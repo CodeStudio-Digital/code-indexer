@@ -146,6 +146,7 @@ interface PoolEntry {
    * sequential runs while the worker stays warm.
    */
   runInProgress: boolean;
+  qualityEnabled: boolean;
 }
 
 export interface RunFreshOpts {
@@ -269,6 +270,52 @@ export class CoderWorkerPool {
       }
     });
     return Promise.all(jobs);
+  }
+
+  qualitySnapshot(): Array<{ sessionId: number; enabled: boolean }> {
+    return [...this.entries.entries()].map(([sessionId, entry]) => ({
+      sessionId,
+      enabled: entry.qualityEnabled,
+    }));
+  }
+
+  async refreshQualityStatus(timeoutMs = 2_000): Promise<Array<{ sessionId: number; enabled: boolean }>> {
+    await Promise.all([...this.entries.values()].map(async (entry) => {
+      try {
+        const status = await entry.host.requireBridge().request<{ enabled: boolean }>(
+          'quality.status',
+          {},
+          { timeoutMs },
+        );
+        entry.qualityEnabled = status.enabled === true;
+      } catch {
+        entry.qualityEnabled = false;
+      }
+    }));
+    return this.qualitySnapshot();
+  }
+
+  async setQualityEnabled(enabled: boolean, timeoutMs = 5_000): Promise<{
+    total: number;
+    acknowledged: number;
+    failed: number;
+  }> {
+    const entries = [...this.entries.values()];
+    let acknowledged = 0;
+    await Promise.all(entries.map(async (entry) => {
+      try {
+        const ack = await entry.host.requireBridge().request<{ enabled: boolean }>(
+          'quality.setEnabled',
+          { enabled },
+          { timeoutMs },
+        );
+        if (ack.enabled === enabled) {
+          entry.qualityEnabled = enabled;
+          acknowledged += 1;
+        }
+      } catch { /* reflected in failed */ }
+    }));
+    return { total: entries.length, acknowledged, failed: entries.length - acknowledged };
   }
 
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
@@ -574,6 +621,13 @@ export class CoderWorkerPool {
       bootMs,
     });
     const bridge = host.requireBridge();
+    let effectiveQualityEnabled = false;
+    try {
+      const status = await bridge.request<{ enabled: boolean }>('quality.status', {}, { timeoutMs: 5_000 });
+      effectiveQualityEnabled = status.enabled === true;
+    } catch {
+      // Keep false: status must reflect an ACK, never the desired spawn input.
+    }
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     // Worker boot installs a `DocSearchBackend` shim that calls
     // `bridge.request('docSearch', ...)`. The corresponding handler
@@ -777,6 +831,7 @@ export class CoderWorkerPool {
       // bumped by `ensureEntry`, but the explicit `false` documents
       // intent.
       runInProgress: false,
+      qualityEnabled: effectiveQualityEnabled,
       detachBusMirror: () => {
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }

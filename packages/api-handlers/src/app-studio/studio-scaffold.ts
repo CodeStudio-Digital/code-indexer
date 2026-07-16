@@ -7,8 +7,8 @@
  *   3. registra o projeto com `builder_json {stack:'cf-fullstack', port,
  *      kind:'app', appName, appSlug, dbEngine}` — é isso que liga preview,
  *      coordenador, tools `app_*` e o bloco de prompt do studio;
- *   4. cria a row `app_studio_sessions` + workflow v5 inicial;
- *   5. cria a única sessão persistente (`agent: 'app_orchestrator'`).
+ *   4. cria a row `app_studio_sessions` + primeira revisão do AppPlanV1;
+ *   5. cria uma conversa Master e uma equipe Company novas e exclusivas do App.
  *
  * Espelha o contrato emit-driven do DS Studio: registro só acontece com
  * scaffold ok; diretório meio-escrito nunca é apagado.
@@ -17,8 +17,10 @@ import type { Project } from '@mcp/shared/types.js';
 import { scaffoldAppStudioWorkspace, slugify } from '@mcp/services/host-scaffold/index.js';
 import { CreateProjectService, ProjectError } from '@mcp/services/services/projects/index.js';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
-import { createAppWorkflowState, serializeAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
+import { emptyAppPlan } from '@mcp/app-studio/plan/types.js';
+import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import type { HandlerDeps } from '../types.js';
+import { createAppTeamSession, type AppTeamSessionView } from './app-team-session.js';
 
 export interface AppStudioCreateInput {
   name: string;
@@ -36,7 +38,13 @@ export type AppStudioStreamEvent =
   | { event: 'log'; data: { stream: 'stdout' | 'stderr'; chunk: string } }
   | {
       event: 'done';
-      data: { project: Project; app_session: AppStudioSession; coder_session_id: number };
+      data: {
+        project: Project;
+        app_session: AppStudioSession;
+        master_session_id: number;
+        company_session_id: number;
+        team: AppTeamSessionView;
+      };
     }
   | { event: 'error'; data: { message: string; stderrTail?: string } };
 
@@ -110,33 +118,13 @@ export async function runAppStudioScaffoldStream(
       name: outcome.name,
       app_slug: appSlug,
     });
-    // Workflow v5 contínuo. Falha aqui nunca derruba a criação — a UI
-    // consegue reconstruí-lo a partir dos artefatos persistidos.
-    try {
-      appSession = deps.appStudioStore.setWorkflowStateJson(
-        appSession.id,
-        serializeAppWorkflowState(createAppWorkflowState()),
-      );
-      deps.appStudioStore.upsertWorkItems([{
-        id: `scope:${appSession.id}`,
-        app_session_id: appSession.id,
-        phase: 'define',
-        slice_id: null,
-        title: 'Definir o escopo do app',
-        outcome: 'Spec e modelo de produto claros, rastreáveis e prontos para aprovação.',
-        kind: 'plan',
-        owner_profile: 'product',
-        priority: 1,
-        status: 'ready',
-        sort_order: 0,
-        acceptance_json: JSON.stringify(['Objetivos, regras, critérios de aceite e fora de escopo registrados.']),
-      }]);
-    } catch (e) {
-      emit({
-        event: 'log',
-        data: { stream: 'stderr', chunk: `workflow init failed (non-fatal): ${(e as Error).message}\n` },
-      });
-    }
+    const initialPlan = emptyAppPlan('pt-BR');
+    deps.appStudioStore.savePlanRevision({
+      app_session_id: appSession.id,
+      plan: initialPlan,
+      fitness: auditAppPlan(initialPlan),
+      created_by: 'app_create',
+    });
 
     const coderSession = deps.sessionStore.createSession({
       project_id: project.id,
@@ -145,7 +133,6 @@ export async function runAppStudioScaffoldStream(
       model: input.model.trim(),
       agent: 'app_orchestrator',
     });
-    appSession = deps.appStudioStore.setCoordinatorSessionId(appSession.id, coderSession.id);
     // Esforço de raciocínio escolhido no dialog de criação (sticky na sessão).
     const effort = input.reasoning_effort?.trim();
     if (effort) {
@@ -156,9 +143,18 @@ export async function runAppStudioScaffoldStream(
       }
     }
 
+    const createdTeam = createAppTeamSession(deps, appSession.id, coderSession.id);
+    appSession = createdTeam.app_session;
+
     emit({
       event: 'done',
-      data: { project: finalProject, app_session: appSession, coder_session_id: coderSession.id },
+      data: {
+        project: finalProject,
+        app_session: appSession,
+        master_session_id: coderSession.id,
+        company_session_id: createdTeam.team.company_session_id,
+        team: createdTeam.team,
+      },
     });
   } catch (err) {
     const message = err instanceof ProjectError || err instanceof Error ? err.message : String(err);

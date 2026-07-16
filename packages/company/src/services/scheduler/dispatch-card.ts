@@ -136,6 +136,7 @@ export async function dispatchCard(
     const spawned = await deps.subordinates.spawn({
       role,
       task: taskText,
+      dispatchSource: source,
       // projectId omitted → spawn auto-resolves from the role's single
       // binding; a multi-bound/unbound role throws and we skip the card.
     });

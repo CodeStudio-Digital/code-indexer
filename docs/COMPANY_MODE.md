@@ -59,6 +59,7 @@ arquivo, o chat único continua mais simples.
 | **Projetos** | As codebases sobre as quais o time trabalha. Uma sessão liga 1+ projetos. | Seção **Projetos** · tabela `company_session_projects` |
 | **Papéis (Roles)** | "Cargos" do time. Exatamente **um** papel `master` é obrigatório; os demais são subordinados. | `roles_json` do template / `config_json` da sessão |
 | **Regras operacionais** | Política em texto livre (markdown) injetada **verbatim** no prompt do Master e de **todo** subordinado. | Campo **Regras operacionais** |
+| **Runtime / capability** | Define qual produto hospeda o lifecycle Company. `company` usa quadro/Kanban/pipelines; `app_studio` usa o workflow e as ferramentas do App. | `company_sessions.runtime_kind` |
 
 ### Papéis: Master × Subordinado
 
@@ -81,6 +82,92 @@ O antigo "Modo Builder" de sessão company foi **aposentado** — a experiência
 vivo + seleção de elementos) virou feature de **projeto**: crie um projeto pelo wizard
 **Novo Projeto → Modo Builder** e use sessões de chat normais sobre ele. Microsserviços em
 container (Add Service) continuam disponíveis em qualquer sessão company.
+
+### App Studio: equipe persistente hospedada pelo Company
+
+Cada App possui **uma sessão Company especializada** (`runtime_kind = 'app_studio'`) e **um Master
+ativo**. O App Studio continua dono da criação, das revisões, do workflow, das aprovações e dos
+artefatos; o runtime Company fornece sessões persistentes por agente, histórico, inbox,
+pause/resume/abort, reconexão e supervisão. A equipe também aparece em **Agents** com o badge
+**App** e link de volta ao workflow.
+
+O servidor resolve a capability a partir de `runtime_kind`:
+
+- `company`: mantém o scheduler, o Kanban e as pipelines genéricas e **não** registra ferramentas
+  `app_*`;
+- `app_studio`: usa prompt, allowlists, política de autonomia e fonte de trabalho do App; não
+  inicializa o scheduler Company nem usa Kanban/pipelines como uma segunda fila;
+- o **workflow do App é a única fonte de cards**. A API `/api/app-studio` permanece como fachada e
+  delega o lifecycle de agentes ao Company.
+
+O transporte do App usa `/api/app-studio/sessions/:appId/team/*` para `start`, `resume`, `message`,
+`answer`, `plan-response`, `abort`, `attach` e replay. O servidor resolve o vínculo App → Company e
+nunca aceita o id da equipe informado pelo cliente. O painel App mantém uma única conexão SSE para
+Chat/Agentes e invalida sessões, modelos efetivos e inbox a partir dos eventos reais. Em Agents, a
+equipe App é uma projeção somente leitura: configuração, conversa e controles operacionais voltam
+ao workflow do App. A projeção conserva somente Board e estado da equipe; oculta terminal, Env,
+Inbox operacional, bancos, catálogo e superfícies de artefatos mutáveis. Mutações Company
+incompatíveis retornam `APP_STUDIO_CONTROL_PLANE_OWNED`.
+
+O preset editável nasce com Master `app_orchestrator` e especialistas `research`, `architect`,
+`backend`, `frontend`, `database`, `ux`, `qa` e `fullstack`. Compatibilidade de nomes antigos:
+`plan → architect`, `implement/implementer → fullstack` e `verify/verifier → qa`. O Master
+coordena, decide e delega; **não edita código**. Especialistas recebem ferramentas de código e
+somente as ferramentas `app_*` necessárias para ler contexto e registrar evidência do seu papel.
+
+#### Modelo autoritativo por papel
+
+Em qualquer spawn de um papel configurado, `role_assignments` é a fonte autoritativa para
+provider, modelo, tier, reasoning, temperature, skills, prompt, fallbacks e os defaults de
+thinking/budget. Uma execução pode ativar thinking para aquele turno, mas não trocar o runtime do
+papel. Em equipes App, um papel inexistente, desabilitado ou sem provider/modelo explícito bloqueia
+o card com erro de configuração. O override global `subagent_model` e parâmetros do despacho
+**não** podem trocar o modelo do papel, e não existe fallback silencioso para o Master, para o pool
+global ou para um modelo mini. Fallback só ocorre quando está explicitamente em `fallbackModels`.
+
+Cada `company_agent_run` persiste o provider/modelo configurado e efetivo, a origem do despacho e
+o motivo de fallback. Alterar um papel não muda um run em andamento; o próximo card usa a nova
+configuração. Uma sessão `waiting` só é reutilizada quando papel, projeto e hash completo da
+configuração continuam compatíveis.
+
+O Master usa o mesmo contrato editável por meio dos campos `master_*` (enabled, provider/model,
+tier, reasoning, temperature, thinking/budget, skills, prompt e fallback explícito). Seu tier
+efetivo permanece `navigate` e a allowlist do Master continua removendo ferramentas de edição.
+Quando uma falha transitória ativa `master_fallback_*`, o lifecycle atualiza primeiro a sessão e a
+proveniência do mesmo `company_agent_run`, então retoma o transcript; não consulta o override
+global nem inventa uma cadeia alternativa. Alterações no contrato do Master não mudam um runner
+ativo: no próximo despertar, o lifecycle faz cold-resume do mesmo transcript, re-resolve o runtime
+e aplica inclusive prompt e skills antes do primeiro turno.
+
+#### Despacho, evidência e reconciliação
+
+O scheduler App considera somente cards `ready` depois que dependências e aprovações foram
+satisfeitas. Ele monta a primeira onda sem conflito de `file_scope`, respeita concorrência e cria
+uma tentativa idempotente antes de marcar o card como `running`. Há histórico de várias tentativas,
+mas somente uma tentativa ativa por card e por agente.
+
+- evidência válida via `app_record_work_evidence` conclui a tentativa e mantém a progressão do
+  workflow para revisão/conclusão;
+- conclusão sem evidência, falha, interrupção ou aborto bloqueia o card e acorda o Master para
+  recuperar ou reatribuir;
+- **Pausar** preserva card e sessão; **Retomar** reutiliza a mesma sessão; **Cancelar/Abortar**
+  atualiza deterministicamente tentativa, agente e card;
+- após reinício, a reconciliação compara as tentativas ativas com `company_agent_runs` e repara
+  estados divergentes. O despacho automático continua restrito a trabalho pronto e aprovado.
+
+#### Adoção e compatibilidade de Apps existentes
+
+A adoção é idempotente e espera o coordenador legado deixar de executar. Depois, cria/vincula a
+sessão Company, adota o coordenador e seu transcript/modelo como Master e converte os perfis
+configurados para `role_assignments`. Sub-runs antigos continuam visíveis separadamente como
+**execuções legadas**; não viram agentes persistentes falsos. Durante a janela de compatibilidade,
+`agent_config_json`, `coordinator_session_id`, `coder_session_id` e endpoints antigos continuam
+legíveis, mas um App adotado deixa imediatamente de despachar por `execute_tasks`; chats solo não
+mudam.
+
+"Nova conversa" só rotaciona o Master quando ele está ocioso. O transcript anterior vira somente
+leitura e os especialistas permanecem na mesma equipe. Excluir o App remove a equipe vinculada na
+mesma operação; a rota Company rejeita a exclusão direta de uma sessão pertencente a um App.
 
 ---
 
@@ -183,6 +270,10 @@ de "espiada" (painéis que você quer **junto** do conteúdo central).
 
 ### Zona **Work** (trabalho do time)
 
+As abas abaixo descrevem sessões `runtime_kind = 'company'`. Em equipes `app_studio`, **Kanban** e
+**Pipelines** ficam ocultos: o painel oferece acesso ao workflow autoritativo do App, sem duplicar
+cards entre produtos. Board, transcript e controles reais dos agentes continuam disponíveis.
+
 | Aba | O que faz |
 |---|---|
 | **Quadro** (Board) | Feed compartilhado onde os agentes postam. Tipos de mensagem: *message, decision, question, deliverable, handoff, blocker*. Dá para copiar o quadro/mensagem em Markdown. |
@@ -262,7 +353,9 @@ O modal de métricas mostra: contagens de **mensagens** (Conversa / Tudo / Só u
 
 **`spawn_subordinate_agent`** — principais parâmetros: `role`, `task`, `project_id`,
 `provider`/`model`/`tier`, `skills`, `wait` (bloquear até concluir) e `thinking`. Por padrão é
-**assíncrono** (`wait=false`): o subordinado roda em segundo plano.
+**assíncrono** (`wait=false`): o subordinado roda em segundo plano. Quando o papel existe em
+`role_assignments`, seu runtime persistido é autoritativo; overrides de provider/modelo/tier do
+despacho são ignorados.
 
 **Ferramentas do subordinado** (não podem spawnar outros): `ask_master`, `submit_plan_to_master` /
 `submit_specification_to_master`, `submit_tasks_to_master`, `send_to_agent`, `send_to_master`,
@@ -274,6 +367,11 @@ Cada sessão roda em um **`worker_thread`** dedicado. No boot, ele abre o SQLite
 **re-fia** os stores module-global via `db.raw()` (design system, QA, env) — necessário porque
 singletons do processo principal ficam `null` no worker. Em seguida instancia o orquestrador, liga
 o **AgentSupervisor**, espelha o `metaBus` e expõe RPC para o processo principal.
+
+No boot, `runtime_kind` seleciona a capability do servidor. Sessões `company` iniciam o
+`CompanyScheduler`; sessões `app_studio` iniciam somente o `AppStudioScheduler`, vinculado por
+`app_studio_sessions.company_session_id`. Ambos compartilham o mesmo lifecycle persistente de
+Master/subordinados, mas não compartilham uma fila de trabalho.
 
 ### AgentSupervisor (anti-travamento)
 
@@ -312,10 +410,17 @@ sobrevivem a reativações e compactações.
   `wait_agents`, inbox), e env (`env_list/read/set/delete/validate` — Master só lê).
 - **`BUILDER_TOOLS`** — só quando há binding de sandbox (subordinado ligado a serviço em
   container): `db_*`, `docs_*`, controle de sandbox/pipeline/serviços.
+- **`APP_TOOLS`** — registradas somente quando `runtime_kind = 'app_studio'` e filtradas por
+  audiência (Master ou papel especialista). Sessões Company comuns nunca recebem `app_*`, e uma
+  tool externa não pode se apresentar como capability nativa do App.
 
 ### Pool de modelos e concorrência
 
 - O **pool de modelos permitidos** é validado no spawn — `(provider, modelo)` fora do pool é rejeitado.
+- Um único resolver de runtime atende os despachos de especialistas por Master, caminho manual,
+  scheduler, pipeline, fan-out, retry e App. Para papel configurado, o pool só valida a escolha
+  persistida; não substitui essa escolha. Em App, fallback vem exclusivamente da lista explícita
+  do papel. O Master usa o runtime persistido próprio da sessão.
 - **Concorrência**: no máximo **10** subordinados simultâneos (`CODER_COMPANY_MAX_SUBORDINATES`);
   ao estourar, o spawn pede para o Master chamar `wait_for_subordinates`.
 - **Retries** automáticos de subordinado: **1** (`CODER_SUBORDINATE_MAX_RETRIES`).
@@ -329,9 +434,9 @@ Tabelas centrais (migration `018_company_agents.ts`):
 | Tabela | Colunas-chave |
 |---|---|
 | `company_templates` | `id`, `name`, `description`, `roles_json`, `created_at`, `updated_at` |
-| `company_sessions` | `id`, `template_id` → templates, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
+| `company_sessions` | `id`, `template_id` → templates, `runtime_kind` *(`company`/`app_studio`)*, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
 | `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = projeto real; preenchido = serviço virtual `_builder_*` — prefixo herdado de sessões legadas)* |
-| `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, `provider`, `model`, `status` *(idle/running/waiting_plan/completed/error/aborted)*, timestamps |
+| `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, `configured_provider/model`, `provider/model` efetivos, `dispatch_source`, `fallback_reason`, `status`, timestamps |
 | `company_board` | `id`, `company_session_id`, `author_role`, `agent_run_id`, `kind` (default `message`), `content`, `mentions_json`, `created_at` |
 
 **`config_json`** (na `company_sessions`) carrega: `role_assignments[]`, `allowed_models[]`,
@@ -343,9 +448,30 @@ Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `
 `085` fundação de pipelines. (A tabela `company_session_databases` da migration `040` foi
 aposentada na `191` — conexões agora são por projeto, migration `174`.)
 
+A migration `235_app_studio_company_runtime.ts` adiciona a integração App:
+
+| Tabela/coluna | Papel |
+|---|---|
+| `app_studio_sessions.company_session_id` | vínculo 1:1 com uma sessão Company `runtime_kind = 'app_studio'` |
+| `app_studio_work_item_runs` | histórico card/tentativa/papel ↔ `company_agent_run`, coder session, status, hash de configuração e chave idempotente |
+
+Índices parciais garantem no banco somente uma tentativa ativa por card e somente um card ativo por
+`company_agent_run`. Triggers validam que o agente pertence à equipe e ao papel informados. A
+exclusão do App apaga primeiro seus vínculos e depois a sessão Company; `ON DELETE RESTRICT` impede
+que a equipe seja removida por fora enquanto ainda pertence ao App.
+
 **Rotas HTTP** (sob `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
 `.../sessions/:id/projects`, além de `board`, `kanban`, `pipelines`, `envs`, `databases`, `drive`, `sandbox`.
+As rotas sob `/api/app-studio/sessions/:id/agents` e `/workflow` são a fachada do App para
+configuração de papéis, sessões/transcripts, dispatch e lifecycle. Respostas expõem
+`company_session_id`, Master/equipe, provider/modelo configurado e efetivo e runs legados separados.
+O lifecycle/stream real entra exclusivamente por
+`/api/app-studio/sessions/:id/team/{state,state-snapshot,attach,start,resume,message,answer,plan-response,wake-master,abort}`.
+O servidor resolve e valida o vínculo App ↔ Company antes de delegar; `attach`, `start` e `resume`
+preservam o stream multiplexado, `Last-Event-ID`, replay e idempotência do runtime Company. A UI do
+App não chama `/api/company` diretamente. Eventos `agent_status` de equipes App carregam também
+provider/modelo configurado e efetivo, origem do despacho e motivo de fallback.
 
 ---
 
@@ -366,6 +492,7 @@ aposentada na `191` — conexões agora são por projeto, migration `174`.)
 | `MCP_SUPERVISOR_GLOBAL_BREAKER_LIMIT` / `_WINDOW_MS` | `20` / `60000` | Disjuntor global. |
 | `MCP_SUPERVISOR_GLOBAL_READ_ONLY_MS` | `60000` (1 min) | Duração do modo somente-leitura. |
 | `MCP_COMPANY_RECONCILE_MS` | `45000` | Cadência da varredura do `RuntimeReconciler` (mín. 1s). |
+| `MCP_APP_STUDIO_SCHEDULER_TICK_MS` | `10000` | Cadência do scheduler especializado do App (mín. 2s; só `runtime_kind = 'app_studio'`). |
 | `MCP_COMPANY_MASTER_NUDGE_MS` | `30000` | Re-cutucada do Master parado; `0` desliga. |
 | `MCP_COMPANY_INBOX_WATCHDOG_ENABLED` | *off* | `1` liga o watchdog de inbox. |
 | `MCP_COMPANY_INBOX_MAX_PENDING` | `3` | Máx. de mensagens pendentes por destinatário. |
@@ -398,6 +525,14 @@ aposentada na `191` — conexões agora são por projeto, migration `174`.)
 - **Spawn rejeitado** — causas comuns: (a) **teto de concorrência** (10) — o Master deve chamar
   `wait_for_subordinates`; (b) **fora do pool** — *"Modelo 'x/y' não está no pool permitido da
   sessão"*; (c) **papel em quarentena** por um disjuntor do supervisor.
+- **Card App bloqueado antes do spawn** — confira se o papel existe, está habilitado e tem
+  provider/modelo explícitos. O runtime App bloqueia configuração inválida em vez de herdar
+  `subagent_model`, o modelo do Master ou um modelo mini.
+- **Especialista App terminou, mas o card bloqueou** — o run terminou sem evidência aceita. Abra o
+  transcript do especialista, corrija a causa e retome/reatribua; o especialista deve chamar
+  `app_record_work_evidence` antes de concluir.
+- **App mostra "migração pendente"** — o coordenador legado ou o Master atual ainda está rodando.
+  Aguarde-o ficar ocioso e recarregue; a adoção é idempotente e não executa duas equipes em paralelo.
 - **Variável de ambiente não aparece / tool de env falha** — geralmente é o store não fiado no
   worker; o boot do company-worker re-fia via `db.raw()`. Confira a aba **Env** e a origem da var.
 - **Master terminou com erro / parou inesperadamente** — os banners pedem **enviar uma mensagem
@@ -424,8 +559,11 @@ time. *Pool de modelos* = lista permitida de provider/modelo.
 | Orquestração / tools | `packages/company/src/tools/{master-tools,master-filter,pipeline-tools,review-subordinate,board-tools}.ts` |
 | Tiers de company | `packages/code-agent/src/tools/tiers-company.ts` |
 | Supervisor / reconciler | `packages/company/src/services/supervisor/` · `RuntimeReconciler.ts` |
+| Capability / scheduler do App | `packages/company/src/tools/app-studio/` · `packages/company/src/services/scheduler/AppStudioScheduler.ts` |
+| Resolver autoritativo de papéis | `packages/company/src/services/subordinate/role-runtime.ts` |
+| Adoção e fachada do App | `packages/api-handlers/src/app-studio/app-team-session.ts` · `apps/http-api/server/routes/app-studio/` |
 | Regras operacionais | `packages/company/src/services/master/config-loader.ts` |
-| Migrations | `packages/store/src/migrations/018_company_agents.ts` (+ 034/036/038/040/065/067/085) |
+| Migrations | `packages/store/src/migrations/018_company_agents.ts` (+ 034/036/038/040/065/067/085/235) |
 | Rotas HTTP | `apps/http-api/server/routes/company/` |
 
 ---
@@ -476,6 +614,7 @@ chat is still simpler.
 | **Projects** | The codebases the team works on. A session links 1+ projects. | **Projects** section · `company_session_projects` table |
 | **Roles** | The team's "positions". Exactly **one** `master` role is required; the rest are subordinates. | template `roles_json` / session `config_json` |
 | **Operational rules** | Free-text (markdown) policy injected **verbatim** into the Master's and **every** subordinate's prompt. | **Operational rules** field |
+| **Runtime / capability** | Selects which product hosts the Company lifecycle. `company` uses board/Kanban/pipelines; `app_studio` uses the App workflow and tools. | `company_sessions.runtime_kind` |
 
 ### Roles: Master vs Subordinate
 
@@ -489,7 +628,8 @@ chat is still simpler.
 
 **Role tiers** (`bootstrap | navigate | full`) control how many navigation/editing tools the role
 gets. `bootstrap` = minimal (quick, well-scoped tasks); `navigate` = intermediate; `full` = the
-complete set. The Master uses `full`.
+complete set. Generic Company keeps its existing Master profile; an App-owned Master resolves to
+`navigate` and is additionally constrained by the Master tool allowlist.
 
 ### Builder is now a project feature
 
@@ -498,6 +638,90 @@ The old company-session "Builder mode" was **retired** — the V0 experience (li
 element selection) became a **project** feature: create a project via the
 **New Project → Builder mode** wizard and use normal chat sessions over it. Containerized
 microservices (Add Service) remain available in any company session.
+
+### App Studio: a persistent team hosted by Company
+
+Each App owns **one specialized Company session** (`runtime_kind = 'app_studio'`) and **one active
+Master**. App Studio remains responsible for creation, revisions, workflow, approvals, and
+artifacts; the Company runtime provides persistent per-agent sessions, history, inbox,
+pause/resume/abort, reconnection, and supervision. The team also appears in **Agents** with an
+**App** badge and a link back to its workflow.
+
+The server resolves the capability from `runtime_kind`:
+
+- `company` keeps the generic scheduler, Kanban, and pipelines, and **does not** register `app_*`
+  tools;
+- `app_studio` uses the App prompt, allowlists, autonomy policy, and work source; it does not start
+  the Company scheduler or use Kanban/pipelines as a second queue;
+- the **App workflow is the only card source**. `/api/app-studio` remains the facade and delegates
+  agent lifecycle operations to Company.
+
+The App transport uses `/api/app-studio/sessions/:appId/team/*` for `start`, `resume`, `message`,
+`answer`, `plan-response`, `abort`, `attach`, and replay. The server resolves the App → Company link
+and never trusts a team id supplied by the client. Chat and Agents share one SSE connection and
+real run/status/inbox events invalidate the App overview. In Agents, App teams are read-only
+projections that link back to the App workflow. The projection keeps only the Board and team state;
+terminal, Env, operational Inbox, databases, catalog, and mutable artifact surfaces are hidden.
+Incompatible Company mutations return `APP_STUDIO_CONTROL_PLANE_OWNED`.
+
+The editable preset starts with Master `app_orchestrator` and specialists `research`, `architect`,
+`backend`, `frontend`, `database`, `ux`, `qa`, and `fullstack`. Legacy name compatibility maps
+`plan → architect`, `implement/implementer → fullstack`, and `verify/verifier → qa`. The Master
+coordinates, decides, and delegates; it **does not edit code**. Specialists get code tools plus
+only the role-scoped `app_*` tools required to read context and record evidence.
+
+#### Authoritative per-role runtime
+
+For every configured-role spawn, `role_assignments` is authoritative for provider, model, tier,
+reasoning, temperature, skills, prompt, fallbacks, and the thinking/budget defaults. A run may
+enable thinking for that turn, but cannot replace the role runtime. In App teams, a missing,
+disabled, or incompletely configured role blocks the card with a configuration error. The global
+`subagent_model` override and dispatch parameters **cannot** replace that role's model, and there
+is no silent fallback to the Master, the global pool, or a mini model. Fallback occurs only when
+explicitly listed in the role's `fallbackModels`.
+
+The Master exposes the same editable contract through `master_*` fields (enabled, provider/model,
+tier, reasoning, temperature, thinking/budget, skills, prompt, and explicit fallback). Its
+effective tier remains `navigate`, and the Master allowlist still removes code-edit tools. On a
+transient failure, `master_fallback_*` updates the coder session and the same
+`company_agent_run` provenance before resuming the transcript; it never consults the global
+override or invents another fallback chain. Master edits never mutate a live runner: on the next
+wake, the lifecycle cold-resumes the same transcript, re-resolves the full runtime, and applies the
+new prompt and skills before the first turn.
+
+Each `company_agent_run` persists configured and effective provider/model, dispatch source, and
+fallback reason. Editing a role does not mutate an active run; the next card uses the new config.
+A `waiting` session is reused only when role, project, and the complete configuration hash still
+match.
+
+#### Dispatch, evidence, and reconciliation
+
+The App scheduler considers only `ready` cards after dependencies and approvals are satisfied. It
+builds the first conflict-free `file_scope` wave, respects concurrency, and creates an idempotent
+attempt before marking the card `running`. Multiple historical attempts are allowed, but only one
+attempt may be active per card and per agent.
+
+- valid evidence through `app_record_work_evidence` completes the attempt and preserves normal
+  workflow progression into review/done;
+- completion without evidence, failure, interruption, or abort blocks the card and wakes the
+  Master to recover or reassign it;
+- **Pause** preserves the card and session; **Resume** reuses that same session;
+  **Cancel/Abort** deterministically updates the attempt, agent, and card;
+- after a server restart, reconciliation compares active attempts with `company_agent_runs` and
+  repairs divergent states. Automatic dispatch remains limited to ready, approved work.
+
+#### Existing-App adoption and compatibility
+
+Adoption is idempotent and waits for the legacy coordinator to stop running. It then creates/links
+the Company session, adopts the coordinator's transcript and model as Master, and converts saved
+profiles into `role_assignments`. Old sub-runs remain separately visible as **legacy runs**; they do
+not become fake persistent agents. During the compatibility window, `agent_config_json`,
+`coordinator_session_id`, `coder_session_id`, and old endpoints remain readable, but an adopted App
+immediately stops dispatching through `execute_tasks`; solo chats remain unchanged.
+
+"New conversation" rotates the Master only while it is idle. The previous transcript becomes
+read-only and specialists remain in the same team. Deleting the App removes its linked team in the
+same operation; the Company route rejects direct deletion of a session owned by an App.
 
 ---
 
@@ -599,6 +823,10 @@ The session uses a **3-zone layout** (which **replace** the central area) + a si
 
 ### **Work** zone (the team's day-to-day)
 
+The tabs below describe `runtime_kind = 'company'` sessions. In `app_studio` teams, **Kanban** and
+**Pipelines** are hidden: the panel links to the authoritative App workflow instead of duplicating
+cards between products. Board, transcript, and real-agent controls remain available.
+
 | Tab | What it does |
 |---|---|
 | **Board** | Shared feed where agents post. Message kinds: *message, decision, question, deliverable, handoff, blocker*. You can copy the board/message as Markdown. |
@@ -676,7 +904,9 @@ ratio) and **Real Savings** (cache savings, output *shaping* and tool *tiering*)
 
 **`spawn_subordinate_agent`** — main parameters: `role`, `task`, `project_id`,
 `provider`/`model`/`tier`, `skills`, `wait` (block until done) and `thinking`. It is **async** by
-default (`wait=false`): the subordinate runs in the background.
+default (`wait=false`): the subordinate runs in the background. When the role exists in
+`role_assignments`, its persisted runtime is authoritative; dispatch-time provider/model/tier
+overrides are ignored.
 
 **Subordinate tools** (cannot spawn others): `ask_master`, `submit_plan_to_master` /
 `submit_specification_to_master`, `submit_tasks_to_master`, `send_to_agent`, `send_to_master`,
@@ -688,6 +918,11 @@ Each session runs in a dedicated **`worker_thread`**. On boot it opens SQLite in
 **re-wires** the module-global stores via `db.raw()` (design system, QA, env) — needed because
 main-process singletons are `null` in the worker. It then instantiates the orchestrator, starts the
 **AgentSupervisor**, mirrors the `metaBus` and exposes RPC to the main process.
+
+At boot, `runtime_kind` selects the server capability. `company` sessions start the
+`CompanyScheduler`; `app_studio` sessions start only the `AppStudioScheduler`, linked through
+`app_studio_sessions.company_session_id`. Both share the persistent Master/subordinate lifecycle,
+but they do not share a work queue.
 
 ### AgentSupervisor (anti-hang)
 
@@ -726,10 +961,17 @@ survive reactivations and compactions.
   `wait_agents`, inbox), and env (`env_list/read/set/delete/validate` — Master read-only).
 - **`BUILDER_TOOLS`** — only when a sandbox binding is present (service-bound subordinate): `db_*`, `docs_*`,
   sandbox/pipeline/service control.
+- **`APP_TOOLS`** — registered only when `runtime_kind = 'app_studio'` and filtered by audience
+  (Master or specialist role). Generic Company sessions never receive `app_*`, and an external tool
+  cannot impersonate a native App capability.
 
 ### Model pool and concurrency
 
 - The **allowed models pool** is validated at spawn — a `(provider, model)` outside it is rejected.
+- One runtime resolver serves specialist dispatches from the Master, manual path, scheduler,
+  pipeline, fan-out, retry, and App. For a configured role, the pool only validates the persisted
+  choice; it never replaces it. In App teams, fallback comes exclusively from the role's explicit
+  list. The Master uses the session's own persisted runtime.
 - **Concurrency**: at most **10** concurrent subordinates (`CODER_COMPANY_MAX_SUBORDINATES`); when
   exceeded, the spawn asks the Master to call `wait_for_subordinates`.
 - Automatic subordinate **retries**: **1** (`CODER_SUBORDINATE_MAX_RETRIES`).
@@ -743,9 +985,9 @@ Core tables (migration `018_company_agents.ts`):
 | Table | Key columns |
 |---|---|
 | `company_templates` | `id`, `name`, `description`, `roles_json`, `created_at`, `updated_at` |
-| `company_sessions` | `id`, `template_id` → templates, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
+| `company_sessions` | `id`, `template_id` → templates, `runtime_kind` *(`company`/`app_studio`)*, `name`, `status` *(idle/running/paused/completed/error)*, `master_session_id` → `coder_sessions`, `config_json` (default `{}`), timestamps |
 | `company_session_projects` | PK (`company_session_id`, `project_id`), `label` *(null = real project; set = virtual `_builder_*` service — prefix inherited from legacy sessions)* |
-| `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, `provider`, `model`, `status` *(idle/running/waiting_plan/completed/error/aborted)*, timestamps |
+| `company_agent_runs` | `id`, `company_session_id`, `role`, `coder_session_id`, `project_ids_json`, configured `provider/model`, effective `provider/model`, `dispatch_source`, `fallback_reason`, `status`, timestamps |
 | `company_board` | `id`, `company_session_id`, `author_role`, `agent_run_id`, `kind` (default `message`), `content`, `mentions_json`, `created_at` |
 
 **`config_json`** (on `company_sessions`) carries: `role_assignments[]`, `allowed_models[]`,
@@ -757,9 +999,31 @@ Additional tables in later migrations: `034` sandbox, `035` services, `036` env 
 `085` pipeline foundation. (Migration `040`'s `company_session_databases` table was retired in
 `191` — connections are per-project now, migration `174`.)
 
+Migration `235_app_studio_company_runtime.ts` adds the App integration:
+
+| Table/column | Purpose |
+|---|---|
+| `app_studio_sessions.company_session_id` | 1:1 link to a Company session with `runtime_kind = 'app_studio'` |
+| `app_studio_work_item_runs` | card/attempt/role history linked to `company_agent_run`, coder session, status, configuration hash, and idempotency key |
+
+Partial indexes enforce one active attempt per card and one active card per `company_agent_run`.
+Triggers verify that the selected agent belongs to the linked team and role. App deletion removes
+its links before deleting the Company session; `ON DELETE RESTRICT` prevents out-of-band team
+deletion while the App still owns it.
+
 **HTTP routes** (under `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
 `.../sessions/:id/projects`, plus `board`, `kanban`, `pipelines`, `envs`, `databases`, `drive`, `sandbox`.
+Routes under `/api/app-studio/sessions/:id/agents` and `/workflow` are the App facade for role
+configuration, sessions/transcripts, dispatch, and lifecycle. Responses expose
+`company_session_id`, Master/team state, configured and effective provider/model, and separate
+legacy runs.
+The real lifecycle/stream is available exclusively through
+`/api/app-studio/sessions/:id/team/{state,state-snapshot,attach,start,resume,message,answer,plan-response,wake-master,abort}`.
+The server resolves and validates the App ↔ Company link before delegating; `attach`, `start`, and
+`resume` preserve the Company runtime's multiplexed stream, `Last-Event-ID`, replay, and
+idempotency. The App UI does not call `/api/company` directly. App-team `agent_status` events also
+carry configured/effective provider and model, dispatch source, and fallback reason.
 
 ---
 
@@ -780,6 +1044,7 @@ Additional tables in later migrations: `034` sandbox, `035` services, `036` env 
 | `MCP_SUPERVISOR_GLOBAL_BREAKER_LIMIT` / `_WINDOW_MS` | `20` / `60000` | Global breaker. |
 | `MCP_SUPERVISOR_GLOBAL_READ_ONLY_MS` | `60000` (1 min) | Read-only mode duration. |
 | `MCP_COMPANY_RECONCILE_MS` | `45000` | `RuntimeReconciler` sweep cadence (min 1s). |
+| `MCP_APP_STUDIO_SCHEDULER_TICK_MS` | `10000` | Specialized App scheduler cadence (min 2s; `runtime_kind = 'app_studio'` only). |
 | `MCP_COMPANY_MASTER_NUDGE_MS` | `30000` | Re-nudge a stalled Master; `0` disables. |
 | `MCP_COMPANY_INBOX_WATCHDOG_ENABLED` | *off* | `1` turns on the inbox watchdog. |
 | `MCP_COMPANY_INBOX_MAX_PENDING` | `3` | Max pending messages per recipient. |
@@ -812,6 +1077,14 @@ Additional tables in later migrations: `034` sandbox, `035` services, `036` env 
 - **Spawn rejected** — common causes: (a) **concurrency cap** (10) — the Master must call
   `wait_for_subordinates`; (b) **outside the pool** — *"Model 'x/y' is not in this session's allowed
   pool"*; (c) **role quarantined** by a supervisor breaker.
+- **App card blocked before spawn** — verify that the role exists, is enabled, and has an explicit
+  provider/model. The App runtime blocks invalid configuration instead of inheriting
+  `subagent_model`, the Master's model, or a mini model.
+- **App specialist finished but the card was blocked** — the run ended without accepted evidence.
+  Open the specialist transcript, fix the cause, and resume/reassign; the specialist must call
+  `app_record_work_evidence` before completing.
+- **App shows "migration pending"** — the legacy coordinator or current Master is still running.
+  Wait until it becomes idle and reload; adoption is idempotent and never runs two teams in parallel.
 - **Env var doesn't appear / env tool fails** — usually a store not wired in the worker; the
   company-worker boot re-wires via `db.raw()`. Check the **Env** tab and the var's source.
 - **Master ended with error / ended unexpectedly** — the banners ask you to **send a message to
@@ -838,6 +1111,9 @@ feed. *Model pool* = the allowed list of provider/model.
 | Orchestration / tools | `packages/company/src/tools/{master-tools,master-filter,pipeline-tools,review-subordinate,board-tools}.ts` |
 | Company tiers | `packages/code-agent/src/tools/tiers-company.ts` |
 | Supervisor / reconciler | `packages/company/src/services/supervisor/` · `RuntimeReconciler.ts` |
+| App capability / scheduler | `packages/company/src/tools/app-studio/` · `packages/company/src/services/scheduler/AppStudioScheduler.ts` |
+| Authoritative role resolver | `packages/company/src/services/subordinate/role-runtime.ts` |
+| App adoption and facade | `packages/api-handlers/src/app-studio/app-team-session.ts` · `apps/http-api/server/routes/app-studio/` |
 | Operational rules | `packages/company/src/services/master/config-loader.ts` |
-| Migrations | `packages/store/src/migrations/018_company_agents.ts` (+ 034/036/038/040/065/067/085) |
+| Migrations | `packages/store/src/migrations/018_company_agents.ts` (+ 034/036/038/040/065/067/085/235) |
 | HTTP routes | `apps/http-api/server/routes/company/` |

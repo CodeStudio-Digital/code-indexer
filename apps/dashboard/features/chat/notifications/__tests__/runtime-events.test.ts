@@ -41,13 +41,26 @@ describe('coder runtime notification feed', () => {
     });
     recordCoderRuntimeNotification({
       id: 12, ts: 12, sessionId, event: 'agents_group_end',
-      data: { groupId: 'g1', jobId: 'job-1', agentCount: 3, successCount: 2 },
+      data: {
+        groupId: 'g1', jobId: 'job-1', agentCount: 3, successCount: 1,
+        completedCount: 1, partialCount: 1, failedCount: 1, resumableCount: 2,
+      },
     });
 
     expect(getNotifications(sessionId).map((item) => item.payload.kind)).toEqual([
-      'agent-failed',
       'background-agents-done',
     ]);
+    expect(getNotifications(sessionId)[0].payload).toEqual({
+      kind: 'background-agents-done',
+      jobId: 'job-1',
+      groupId: 'g1',
+      agentCount: 3,
+      successCount: 1,
+      completedCount: 1,
+      partialCount: 1,
+      failedCount: 1,
+      resumableCount: 2,
+    });
   });
 
   it('ignores ok quality verdicts', () => {

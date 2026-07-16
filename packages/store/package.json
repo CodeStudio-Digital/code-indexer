@@ -8,6 +8,7 @@
     "./*": "./src/*"
   },
   "dependencies": {
+    "@mcp/app-studio": "workspace:*",
     "@mcp/shared": "workspace:*"
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Admin routes for quality classifications + counterfactual logs.
+ * Admin routes for hybrid Quality plus legacy counterfactual compatibility.
  *
  *   GET  /api/admin/quality                          → recent verdicts
  *   GET  /api/admin/quality/distribution             → verdict counts per classifier
@@ -17,20 +17,41 @@ import {
   isGlobalQualityClassifierEnabled,
   setGlobalQualityClassifierPipeline,
 } from '@mcp/services/quality/index.js';
+import { peekCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
+import { peekWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 
 export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
   const { qualityClassificationStore, qualityInterventionStore, counterfactualLogStore } = deps;
 
   // ─── Runtime on/off toggle ─────────────────────────────────────────────
-  // Runtime toggle for the quality classifiers. In in-process coder mode this
-  // flips the main-process global directly. In worker-thread coder mode, new
-  // workers inherit process.env at spawn, so we also mirror the value into the
-  // env flag below; already-spawned workers keep their current boot snapshot
-  // until they are recreated. Persists only for the process lifetime (the boot
-  // default is the MCP_PIPELINES_QUALITY_CLASSIFIERS env/app-setting flag).
-  app.get('/api/admin/quality/enabled', (c) =>
-    c.json({ enabled: isGlobalQualityClassifierEnabled() }),
-  );
+  // The compatibility env alias is the desired process-lifetime state. Active
+  // workers must ACK it; newly spawned workers receive it in workerData.
+  const qualityStatus = async () => {
+    const desired = process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1';
+    await Promise.all([
+      peekCoderWorkerPool()?.refreshQualityStatus() ?? Promise.resolve([]),
+      peekWorkerOrchestratorPool()?.refreshQualityStatus() ?? Promise.resolve([]),
+    ]);
+    const workers = [
+      ...(peekCoderWorkerPool()?.qualitySnapshot().map((row) => ({ ...row, kind: 'coder' as const })) ?? []),
+      ...(peekWorkerOrchestratorPool()?.qualitySnapshot().map((row) => ({ ...row, kind: 'company' as const })) ?? []),
+    ];
+    const acknowledged = workers.filter((worker) => worker.enabled === desired).length;
+    return {
+      enabled: isGlobalQualityClassifierEnabled() && acknowledged === workers.length,
+      desiredEnabled: desired,
+      mode: 'hybrid' as const,
+      target: 'completed_round' as const,
+      workers: {
+        total: workers.length,
+        acknowledged,
+        failed: workers.length - acknowledged,
+        states: workers,
+      },
+    };
+  };
+
+  app.get('/api/admin/quality/enabled', async (c) => c.json(await qualityStatus()));
 
   app.post('/api/admin/quality/enabled', async (c) => {
     let body: { enabled?: boolean } = {};
@@ -40,7 +61,43 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
     }
     process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = body.enabled ? '1' : '0';
     setGlobalQualityClassifierPipeline(deps.qualityClassifierPipeline, body.enabled);
-    return c.json({ enabled: isGlobalQualityClassifierEnabled() });
+    const jobs: Array<Promise<unknown>> = [];
+    const coderPool = peekCoderWorkerPool();
+    const companyPool = peekWorkerOrchestratorPool();
+    if (coderPool) jobs.push(coderPool.setQualityEnabled(body.enabled));
+    if (companyPool) jobs.push(companyPool.setQualityEnabled(body.enabled));
+    await Promise.all(jobs);
+    return c.json(await qualityStatus());
+  });
+
+  app.get('/api/admin/quality/overview', (c) => {
+    const since = c.req.query('since') ?? undefined;
+    return c.json(qualityClassificationStore.overview({ since }));
+  });
+
+  app.get('/api/admin/quality/delivery', (c) => {
+    const since = c.req.query('since') ?? undefined;
+    const limit = Math.max(1, Math.min(2000, Number(c.req.query('limit') ?? 200)));
+    return c.json({ rows: qualityClassificationStore.listRecent({ scope: 'run_final', since, limit }) });
+  });
+
+  app.get('/api/admin/quality/runtime', (c) => {
+    const since = c.req.query('since') ?? undefined;
+    const limit = Math.max(1, Math.min(2000, Number(c.req.query('limit') ?? 200)));
+    return c.json({ rows: qualityClassificationStore.listRecent({ scope: 'runtime', since, limit }) });
+  });
+
+  app.get('/api/admin/quality/legacy', (c) => {
+    const since = c.req.query('since') ?? undefined;
+    const limit = Math.max(1, Math.min(2000, Number(c.req.query('limit') ?? 200)));
+    return c.json({
+      rows: qualityClassificationStore.listRecent({ scope: 'legacy_turn', since, limit }),
+      distribution: qualityClassificationStore.verdictDistribution({
+        since,
+        scope: 'legacy_turn',
+        excludeSystemErrors: c.req.query('include_system_errors') !== '1',
+      }),
+    });
   });
 
   // ─── Quality classifications ────────────────────────────────────────
@@ -77,10 +134,15 @@ export function mountAdminQualityRoutes(app: Hono, deps: ServerDeps): void {
     const classifier = c.req.query('classifier_name') ?? undefined;
     const since = c.req.query('since') ?? undefined;
     const includeSys = c.req.query('include_system_errors') === '1';
+    const scopeRaw = c.req.query('scope');
+    const scope = scopeRaw === 'run_final' || scopeRaw === 'runtime' || scopeRaw === 'legacy_turn'
+      ? scopeRaw
+      : undefined;
     return c.json({
       distribution: qualityClassificationStore.verdictDistribution({
         classifierName: classifier,
         since,
+        scope,
         excludeSystemErrors: !includeSys,
       }),
       systemErrors: qualityClassificationStore.countSystemErrors({ since }),

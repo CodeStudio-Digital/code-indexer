@@ -113,6 +113,9 @@ export interface HybridSearchPipelineQuery extends PipelineQuery {
     contentCount?: number;
     graphExpansionCount?: number;
     generationUsed?: number;
+    rerankerApplied?: boolean;
+    rerankerCandidates?: number;
+    rerankerReturned?: number;
     rerankerError?: string;
   };
 }
@@ -691,7 +694,10 @@ export class RerankerHydrator
     q: HybridSearchPipelineQuery,
     candidates: readonly HybridSearchPipelineCandidate[],
   ): Promise<Array<{ ok: true; candidate: HybridSearchPipelineCandidate }>> {
+    q.diag.rerankerCandidates = candidates.length;
+    q.diag.rerankerApplied = false;
     if (candidates.length === 0) {
+      q.diag.rerankerReturned = 0;
       return [];
     }
     const sourceCache = new Map<string, string>();
@@ -733,6 +739,8 @@ export class RerankerHydrator
       newScoreById = new Map(reranked.map((result) => [result.id, result.score]));
       rerankedIds = ids;
       floorScore = Math.min(...reranked.map((result) => result.score)) - 1;
+      q.diag.rerankerApplied = true;
+      q.diag.rerankerReturned = reranked.length;
     } catch (error) {
       // RRF is a complete and deterministic ordering. A reranker outage must
       // never fail the query or erase candidates.
@@ -740,6 +748,7 @@ export class RerankerHydrator
         error instanceof Error ? error.message : String(error)
       }`);
       q.diag.rerankerError = error instanceof Error ? error.message : String(error);
+      q.diag.rerankerReturned = 0;
     }
     return candidates.map((c, index) => {
       const newScore = newScoreById.get(c.candidateId)

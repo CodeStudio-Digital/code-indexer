@@ -22,6 +22,13 @@ import { MasterInboxRouter } from '../services/MasterInboxRouter.js';
 import { RuntimeReconciler } from '../services/RuntimeReconciler.js';
 import { ServiceSupervisor } from '../services/service-supervisor/ServiceSupervisor.js';
 import { CompanyScheduler } from '../services/scheduler/CompanyScheduler.js';
+import { AppStudioScheduler } from '../services/scheduler/AppStudioScheduler.js';
+import type { IKanbanNotifier } from '../services/ports.js';
+import {
+  constrainAutonomyForCapabilities,
+  resolveCompanySessionCapabilities,
+  resolveCompanyServiceWiringPlan,
+} from '../services/session-capabilities.js';
 import { CompanyDriveStore } from '../services/CompanyDriveStore.js';
 import { CompanyEventBus } from '../services/CompanyEventBus.js';
 import { createAutonomyProvider, type AutonomyProvider } from '../services/autonomy/autonomy-provider.js';
@@ -31,7 +38,7 @@ export interface WiredServices {
   ctx: SessionContext;
   publisher: MetaBusPublisher;
   wirer: MetaBusWirer;
-  kanban: KanbanService;
+  kanban: KanbanService | null;
   board: BoardBridge;
   status: AgentStatusUpdater;
   attention: MasterAttention;
@@ -42,8 +49,8 @@ export interface WiredServices {
   watchdog: IdleWatchdog;
   subordinates: SubordinateLifecycle;
   master: MasterLifecycle;
-  pipelines: PipelineService;
-  pipelineExecutor: PipelineExecutor;
+  pipelines: PipelineService | null;
+  pipelineExecutor: PipelineExecutor | null;
   inbox: InboxQueue;
   masterInbox: MasterInboxRouter;
   reconciler: RuntimeReconciler;
@@ -54,7 +61,8 @@ export interface WiredServices {
    * alongside the reconciler.
    */
   serviceSupervisor: ServiceSupervisor;
-  scheduler: CompanyScheduler;
+  scheduler: CompanyScheduler | null;
+  appStudioScheduler: AppStudioScheduler | null;
   /**
    * C0/C2 — per-session autonomy config provider (cached read of
    * `config_json.autonomy`, invalidated on `session.config_updated`).
@@ -86,14 +94,34 @@ export function wireServices(args: {
   // Resolve parent linkage (migration 067).
   const sessionRow = args.companyStore.getCompanySession(args.companySessionId);
   const parentSessionId = sessionRow?.parent_session_id ?? null;
+  const runtimeKind = sessionRow?.runtime_kind ?? 'company';
+  let appStudioSessionId: number | null = null;
+  if (runtimeKind === 'app_studio') {
+    try {
+      const row = args.db.raw().prepare(
+        'SELECT id FROM app_studio_sessions WHERE company_session_id = ? LIMIT 1',
+      ).get(args.companySessionId) as { id: number } | undefined;
+      appStudioSessionId = row?.id ?? null;
+    } catch {
+      // Compatibility with a DB that has not run the App/Company migration.
+    }
+  }
+  const capabilities = resolveCompanySessionCapabilities(runtimeKind, appStudioSessionId);
+  const servicePlan = resolveCompanyServiceWiringPlan(capabilities);
 
   // C0 — autonomy config provider. `applyConfigPatch` (this worker) publishes
   // `session.config_updated` on this same metaBus after persisting, so the
   // sink below keeps the cache coherent without timers.
-  const autonomy = createAutonomyProvider({
+  const persistedAutonomy = createAutonomyProvider({
     companyStore: args.companyStore,
     sessionId: args.companySessionId,
   });
+  const autonomy: AutonomyProvider = capabilities.autonomyPolicy === 'controlled_app_work'
+    ? {
+        get: () => constrainAutonomyForCapabilities(capabilities, persistedAutonomy.get()),
+        invalidate: () => persistedAutonomy.invalidate(),
+      }
+    : persistedAutonomy;
   addBusEventSink(metaBus, (ev) => {
     if (ev.event === 'session.config_updated') autonomy.invalidate();
   });
@@ -104,13 +132,29 @@ export function wireServices(args: {
     db: args.db,
     metaBus,
     parentSessionId,
+    runtimeKind,
+    appStudioSessionId,
+    capabilities,
   });
 
   const publisher = new MetaBusPublisher(metaBus);
   const wirer = new MetaBusWirer(publisher);
   const sandboxService = new SandboxService(ctx, publisher);
-  const kanban = new KanbanService(ctx, publisher);
-  const board = new BoardBridge(ctx, publisher, kanban);
+  // App Studio owns its work graph. Do not even construct the generic
+  // Company Kanban service for App-backed sessions: completion, board and
+  // reconciliation hooks receive a narrow no-op notifier instead, so an
+  // overlooked generic callback cannot create/move Company cards.
+  const kanban = servicePlan.initializeCompanyKanban
+    ? new KanbanService(ctx, publisher)
+    : null;
+  const disabledKanbanNotifier: IKanbanNotifier = {
+    findCardForAgent: () => null,
+    addComment: () => undefined,
+    moveCard: () => undefined,
+    getCard: () => null,
+  };
+  const kanbanNotifier = kanban ?? disabledKanbanNotifier;
+  const board = new BoardBridge(ctx, publisher, kanbanNotifier);
   const status = new AgentStatusUpdater(ctx, publisher);
   const attention = new MasterAttention();
   const driveStore = CompanyDriveStore.fromSessionContext(ctx, { publisher });
@@ -131,7 +175,7 @@ export function wireServices(args: {
   (master as unknown as { deps: { humanInLoop: HumanInTheLoop } }).deps.humanInLoop = humanInLoop;
 
   const subordinates = new SubordinateLifecycle({
-    ctx, board, status, kanban, master, humanInLoop, wirer, eventBus,
+    ctx, board, status, kanban: kanbanNotifier, master, humanInLoop, wirer, eventBus,
     orchestratorRef: args.orchestratorRef, attention, autonomy,
   });
 
@@ -165,10 +209,17 @@ export function wireServices(args: {
 
   // Pipelines: thin CRUD + executor that drives subordinates through a stored
   // graph. Constructed last because the executor needs already-wired services.
-  const pipelines = new PipelineService(ctx);
-  const pipelineExecutor = new PipelineExecutor({
-    ctx, pipelines, kanban, subordinates, attention, publisher,
-  });
+  const pipelines = servicePlan.initializeCompanyPipelines
+    ? new PipelineService(ctx)
+    : null;
+  // A Company pipeline materializes nodes as Company Kanban cards, therefore
+  // both capabilities must be present. App sessions intentionally construct
+  // neither service.
+  const pipelineExecutor = pipelines && kanban
+    ? new PipelineExecutor({
+        ctx, pipelines, kanban, subordinates, attention, publisher,
+      })
+    : null;
 
   // Inbox: persistent message queue between subordinates. The lifecycle's
   // idle hook is wired here (late-bound) because the queue needs
@@ -198,7 +249,8 @@ export function wireServices(args: {
   // RuntimeReconciler — periodic DB↔runtime consistency sweep + master-inbox
   // heartbeat. Constructed AFTER masterInbox because it depends on it.
   const reconciler = new RuntimeReconciler({
-    ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention, kanban,
+    ctx, master, subordinates, masterInbox, publisher, humanInLoop, attention,
+    kanban: kanban ?? undefined,
     autonomy,
   });
   reconciler.start();
@@ -215,7 +267,7 @@ export function wireServices(args: {
       notifyMaster: (m) => master.notify(m),
       board,
       publisher,
-      kanban,
+      kanban: servicePlan.allowIncidentKanbanCards ? kanban ?? undefined : undefined,
       inbox,
       getSessionConfigJson: () =>
         args.companyStore.getCompanySession(args.companySessionId)?.config_json ?? null,
@@ -228,24 +280,36 @@ export function wireServices(args: {
   // timer is always armed and each tick consults the autonomy provider, so
   // a session toggle (PATCH /config), `freeze`, or MCP_COMPANY_SCHEDULER='0'
   // kills it live without a worker restart.
-  const scheduler = new CompanyScheduler({
-    ctx,
-    kanban,
-    master,
-    subordinates,
-    concurrencyLimit: subordinates.concurrencyPolicy.limit,
-    // C1 — organism visibility: dispatch/skip/sweep events ride the session
-    // metaBus so the dashboard's autonomy feed sees the scheduler act.
-    bus: publisher,
-    autonomy,
-  });
-  scheduler.start();
+  const scheduler = servicePlan.initializeCompanyScheduler && kanban
+    ? new CompanyScheduler({
+        ctx,
+        kanban,
+        master,
+        subordinates,
+        concurrencyLimit: subordinates.concurrencyPolicy.limit,
+        // C1 — organism visibility: dispatch/skip/sweep events ride the session
+        // metaBus so the dashboard's autonomy feed sees the scheduler act.
+        bus: publisher,
+        autonomy,
+      })
+    : null;
+  scheduler?.start();
+  const appStudioScheduler = capabilities.allowAppScheduler
+    ? new AppStudioScheduler({
+        ctx,
+        host: args.orchestratorRef,
+        master,
+        bus: publisher,
+        autonomy,
+      })
+    : null;
+  appStudioScheduler?.start();
 
   return {
     ctx, publisher, wirer, kanban, board, status, attention,
     sandboxService, eventBus, humanInLoop, idle, watchdog,
     subordinates, master, pipelines, pipelineExecutor,
     inbox, masterInbox, reconciler, serviceSupervisor, scheduler,
-    autonomy, driveStore, metaBus, parentSessionId,
+    autonomy, driveStore, metaBus, parentSessionId, appStudioScheduler,
   };
 }

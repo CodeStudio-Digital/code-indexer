@@ -79,6 +79,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     consecutiveNoopCompactions: 0,
     planNudges: 0,
     goalVerifyAttempts: 0,
+    lastStrategyNudgeTurnByKey: new Map(),
     estimateCalibration: null,
     runId: randomUUID(),
     aborted: false,

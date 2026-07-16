@@ -23,7 +23,7 @@ export interface BackgroundAgentSlot {
   label: string;
   profileId: string;
   task: string;
-  status: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+  status: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
   toolCallCount: number;
   phase?: string;
   turn?: number;
@@ -48,6 +48,8 @@ export interface SubagentJob {
   agents: BackgroundAgentSlot[];
   resultText?: string;
   totalUsage?: ChatUsage;
+  /** Number of retained child transcripts currently eligible for resume_agent. */
+  resumableCount: number;
   /** True once the tokens have been added to the session totals (settle). */
   usageAccounted: boolean;
   abort: AbortController;
@@ -100,6 +102,7 @@ export class SubagentJobManager {
       status: 'running',
       delivery: 'none',
       agents: args.agents,
+      resumableCount: 0,
       usageAccounted: false,
       abort: new AbortController(),
       settled,

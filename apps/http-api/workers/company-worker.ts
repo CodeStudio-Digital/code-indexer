@@ -152,11 +152,15 @@ hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
 
 // Quality classifiers — worker_threads don't share module state, so the
 // quality globals installed in server.ts (main thread) are NULL here. The
-// subordinate CoderRunner instances fire per-turn classifiers from INSIDE
+// main Company CoderRunner instances fire completed-round assessment from INSIDE
 // this worker when MCP_CODER_WORKER=1, so without this re-install Telemetry
 // → Quality stays empty for company/subordinate runs. See quality-wiring.ts
 // for the gaps vs main.
-installWorkerQualityWiring(dbConn.handle, `company-worker ${companySessionId}`);
+const qualityController = installWorkerQualityWiring(
+  dbConn.handle,
+  `company-worker ${companySessionId}`,
+  process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
+);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
@@ -577,6 +581,13 @@ interface RpcPayload {
   /** Positional args. POJO-only — survived `structuredClone`. */
   args: unknown[];
 }
+
+bridge.handle('quality.setEnabled', (payload) => {
+  const { enabled } = payload as { enabled: boolean };
+  return qualityController.setEnabled(enabled);
+});
+
+bridge.handle('quality.status', () => ({ enabled: qualityController.isEnabled() }));
 
 bridge.handle('rpc', async (payload) => {
   const { path, args } = payload as RpcPayload;

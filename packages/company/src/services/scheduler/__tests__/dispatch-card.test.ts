@@ -80,7 +80,11 @@ describe('dispatchCard', () => {
     expect(result).toMatchObject({ ok: true, cardId: 7, role: 'frontend', agentRunId: 42 });
     expect(recommend).not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledWith(
-      expect.objectContaining({ role: 'frontend', task: 'Build login form\n\nReact + zod' }),
+      expect.objectContaining({
+        role: 'frontend',
+        task: 'Build login form\n\nReact + zod',
+        dispatchSource: 'scheduler',
+      }),
     );
     expect(assignAgent).toHaveBeenCalledWith(7, 42, 'frontend');
     expect(moveCard).toHaveBeenCalledWith(7, 'in_progress');
@@ -155,9 +159,10 @@ describe('dispatchCard', () => {
   });
 
   it("manual source: no scheduler_* events, human-authored comment", async () => {
-    const { deps, addComment, published } = makeDeps({});
+    const { deps, spawn, addComment, published } = makeDeps({});
     const result = await dispatchCard(deps, 7, { role: 'frontend', source: 'manual' });
     expect(result.ok).toBe(true);
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ dispatchSource: 'manual' }));
     expect(published).toEqual([]); // kanban_* events already narrate manual dispatches
     expect(addComment).toHaveBeenCalledWith(7, 'human', 42, expect.stringContaining('quick-dispatch'));
     expect(addComment).not.toHaveBeenCalledWith(7, 'human', 42, expect.stringContaining('[AUTO]'));

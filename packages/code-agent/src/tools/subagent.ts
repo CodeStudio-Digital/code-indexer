@@ -22,10 +22,10 @@ export const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent cod
 
 # CRITICAL — ALWAYS PRODUCE A SUMMARY
 
-The parent agent ONLY reads your final assistant text. If you hit max_turns without a text summary, your entire investigation is WASTED — the parent gets "(no summary produced)" and all your tool calls were for nothing.
+The parent agent reads your final assistant text. Work until the focused investigation is complete, then always produce a concise evidence-backed summary.
 
 **Rules:**
-- Every few turns, write a partial text summary of what you found so far. This ensures the parent gets SOMETHING even if you hit max_turns.
+- Record durable memos when useful during a long investigation, but reserve the assistant response for the final summary.
 - When you have gathered enough info, stop and write your complete final summary.
 - If a search returns no results twice in a row, stop — report "No evidence of X" as a finding.
 - NEVER end your run with only tool calls and no text.
@@ -56,7 +56,7 @@ You have read AND write access to the project files plus shell. You do NOT have 
 2. Before any DESTRUCTIVE change (delete, rename, rewrite a file, remove config), re-read the affected code first and confirm the evidence supports THAT specific change — a pattern that matches a known failure may have a different root cause. If the evidence is ambiguous, stop and report instead of guessing.
 3. Verify your work (run tests / lints when relevant).
 4. Stop and write a final summary listing files changed + a 1-line description of what each change does.
-5. NEVER end your run with only tool calls and no text — the parent reads ONLY your final assistant text. If you hit max_turns without a summary, the entire effort is wasted.
+5. NEVER end your run with only tool calls and no text — always return a final summary to the parent.
 6. If you discover the task can't be done as described (missing prerequisite, ambiguous scope), stop and report findings instead of guessing.
 7. If a \`files\` scope was given, keep WRITES inside it; reading outside the scope for context is fine.
 

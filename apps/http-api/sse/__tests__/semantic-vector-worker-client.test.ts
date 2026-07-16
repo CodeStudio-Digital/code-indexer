@@ -188,6 +188,28 @@ describe('SemanticVectorWorkerClient generation cleanup RPC', () => {
     });
   });
 
+  it('routes unused-table probes and physical compaction through the worker bridge', async () => {
+    const client = new SemanticVectorWorkerClient('D:/data/index.db', {
+      file: 'D:/fake/semantic-vector-worker.js',
+      execArgv: [],
+      built: true,
+    });
+    const request = vi.fn(async (type: string) => type === 'vectors.hasGeneration'
+      ? true
+      : { before_bytes: 20_000, after_bytes: 8_000 });
+    Object.defineProperty(client, 'request', { value: request });
+
+    await expect(client.hasGeneration('code:p7', 3)).resolves.toBe(true);
+    await expect(client.compactGenerationDatabase('code:p7', 3)).resolves.toEqual({
+      before_bytes: 20_000,
+      after_bytes: 8_000,
+    });
+    expect(request.mock.calls).toEqual([
+      ['vectors.hasGeneration', { namespace: 'code:p7', generationId: 3 }],
+      ['vectors.compactGenerationDatabase', { namespace: 'code:p7', generationId: 3 }],
+    ]);
+  });
+
   it('routes physical id probes through the worker bridge', async () => {
     const client = new SemanticVectorWorkerClient('D:/data/index.db', {
       file: 'D:/fake/semantic-vector-worker.js',

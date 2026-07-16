@@ -1,8 +1,31 @@
 export type CompanySessionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error';
+export type CompanyRuntimeKind = 'company' | 'app_studio';
+
+/**
+ * Server-resolved runtime surface. Persist only `runtime_kind`; the remaining
+ * fields are derived so clients and workers cannot widen a session's powers by
+ * editing config_json.
+ */
+export interface CompanySessionCapabilities {
+  runtimeKind: CompanyRuntimeKind;
+  appStudioSessionId: number | null;
+  promptProfile: 'company' | 'app_studio';
+  toolProfile: 'company' | 'app_studio';
+  autonomyPolicy: 'company' | 'controlled_app_work';
+  workSource: 'company_kanban' | 'app_workflow';
+  allowAppTools: boolean;
+  allowCompanyKanban: boolean;
+  allowCompanyPipelines: boolean;
+  allowCompanyScheduler: boolean;
+  allowAppScheduler: boolean;
+  allowFreeSubordinateSpawn: boolean;
+}
 
 export interface CompanySession {
   id: number;
   template_id: number | null;
+  /** Selects the server-owned orchestration capability for this session. */
+  runtime_kind: CompanyRuntimeKind;
   name: string;
   status: CompanySessionStatus;
   master_session_id: number | null;

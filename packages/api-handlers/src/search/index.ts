@@ -26,7 +26,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
   const { db, hybridSearch } = deps;
 
   return {
-    async project({ projectId, query, mode, type, limit, supersessionKey }, ctx) {
+    async project({ projectId, query, mode, type, limit, supersessionKey, bypassCache }, ctx) {
       const project = db.getProject(projectId);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
       const effectiveMode = (mode ?? project.search_mode ?? 'hybrid') as SearchMode;
@@ -42,6 +42,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
             ? `project:${projectId}:${ctx.clientInfo?.sourceType ?? 'unknown'}:${supersessionKey.trim().slice(0, 128)}`
             : undefined,
           signal: ctx.signal,
+          bypassCache,
         },
       );
       const activeGeneration = deps.semanticStore.getActiveGeneration(codeNamespace(projectId));

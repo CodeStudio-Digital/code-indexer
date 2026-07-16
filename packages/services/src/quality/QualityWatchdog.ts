@@ -1,34 +1,7 @@
 /**
- * QualityWatchdog — a lightweight, always-on LLM watchdog focused on
- * tool-loop / stuck-progress detection.
- *
- * Different from {@link QualityClassifierPipeline} (the 5-classifier
- * pipeline gated by `MCP_PIPELINES_QUALITY_CLASSIFIERS=1`):
- *
- *   - **Single focus**: only detects tool loops / stuck progress.
- *     The other 4 classifiers (off_topic, completeness, code_quality,
- *     policy) stay in their pipeline.
- *   - **Cheap model**: uses its own provider/model — typically a fast
- *     cheap one like `claude-haiku-4-5` or `gemini-2.5-flash`. The
- *     5-classifier pipeline can keep using the main model.
- *   - **Trigger-gated**: doesn't run every turn. The runner consults a
- *     cheap heuristic pre-filter first (`shouldRun()`) and only invokes
- *     the LLM when the pre-filter says "this looks suspicious". Result:
- *     ~5 calls in a 50-turn loop vs. 250 for the full pipeline.
- *   - **On by default** (when provider+model are configured): no need
- *     to flip `MCP_PIPELINES_QUALITY_CLASSIFIERS=1`. The operator opts
- *     out via `MCP_QUALITY_WATCHDOG_ENABLED=0`.
- *
- * Persists each invocation in `quality_classifications` with
- * `classifier_name='tool_loop'` so it doesn't collide with the
- * `tool_misuse` rows the full pipeline writes.
- *
- * Plumbing-agnostic: the constructor takes a single `runChat` function
- * that the caller binds to the actual provider/model. The boot-side
- * server.ts wiring picks `pickChatFn` from the dispatcher and resolves
- * the binding once at process startup. Keeps the watchdog itself free
- * of binding-resolver knowledge and easy to unit-test (just stub
- * `runChat`).
+ * Legacy watchdog implementation retained for source compatibility only.
+ * Runtime wiring uses deterministic ledger guards and the terminal delivery
+ * assessment instead; this class is not started by the server or workers.
  */
 import type { ClassificationVerdict, QualityVerdict } from './types.js';
 

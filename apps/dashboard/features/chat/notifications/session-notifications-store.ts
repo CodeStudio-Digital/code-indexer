@@ -28,8 +28,17 @@ export type SessionNotificationPayload =
       reason: string;
       turn: number;
     }
-  | { kind: 'background-agents-done'; jobId: string; agentCount: number; successCount: number }
-  | { kind: 'agent-failed'; groupId: string; agentIndex: number; label: string; reason: string };
+  | {
+      kind: 'background-agents-done';
+      jobId: string;
+      groupId: string;
+      agentCount: number;
+      successCount: number;
+      completedCount: number;
+      partialCount: number;
+      failedCount: number;
+      resumableCount: number;
+    };
 
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 
@@ -96,11 +105,9 @@ function derive(payload: SessionNotificationPayload): {
         ? { severity: 'error', autoDismissMs: null }
         : { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
     case 'background-agents-done':
-      return payload.successCount < payload.agentCount
+      return payload.partialCount > 0 || payload.failedCount > 0
         ? { severity: 'warning', autoDismissMs: WARN_DISMISS_MS }
         : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
-    case 'agent-failed':
-      return { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
   }
 }
 

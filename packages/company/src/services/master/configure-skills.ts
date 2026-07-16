@@ -8,7 +8,7 @@
  */
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import { resolveRoleSkills } from '@mcp/company/types.js';
+import { resolveRoleSkills, type RoleSkills } from '@mcp/company/types.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 
 export function configureMasterSkills(opts: {
@@ -17,12 +17,15 @@ export function configureMasterSkills(opts: {
   /** `coder_sessions.id` of the master. */
   coderSessionId: number;
   primaryProjectId: number | undefined;
+  /** Authoritative App Master skills; [] explicitly disables all. */
+  masterSkills?: RoleSkills;
 }): void {
   const masterRoleConfig = opts.roleConfigs.find((r) => r.role === 'master');
-  const masterResolvedSkills = resolveRoleSkills(masterRoleConfig?.skills, {
+  const configuredSkills = opts.masterSkills ?? masterRoleConfig?.skills;
+  if (configuredSkills === undefined) return;
+  const masterResolvedSkills = resolveRoleSkills(configuredSkills, {
     stack: opts.configuredStack ?? undefined,
   });
-  if (masterResolvedSkills.length === 0) return;
   if (opts.primaryProjectId == null) return;
 
   try {

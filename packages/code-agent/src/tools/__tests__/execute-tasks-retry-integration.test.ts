@@ -149,4 +149,19 @@ describe('execute_tasks retry integration', () => {
     await tool.handler({}, ctx);
     expect(runSubagent).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry an explicit operational budget cutoff', async () => {
+    vi.mocked(runSubagent).mockResolvedValue({
+      reason: 'time_budget', finalText: 'partial work retained',
+      usage: { input_tokens: 20, output_tokens: 5 }, sandboxViolations: [],
+    });
+    const { tool, ctx, runner } = setup([task({ id: 'tsk_one' })]);
+    await tool.handler({}, ctx);
+
+    expect(runSubagent).toHaveBeenCalledTimes(1);
+    expect(runner.emit).toHaveBeenCalledWith(
+      'task_finished',
+      expect.objectContaining({ task_id: 'tsk_one', status: 'interrupted' }),
+    );
+  });
 });

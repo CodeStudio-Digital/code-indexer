@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
-import { ArrowLeft } from 'lucide-react';
+import { Badge } from '../../components/ui/badge.js';
+import { ArrowLeft, CheckCheck, RotateCcw } from 'lucide-react';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
 import { cn } from '../../lib/utils.js';
 import { SnapshotFileList } from './SnapshotFileList.js';
@@ -39,9 +40,18 @@ interface Props {
   /** Baseline to preselect on open (deep-link from a chat "View snapshot" action). */
   initialBaselineId?: number | null;
   onSubmitReviewMessage?: (message: string) => Promise<void>;
+  /** Reserves room in the shared toolbar for the dialog's close control. */
+  dialogMode?: boolean;
 }
 
-export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId, onSubmitReviewMessage }: Props) {
+export function SnapshotsPanel({
+  scope,
+  sessionId,
+  refreshKey,
+  initialBaselineId,
+  onSubmitReviewMessage,
+  dialogMode = false,
+}: Props) {
   const { t } = useTranslation('projects');
   const confirm = useConfirm();
   const [files, setFiles] = useState<SnapshotFileSummary[]>([]);
@@ -367,25 +377,31 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b bg-card">
-        <div className="flex items-center gap-2 min-w-0">
+      <div
+        className={cn(
+          'flex min-h-10 flex-wrap items-center justify-between gap-1.5 border-b bg-card px-2.5 py-1.5',
+          dialogMode && 'pr-11',
+        )}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
           {mobileShowDiff && (
             <Button
               size="icon"
               variant="ghost"
               onClick={() => setMobileShowDiff(false)}
-              className="lg:hidden h-7 w-7 flex-shrink-0"
+              className="h-7 w-7 flex-shrink-0 md:hidden"
               aria-label={t('snapshotPanel.backToList')}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
           )}
-          <h2 className="font-medium text-sm truncate">
-            {t('snapshotPanel.title')} <span className="text-muted-foreground">{t('snapshotPanel.activeCount', { count: activeCount })}</span>
-          </h2>
+          <h2 className="truncate text-sm font-semibold">{t('snapshotPanel.title')}</h2>
+          <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] font-normal tabular-nums">
+            {t('snapshotPanel.activeCount', { count: activeCount })}
+          </Badge>
           {projects.length > 1 && (
             <select
-              className="text-xs bg-background border rounded px-1.5 py-0.5 max-w-[160px]"
+              className="h-7 max-w-[170px] min-w-0 rounded border bg-background px-1.5 text-xs"
               value={projectFilter ?? ''}
               onChange={(e) =>
                 setProjectFilter(e.target.value === '' ? null : Number(e.target.value))
@@ -399,24 +415,28 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
             </select>
           )}
         </div>
-        <div className="flex gap-1.5 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center gap-1">
           <Button
             size="sm"
             variant="default"
             disabled={busy || activeCount === 0}
             onClick={handleAcceptAll}
-            className="h-7 text-xs px-2"
+            className="h-7 px-2 text-xs"
+            title={t('snapshotPanel.keepAll')}
           >
-            {t('snapshotPanel.keepAll')}
+            <CheckCheck className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t('snapshotPanel.keepAll')}</span>
           </Button>
           <Button
             size="sm"
             variant="outline"
             disabled={busy || activeCount === 0}
             onClick={handleRevertAll}
-            className="h-7 text-xs px-2"
+            className="h-7 px-2 text-xs"
+            title={t('snapshotPanel.revertAll')}
           >
-            {t('snapshotPanel.revertAll')}
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t('snapshotPanel.revertAll')}</span>
           </Button>
         </div>
       </div>
@@ -441,12 +461,12 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
         onUpdateComment={handleUpdateReviewComment}
         onSubmit={handleSubmitReview}
       />
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[320px_1fr]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(240px,280px)_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)]">
         {/* File list — hidden on mobile when a diff is being viewed */}
         <div
           className={cn(
             'border-r min-h-0 flex flex-col',
-            mobileShowDiff && 'hidden lg:flex',
+            mobileShowDiff && 'hidden md:flex',
           )}
         >
           {loading ? (
@@ -466,7 +486,7 @@ export function SnapshotsPanel({ scope, sessionId, refreshKey, initialBaselineId
         <div
           className={cn(
             'min-h-0 min-w-0 flex flex-col',
-            !mobileShowDiff && 'hidden lg:flex',
+            !mobileShowDiff && 'hidden md:flex',
           )}
         >
           {selectedBaselineId == null ? (

@@ -58,4 +58,24 @@ describe('applyAgentStatus — subordinate materialisation', () => {
     expect(s.masterState?.status).toBe('running');
     expect(s.subordinateStates.size).toBe(0);
   });
+
+  it('retains App configured/effective model provenance from the live stream', () => {
+    const agent = applyAgentStatus(base(), evt({
+      configuredProvider: 'openai-chatgpt',
+      configuredModel: 'gpt-5.6-sol',
+      effectiveProvider: 'openai-chatgpt',
+      effectiveModel: 'gpt-5.6-sol',
+      dispatchSource: 'app_studio',
+      fallbackReason: null,
+    })).subordinateStates.get(7);
+
+    expect(agent).toMatchObject({
+      configuredProvider: 'openai-chatgpt',
+      configuredModel: 'gpt-5.6-sol',
+      effectiveProvider: 'openai-chatgpt',
+      effectiveModel: 'gpt-5.6-sol',
+      dispatchSource: 'app_studio',
+      fallbackReason: null,
+    });
+  });
 });

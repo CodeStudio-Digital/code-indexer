@@ -1,5 +1,6 @@
 import type { Database as DB } from 'better-sqlite3';
 import type {
+  CompanyRuntimeKind,
   CompanySession,
   CompanySessionStatus,
 } from '@mcp/company/types.js';
@@ -9,6 +10,7 @@ export interface CreateCompanySessionInput {
   name: string;
   config_json?: string;
   parent_session_id?: number | null;
+  runtime_kind?: CompanyRuntimeKind;
 }
 
 export interface ListSessionsOptions {
@@ -18,14 +20,15 @@ export interface ListSessionsOptions {
 
 export function create(db: DB, input: CreateCompanySessionInput): CompanySession {
   const stmt = db.prepare(`
-    INSERT INTO company_sessions (template_id, name, config_json, parent_session_id)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO company_sessions (template_id, name, config_json, parent_session_id, runtime_kind)
+    VALUES (?, ?, ?, ?, ?)
   `);
   const r = stmt.run(
     input.template_id ?? null,
     input.name,
     input.config_json ?? '{}',
     input.parent_session_id ?? null,
+    input.runtime_kind ?? 'company',
   );
   return get(db, Number(r.lastInsertRowid))!;
 }
@@ -37,6 +40,9 @@ export function create(db: DB, input: CreateCompanySessionInput): CompanySession
 export function createChild(db: DB, parentSessionId: number, name: string): CompanySession {
   const parent = get(db, parentSessionId);
   if (!parent) throw new Error(`Parent session ${parentSessionId} not found`);
+  if (parent.runtime_kind !== 'company') {
+    throw new Error(`Runtime '${parent.runtime_kind}' does not support Company child sessions`);
+  }
   if (parent.parent_session_id != null) {
     throw new Error('Cannot nest sub-sessions: parent must itself be a root session');
   }
@@ -45,6 +51,7 @@ export function createChild(db: DB, parentSessionId: number, name: string): Comp
     name,
     config_json: parent.config_json,
     parent_session_id: parent.id,
+    runtime_kind: parent.runtime_kind,
   });
 }
 
@@ -127,8 +134,11 @@ export function duplicate(db: DB, sourceId: number, newName: string): CompanySes
   const tx = db.transaction(() => {
     const source = db
       .prepare('SELECT * FROM company_sessions WHERE id = ?')
-      .get(sourceId) as { config_json: string } | undefined;
+      .get(sourceId) as { config_json: string; runtime_kind: CompanyRuntimeKind } | undefined;
     if (!source) throw new Error(`Session ${sourceId} not found`);
+    if (source.runtime_kind !== 'company') {
+      throw new Error(`Runtime '${source.runtime_kind}' does not support Company duplication`);
+    }
 
     const r = db
       .prepare(`INSERT INTO company_sessions (name, config_json, status) VALUES (?, ?, 'idle')`)

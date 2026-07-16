@@ -49,6 +49,8 @@ interface CompanySession {
   name: string;
   status: string;
   template_id: number | null;
+  runtime_kind?: 'company' | 'app_studio';
+  app_session_id?: number | null;
   created_at: string;
 }
 
@@ -80,7 +82,7 @@ export function AgentsTab() {
     const query = sessionQuery.trim().toLocaleLowerCase();
     if (!query) return sessions ?? [];
     return (sessions ?? []).filter((session) =>
-      `${session.name} ${session.status}`.toLocaleLowerCase().includes(query),
+      `${session.name} ${session.status} ${session.runtime_kind === 'app_studio' ? 'app' : 'company'}`.toLocaleLowerCase().includes(query),
     );
   }, [sessionQuery, sessions]);
 
@@ -95,7 +97,7 @@ export function AgentsTab() {
   useEffect(() => {
     if (agentsSidebarOpen) catalogPanelRef.current?.expand();
     else catalogPanelRef.current?.collapse();
-  }, [agentsSidebarOpen]);
+  }, [agentsSidebarOpen, selectedSessionId]);
 
   const toggleCatalog = useCallback((view: CompanyCatalogView) => {
     if (sidebarView === view) {
@@ -105,17 +107,6 @@ export function AgentsTab() {
     setSidebarView(view);
     setAgentsSidebarOpen(true);
   }, [sidebarView]);
-
-  const sessionWorkbenchSlots = useMemo<CompanySessionWorkbenchSlots>(() => ({
-    leftRailHost: sessionRailHost,
-    catalog: {
-      open: agentsSidebarOpen,
-      activeView: sidebarView,
-      sessionCount: sessions?.length,
-      templateCount: templates?.length,
-      onToggle: toggleCatalog,
-    },
-  }), [agentsSidebarOpen, sessionRailHost, sessions?.length, sidebarView, templates?.length, toggleCatalog]);
 
   function selectSession(id: number) {
     navigate(buildAgentsDefaultUrl(id));
@@ -137,145 +128,161 @@ export function AgentsTab() {
     selectSession(data.session.id);
   }
 
+  const catalogPanel = (
+    <WorkbenchSurface className="flex h-full flex-col rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+      <WorkbenchPanelHeader
+        title={sidebarView === 'sessions' ? t('sessions') : t('templates')}
+        icon={sidebarView === 'sessions' ? Users : LayoutTemplate}
+        actions={
+          <button
+            type="button"
+            onClick={() => sidebarView === 'sessions' ? setShowNewCompany(true) : setShowNewTemplate(true)}
+            aria-label={sidebarView === 'sessions' ? t('newCompany') : t('template.newTemplate')}
+            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        }
+        onClose={() => setAgentsSidebarOpen(false)}
+        closeLabel={t('catalog.collapse')}
+      />
+
+      {sidebarView === 'sessions' ? (
+        <>
+          <div className="border-b border-[var(--workbench-border)] p-1.5">
+            <label className="flex h-7 items-center gap-1.5 rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-muted-foreground focus-within:border-[var(--workbench-focus)]">
+              <Search className="h-3.5 w-3.5 shrink-0" />
+              <input
+                value={sessionQuery}
+                onChange={(event) => setSessionQuery(event.target.value)}
+                placeholder={t('catalog.filterCompanies')}
+                className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </label>
+          </div>
+          <div className="flex-1 space-y-1 overflow-y-auto p-1.5">
+            {filteredSessions.length === 0 && (
+              <div className="px-3 py-8 text-center">
+                <Users className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
+                <p className="text-[11px] font-medium text-foreground">
+                  {sessionQuery ? t('catalog.noCompanyFound') : t('noSessions')}
+                </p>
+                {!sessionQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCompany(true)}
+                    className="mt-2 text-[11px] text-primary hover:underline"
+                  >
+                    {t('newCompany')}
+                  </button>
+                )}
+              </div>
+            )}
+            {filteredSessions.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                selected={selectedSessionId === session.id}
+                onSelect={() => selectSession(session.id)}
+                onDuplicate={(event) => handleDuplicate(event, session.id)}
+                onDelete={(event) => handleDelete(event, session.id)}
+              />
+            ))}
+          </div>
+          <div className="flex h-7 items-center border-t border-[var(--workbench-border)] px-2 text-[10px] text-muted-foreground">
+            {t('catalog.companyCount', { shown: filteredSessions.length, total: sessions?.length ?? 0 })}
+          </div>
+        </>
+      ) : (
+        <TemplateListPanel onNewTemplate={() => setShowNewTemplate(true)} />
+      )}
+    </WorkbenchSurface>
+  );
+
+  const sessionWorkbenchSlots: CompanySessionWorkbenchSlots = {
+    leftRailHost: sessionRailHost,
+    catalog: {
+      open: agentsSidebarOpen,
+      activeView: sidebarView,
+      sessionCount: sessions?.length,
+      templateCount: templates?.length,
+      onToggle: toggleCatalog,
+      onOpenChange: setAgentsSidebarOpen,
+    },
+    catalogPanel,
+  };
+
   return (
     <WorkbenchShell>
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {selectedSession ? (
           <div ref={setSessionRailHost} className="contents" />
         ) : (
-        <RailContainer side="left" aria-label={t('catalog.navigationLabel')}>
-          <RailButton
-            icon={Users}
-            label={t('sessions')}
-            role="toggle"
-            active={agentsSidebarOpen && sidebarView === 'sessions'}
-            onClick={() => toggleCatalog('sessions')}
-            badge={sessions?.length}
-          />
-          <RailButton
-            icon={LayoutTemplate}
-            label={t('templates')}
-            role="toggle"
-            active={agentsSidebarOpen && sidebarView === 'templates'}
-            onClick={() => toggleCatalog('templates')}
-            badge={templates?.length}
-          />
-          <div className="mt-auto pb-1">
+          <RailContainer side="left" aria-label={t('catalog.navigationLabel')}>
             <RailButton
-              icon={Plus}
-              label={t('newCompany')}
+              icon={Users}
+              label={t('sessions')}
               role="toggle"
-              active={showNewCompany}
-              onClick={() => setShowNewCompany(true)}
+              active={agentsSidebarOpen && sidebarView === 'sessions'}
+              onClick={() => toggleCatalog('sessions')}
+              badge={sessions?.length}
             />
-          </div>
-        </RailContainer>
+            <RailButton
+              icon={LayoutTemplate}
+              label={t('templates')}
+              role="toggle"
+              active={agentsSidebarOpen && sidebarView === 'templates'}
+              onClick={() => toggleCatalog('templates')}
+              badge={templates?.length}
+            />
+            <div className="mt-auto pb-1">
+              <RailButton
+                icon={Plus}
+                label={t('newCompany')}
+                role="toggle"
+                active={showNewCompany}
+                onClick={() => setShowNewCompany(true)}
+              />
+            </div>
+          </RailContainer>
         )}
 
-        <div className={cn('min-w-0 flex-1', !selectedSession && 'p-1.5')}>
-          <PanelGroup direction="horizontal" autoSaveId="mcp-company-catalog-layout" className="min-h-0 min-w-0">
-            <Panel
-              ref={catalogPanelRef}
-              order={1}
-              defaultSize={22}
-              minSize={16}
-              maxSize={34}
-              collapsible
-              collapsedSize={0}
-              onCollapse={() => setAgentsSidebarOpen(false)}
-              onExpand={() => setAgentsSidebarOpen(true)}
-            >
-              <div className={cn('h-full min-h-0', selectedSession && 'p-1.5 pr-0')}>
-              <WorkbenchSurface className="flex h-full flex-col rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
-                <WorkbenchPanelHeader
-                  title={sidebarView === 'sessions' ? t('sessions') : t('templates')}
-                  icon={sidebarView === 'sessions' ? Users : LayoutTemplate}
-                  actions={
-                    <button
-                      type="button"
-                      onClick={() => sidebarView === 'sessions' ? setShowNewCompany(true) : setShowNewTemplate(true)}
-                      aria-label={sidebarView === 'sessions' ? t('newCompany') : t('template.newTemplate')}
-                      className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-[var(--workbench-hover)] hover:text-foreground"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </button>
-                  }
-                  onClose={() => setAgentsSidebarOpen(false)}
-                  closeLabel={t('catalog.collapse')}
-                />
-
-                {sidebarView === 'sessions' ? (
-                  <>
-                    <div className="border-b border-[var(--workbench-border)] p-1.5">
-                      <label className="flex h-7 items-center gap-1.5 rounded border border-[var(--workbench-border)] bg-[var(--workbench-canvas)] px-2 text-muted-foreground focus-within:border-[var(--workbench-focus)]">
-                        <Search className="h-3.5 w-3.5 shrink-0" />
-                        <input
-                          value={sessionQuery}
-                          onChange={(event) => setSessionQuery(event.target.value)}
-                          placeholder={t('catalog.filterCompanies')}
-                          className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
-                        />
-                      </label>
-                    </div>
-                    <div className="flex-1 space-y-1 overflow-y-auto p-1.5">
-                      {filteredSessions.length === 0 && (
-                        <div className="px-3 py-8 text-center">
-                          <Users className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
-                          <p className="text-[11px] font-medium text-foreground">
-                            {sessionQuery ? t('catalog.noCompanyFound') : t('noSessions')}
-                          </p>
-                          {!sessionQuery && (
-                            <button
-                              type="button"
-                              onClick={() => setShowNewCompany(true)}
-                              className="mt-2 text-[11px] text-primary hover:underline"
-                            >
-                              {t('newCompany')}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {filteredSessions.map((session) => (
-                        <SessionRow
-                          key={session.id}
-                          session={session}
-                          selected={selectedSessionId === session.id}
-                          onSelect={() => selectSession(session.id)}
-                          onDuplicate={(event) => handleDuplicate(event, session.id)}
-                          onDelete={(event) => handleDelete(event, session.id)}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex h-7 items-center border-t border-[var(--workbench-border)] px-2 text-[10px] text-muted-foreground">
-                      {t('catalog.companyCount', { shown: filteredSessions.length, total: sessions?.length ?? 0 })}
-                    </div>
-                  </>
-                ) : (
-                  <TemplateListPanel onNewTemplate={() => setShowNewTemplate(true)} />
-                )}
-              </WorkbenchSurface>
-              </div>
-            </Panel>
-
-            <WorkbenchResizeHandle
-              direction="horizontal"
-              disabled={!agentsSidebarOpen}
-              className={!agentsSidebarOpen ? 'w-0 cursor-default' : undefined}
+        {selectedSession ? (
+          <div className="min-w-0 flex-1">
+            <CompanySessionView
+              key={selectedSession.id}
+              sessionId={selectedSession.id}
+              sessionName={selectedSession.name}
+              sessionStatus={selectedSession.status}
+              runtimeKind={selectedSession.runtime_kind ?? 'company'}
+              appSessionId={selectedSession.app_session_id ?? null}
+              workbenchSlots={sessionWorkbenchSlots}
             />
+          </div>
+        ) : (
+          <div className="min-w-0 flex-1 p-1.5">
+            <PanelGroup direction="horizontal" autoSaveId="mcp-company-catalog-layout" className="min-h-0 min-w-0">
+              <Panel
+                ref={catalogPanelRef}
+                order={1}
+                defaultSize={22}
+                minSize={16}
+                maxSize={34}
+                collapsible
+                collapsedSize={0}
+                onCollapse={() => setAgentsSidebarOpen(false)}
+                onExpand={() => setAgentsSidebarOpen(true)}
+              >
+                <div className="h-full min-h-0">{catalogPanel}</div>
+              </Panel>
 
-            <Panel order={2} minSize={42}>
-              {selectedSession ? (
-                // The selected session owns its primary/right/bottom
-                // WorkbenchSurfaces. Avoid wrapping them in one giant card,
-                // which visually glued the docks back to the content.
-                <CompanySessionView
-                  key={selectedSession.id}
-                  sessionId={selectedSession.id}
-                  sessionName={selectedSession.name}
-                  sessionStatus={selectedSession.status}
-                  workbenchSlots={sessionWorkbenchSlots}
-                />
-              ) : (
+              <WorkbenchResizeHandle
+                direction="horizontal"
+                disabled={!agentsSidebarOpen}
+                className={!agentsSidebarOpen ? 'w-0 cursor-default' : undefined}
+              />
+
+              <Panel order={2} minSize={42}>
                 <WorkbenchSurface className="h-full rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-canvas)]">
                   <CompanyHome
                     sessions={sessions ?? []}
@@ -289,10 +296,10 @@ export function AgentsTab() {
                     onOpenSession={selectSession}
                   />
                 </WorkbenchSurface>
-              )}
-            </Panel>
-          </PanelGroup>
-        </div>
+              </Panel>
+            </PanelGroup>
+          </div>
+        )}
       </div>
 
       {/* Modals */}
@@ -408,7 +415,12 @@ function CompanyHome({
                       <Users className="h-3.5 w-3.5" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] font-medium text-foreground">{session.name}</span>
+                      <span className="flex items-center gap-1.5 truncate text-[11px] font-medium text-foreground">
+                        <span className="truncate">{session.name}</span>
+                        {session.runtime_kind === 'app_studio' && (
+                          <Badge variant="outline" className="h-4 px-1 text-[8px] text-violet-400">{t('company.appBadge')}</Badge>
+                        )}
+                      </span>
                       <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                         <StatusBadge status={session.status} />
                         {formatDay(session.created_at)}
@@ -498,6 +510,8 @@ interface SessionRowProps {
 
 function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: SessionRowProps) {
   const { t } = useTranslation('agents');
+  const navigate = useNavigate();
+  const isAppTeam = s.runtime_kind === 'app_studio';
 
   const items: ContextMenuItem[] = [
     {
@@ -520,29 +534,34 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
     });
   }
 
-  items.push({
-    id: 'duplicate',
-    label: t('duplicateSession', 'Duplicate'),
-    icon: Copy,
-    separatorBefore: true,
-    onSelect: () => {
-      // Synthesize a MouseEvent-shaped object — onDuplicate only reads
-      // stopPropagation, so a noop stub is enough.
-      onDuplicate({
-        stopPropagation: () => undefined,
-      } as unknown as React.MouseEvent);
-    },
-  });
-
-  items.push({
-    id: 'delete',
-    label: t('deleteSession', 'Delete'),
-    icon: Trash2,
-    destructive: true,
-    onSelect: () => {
-      onDelete({ stopPropagation: () => undefined } as unknown as React.MouseEvent);
-    },
-  });
+  if (isAppTeam && s.app_session_id != null) {
+    items.push({
+      id: 'open-app',
+      label: t('company.openAppWorkflow'),
+      icon: ExternalLink,
+      separatorBefore: true,
+      onSelect: () => navigate(`/apps/${s.app_session_id}`),
+    });
+  } else {
+    items.push({
+      id: 'duplicate',
+      label: t('duplicateSession', 'Duplicate'),
+      icon: Copy,
+      separatorBefore: true,
+      onSelect: () => {
+        onDuplicate({ stopPropagation: () => undefined } as unknown as React.MouseEvent);
+      },
+    });
+    items.push({
+      id: 'delete',
+      label: t('deleteSession', 'Delete'),
+      icon: Trash2,
+      destructive: true,
+      onSelect: () => {
+        onDelete({ stopPropagation: () => undefined } as unknown as React.MouseEvent);
+      },
+    });
+  }
 
   const { triggerProps, Menu } = useContextMenu(items);
 
@@ -568,36 +587,39 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
           <Users className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{s.name}</span>
+        {isAppTeam && <Badge variant="outline" className="h-4 px-1 text-[8px] text-violet-400">{t('company.appBadge')}</Badge>}
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={onDuplicate}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.stopPropagation();
-                onDuplicate(e as unknown as React.MouseEvent);
-              }
-            }}
-            className="text-muted-foreground hover:text-primary cursor-pointer"
-            title={t('duplicateSession')}
-          >
-            <Copy className="h-3 w-3" />
-          </span>
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={onDelete}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.stopPropagation();
-                onDelete(e as unknown as React.MouseEvent);
-              }
-            }}
-            className="text-muted-foreground hover:text-destructive cursor-pointer"
-          >
-            <Trash2 className="h-3 w-3" />
-          </span>
+          {isAppTeam && s.app_session_id != null ? (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(event) => { event.stopPropagation(); navigate(`/apps/${s.app_session_id}`); }}
+              className="cursor-pointer text-muted-foreground hover:text-primary"
+              title={t('company.openAppWorkflow')}
+            >
+              <ExternalLink className="h-3 w-3" />
+            </span>
+          ) : (
+            <>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={onDuplicate}
+                className="text-muted-foreground hover:text-primary cursor-pointer"
+                title={t('duplicateSession')}
+              >
+                <Copy className="h-3 w-3" />
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={onDelete}
+                className="text-muted-foreground hover:text-destructive cursor-pointer"
+              >
+                <Trash2 className="h-3 w-3" />
+              </span>
+            </>
+          )}
         </div>
       </div>
       <div className="mt-1 flex items-center gap-1.5 pl-8">

@@ -51,7 +51,8 @@ export type StopReason =
   | 'doom_loop'         // doom-loop guard refused identical tool calls
   | 'compact_failure'   // consecutive compaction failures hit the cap
   | 'compact_exhausted' // pre-emit compaction kept firing without freeing the window
-  | 'tool_budget';      // subagent hit its (optional) tool-CALL budget — benign, partial result (not a crash)
+  | 'tool_budget'       // subagent hit its (optional) tool-CALL budget — benign, partial result (not a crash)
+  | 'time_budget';      // subagent hit its (optional) wall-clock budget — benign, partial result (not a crash)
 
 export interface RunResult {
   totalUsage: ChatUsage;

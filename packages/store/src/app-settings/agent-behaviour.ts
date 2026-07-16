@@ -43,7 +43,8 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_MAX_AUTO_CONTINUES',
     label: 'Max auto-continues per run',
     description:
-      'How many extra max-turn batches one run may receive without a new user message. ' +
+      'How many extra max-turn batches a top-level run may receive without a new user message. ' +
+      'Ephemeral subagents do not use auto-continue. ' +
       'The effective ceiling is maxTurns × (1 + this value); the recommended default is 3 and values above 3 are aggressive.',
     type: 'int',
     category: 'agent',
@@ -53,21 +54,31 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   {
     key: 'CODER_IMPLEMENT_MAX_TURNS',
     label: 'Build mode max turns',
-    description: 'Hard cap on turns in build/implement mode.',
+    description: 'Optional exact turn cap for build/implement subagents. 0 = unlimited.',
     type: 'int',
     category: 'agent',
-    default: '60',
-    min: 1,
+    default: '0',
+    min: 0,
     advanced: true,
   },
   {
     key: 'CODER_REVIEW_MAX_TURNS',
     label: 'Reviewer subagent max turns',
-    description: 'Turns budget for `request_review` reviewer subagent.',
+    description: 'Optional exact turn cap for the `request_review` reviewer. 0 = unlimited.',
     type: 'int',
     category: 'agent',
-    default: '12',
-    min: 1,
+    default: '0',
+    min: 0,
+    advanced: true,
+  },
+  {
+    key: 'CODER_GOAL_VERIFY_MAX_TURNS',
+    label: 'Completion verifier max turns',
+    description: 'Optional exact turn cap for the independent completion verifier. 0 = unlimited.',
+    type: 'int',
+    category: 'agent',
+    default: '0',
+    min: 0,
     advanced: true,
   },
   {

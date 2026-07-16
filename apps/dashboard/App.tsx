@@ -35,6 +35,7 @@ import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { PopoutRoot } from './features/popout/PopoutRoot.js';
 import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
 import { GlobalSessionWorkbench } from './features/chat/global/GlobalSessionWorkbench.js';
+import { PushDialogHost } from './features/git-push/PushDialog.js';
 
 // Sprite Studio is a heavy standalone surface (virtualized library now,
 // canvas engine later) — lazy so it never weighs on the other routes.
@@ -272,11 +273,11 @@ function AppStudioSessionRoute() {
   if (!features.appStudioEnabled) return <Navigate to="/" replace />;
   const id = Number(sessionId);
   if (!Number.isFinite(id)) return <Navigate to="/apps" replace />;
-  const state = (location.state ?? {}) as { coderSessionId?: number; idea?: string };
+  const state = (location.state ?? {}) as { masterSessionId?: number; idea?: string };
   return (
     <AppStudioView
       sessionId={id}
-      initialCoderSessionId={state.coderSessionId}
+      initialMasterSessionId={state.masterSessionId}
       initialIdeaPrompt={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
       onBack={() => navigate('/apps')}
     />
@@ -344,6 +345,7 @@ export default function App() {
             onboarding wizard moved INSIDE the Router via AppRoot above. */}
         <PromptDialogHost />
         <ConfirmDialogHost />
+        <PushDialogHost />
         <ToastHost />
       </DialogProvider>
     </TooltipProvider>

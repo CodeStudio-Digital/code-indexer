@@ -507,7 +507,16 @@ function makeHarness(options: {
         : namespace === 'memory:user'
           ? 'D:/global/semantic/memory-vectors.db'
           : `D:/p${projectId}/.mcp-indexer/vectors.db`;
-      return { namespace, generationId, purpose, dbPath, tableName: `${purpose}_g_${generationId}` };
+      return {
+        namespace,
+        generationId,
+        purpose,
+        scope: namespace.startsWith('code:') ? 'code' : 'project_memory',
+        projectId,
+        collectionId: null,
+        dbPath,
+        tableName: `${purpose}_g_${generationId}`,
+      };
     }),
     removeProject: vi.fn(),
     dropGeneration: vi.fn(async () => undefined),
@@ -1772,9 +1781,16 @@ describe('SemanticIndexCoordinator code generations', () => {
       expected_items: 1,
     });
     h.store.updateJob(historical.id, { status: 'completed' });
+    // A durable pending marker is not executing and must not make cleanup
+    // permanently unavailable after an application restart.
+    h.store.createJob({
+      generation_id: null,
+      namespace: 'semantic:reindex:code:p1',
+      kind: 'build',
+    });
     h.store.deleteItemsForNamespaceGeneration.mockReturnValueOnce(12);
 
-    const result = await h.coordinator.cleanupUnusedVectors();
+    const result = await h.coordinator.cleanupUnusedVectors(1);
 
     expect(h.vectorStore.dropGeneration).toHaveBeenCalledWith('code:p1', 2);
     expect(h.vectorStore.dropGeneration).not.toHaveBeenCalledWith('code:p1', 3);
@@ -1787,6 +1803,39 @@ describe('SemanticIndexCoordinator code generations', () => {
       skipped_referenced: 1,
       failures: [],
     });
+  });
+
+  it('refuses project cleanup while that project has a running physical build', async () => {
+    const h = makeHarness({
+      existingGenerations: [{
+        id: 4,
+        purpose: 'code',
+        fingerprint: 'model-4',
+        embedding_target: { kind: 'onnx', model: 'model-4' },
+        dimension: 3,
+        status: 'building',
+        expected_items: 1,
+        indexed_items: 0,
+        failed_items: 0,
+        error: null,
+      }],
+      namespaceStates: [{
+        namespace: 'code:p1', purpose: 'code', active_generation_id: null,
+        building_generation_id: 4, expected_items: 1, indexed_items: 0,
+        failed_items: 0, delta_items: 0, last_error: null,
+      }],
+    });
+    const running = h.store.createJob({
+      generation_id: 4,
+      namespace: 'code:p1',
+      kind: 'backfill',
+    });
+    h.store.updateJob(running.id, { status: 'running' });
+
+    await expect(h.coordinator.cleanupUnusedVectors(1)).rejects.toThrow(
+      'wait for semantic builds to finish before cleaning unused vectors',
+    );
+    expect(h.vectorStore.dropGeneration).not.toHaveBeenCalled();
   });
 
   it('does not allocate another generation while an abandoned DROP keeps failing', async () => {

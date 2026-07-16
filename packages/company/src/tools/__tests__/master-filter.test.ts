@@ -67,3 +67,31 @@ describe('isMasterAllowed — external MCP is default-deny', () => {
     }))).toBe(true);
   });
 });
+
+describe('isMasterAllowed — App Studio capability boundary', () => {
+  it('exposes app tools only to the specialised App master', () => {
+    expect(isMasterAllowed(native('app_get_workflow'))).toBe(false);
+    expect(isMasterAllowed(native('app_get_workflow'), { allowAppStudio: true })).toBe(true);
+  });
+
+  it('removes execute_tasks from the persistent App master', () => {
+    expect(isMasterAllowed(native('execute_tasks'), { allowAppStudio: true })).toBe(false);
+  });
+
+  it.each([
+    'spawn_subordinate_agent',
+    'kanban_create_card',
+    'kanban_list_cards',
+    'list_pipelines',
+    'start_pipeline',
+  ])('removes incompatible Company capability %s from the App master', (name) => {
+    expect(isMasterAllowed(native(name), { allowAppStudio: true })).toBe(false);
+  });
+
+  it('does not let an external connector impersonate an App capability', () => {
+    expect(isMasterAllowed(external('app_get_workflow', {
+      mutates: false,
+      riskLevel: 'read',
+    }), { allowAppStudio: true })).toBe(false);
+  });
+});

@@ -1,4 +1,11 @@
 {
+  "notifications.background.collectWith": "Colete com",
+  "notifications.background.resumeWith": "Retome {{count}} com",
+  "notifications.background.statusDone": "concluído",
+  "notifications.background.statusFailed": "{{count}} com falha",
+  "notifications.background.statusPartial": "{{count}} parciais",
+  "notifications.background.summary": "{{completed}} concluídos, {{partial}} parciais, {{failed}} com falha.",
+  "notifications.background.title": "Subagentes em segundo plano concluídos",
   "openSessions": "Abrir sessões",
   "sessions": "Sessões",
   "newSession": "Nova Sessão",

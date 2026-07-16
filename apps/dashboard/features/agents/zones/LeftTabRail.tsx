@@ -34,6 +34,8 @@ interface LeftTabRailProps {
   bottomOpen: boolean;
   onToggleBottom: () => void;
   catalog?: CompanyCatalogRail;
+  hiddenTabs?: readonly string[];
+  showTerminal?: boolean;
 }
 
 const ADVANCED_STORAGE_KEY = 'agents.railAdvanced';
@@ -46,12 +48,13 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onToggleBottom, catalog }: LeftTabRailProps) {
+export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onToggleBottom, catalog, hiddenTabs = [], showTerminal = true }: LeftTabRailProps) {
   const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
 
-  const core = TAB_REGISTRY.filter((td) => !td.advanced);
-  const advanced = TAB_REGISTRY.filter((td) => td.advanced);
+  const visibleTabs = TAB_REGISTRY.filter((td) => !hiddenTabs.includes(td.tab));
+  const core = visibleTabs.filter((td) => !td.advanced);
+  const advanced = visibleTabs.filter((td) => td.advanced);
   const activeIsAdvanced = advanced.some((td) => td.zone === activeZone && td.tab === activeTab);
   // Deep link / restored route into a demoted tab → keep the group open.
   const showAdvanced = expanded || activeIsAdvanced;
@@ -113,13 +116,15 @@ export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onTog
       {showAdvanced && renderGroup(advanced)}
       {/* Terminal toggle pinned to the footer — mirrors the ProjectView rail. */}
       <div className="mt-auto pb-1 flex flex-col items-center gap-0.5">
-        <RailButton
-          icon={TerminalSquare}
-          label={terminalLabel}
-          role="toggle"
-          active={bottomOpen}
-          onClick={onToggleBottom}
-        />
+        {showTerminal && (
+          <RailButton
+            icon={TerminalSquare}
+            label={terminalLabel}
+            role="toggle"
+            active={bottomOpen}
+            onClick={onToggleBottom}
+          />
+        )}
         {catalog && (
           <>
             <RailSeparator />

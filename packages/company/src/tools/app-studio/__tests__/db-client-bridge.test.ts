@@ -16,15 +16,10 @@ function session(overrides: Partial<AppStudioSession> = {}): AppStudioSession {
     project_id: 42,
     name: 'FutebolFantasy',
     app_slug: 'futebol-fantasy',
-    stack: 'cf-fullstack',
-    db_engine: 'd1',
-    spec_json: null,
-    pipeline_json: null,
-    deploy_json: null,
-    blueprint_json: null,
-    coordinator_session_id: null,
-    agent_config_json: null,
+    company_session_id: null,
+    stack_profile_id: 'cf-fullstack-v1',
     created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }

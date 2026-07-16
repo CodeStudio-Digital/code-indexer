@@ -14,7 +14,8 @@ const usage: ChatUsage = { input_tokens: 1, output_tokens: 1 };
 function slots(): BackgroundAgentSlot[] {
   return [
     { index: 0, label: 'auth', profileId: 'explore', task: 't', status: 'completed', toolCallCount: 5, summary: 'JWT verified in verify.ts' },
-    { index: 1, label: 'db', profileId: 'explore', task: 't', status: 'error', toolCallCount: 3, summary: 'pool duplicated' },
+    { index: 1, label: 'db', profileId: 'explore', task: 't', status: 'partial', toolCallCount: 3, summary: 'pool inspected until budget' },
+    { index: 2, label: 'api', profileId: 'explore', task: 't', status: 'error', toolCallCount: 2, summary: 'provider failed' },
   ];
 }
 
@@ -31,9 +32,10 @@ function runningJob() {
 describe('renderCompletionNotice', () => {
   it('summarizes counts, per-agent digests, and the collect/resume hints', () => {
     const j = runningJob();
+    j.resumableCount = 2;
     const text = renderCompletionNotice(j);
     expect(text).toContain('<system-reminder>');
-    expect(text).toContain('job job-1 (2 agents): 1 completed, 1 failed');
+    expect(text).toContain('job job-1 (3 agents): 1 completed, 1 partial, 1 failed');
     expect(text).toContain('auth (explore): completed, 5 tools — "JWT verified in verify.ts"');
     expect(text).toContain('collect_agents({job_id:"job-1"})');
     expect(text).toContain('resume_agent({spawn_id:"g1"})'); // has a failure

@@ -1,104 +1,154 @@
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err, ok } from '@mcp/code-agent/core/tool.js';
-import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
-import { auditAppSpec } from '@mcp/app-studio/spec/audit.js';
-import { parseAppProductModel } from '@mcp/app-studio/product/types.js';
-import { auditAppProductModel } from '@mcp/app-studio/product/audit.js';
-import { parseAppWireframePlan } from '@mcp/app-studio/experience/types.js';
-import { auditAppDeliveryBlueprint, auditAppReleaseReadiness } from '@mcp/app-studio/workflow/audit.js';
-import { parseAppAgentConfig } from '@mcp/app-studio/workflow/agent-config.js';
-import { deriveAppWorkflowState, parseAppWorkflowState, serializeAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
-import { dependentWorkItemIds, planAdaptiveDispatch } from '@mcp/app-studio/workflow/scheduler.js';
-import type { AppApproval, AppDeliveryBlueprint, AppWorkItem, AppWorkItemKind, AppWorkItemStatus, AppWorkflowPhaseId } from '@mcp/app-studio/workflow/types.js';
-import type { AppStudioApproval, AppStudioSession, AppStudioStore, AppStudioWorkItem } from '@mcp/store/app-studio-store.js';
+import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
+import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
+import { parseAppPlan, type AppFitnessReport, type AppPlanV1 } from '@mcp/app-studio/plan/types.js';
+import { nextMigrationFilename, normalizeMigrationSlug, validateAppMigrationSql } from '@mcp/app-studio/database/migration.js';
+import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
+import { listSqlMigrations, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/verification/workspace-checks.js';
+import { readDbStatus } from '@mcp/app-studio/status-files.js';
+import { findLocalD1File } from '@mcp/app-studio/local-db.js';
+import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
+import type {
+  AppStudioSession,
+  AppStudioStore,
+  AppStudioWorkItem,
+  AppStudioWorkItemKind,
+} from '@mcp/store/app-studio-store.js';
+import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
-import { appResult, PAGE_PROPERTIES, pageItems, viewArg } from './model-output.js';
-
-const json = <T>(value: string | null | undefined, fallback: T): T => {
-  if (!value) return fallback;
-  try { return JSON.parse(value) as T; } catch { return fallback; }
-};
-const hydrateItem = ({ depends_on_json, source_ids_json, acceptance_json, evidence_json, file_scope_json, run_json, ...row }: AppStudioWorkItem): AppWorkItem => ({
-  ...row,
-  depends_on: json(depends_on_json, []), source_ids: json(source_ids_json, []),
-  acceptance: json(acceptance_json, []), evidence: json(evidence_json, []),
-  file_scope: json(file_scope_json, []), run: json(run_json, null),
-});
-const hydrateApproval = ({ bundle_json, ...row }: AppStudioApproval): AppApproval => ({
-  ...row, bundle: json(bundle_json, {}),
-});
+import { appResult } from './model-output.js';
+import { ensureAppStudioDbConnection, getAppStudioDbClientStore } from './db-client-bridge.js';
+import { dispatchReadyAppWork, type AppCompanyDispatchHost } from './company-dispatch.js';
 
 const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
-const WORKFLOW_READ_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    view: { type: 'string', enum: ['summary', 'attention', 'board', 'card'], description: 'Progressive workflow projection. Default: summary.' },
-    work_item_id: { type: 'string', description: 'Required for view=card.' },
-    ...PAGE_PROPERTIES,
-  },
-  additionalProperties: false,
-};
 
-const WORKFLOW_READ_GUIDANCE =
-  'Reuse this snapshot for the current user request. A tool result is not a new request: do not call app_get_workflow again until a workflow write, a new user message, an approval/decision update, a resume or a compaction changes what you need to know.';
+function json<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
 
 type BoundApp = { ok: false; error: string } | { ok: true; store: AppStudioStore; session: AppStudioSession };
-
 function bound(binding: AppToolBinding): BoundApp {
   const store = getAppStudioStore();
   if (!store) return { ok: false, error: 'AppStudioStore not wired.' };
   const session = binding.resolveAppSession(store);
-  if (!session) return { ok: false, error: `No AppStudioSession bound to ${binding.describeBinding()}.` };
-  return { ok: true, store, session };
+  return session
+    ? { ok: true, store, session }
+    : { ok: false, error: `No App is bound to ${binding.describeBinding()}.` };
 }
 
-export function appGetWorkflow(binding: AppToolBinding): CoderTool {
+function latestPlan(value: Extract<BoundApp, { ok: true }>) {
+  const revision = value.store.getLatestPlanRevision(value.session.id);
+  const plan = parseAppPlan(revision?.plan_json ?? null);
+  const fitness = json<AppFitnessReport | null>(revision?.fitness_json, null);
+  return { revision, plan, fitness };
+}
+
+function workView(row: AppStudioWorkItem) {
   return {
-    name: 'app_get_workflow',
-    description: 'Read the authoritative App Studio v5 workflow once per new user request or resume: summary, attention, paginated board or one full card. Reuse the result after tool continuations; reread only after workflow state can have changed.',
-    parameters: WORKFLOW_READ_SCHEMA, source: 'native', mutates: false, parallelSafe: true,
-    stopOnRepeatedUnchangedResult: true,
+    id: row.id,
+    plan_revision_id: row.plan_revision_id,
+    slice_id: row.slice_id,
+    title: row.title,
+    outcome: row.outcome,
+    kind: row.kind,
+    owner_role: row.owner_role,
+    priority: row.priority,
+    status: row.status,
+    depends_on: json<string[]>(row.depends_on_json, []),
+    source_ids: json<string[]>(row.source_ids_json, []),
+    acceptance: json<string[]>(row.acceptance_json, []),
+    evidence: json<Array<Record<string, unknown>>>(row.evidence_json, []),
+    file_scope: json<string[]>(row.file_scope_json, []),
+    blocked_reason: row.blocked_reason,
+  };
+}
+
+export function appGetState(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_get_state',
+    description: 'Read the compact App state: plan readiness, human progress, decisions, cards and deployment. This is the authoritative control-plane snapshot.',
+    parameters: EMPTY,
+    source: 'native', mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
+    handler: async () => {
+      const value = bound(binding); if (!value.ok) return err(value.error);
+      const { revision, fitness } = latestPlan(value);
+      const work = value.store.listWorkItems(value.session.id);
+      const decisions = value.store.listDecisions(value.session.id);
+      const deployment = value.store.getLatestDeployment(value.session.id);
+      const stage = deployment?.status === 'live' && deployment.health_ok
+        ? 'live'
+        : revision?.status !== 'approved'
+          ? 'planning'
+          : decisions.some((item) => item.status === 'open') || work.some((item) => ['review', 'blocked'].includes(item.status))
+            ? 'reviewing'
+            : work.length > 0 && work.every((item) => item.status === 'done') ? 'ready' : 'building';
+      return appResult('App state', {
+        app: { id: value.session.id, name: value.session.name, stack_profile_id: value.session.stack_profile_id },
+        stage,
+        plan: revision ? { id: revision.id, revision_number: revision.revision_number, status: revision.status, fitness: fitness?.status ?? 'blocked' } : null,
+        work: Object.fromEntries(['backlog', 'ready', 'running', 'review', 'done', 'blocked', 'stale', 'cancelled'].map((status) => [status, work.filter((item) => item.status === status).length])),
+        open_decisions: decisions.filter((item) => item.status === 'open').length,
+        deployment,
+      });
+    },
+  };
+}
+
+export function appGetPlan(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_get_plan',
+    description: 'Read the current canonical AppPlanV1 and its explainable fitness report.',
+    parameters: EMPTY,
+    source: 'native', mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
+    handler: async () => {
+      const value = bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan, fitness } = latestPlan(value);
+      return revision && plan
+        ? appResult(`App plan r${revision.revision_number}`, { revision: { id: revision.id, revision_number: revision.revision_number, status: revision.status }, plan, fitness })
+        : err('The App has no valid AppPlanV1.');
+    },
+  };
+}
+
+const PLAN_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    plan: { type: 'object', description: 'Complete AppPlanV1 document.' },
+    expected_revision_number: { type: 'integer', minimum: 1 },
+    reason: { type: 'string' },
+  },
+  required: ['plan', 'reason'],
+  additionalProperties: false,
+};
+
+export function appUpdatePlan(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_update_plan',
+    description: 'Save one complete AppPlanV1 revision. The fitness audit runs automatically and prior cards become stale; this never approves the plan.',
+    parameters: PLAN_SCHEMA,
+    source: 'native', mutates: true, parallelSafe: false,
     handler: async (args) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
-      const state = parseAppWorkflowState(value.session.pipeline_json);
-      if (!state) return err('Workflow v5 is not initialized yet. Open the App Studio journey once to migrate it safely.');
-      const items = value.store.listWorkItems(value.session.id).map(hydrateItem);
-      const approvals = value.store.listApprovals(value.session.id).map(hydrateApproval);
-      const decisions = value.store.listDecisionRequests(value.session.id).map(({ options_json, blocked_work_item_ids_json, ...row }) => ({
-        ...row,
-        options: json<Array<{ label: string; value: string }>>(options_json, []),
-        blocked_work_item_ids: json<string[]>(blocked_work_item_ids_json, []),
-      }));
-      const derived = deriveAppWorkflowState(state, approvals, items);
-      const agentConfig = parseAppAgentConfig(value.session.agent_config_json);
-      const view = viewArg(args, ['summary', 'attention', 'board', 'card'], 'summary');
-      if (view === 'attention') return appResult('App workflow — attention', {
-        approvals: approvals.filter((item) => item.status === 'pending'),
-        decisions: decisions.filter((item) => item.status === 'open'),
-        guidance: `${WORKFLOW_READ_GUIDANCE} Only linked cards are blocked; continue independent ready work.`,
-      });
-      if (view === 'card') {
-        const id = typeof args.work_item_id === 'string' ? args.work_item_id : '';
-        const item = items.find((candidate) => candidate.id === id);
-        return item ? appResult(`App workflow — ${id}`, item) : err(`Unknown work item '${id || '(missing work_item_id)'}'.`);
+      const plan = parseAppPlan(args.plan);
+      if (!plan) return err('plan must be a complete AppPlanV1 document.');
+      const fitness = auditAppPlan(plan);
+      try {
+        const revision = value.store.savePlanRevision({
+          app_session_id: value.session.id,
+          plan,
+          fitness,
+          expected_revision_number: typeof args.expected_revision_number === 'number' ? args.expected_revision_number : null,
+          created_by: 'app_orchestrator',
+        });
+        return appResult(`App plan r${revision.revision_number} saved`, { revision_id: revision.id, fitness, approval_required: true });
+      } catch (error) {
+        return err((error as Error).message);
       }
-      if (view === 'board') return appResult('App workflow — board', {
-        ...pageItems(items, args, (item) => item.id),
-        guidance: WORKFLOW_READ_GUIDANCE,
-      });
-      return appResult('App workflow v5', {
-        coordinator_session_id: value.session.coordinator_session_id,
-        coordinator_instruction: agentConfig.coordinator_prompt || null,
-        phases: derived.phases.map((phase) => ({ id: phase.id, status: phase.status })),
-        attention: {
-          approvals: approvals.filter((item) => item.status === 'pending').length,
-          decisions: decisions.filter((item) => item.status === 'open').length,
-        },
-        board: Object.fromEntries(['backlog', 'ready', 'running', 'review', 'done', 'blocked', 'stale', 'cancelled'].map((status) => [status, items.filter((item) => item.status === status).length])),
-        guidance: `${WORKFLOW_READ_GUIDANCE} Approval is asynchronous; continue every independent ready card.`,
-      });
     },
   };
 }
@@ -107,130 +157,56 @@ const UPSERT_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     items: { type: 'array', minItems: 1, items: { type: 'object', properties: {
-      id: { type: 'string' }, phase: { type: 'string', enum: ['define', 'blueprint', 'build', 'deliver'] },
-      slice_id: { type: ['string', 'null'] }, title: { type: 'string' }, outcome: { type: 'string' },
+      id: { type: 'string' }, slice_id: { type: ['string', 'null'] }, title: { type: 'string' }, outcome: { type: 'string' },
       kind: { type: 'string', enum: ['research', 'plan', 'contract', 'implement', 'verify', 'release', 'change'] },
-      owner_profile: { type: 'string' }, priority: { type: 'integer', minimum: 1, maximum: 5 },
-      status: { type: 'string', enum: ['backlog', 'ready', 'blocked', 'stale', 'cancelled'] }, sort_order: { type: 'integer' },
+      owner_role: { type: 'string' }, priority: { type: 'integer' }, sort_order: { type: 'integer' },
       depends_on: { type: 'array', items: { type: 'string' } }, source_ids: { type: 'array', items: { type: 'string' } },
       acceptance: { type: 'array', items: { type: 'string' } }, file_scope: { type: 'array', items: { type: 'string' } },
-      blocked_reason: { type: ['string', 'null'] },
-      corrects_work_item_id: { type: ['string', 'null'] },
-    }, required: ['id', 'phase', 'title', 'outcome', 'kind', 'source_ids', 'acceptance'] } },
-  }, required: ['items'], additionalProperties: false,
-} as JsonSchema;
+    }, required: ['id', 'title', 'kind', 'owner_role', 'source_ids', 'acceptance'], additionalProperties: false } },
+  },
+  required: ['items'], additionalProperties: false,
+};
 
 export function appUpsertWorkItems(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_upsert_work_items',
-    description: 'Create or refine traceable App Studio Kanban cards. Only backlog/ready status can be changed here; active, exceptional and terminal state plus evidence are preserved.',
-    parameters: UPSERT_SCHEMA, source: 'native', mutates: true, parallelSafe: false,
+    description: 'Create or refine cards for the current plan revision. Cards are the only App work source and remain backlog until that exact revision is approved.',
+    parameters: UPSERT_SCHEMA,
+    source: 'native', mutates: true, parallelSafe: false,
     handler: async (args) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan } = latestPlan(value);
+      if (!revision || !plan) return err('Save a valid AppPlanV1 before creating work.');
       const raw = Array.isArray(args.items) ? args.items as Array<Record<string, unknown>> : [];
       if (raw.length === 0) return err('items is required.');
-      const ids = new Set(raw.map((item) => String(item.id ?? '')));
-      if (ids.has('') || ids.size !== raw.length) return err('Every work item needs a unique non-empty id.');
-      const existing = value.store.listWorkItems(value.session.id);
-      const known = new Set([...existing.map((item) => item.id), ...ids]);
-      const dependencies = new Map(existing.map((item) => [item.id, json<string[]>(item.depends_on_json, [])]));
-      const metadata = new Map(existing.map((item) => [item.id, { kind: item.kind, owner: item.owner_profile }]));
+      const ids = raw.map((item) => String(item.id ?? '').trim());
+      if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return err('Every item needs a unique non-empty id.');
+      const known = new Set([...value.store.listWorkItems(value.session.id).map((item) => item.id), ...ids]);
       for (const item of raw) {
-        const id = String(item.id);
-        const deps = Array.isArray(item.depends_on) ? item.depends_on.map(String) : [];
-        const missing = deps.filter((id) => !known.has(id));
-        if (missing.length) return err(`Work item '${id}' depends on unknown item(s): ${missing.join(', ')}.`);
-        if (deps.includes(id)) return err(`Work item '${id}' cannot depend on itself.`);
-        const kind = String(item.kind) as AppWorkItemKind;
-        const owner = typeof item.owner_profile === 'string' ? item.owner_profile : kind === 'verify' ? 'verify' : 'coordinator';
-        dependencies.set(id, deps);
-        metadata.set(id, { kind, owner });
-        if (typeof item.corrects_work_item_id === 'string' && !known.has(item.corrects_work_item_id)) {
-          return err(`Work item '${id}' corrects unknown item '${item.corrects_work_item_id}'.`);
-        }
-        if (item.corrects_work_item_id === id) return err(`Work item '${id}' cannot correct itself.`);
-      }
-      const visiting = new Set<string>();
-      const visited = new Set<string>();
-      const visit = (id: string): string | null => {
-        if (visiting.has(id)) return id;
-        if (visited.has(id)) return null;
-        visiting.add(id);
-        for (const dependency of dependencies.get(id) ?? []) {
-          const cycle = visit(dependency);
-          if (cycle) return cycle;
-        }
-        visiting.delete(id);
-        visited.add(id);
-        return null;
-      };
-      for (const id of dependencies.keys()) {
-        const cycle = visit(id);
-        if (cycle) return err(`Work item dependency graph contains a cycle through '${cycle}'.`);
-      }
-      for (const item of raw) {
-        const id = String(item.id);
-        const meta = metadata.get(id)!;
-        if (meta.kind !== 'verify') continue;
-        for (const dependencyId of dependencies.get(id) ?? []) {
-          const dependency = metadata.get(dependencyId);
-          if (dependency && (dependency.kind === 'implement' || dependency.kind === 'contract') && dependency.owner === meta.owner) {
-            return err(`Verifier '${id}' must use a different owner profile from implementation '${dependencyId}'.`);
-          }
+        for (const dep of Array.isArray(item.depends_on) ? item.depends_on.map(String) : []) {
+          if (!known.has(dep)) return err(`Unknown dependency '${dep}'.`);
+          if (dep === String(item.id)) return err(`Work item '${dep}' cannot depend on itself.`);
         }
       }
       const saved = value.store.upsertWorkItems(raw.map((item, index) => ({
-        id: String(item.id), app_session_id: value.session.id, phase: String(item.phase) as AppWorkflowPhaseId,
-        slice_id: typeof item.slice_id === 'string' ? item.slice_id : null, title: String(item.title), outcome: String(item.outcome),
-        kind: String(item.kind) as AppWorkItemKind, owner_profile: typeof item.owner_profile === 'string' ? item.owner_profile : String(item.kind) === 'verify' ? 'verify' : 'coordinator',
-        priority: typeof item.priority === 'number' ? item.priority : 2, status: (typeof item.status === 'string' ? item.status : 'backlog') as AppWorkItemStatus,
+        app_session_id: value.session.id,
+        id: String(item.id),
+        plan_revision_id: revision.id,
+        slice_id: typeof item.slice_id === 'string' ? item.slice_id : null,
+        title: String(item.title),
+        outcome: typeof item.outcome === 'string' ? item.outcome : '',
+        kind: String(item.kind) as AppStudioWorkItemKind,
+        owner_role: String(item.owner_role),
+        priority: typeof item.priority === 'number' ? item.priority : 0,
         sort_order: typeof item.sort_order === 'number' ? item.sort_order : index,
+        status: 'backlog' as const,
         depends_on_json: JSON.stringify(Array.isArray(item.depends_on) ? item.depends_on : []),
         source_ids_json: JSON.stringify(Array.isArray(item.source_ids) ? item.source_ids : []),
         acceptance_json: JSON.stringify(Array.isArray(item.acceptance) ? item.acceptance : []),
         file_scope_json: JSON.stringify(Array.isArray(item.file_scope) ? item.file_scope : []),
-        blocked_reason: typeof item.blocked_reason === 'string' ? item.blocked_reason : null,
-        run_json: typeof item.corrects_work_item_id === 'string' ? JSON.stringify({ corrects_work_item_id: item.corrects_work_item_id }) : null,
       })));
       value.store.refreshReadyWorkItems(value.session.id);
-      const wireframeRow = value.store.getLatestWireframeRevision(value.session.id);
-      const wireframe = parseAppWireframePlan(wireframeRow?.wireframe_json);
-      const board = value.store.listWorkItems(value.session.id).map(hydrateItem);
-      if (wireframe && board.some((item) => item.phase === 'build')) {
-        const blueprint: AppDeliveryBlueprint = {
-          v: 1,
-          refs: {
-            spec_revision_id: value.store.getLatestApprovedSpecRevision(value.session.id)?.id ?? null,
-            product_revision_id: value.store.getLatestProductRevision(value.session.id)?.id ?? null,
-            architecture_revision_id: value.store.getLatestArchitectureRevision(value.session.id)?.id ?? null,
-            ux_revision_id: value.store.getLatestUxRevision(value.session.id)?.id ?? null,
-            wireframe_revision_id: wireframeRow?.id ?? null,
-          },
-          slices: wireframe.delivery_slices.map((slice) => {
-            const cards = board.filter((item) => item.slice_id === slice.id);
-            const flows = wireframe.flows.filter((flow) => slice.flow_ids.includes(flow.id));
-            return {
-              id: slice.id,
-              capability_ids: slice.capability_ids,
-              journey_ids: [],
-              source_ids: [...new Set([...flows.flatMap((flow) => flow.source_ids), ...cards.flatMap((item) => item.source_ids)])],
-              screen_ids: slice.screen_ids,
-              entity_names: [...new Set(wireframe.checklist_items.filter((item) => item.slice_id === slice.id).flatMap((item) => item.entity_names))],
-              behavior_ids: flows.flatMap((flow) => flow.source_ids.filter((source) => source.startsWith('behavior:')).map((source) => source.slice('behavior:'.length))),
-              acceptance_test_ids: [...new Set(wireframe.checklist_items.filter((item) => item.slice_id === slice.id).flatMap((item) => item.tdd_case_ids))],
-              work_item_ids: cards.map((item) => item.id),
-            };
-          }),
-          test_matrix: wireframe.tdd_cases.map((test) => ({
-            id: test.id,
-            source_ids: test.source_ids,
-            slice_id: wireframe.delivery_slices.find((slice) => slice.flow_ids.some((flowId) => test.flow_ids.includes(flowId)))?.id ?? 'unassigned',
-            kind: 'acceptance',
-          })),
-        };
-        value.store.saveDeliveryBlueprint(value.session.id, JSON.stringify(blueprint));
-      }
-      return ok(`Upserted ${saved.length} work item(s). The board remains active; no human approval was introduced.`);
+      return appResult('App work updated', { plan_revision_id: revision.id, items: saved.map(workView) });
     },
   };
 }
@@ -238,67 +214,48 @@ export function appUpsertWorkItems(binding: AppToolBinding): CoderTool {
 export function appRequestDecision(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_request_decision',
-    description: 'Ask one durable product/technical decision and block only the listed cards. Do not stop work on independent cards.',
+    description: 'Request one durable decision and block only the listed cards. Independent work continues.',
     parameters: { type: 'object', properties: {
-      question: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'string' } }, required: ['label', 'value'] } },
+      question: { type: 'string' }, options: { type: 'array', items: { type: 'object' } },
       blocked_work_item_ids: { type: 'array', items: { type: 'string' } },
     }, required: ['question', 'blocked_work_item_ids'], additionalProperties: false } as JsonSchema,
-    source: 'native', mutates: true, interactive: false,
+    source: 'native', mutates: true,
     handler: async (args) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
+      const { revision } = latestPlan(value);
       const question = typeof args.question === 'string' ? args.question.trim() : '';
-      const blockedIds = Array.isArray(args.blocked_work_item_ids) ? args.blocked_work_item_ids.map(String) : [];
-      if (!question) return err('question is required.');
-      for (const id of blockedIds) {
-        if (!value.store.getWorkItem(value.session.id, id)) return err(`Unknown blocked work item '${id}'.`);
+      const blocked = Array.isArray(args.blocked_work_item_ids) ? args.blocked_work_item_ids.map(String) : [];
+      if (!revision || !question) return err('A current plan and question are required.');
+      for (const id of blocked) {
+        if (!value.store.getWorkItem(value.session.id, id)) return err(`Unknown work item '${id}'.`);
         value.store.setWorkItemStatus(value.session.id, id, 'blocked', { blockedReason: question });
       }
-      const decision = value.store.createDecisionRequest({ sessionId: value.session.id, question, optionsJson: JSON.stringify(args.options ?? []), blockedWorkItemIdsJson: JSON.stringify(blockedIds) });
-      return ok(`Decision ${decision.id} requested. Only ${blockedIds.length} linked card(s) are blocked; continue independent ready work.`);
+      const decision = value.store.createDecision({
+        sessionId: value.session.id,
+        planRevisionId: revision.id,
+        question,
+        optionsJson: JSON.stringify(args.options ?? []),
+        blockedWorkItemIdsJson: JSON.stringify(blocked),
+      });
+      return ok(`Decision ${decision.id} requested; ${blocked.length} linked card(s) blocked.`);
     },
   };
 }
 
-export function appRequestApproval(binding: AppToolBinding): CoderTool {
+export function appRequestPlanApproval(binding: AppToolBinding): CoderTool {
   return {
-    name: 'app_request_approval',
-    description: 'Request one of the only three async human approvals: scope, blueprint or release. Validates its deterministic gate and never pauses the runner.',
-    parameters: { type: 'object', properties: {
-      type: { type: 'string', enum: ['scope', 'blueprint', 'release'] }, summary: { type: 'string' },
-    }, required: ['type', 'summary'], additionalProperties: false } as JsonSchema,
-    source: 'native', mutates: true, interactive: false,
-    handler: async (args) => {
+    name: 'app_request_plan_approval',
+    description: 'Audit the current plan and expose the single human action “Approve plan and build”. This tool never auto-approves.',
+    parameters: EMPTY,
+    source: 'native', mutates: true,
+    handler: async () => {
       const value = bound(binding); if (!value.ok) return err(value.error);
-      const type = String(args.type) as AppApproval['type'];
-      const pendingSpec = value.store.getPendingSpecRevision(value.session.id);
-      const spec = parseAppSpec(pendingSpec?.spec_json ?? value.session.spec_json);
-      const productRow = value.store.getLatestProductRevision(value.session.id);
-      const product = parseAppProductModel(productRow?.product_json);
-      const items = value.store.listWorkItems(value.session.id).map(hydrateItem);
-      const bundle = {
-        spec_revision_id: pendingSpec?.id ?? value.store.getLatestApprovedSpecRevision(value.session.id)?.id ?? null,
-        product_revision_id: productRow?.id ?? null,
-        architecture_revision_id: value.store.getLatestArchitectureRevision(value.session.id)?.id ?? null,
-        ux_revision_id: value.store.getLatestUxRevision(value.session.id)?.id ?? null,
-        wireframe_revision_id: value.store.getLatestWireframeRevision(value.session.id)?.id ?? null,
-        delivery_blueprint_id: value.store.getLatestDeliveryBlueprint(value.session.id)?.id ?? null,
-      };
-      const issues: string[] = [];
-      if (type === 'scope') {
-        if (!spec) issues.push('No app spec saved.');
-        else issues.push(...auditAppSpec(spec).issues.filter((issue) => issue.severity === 'error').map((issue) => issue.detail));
-        issues.push(...auditAppProductModel(product).issues);
-      } else if (type === 'blueprint') {
-        const blueprint = json<AppDeliveryBlueprint | null>(value.store.getLatestDeliveryBlueprint(value.session.id)?.blueprint_json, null);
-        issues.push(...auditAppDeliveryBlueprint(blueprint, spec, product, items).issues);
-      } else {
-        const blueprint = json<AppDeliveryBlueprint | null>(value.store.getLatestDeliveryBlueprint(value.session.id)?.blueprint_json, null);
-        issues.push(...auditAppReleaseReadiness(items, blueprint).issues);
-      }
-      if (issues.length) return err(`Cannot request ${type} approval:\n- ${[...new Set(issues)].join('\n- ')}`);
-      const revision = Math.max(0, ...value.store.listApprovals(value.session.id).filter((item) => item.type === type).map((item) => item.bundle_revision)) + 1;
-      const approval = value.store.requestApproval({ sessionId: value.session.id, type, bundleRevision: revision, bundleJson: JSON.stringify(bundle), summary: String(args.summary) });
-      return ok(`Approval ${approval.id} (${type}) is pending asynchronously. Do NOT stop: continue independent ready cards and use app_get_workflow for current state.`);
+      const { revision, plan } = latestPlan(value);
+      if (!revision || !plan) return err('The App has no valid plan.');
+      const fitness = auditAppPlan(plan);
+      if (fitness.status !== 'ready') return appResult('Plan approval blocked', { fitness, action: 'Resolve every failed check.' });
+      value.store.appendEvent(value.session.id, 'plan.approval_requested', 'plan_revision', String(revision.id), JSON.stringify({ revision_number: revision.revision_number }), `plan-approval-requested:${revision.id}`);
+      return appResult('Plan ready for approval', { revision_id: revision.id, revision_number: revision.revision_number, fitness, human_action: 'approve_plan_and_build' });
     },
   };
 }
@@ -306,55 +263,22 @@ export function appRequestApproval(binding: AppToolBinding): CoderTool {
 export function appDispatchReadyWork(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_dispatch_ready_work',
-    description: 'Plan dependency-safe adaptive waves from ready Kanban cards and seed the existing execute_tasks runtime as already approved. Call execute_tasks({mode:"auto"}) immediately after.',
-    parameters: EMPTY, source: 'native', mutates: true, parallelSafe: false,
+    description: 'Dispatch the first conflict-safe wave through the persistent App Company team. There is no single-session or execute_tasks fallback.',
+    parameters: EMPTY,
+    source: 'native', mutates: true, parallelSafe: false,
     handler: async (_args, ctx) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
-      const items = value.store.refreshReadyWorkItems(value.session.id).map(hydrateItem);
-      const agentConfig = parseAppAgentConfig(value.session.agent_config_json);
-      const waves = planAdaptiveDispatch(items);
-      if (waves.length === 0) return ok('No dependency-ready cards. Resolve the listed decision/approval blockers or create the missing cards.');
-      const dispatches = waves.flat();
-      const dispatchById = new Map(dispatches.map((item) => [item.work_item_id, item]));
-      const selectedIds = dispatches.map((item) => item.work_item_id);
-      const selected = selectedIds.map((id) => items.find((item) => item.id === id)!).filter(Boolean);
-      const tasks: CoderTask[] = selected.map((item) => {
-        const profileConfig = agentConfig.profiles[item.owner_profile];
-        const coordinatorInstruction = agentConfig.coordinator_prompt
-          ? `\nCoordinator instructions: ${agentConfig.coordinator_prompt}`
-          : '';
-        const profileInstruction = profileConfig?.additional_prompt
-          ? `\nProfile instructions (${item.owner_profile}): ${profileConfig.additional_prompt}`
-          : '';
-        const requiredSkills = profileConfig?.skills ?? [];
-        const skillInstruction = requiredSkills.length > 0
-          ? `\nRequired skills (${item.owner_profile}): ${requiredSkills.join(', ')}. Load each assigned skill with get_skill_content before executing this card.`
-          : '';
-        const mode = profileConfig?.enabled === false ? 'inline' : (dispatchById.get(item.id)?.mode ?? 'subagent');
-        return {
-          id: item.id, title: item.title,
-          description: `${item.outcome}\nAcceptance: ${item.acceptance.join('; ')}${coordinatorInstruction}${profileInstruction}${skillInstruction}\nAfter execution call app_record_work_evidence for this card.`,
-          files: item.file_scope, references: item.source_ids.map((source) => ({ type: 'doc' as const, value: source })),
-          depends_on: item.depends_on.filter((id) => selectedIds.includes(id)),
-          suggested_mode: mode,
-          estimated_complexity: item.file_scope.length > 5 ? 'large' : item.file_scope.length > 1 ? 'medium' : 'small',
-          parallel_group: `app-wave-${waves.findIndex((wave) => wave.some((candidate) => candidate.work_item_id === item.id)) + 1}`,
-          kind: item.kind === 'research' || item.kind === 'plan' ? 'investigate' : item.kind === 'verify' || item.kind === 'release' ? 'verify' : 'implement',
-          agent_profile: item.owner_profile,
-          status: 'pending',
-        };
-      });
-      const taskState: TasksState = { gate: 'approve', summary: 'App Studio ready work', tasks, execution_mode: 'smart', approved: true, current_task_id: null };
-      ctx.recordTasks?.(ctx.currentToolUseId ?? `app-dispatch:${Date.now()}`, taskState);
-      ctx.resolveTasks?.({ approved: true, tasks, execution_mode: 'smart' });
-      for (const item of selected) {
-        const profileConfig = agentConfig.profiles[item.owner_profile];
-        value.store.setWorkItemStatus(value.session.id, item.id, 'running', { runJson: JSON.stringify({
-          mode: profileConfig?.enabled === false ? 'inline' : (dispatchById.get(item.id)?.mode ?? 'subagent'),
-          agent: profileConfig?.enabled === false ? 'coordinator' : (dispatchById.get(item.id)?.profile ?? item.owner_profile),
-        }) });
+      if (ctx.companyContext?.runtimeKind !== 'app_studio' || !ctx.companyContext.isMaster) {
+        return err('Only the persistent App Company Master can dispatch App work.');
       }
-      return ok(`Prepared ${tasks.length} already-approved task(s) in ${waves.length} dependency/file-safe wave(s). Call execute_tasks({mode:"auto"}) now; no additional human task approval is needed.`);
+      if (value.session.company_session_id !== ctx.companyContext.companySessionId) return err('The App is linked to a different Company team.');
+      const results = await dispatchReadyAppWork({
+        store: value.store,
+        session: value.session,
+        host: ctx.companyContext.orchestrator as AppCompanyDispatchHost,
+        source: 'master_tool',
+      });
+      return appResult('App team dispatch', { results, legacy_fallback: false });
     },
   };
 }
@@ -362,71 +286,168 @@ export function appDispatchReadyWork(binding: AppToolBinding): CoderTool {
 export function appRecordWorkEvidence(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_record_work_evidence',
-    description: 'Attach concrete proof to a Kanban card and move it to automated review or done. Done is rejected without evidence.',
+    description: 'Record concrete evidence for the active specialist attempt. Evidence is bound to the approved plan and current workspace fingerprint.',
     parameters: { type: 'object', properties: {
       work_item_id: { type: 'string' }, status: { type: 'string', enum: ['review', 'done', 'blocked'] },
-      summary: { type: 'string' }, evidence: { type: 'array', minItems: 1, items: { type: 'object', properties: { kind: { type: 'string' }, value: { type: 'string' } }, required: ['kind', 'value'] } },
-      blocked_reason: { type: 'string' },
+      summary: { type: 'string' }, evidence: { type: 'array', items: { type: 'object', properties: {
+        kind: { type: 'string' }, value: { type: 'string' },
+      }, required: ['kind', 'value'], additionalProperties: false } }, blocked_reason: { type: 'string' },
     }, required: ['work_item_id', 'status', 'summary'], additionalProperties: false } as JsonSchema,
     source: 'native', mutates: true,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
       const id = String(args.work_item_id ?? '');
-      const current = value.store.getWorkItem(value.session.id, id);
-      if (!current) return err(`Unknown work item '${id}'.`);
-      if (current.status === 'cancelled') return err(`Work item '${id}' was cancelled and cannot accept new evidence.`);
-      if (current.status === 'blocked' || current.status === 'stale') return err(`Work item '${id}' is ${current.status}; resume or replace it before recording evidence.`);
-      const evidence = Array.isArray(args.evidence) ? args.evidence.map((item) => {
-        const record = item as Record<string, unknown>;
-        return { kind: typeof record.kind === 'string' ? record.kind : '', value: typeof record.value === 'string' ? record.value : '', recorded_at: new Date().toISOString() };
-      }) : [];
-      if (String(args.status) !== 'blocked' && evidence.length === 0) return err('At least one concrete evidence item is required.');
-      if (evidence.some((item) => !item.kind.trim() || !item.value.trim())) {
-        return err('Every evidence item needs a non-empty kind and value.');
+      const item = value.store.getWorkItem(value.session.id, id);
+      if (!item) return err(`Unknown work item '${id}'.`);
+      const approved = value.store.getLatestApprovedPlanRevision(value.session.id);
+      if (!approved || approved.id !== item.plan_revision_id) return err('Evidence can only be recorded for the current approved plan revision.');
+      const active = value.store.getActiveWorkItemRun(value.session.id, id);
+      const company = ctx.companyContext;
+      if (!company || company.runtimeKind !== 'app_studio' || company.isMaster || company.companySessionId !== value.session.company_session_id) {
+        return err('Evidence must come from the App specialist that owns the active attempt.');
       }
-      if ((current.kind === 'implement' || current.kind === 'contract') && String(args.status) === 'done') {
-        return err(`Work item '${id}' must move to review. A separate verify card must complete it.`);
+      if (!active?.company_agent_run_id || active.company_agent_run_id !== company.agentRunId || active.role !== company.agentRole) {
+        return err('This specialist does not own the active attempt.');
       }
-      const merged = [...json<unknown[]>(current.evidence_json, []), ...evidence];
-      const item = value.store.setWorkItemStatus(value.session.id, id, String(args.status) as AppWorkItemStatus, {
+      const status = String(args.status) as 'review' | 'done' | 'blocked';
+      const supplied = Array.isArray(args.evidence) ? args.evidence as Array<Record<string, unknown>> : [];
+      if (status !== 'blocked' && supplied.length === 0) return err('Concrete evidence is required.');
+      const resolved = resolveHostPath('.', ctx);
+      if (resolved.kind === 'no-bind-mount') return err(resolved.message);
+      const plan = parseAppPlan(approved.plan_json)!;
+      const now = new Date().toISOString();
+      const records = supplied.map((record) => ({
+        kind: String(record.kind ?? ''), value: String(record.value ?? ''), recorded_at: now,
+        actor_role: company.agentRole, actor_agent_run_id: company.agentRunId,
+        plan_fingerprint: auditAppPlan(plan).plan_fingerprint,
+        workspace_fingerprint: appWorkspaceFingerprint(resolved.path),
+      }));
+      if (records.some((record) => !record.kind.trim() || !record.value.trim())) return err('Every evidence item needs kind and value.');
+      if (['implement', 'contract', 'change'].includes(item.kind) && status === 'done') return err('Implementation cards move to review; a separate verify card closes them.');
+      const merged = [...json<Array<Record<string, unknown>>>(item.evidence_json, []), ...records];
+      const updated = value.store.setWorkItemStatus(value.session.id, id, status, {
         blockedReason: typeof args.blocked_reason === 'string' ? args.blocked_reason : null,
-        evidenceJson: JSON.stringify(merged), runJson: JSON.stringify({ ...json(current.run_json, {}), summary: String(args.summary) }),
+        evidenceJson: JSON.stringify(merged),
       });
-      const resolveCorrection = (corrector: AppStudioWorkItem, verifierId?: string): void => {
-        const run = json<{ corrects_work_item_id?: string }>(corrector.run_json, {});
-        if (!run.corrects_work_item_id) return;
-        const corrected = value.store.getWorkItem(value.session.id, run.corrects_work_item_id);
-        if (!corrected || corrected.status !== 'stale') return;
-        const correctedEvidence = json<Array<{ kind: string; value: string; recorded_at?: string }>>(corrected.evidence_json, []);
-        const recordedAt = new Date().toISOString();
-        value.store.setWorkItemStatus(value.session.id, corrected.id, 'done', {
-          evidenceJson: JSON.stringify([
-            ...correctedEvidence,
-            { kind: 'corrected-by', value: corrector.id, recorded_at: recordedAt },
-            ...(verifierId ? [{ kind: 'verified-by', value: verifierId, recorded_at: recordedAt }] : []),
-          ]),
-        });
-        const all = value.store.listWorkItems(value.session.id).map(hydrateItem);
-        for (const dependentId of dependentWorkItemIds(all, [corrected.id])) {
-          if (dependentId === corrected.id) continue;
-          const dependent = value.store.getWorkItem(value.session.id, dependentId);
-          if (dependent?.status === 'stale') value.store.setWorkItemStatus(value.session.id, dependent.id, 'backlog');
-        }
-      };
-      if (current.kind === 'verify' && item.status === 'done') {
-        for (const dependencyId of json<string[]>(current.depends_on_json, [])) {
+      value.store.updateWorkItemRunStatus(active.id, status === 'blocked' ? 'blocked' : 'completed', { statusMessage: String(args.summary) });
+      if (updated.kind === 'verify' && updated.status === 'done') {
+        for (const dependencyId of json<string[]>(updated.depends_on_json, [])) {
           const dependency = value.store.getWorkItem(value.session.id, dependencyId);
-          if (!dependency || dependency.status !== 'review') continue;
-          const dependencyEvidence = json<unknown[]>(dependency.evidence_json, []);
-          value.store.setWorkItemStatus(value.session.id, dependency.id, 'done', {
-            evidenceJson: JSON.stringify([...dependencyEvidence, { kind: 'verified-by', value: current.id, recorded_at: new Date().toISOString() }]),
+          if (dependency?.status === 'review') value.store.setWorkItemStatus(value.session.id, dependency.id, 'done', {
+            evidenceJson: JSON.stringify([...json<unknown[]>(dependency.evidence_json, []), { kind: 'verified-by', value: updated.id, recorded_at: now }]),
           });
-          resolveCorrection(dependency, current.id);
         }
       }
-      if (item.status === 'done' && current.kind !== 'implement' && current.kind !== 'contract') resolveCorrection(item, current.kind === 'verify' ? current.id : undefined);
       value.store.refreshReadyWorkItems(value.session.id);
-      return ok(`Work item '${item.id}' moved to ${item.status} with ${merged.length} evidence record(s).`);
+      return ok(`Evidence recorded for '${id}'; status=${updated.status}.`);
+    },
+  };
+}
+
+export function appGetDbState(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_get_db_state',
+    description: 'Read the real local D1 migration, seed and provisioning state for this App.',
+    parameters: EMPTY,
+    source: 'native', mutates: false, parallelSafe: true,
+    handler: async (_args, ctx) => {
+      const value = bound(binding); if (!value.ok) return err(value.error);
+      const resolved = resolveHostPath('.', ctx); if (resolved.kind === 'no-bind-mount') return err(resolved.message);
+      const migrations = listSqlMigrations(resolved.path);
+      const status = readDbStatus(resolved.path);
+      return appResult('App database state', {
+        engine: 'd1', migrations, applied: status?.applied ?? [],
+        pending: migrations.filter((name) => !status?.applied.includes(name)),
+        local_ready: status?.local_ready ?? false, seeded: status?.seeded ?? false,
+        database_file: findLocalD1File(resolved.path) ? 'available' : 'missing',
+        last_error_phase: status?.last_error_phase ?? null,
+      });
+    },
+  };
+}
+
+export function appUpdateDatabase(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_update_database',
+    description: 'Safely update the App D1 database: add one validated migration, replace canonical seed data, or provision the local preview. Remote publishing is never performed here.',
+    parameters: { type: 'object', properties: {
+      operation: { type: 'string', enum: ['add_migration', 'replace_seed', 'provision_local'] },
+      name: { type: 'string' }, sql: { type: 'string' }, reason: { type: 'string' },
+    }, required: ['operation'], additionalProperties: false } as JsonSchema,
+    source: 'native', mutates: true, parallelSafe: false,
+    handler: async (args, ctx) => {
+      const value = bound(binding); if (!value.ok) return err(value.error);
+      if (!value.store.getLatestApprovedPlanRevision(value.session.id)) return err('Approve the current plan before changing the database.');
+      const resolved = resolveHostPath('.', ctx); if (resolved.kind === 'no-bind-mount') return err(resolved.message);
+      const operation = String(args.operation ?? '');
+      if (operation === 'add_migration') {
+        const name = String(args.name ?? '');
+        const sql = String(args.sql ?? '');
+        const slug = normalizeMigrationSlug(name);
+        const issue = validateAppMigrationSql(sql);
+        if (!slug || issue) return err(issue ?? 'A migration name is required.');
+        const migrations = listSqlMigrations(resolved.path);
+        const status = readDbStatus(resolved.path);
+        const pending = migrations.filter((file) => !status?.applied.includes(file));
+        if (pending.length > 0) return err(`Provision the existing pending migration(s) first: ${pending.join(', ')}.`);
+        const filename = nextMigrationFilename(migrations, name);
+        mkdirSync(join(resolved.path, 'migrations'), { recursive: true });
+        writeFileSync(join(resolved.path, 'migrations', filename), `${sql.trim()}\n`, 'utf8');
+        const stale = value.store.listWorkItems(value.session.id).filter((item) => ['done', 'review'].includes(item.status)).map((item) => item.id);
+        value.store.markWorkItemsStale(value.session.id, stale, `Database migration ${filename} changed the implementation evidence.`);
+        value.store.appendEvent(value.session.id, 'database.changed', 'migration', filename, JSON.stringify({ operation }));
+        return appResult('Database migration added', { filename, stale_work_items: stale });
+      }
+      if (operation === 'replace_seed') {
+        const sql = String(args.sql ?? '');
+        const reason = String(args.reason ?? '').trim();
+        const issue = validateAppSeedSql(sql);
+        if (!reason || issue) return err(issue ?? 'reason is required.');
+        const result = replaceAppSeedFile(resolved.path, sql);
+        const stale = result.changed
+          ? value.store.listWorkItems(value.session.id).filter((item) => ['done', 'review'].includes(item.status)).map((item) => item.id)
+          : [];
+        value.store.markWorkItemsStale(value.session.id, stale, 'Canonical seed data changed the implementation evidence.');
+        value.store.appendEvent(value.session.id, 'database.changed', 'seed', 'seeds/seed.sql', JSON.stringify({ operation, reason, changed: result.changed }));
+        return appResult('Database seed updated', { ...result, stale_work_items: stale });
+      }
+      if (operation === 'provision_local') {
+        const outcome = await getDatabaseProvisioner('d1').ensureLocal({ workspaceDir: resolved.path, appSlug: value.session.app_slug, bindingName: 'DB' });
+        if (!outcome.ok) return err(outcome.error ?? 'Local D1 provisioning failed.');
+        const dbFile = findLocalD1File(resolved.path);
+        const dbStore = getAppStudioDbClientStore();
+        if (dbFile && dbStore) ensureAppStudioDbConnection(dbStore, value.session, dbFile);
+        value.store.appendEvent(value.session.id, 'database.provisioned', 'database', 'local-d1', JSON.stringify({ applied: outcome.applied }));
+        return appResult('Local D1 ready', { applied: outcome.applied, database_file: dbFile ? 'available' : 'missing' });
+      }
+      return err('operation must be add_migration, replace_seed or provision_local.');
+    },
+  };
+}
+
+export function appRunChecks(binding: AppToolBinding): CoderTool {
+  return {
+    name: 'app_run_checks',
+    description: 'Run the explainable plan audit and optionally one declared workspace check before build, review or publish.',
+    parameters: { type: 'object', properties: {
+      script: { type: 'string', enum: ['test:worker', 'test:e2e', 'build'] },
+    }, additionalProperties: false } as JsonSchema,
+    source: 'native', mutates: false, parallelSafe: false, riskLevel: 'execute',
+    handler: async (args, ctx) => {
+      const value = bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan } = latestPlan(value);
+      if (!revision || !plan) return err('The App has no valid plan.');
+      const fitness = auditAppPlan(plan);
+      const script = typeof args.script === 'string' ? args.script : null;
+      if (!script) return appResult('App checks', { fitness, script: null });
+      const resolved = resolveHostPath('.', ctx); if (resolved.kind === 'no-bind-mount') return err(resolved.message);
+      const result = await runWorkspaceScript(resolved.path, script, script === 'test:e2e' ? 180_000 : 120_000);
+      return appResult('App checks', {
+        fitness,
+        script: { name: script, ok: result.ok, output: summarizeOutput(result.output) },
+        workspace_fingerprint: appWorkspaceFingerprint(resolved.path),
+        ready: fitness.status === 'ready' && result.ok,
+      });
     },
   };
 }

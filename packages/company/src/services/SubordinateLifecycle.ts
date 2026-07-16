@@ -158,6 +158,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   // ─── ISubordinateQuery ──────────────────────────────────────────
 
   get runningCount(): number { return this.runningIds.size; }
+  /** Includes synchronous spawn reservations that have not created a run yet. */
+  get concurrencyOccupancy(): number { return this.runningIds.size + this.pendingSpawns.count; }
   isRunning(agentRunId: number): boolean { return this.runningIds.has(agentRunId); }
 
   // ─── Queries ────────────────────────────────────────────────────

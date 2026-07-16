@@ -663,7 +663,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // execute_tasks already owns a user-friendly task process row. Its
       // internal tasks-wave agent group is the same work, not another row.
       if (!isTaskWaveGroup(d.groupId)) {
-        if (d.event === 'completed' || d.event === 'error' || d.event === 'timed_out' || d.event === 'aborted') {
+        if (d.event === 'completed' || d.event === 'partial' || d.event === 'error' || d.event === 'timed_out' || d.event === 'aborted') {
           removeProcess(processId);
         } else {
           upsertProcess({

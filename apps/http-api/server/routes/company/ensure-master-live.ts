@@ -26,6 +26,8 @@ import {
 } from '../../../sse/companyOrchestrator.js';
 import { withSessionLock } from '../coder/sessionLock.js';
 import { resolveAndRunMaster } from './master-resolve.js';
+import { routeAllowsCompanySurface } from './runtime-capabilities.js';
+import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
 
 const PORT_CLOSED_RETRY_DELAY_MS = 600;
 
@@ -55,13 +57,22 @@ export async function ensureCompanyMasterLive(
     if (!session) return { error: 'Not found', status: 404 };
 
     let config: {
-      master_provider?: string;
-      master_model?: string;
-      master_reasoning_effort?: string;
       role_assignments?: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
     } = {};
     try { config = JSON.parse(session.config_json); } catch { /* defaults below */ }
     const roleConfigs = config.role_assignments ?? [];
+    let masterRuntime;
+    try {
+      masterRuntime = resolveEffectiveMasterRuntime({
+        configJson: session.config_json,
+        runtimeKind: session.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+      });
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        status: 400,
+      };
+    }
 
     // A session that has a master run RESUMES it (reuses coder_session_id);
     // a brand-new sub-session with no master run cold-starts.
@@ -69,18 +80,23 @@ export async function ensureCompanyMasterLive(
 
     const attemptSpawnAndResume = async (): Promise<CompanyOrchestrator> => {
       const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
-      void orchestrator.pipelineRecoverRunning().catch((err) => {
-        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-      });
+      if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+        void orchestrator.pipelineRecoverRunning().catch((err) => {
+          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+        });
+      }
       await resolveAndRunMaster(orchestrator, !!masterRun, {
         userMessage: opts.message,
-        provider: config.master_provider ?? 'anthropic',
-        model: config.master_model ?? 'claude-sonnet-4-6',
+        provider: masterRuntime.provider,
+        model: masterRuntime.model,
         maxTurns: 100,
         roleConfigs,
         attachments: opts.attachments,
-        thinking: opts.thinking,
-        reasoningEffort: config.master_reasoning_effort,
+        thinking: opts.thinking ?? masterRuntime.thinking,
+        thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
+        temperature: masterRuntime.temperature,
+        reasoningEffort: masterRuntime.reasoningEffort,
+        fallbackModels: masterRuntime.fallbackModels,
       });
       return orchestrator;
     };

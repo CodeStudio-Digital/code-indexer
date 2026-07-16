@@ -10,7 +10,7 @@
  * stallMs is intentionally NOT scaled — a paused subagent is a paused
  * subagent regardless of how much work was budgeted.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyComplexityToLimits,
   DEFAULT_LIMITS,
@@ -79,9 +79,18 @@ describe('applyComplexityToLimits', () => {
     expect(out.maxToolCalls).toBe(200);
     expect(out.timeoutMs).toBeUndefined();
   });
+
+  it('keeps zero unlimited across complexity multipliers', () => {
+    expect(applyComplexityToLimits('small', { maxToolCalls: 0, timeoutMs: 0 }))
+      .toEqual({ maxToolCalls: 0, timeoutMs: 0 });
+    expect(applyComplexityToLimits('large', { maxToolCalls: 0, timeoutMs: 0 }))
+      .toEqual({ maxToolCalls: 0, timeoutMs: 0 });
+  });
 });
 
 describe('resolveTaskLimit (per-kind + complexity composition)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('uses implement defaults at medium complexity', () => {
     const out = resolveTaskLimit(task({ kind: 'implement', estimated_complexity: 'medium' }));
     expect(out.maxToolCalls).toBe(DEFAULT_LIMITS.implement.maxToolCalls);
@@ -99,8 +108,17 @@ describe('resolveTaskLimit (per-kind + complexity composition)', () => {
     expect(out.timeoutMs).toBe(DEFAULT_LIMITS.verify.timeoutMs * 2);
   });
 
-  it('investigate small complexity gets 20 tool calls (40 base × 0.5)', () => {
+  it('keeps investigate unlimited at small complexity', () => {
+    const out = resolveTaskLimit(task({ kind: 'investigate', estimated_complexity: 'small' }));
+    expect(out.maxToolCalls).toBe(0);
+    expect(out.timeoutMs).toBe(0);
+  });
+
+  it('hot-applies and scales a positive operator override', () => {
+    vi.stubEnv('CODER_TASK_INVESTIGATE_MAX_TOOLS', '40');
+    vi.stubEnv('CODER_TASK_INVESTIGATE_TIMEOUT_MS', '600000');
     const out = resolveTaskLimit(task({ kind: 'investigate', estimated_complexity: 'small' }));
     expect(out.maxToolCalls).toBe(20);
+    expect(out.timeoutMs).toBe(300000);
   });
 });

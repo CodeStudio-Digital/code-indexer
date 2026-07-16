@@ -3,11 +3,11 @@
  * (o SQLite do miniflare em `.wrangler/state/v3/d1/`), traduzida para
  * fichas leigo-friendly com labels humanos vindos da spec.
  *
- *   GET /api/app-studio/sessions/:id/data            → todas as tabelas
+ *   GET /api/app-studio/apps/:id/data                → todas as tabelas
  *       (colunas + contagem + 3 linhas de exemplo)
- *   GET /api/app-studio/sessions/:id/data?table=X    → até 100 linhas de X
- *   POST /api/app-studio/sessions/:id/data/provision → aplica migrations + seed locais
- *   POST /api/app-studio/sessions/:id/data/query     → consulta SELECT read-only
+ *   GET /api/app-studio/apps/:id/data?table=X        → até 100 linhas de X
+ *   POST /api/app-studio/apps/:id/data/provision     → aplica migrations + seed locais
+ *   POST /api/app-studio/apps/:id/data/query         → consulta SELECT read-only
  *
  * Read-only por construção (better-sqlite3 { readonly }); tabelas internas
  * (sqlite_*, _cf_*, d1_migrations) ficam de fora.
@@ -17,9 +17,8 @@ import { join } from 'node:path';
 import type { Hono } from 'hono';
 import type DatabaseConstructor from 'better-sqlite3';
 import { listSqlMigrations, readIfExists, sqlHasStatements } from '@mcp/app-studio/verification/workspace-checks.js';
-import type { AppDbEngine } from '@mcp/app-studio/provisioner/types.js';
 import { findLocalD1File } from '@mcp/app-studio/local-db.js';
-import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
+import { parseAppPlan } from '@mcp/app-studio/plan/types.js';
 import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
 import { ensureAppStudioDbConnection } from '@mcp/company/tools/app-studio/db-client-bridge.js';
@@ -101,7 +100,7 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     }, session, dbFile);
   }
 
-  app.get('/api/app-studio/sessions/:id/data', (c) => {
+  app.get('/api/app-studio/apps/:id/data', (c) => {
     const id = parseIdParam(c);
     const session = appStudioStore.getSession(id);
     if (!session) return notFound(c);
@@ -113,8 +112,8 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     if (!dbFile) return c.json({ tables: null, reason: 'not-provisioned', provision });
     syncNativeDbConnection(session, dbFile);
 
-    const spec = parseAppSpec(session.spec_json);
-    const entityByName = new Map(spec?.database.entities.map((e) => [e.name, e]) ?? []);
+    const plan = parseAppPlan(appStudioStore.getLatestPlanRevision(id)?.plan_json ?? null);
+    const entityByName = new Map(plan?.data.entities.map((entity) => [entity.name, entity]) ?? []);
 
     let sqlite: InstanceType<typeof Database> | null = null;
     try {
@@ -157,18 +156,18 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
         const fks = sqlite!.prepare(`PRAGMA foreign_key_list("${name}")`).all() as SqliteForeignKeyInfo[];
         const columns = (sqlite!.prepare(`PRAGMA table_info("${name}")`).all() as SqliteColumnInfo[]).map(
           (col) => {
-            const specField = entity?.fields.find((f) => f.name === col.name);
+            const planField = entity?.fields.find((f) => f.name === col.name);
             const fk = fks.find((item) => item.from === col.name);
             return {
               name: col.name,
               type: col.type,
-              label: specField?.label ?? col.name,
-              required: col.notnull === 1 || col.pk > 0 || specField?.required === true,
+              label: planField?.label ?? col.name,
+              required: col.notnull === 1 || col.pk > 0 || planField?.required === true,
               primary_key: col.pk > 0,
               references: fk
                 ? { table: fk.table, column: fk.to || 'id', label: entityLabel(fk.table) }
-                : specField?.references
-                  ? { table: specField.references, column: 'id', label: entityLabel(specField.references) }
+                : planField?.references
+                  ? { table: planField.references, column: 'id', label: entityLabel(planField.references) }
                   : null,
             };
           },
@@ -207,7 +206,7 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.post('/api/app-studio/sessions/:id/data/provision', async (c) => {
+  app.post('/api/app-studio/apps/:id/data/provision', async (c) => {
     const id = parseIdParam(c);
     const session = appStudioStore.getSession(id);
     if (!session) return notFound(c);
@@ -216,7 +215,7 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
 
     let provisioner;
     try {
-      provisioner = getDatabaseProvisioner(session.db_engine as AppDbEngine);
+      provisioner = getDatabaseProvisioner('d1');
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }
@@ -239,7 +238,7 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.post('/api/app-studio/sessions/:id/data/query', async (c) => {
+  app.post('/api/app-studio/apps/:id/data/query', async (c) => {
     const id = parseIdParam(c);
     const session = appStudioStore.getSession(id);
     if (!session) return notFound(c);

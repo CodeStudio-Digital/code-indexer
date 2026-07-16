@@ -215,7 +215,7 @@ export class SemanticIndexCoordinator {
    * a compatible vector space instead of probing/creating duplicates. */
   private readonly generationRuns = new Map<SemanticPurpose, Promise<SemanticGenerationRow>>();
   private readonly cleanupRuns = new Map<string, Promise<void>>();
-  private unusedVectorCleanupRun: Promise<SemanticUnusedVectorCleanupResult> | null = null;
+  private readonly unusedVectorCleanupRuns = new Map<string, Promise<SemanticUnusedVectorCleanupResult>>();
   private readonly projectRemovalRuns = new Map<number, {
     kind: ProjectRemovalKind;
     promise: Promise<void>;
@@ -361,24 +361,36 @@ export class SemanticIndexCoordinator {
   /** Explicit administrative sweep for obsolete physical generation tables.
    * Routing is proven per SQLite/table, so a generation still serving another
    * project or collection cannot be removed accidentally. */
-  cleanupUnusedVectors(): Promise<SemanticUnusedVectorCleanupResult> {
-    if (this.unusedVectorCleanupRun) return this.unusedVectorCleanupRun;
-    const running = this.performUnusedVectorCleanup().finally(() => {
-      if (this.unusedVectorCleanupRun === running) this.unusedVectorCleanupRun = null;
+  cleanupUnusedVectors(projectId?: number): Promise<SemanticUnusedVectorCleanupResult> {
+    const key = projectId === undefined ? 'global' : `project:${projectId}`;
+    const existing = this.unusedVectorCleanupRuns.get(key);
+    if (existing) return existing;
+    if (this.unusedVectorCleanupRuns.size > 0) {
+      return Promise.reject(new Error('another unused vector cleanup is already running'));
+    }
+    const running = this.performUnusedVectorCleanup(projectId).finally(() => {
+      if (this.unusedVectorCleanupRuns.get(key) === running) this.unusedVectorCleanupRuns.delete(key);
     });
-    this.unusedVectorCleanupRun = running;
+    this.unusedVectorCleanupRuns.set(key, running);
     return running;
   }
 
-  private async performUnusedVectorCleanup(): Promise<SemanticUnusedVectorCleanupResult> {
+  private async performUnusedVectorCleanup(projectId?: number): Promise<SemanticUnusedVectorCleanupResult> {
     const hasGeneration = this.deps.vectorStore.hasGeneration;
     const compact = this.deps.vectorStore.compactGenerationDatabase;
     if (!hasGeneration || !compact || !this.deps.vectorStore.dropGeneration) {
       throw new SemanticVectorWorkerUnavailableError('unused vector cleanup');
     }
     const executing = this.deps.semanticStore.listJobs().some((job) =>
-      (job.status === 'pending' || job.status === 'running')
-      && (job.kind === 'build' || job.kind === 'backfill'));
+      // Pending rows are durable requests waiting for an explicit wake-up;
+      // only running means a worker currently owns the physical database.
+      job.status === 'running'
+      && (job.kind === 'build' || job.kind === 'backfill')
+      // Superseded jobs are historical control-plane residue, not live work.
+      && this.jobGenerationIsReferenced(job)
+      // A project-scoped cleanup owns only that project's vectors.db. Work in
+      // another project or in a global docs/memory database must not block it.
+      && (projectId === undefined || this.semanticProjectIdForJob(job) === projectId));
     if (executing) throw new Error('wait for semantic builds to finish before cleaning unused vectors');
 
     this.deps.semanticStore.retireUnreferencedGenerations();
@@ -395,6 +407,7 @@ export class SemanticIndexCoordinator {
         let route: ReturnType<LocalVectorRouter['resolve']>;
         try { route = this.deps.router.resolve(namespace, generation.id); }
         catch { continue; }
+        if (projectId !== undefined && route.projectId !== projectId) continue;
         const key = `${route.dbPath.toLowerCase()}\0${route.tableName}`;
         const group = groups.get(key) ?? {
           namespace,
@@ -722,6 +735,13 @@ export class SemanticIndexCoordinator {
     const cursorProjectId = Number(job.cursor?.project_id);
     if (Number.isSafeInteger(cursorProjectId) && cursorProjectId > 0) return cursorProjectId;
     const match = /^(?:code:p|semantic:reindex:code:p)(\d+)$/.exec(job.namespace);
+    return match ? Number(match[1]) : null;
+  }
+
+  private semanticProjectIdForJob(job: SemanticJobRow): number | null {
+    const codeProjectId = this.codeProjectIdForJob(job);
+    if (codeProjectId !== null) return codeProjectId;
+    const match = /^(?:snapshot:p|memory:project:p)(\d+)$/.exec(job.namespace);
     return match ? Number(match[1]) : null;
   }
 

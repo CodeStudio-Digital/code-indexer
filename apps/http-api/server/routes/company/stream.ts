@@ -22,6 +22,13 @@ import {
 import { resolveAndRunMaster } from './master-resolve.js';
 import { ensureCompanyMasterLive } from './ensure-master-live.js';
 import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+  routeAllowsCompanySurface,
+} from './runtime-capabilities.js';
+import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
+import { abortCompanyRuntime } from './runtime-lifecycle.js';
+import {
   binaryDocumentsHandledNatively,
   normalizeAttachmentsForModel,
   pdfHandledNatively,
@@ -97,25 +104,21 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   // master can see images, and extract PDF text (dropping base64) unless the
   // master's adapter reads PDF natively. Defaults to the vision-capable,
   // PDF-native Anthropic master when the config is missing/unparseable.
-  // General file transports also keep Office/OpenDocument bytes native.
+  // General file transports also keep Office/OpenDocument bytes native. The
+  // model is resolved through the same authoritative contract as launch, so
+  // an incomplete App Master cannot gain a legacy attachment-time fallback.
   function masterAttachmentOpts(id: number): {
     extractImages: boolean;
     extractPdfText: boolean;
     keepBinaryDocuments: boolean;
   } {
-    let providerName = 'anthropic';
-    let modelId = 'claude-sonnet-4-6';
-    try {
-      const cur = companyStore.getCompanySession(id);
-      const config = JSON.parse(cur?.config_json ?? '{}') as {
-        master_provider?: string;
-        master_model?: string;
-      };
-      providerName = config.master_provider ?? providerName;
-      modelId = config.master_model ?? modelId;
-    } catch {
-      /* defaults */
-    }
+    const cur = companyStore.getCompanySession(id);
+    const runtime = resolveEffectiveMasterRuntime({
+      configJson: cur?.config_json,
+      runtimeKind: cur?.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+    });
+    const providerName = runtime.provider;
+    const modelId = runtime.model;
     const providerKind = providerStore.getProvider(providerName)?.kind ?? providerName;
     const modelRow = providerStore.getProvider(providerName)
       ? providerStore.listModels(providerName).find((m) => m.model_id === modelId)
@@ -174,9 +177,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!userMessage) return c.json({ error: 'user_message required' }, 400);
     const maxTurnsRequested = body.max_turns;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
+    let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
+    try {
+      attachmentOpts = masterAttachmentOpts(id);
+    } catch (error) {
+      return c.json({
+        error: error instanceof Error ? error.message : String(error),
+        code: 'MASTER_RUNTIME_INVALID',
+      }, 409);
+    }
     const attachments = await normalizeAttachmentsForModel(
       attachmentsCheck.value,
-      masterAttachmentOpts(id),
+      attachmentOpts,
     );
 
     // Serialize the "is there already a master for this id?" decision so two
@@ -210,12 +222,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
       // Parse config from DB — this is the source of truth for roles
       let config: {
-        master_provider?: string;
-        master_model?: string;
-        master_reasoning_effort?: string;
         role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
       } = {};
       try { config = JSON.parse(cur.config_json); } catch { /* use defaults */ }
+
+      let masterRuntime;
+      try {
+        masterRuntime = resolveEffectiveMasterRuntime({
+          configJson: cur.config_json,
+          runtimeKind: cur.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+        });
+      } catch (error) {
+        return {
+          kind: 'reject',
+          status: 409,
+          body: { error: error instanceof Error ? error.message : String(error) },
+        };
+      }
 
       const roleConfigs = (config.role_assignments ?? []) as Array<{
         role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string;
@@ -232,9 +255,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       // Pause any pipeline executions that were 'running' before the
       // server restart. The dashboard will surface a Resume button.
       // Fire-and-forget: never block startMaster on this.
-      void orchestrator.pipelineRecoverRunning().catch((err) => {
-        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-      });
+      if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+        void orchestrator.pipelineRecoverRunning().catch((err) => {
+          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+        });
+      }
 
       // Await master spin-up — if it fails, return JSON error (not a broken SSE
       // stream). Resume-or-start: if this session ALREADY has a master run,
@@ -247,13 +272,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           .some((r) => r.role === 'master');
         await resolveAndRunMaster(orchestrator, masterExists, {
           userMessage,
-          provider: config.master_provider ?? 'anthropic',
-          model: config.master_model ?? 'claude-sonnet-4-6',
+          provider: masterRuntime.provider,
+          model: masterRuntime.model,
           maxTurns: maxTurnsRequested ?? 100,
           roleConfigs,
           attachments,
-          thinking: body.thinking,
-          reasoningEffort: config.master_reasoning_effort,
+          thinking: body.thinking ?? masterRuntime.thinking,
+          thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
+          temperature: masterRuntime.temperature,
+          reasoningEffort: masterRuntime.reasoningEffort,
+          fallbackModels: masterRuntime.fallbackModels,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -316,9 +344,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
+    let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
+    try {
+      attachmentOpts = masterAttachmentOpts(id);
+    } catch (error) {
+      return c.json({
+        error: error instanceof Error ? error.message : String(error),
+        code: 'MASTER_RUNTIME_INVALID',
+      }, 409);
+    }
     const attachments = await normalizeAttachmentsForModel(
       attachmentsCheck.value,
-      masterAttachmentOpts(id),
+      attachmentOpts,
     );
     const message = body.message?.trim()
       ? body.message
@@ -330,7 +367,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const decision = await withSessionLock(id, async (): Promise<
       | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number; bus: CompanyOrchestrator['metaBus'] }
       | { kind: 'fresh'; orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] }
-      | { kind: 'reject'; status: 400 | 404 | 500; body: { error: string } }
+      | { kind: 'reject'; status: 400 | 404 | 409 | 500; body: { error: string } }
       | { kind: 'replay'; bus: CompanyOrchestrator['metaBus']; since: number }
       | { kind: 'gone' }
     > => {
@@ -365,13 +402,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
       // Parse role configs from session config
       let config: {
-        master_provider?: string;
-        master_model?: string;
-        master_reasoning_effort?: string;
         role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
       } = {};
       try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
       const roleConfigs = config.role_assignments ?? [];
+      let masterRuntime;
+      try {
+        masterRuntime = resolveEffectiveMasterRuntime({
+          configJson: session.config_json,
+          runtimeKind: session.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+        });
+      } catch (error) {
+        return {
+          kind: 'reject',
+          status: 409,
+          body: { error: error instanceof Error ? error.message : String(error) },
+        };
+      }
 
       // Spawn-or-attach helper. Wraps one full attempt at:
       //   1. getOrSpawn the orchestrator (creates worker if needed)
@@ -388,21 +435,26 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }> => {
         const spawned = await getOrSpawnCompanyOrchestrator(id);
         const orchestrator = spawned.orchestrator;
-        void orchestrator.pipelineRecoverRunning().catch((err) => {
-          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-        });
+        if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+          void orchestrator.pipelineRecoverRunning().catch((err) => {
+            console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+          });
+        }
         // Resume-or-start (shared with /start). `masterRun` present → resume
         // and reuse its coder-session; absent (brand-new sub-session) → cold
         // start. Never spawns a duplicate master for a session that has one.
         await resolveAndRunMaster(orchestrator, !!masterRun, {
           userMessage,
-          provider: config.master_provider ?? 'anthropic',
-          model: config.master_model ?? 'claude-sonnet-4-6',
+          provider: masterRuntime.provider,
+          model: masterRuntime.model,
           maxTurns: 100,
           roleConfigs,
           attachments,
-          thinking: body.thinking,
-          reasoningEffort: config.master_reasoning_effort,
+          thinking: body.thinking ?? masterRuntime.thinking,
+          thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
+          temperature: masterRuntime.temperature,
+          reasoningEffort: masterRuntime.reasoningEffort,
+          fallbackModels: masterRuntime.fallbackModels,
         });
         return { orchestrator, bus: spawned.bus };
       };
@@ -485,10 +537,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/abort', (c) => {
     const id = parseIdParam(c);
-    const orchestrator = getCompanyOrchestrator(id);
-    if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
-    orchestrator.abortAll();
-    deleteCompanyOrchestrator(id);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'session abort');
+    }
+    const result = abortCompanyRuntime(id);
+    if (!result.ok) return c.json({ error: 'No active orchestrator' }, 404);
     return c.json({ ok: true });
   });
 
@@ -501,6 +556,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'runtime/model configuration');
+    }
 
     const body = await parseJsonBody<{
       provider: string;

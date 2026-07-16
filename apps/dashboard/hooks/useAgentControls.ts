@@ -14,12 +14,25 @@ export function useAgentControls(
   companySessionId: number | null,
   streamSetError: (sessionId: number, error: string | null) => void,
   streamRemoveSubordinate: (sessionId: number, agentRunId: number) => void,
+  /** null disables raw Company controls (App cards own their lifecycle). */
+  controlsBasePath?: string | null,
 ) {
+  const route = useCallback((agentRunId: number, suffix = '') => {
+    if (controlsBasePath === null || companySessionId == null) return null;
+    const base = controlsBasePath ?? `/api/company/sessions/${companySessionId}/agents`;
+    return `${base}/${agentRunId}${suffix}`;
+  }, [companySessionId, controlsBasePath]);
+
   const pauseAgent = useCallback(
     async (agentRunId: number) => {
       if (companySessionId == null) return;
+      const url = route(agentRunId, '/pause');
+      if (!url) {
+        streamSetError(companySessionId, 'Use the App work-item controls to pause this specialist.');
+        return;
+      }
       try {
-        const r = await fetch(`/api/company/sessions/${companySessionId}/agents/${agentRunId}/pause`, {
+        const r = await fetch(url, {
           method: 'POST',
         });
         if (!r.ok && r.status !== 409) {
@@ -30,14 +43,19 @@ export function useAgentControls(
         streamSetError(companySessionId, `Pause error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError],
+    [companySessionId, route, streamSetError],
   );
 
   const resumeAgent = useCallback(
     async (agentRunId: number, opts?: { message?: string; thinking?: boolean }) => {
       if (companySessionId == null) return;
+      const url = route(agentRunId, '/resume');
+      if (!url) {
+        streamSetError(companySessionId, 'Use the App work-item controls to resume this specialist.');
+        return;
+      }
       try {
-        const r = await fetch(`/api/company/sessions/${companySessionId}/agents/${agentRunId}/resume`, {
+        const r = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: opts?.message, thinking: opts?.thinking }),
@@ -50,14 +68,19 @@ export function useAgentControls(
         streamSetError(companySessionId, `Resume error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError],
+    [companySessionId, route, streamSetError],
   );
 
   const deleteAgent = useCallback(
     async (agentRunId: number) => {
       if (companySessionId == null) return;
+      const url = route(agentRunId);
+      if (!url) {
+        streamSetError(companySessionId, 'Use the App work-item controls to abort this specialist.');
+        return;
+      }
       try {
-        const r = await fetch(`/api/company/sessions/${companySessionId}/agents/${agentRunId}`, {
+        const r = await fetch(url, {
           method: 'DELETE',
         });
         if (r.ok) {
@@ -70,7 +93,7 @@ export function useAgentControls(
         streamSetError(companySessionId, `Delete error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError, streamRemoveSubordinate],
+    [companySessionId, route, streamSetError, streamRemoveSubordinate],
   );
 
   return { pauseAgent, resumeAgent, deleteAgent };

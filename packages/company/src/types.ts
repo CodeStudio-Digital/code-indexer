@@ -26,6 +26,12 @@ export * from '@mcp/company-contracts';
 export interface CompanyContext {
   orchestrator: import('@mcp/company/orchestrator.js').CompanyOrchestrator;
   companySessionId: number;
+  /** Product capability hosted by the persistent Company lifecycle. */
+  runtimeKind?: import('@mcp/company-contracts').CompanyRuntimeKind;
+  /** Durable App Studio owner when runtimeKind === 'app_studio'. */
+  appStudioSessionId?: number;
+  /** Server-resolved, fail-closed runtime surface for this Company session. */
+  capabilities?: import('@mcp/company-contracts').CompanySessionCapabilities;
   agentRole: string;
   agentRunId: number | null;
   allowedProjectIds: number[];

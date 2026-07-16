@@ -33,6 +33,7 @@ interface SidebarRailProps {
   onToggle: (panel: SidePanel) => void;
   /** Contributed tool windows → extra rail icons opening their webview. */
   pluginWindows?: ContribToolWindow[];
+  readOnly?: boolean;
 }
 
 interface RailIcon {
@@ -65,7 +66,7 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRailProps) {
+export function SidebarRail({ active, onToggle, pluginWindows = [], readOnly = false }: SidebarRailProps) {
   const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
   useEffect(() => {
@@ -87,10 +88,9 @@ export function SidebarRail({ active, onToggle, pluginWindows = [] }: SidebarRai
       Icon: Puzzle,
       title: w.title,
     }));
-  const icons: RailIcon[] = [
-    ...BASE_ICONS,
-    ...pluginIcons,
-  ];
+  const icons: RailIcon[] = readOnly
+    ? BASE_ICONS.filter((icon) => icon.id === 'company-config')
+    : [...BASE_ICONS, ...pluginIcons];
   const core = icons.filter((i) => !i.advanced);
   const advanced = icons.filter((i) => i.advanced);
   // A panel opened via persisted state / deep link keeps its group visible.

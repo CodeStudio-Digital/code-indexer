@@ -32,7 +32,7 @@ const binding: ResolvedBinding = {
 };
 
 describe('CombinedQualityClassifier', () => {
-  it('evaluates all legacy dimensions in one provider call', async () => {
+  it('evaluates the terminal delivery dimensions in one provider call', async () => {
     const resolver = {
       resolveChain: vi.fn(async () => [binding]),
     } as unknown as PipelineProviderResolver;
@@ -42,7 +42,9 @@ describe('CombinedQualityClassifier', () => {
         confidence: 0.8,
         reason: 'completeness needs attention',
         dimensions: {
-          relevance: 'ok', completeness: 'warn', code_quality: 'ok', policy: 'ok', tool_use: 'ok',
+          delivery_relevance: { verdict: 'ok', confidence: 0.9, reason: 'on task' },
+          delivery_completeness: { verdict: 'warn', confidence: 0.8, reason: 'partial' },
+          evidence_alignment: { verdict: 'ok', confidence: 0.95, reason: 'supported' },
         },
       }),
       latencyMs: 1,
@@ -51,16 +53,50 @@ describe('CombinedQualityClassifier', () => {
     const result = await classifier.classify({
       taskText: 'Implement the requested change',
       outputText: 'Partial result',
-      recentToolCalls: [{ name: 'read_file', success: true, timestampMs: 1 }],
+      stopReason: 'completed',
+      changedFiles: ['src/user.ts'],
+      toolSummary: { total: 2, success: 2, error: 0, timeout: 0, refusal: 0, tools: [] },
+      validationSignals: ['npm test'],
     });
 
     expect(chatFn).toHaveBeenCalledTimes(1);
     const messages = chatFn.mock.calls[0][1];
     expect(messages[0].content).toContain('relevance');
     expect(messages[0].content).toContain('completeness');
-    expect(messages[0].content).toContain('code_quality');
-    expect(messages[0].content).toContain('policy');
-    expect(messages[0].content).toContain('tool_use');
-    expect(result).toMatchObject({ classifierName: 'quality_combined', verdict: 'warn' });
+    expect(messages[0].content).toContain('evidence_alignment');
+    expect(messages[0].content).not.toContain('code_quality');
+    expect(messages[1].content).toContain('src/user.ts');
+    expect(messages[1].content).not.toContain('Recent tool calls');
+    expect(result).toMatchObject({
+      classifierName: 'delivery_overall',
+      verdict: 'warn',
+      dimensions: [
+        { classifierName: 'delivery_relevance', verdict: 'ok' },
+        { classifierName: 'delivery_completeness', verdict: 'warn' },
+        { classifierName: 'evidence_alignment', verdict: 'ok' },
+      ],
+    });
+  });
+
+  it('does not retry or fail over the terminal provider attempt', async () => {
+    const resolver = {
+      resolveChain: vi.fn(async () => [
+        binding,
+        { ...binding, bindingId: 2, provider: { ...binding.provider, id: 'fallback-provider' } },
+      ]),
+    } as unknown as PipelineProviderResolver;
+    const chatFn = vi.fn(async () => {
+      throw new Error('provider unavailable');
+    });
+    const classifier = new CombinedQualityClassifier(resolver, {
+      chatFn,
+      singleAttempt: true,
+      retry: { maxRetries: 0 },
+    });
+
+    const result = await classifier.classify({ taskText: 'task', outputText: 'final' });
+
+    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ verdict: 'error', systemError: true });
   });
 });

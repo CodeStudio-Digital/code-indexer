@@ -26,15 +26,15 @@ export function useAppStudioSession(sessionId: number): {
     void refresh();
   }, [refresh]);
   useEffect(() => {
-    const events = new EventSource(`/api/app-studio/sessions/${sessionId}/events`);
+    const events = new EventSource(`/api/app-studio/apps/${sessionId}/events`);
     const changed = (event: MessageEvent) => {
       if (event.type !== 'heartbeat') void refresh();
     };
     const eventNames = [
-      'workflow.migrated', 'work_item.upserted', 'work_item.status_changed',
-      'work_item.reordered', 'approval.requested', 'approval.resolved',
-      'decision.requested', 'decision.resolved', 'blueprint.saved',
-      'publish.completed', 'agents.coordinator_changed',
+      'plan.revised', 'plan.approval_requested', 'plan.approved',
+      'work.status', 'decision.requested', 'decision.resolved',
+      'database.changed', 'database.provisioned', 'deployment.publishing',
+      'deployment.live', 'deployment.failed', 'build.paused', 'build.resumed', 'build.cancelled',
     ];
     eventNames.forEach((name) => events.addEventListener(name, changed));
     events.onerror = () => setError((current) => current ?? 'A conexão ao workflow será retomada automaticamente.');

@@ -196,7 +196,7 @@ describe('CoderWorkerPool', () => {
 
     expect(bus2).not.toBe(failedBus);
     expect(bus2.ended).toBe(false);
-    expect(mockWorker.state.hosts[0].bridge.requests).toHaveLength(2);
+    expect(mockWorker.state.hosts[0].bridge.requests.filter((request) => request.type === 'runFresh')).toHaveLength(2);
   });
 
   it('forwards the persisted round message id to an active worker follow-up', async () => {
@@ -214,5 +214,49 @@ describe('CoderWorkerPool', () => {
         roundMessageId: 42,
       },
     });
+  });
+
+  it('updates active workers only after ACK and preserves failed worker state', async () => {
+    const previous = process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS;
+    process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = '0';
+    try {
+      const p = createPool();
+      await p.runFresh(11, { userMessage: 'first' });
+      expect(p.qualitySnapshot()).toEqual([{ sessionId: 11, enabled: false }]);
+
+      mockWorker.state.requestImpl = async (type) => {
+        if (type === 'quality.setEnabled') return { enabled: true };
+        return { ok: true };
+      };
+      await expect(p.setQualityEnabled(true)).resolves.toEqual({ total: 1, acknowledged: 1, failed: 0 });
+      expect(p.qualitySnapshot()).toEqual([{ sessionId: 11, enabled: true }]);
+
+      mockWorker.state.requestImpl = async (type) => {
+        if (type === 'quality.setEnabled') throw new Error('ACK timeout');
+        return { ok: true };
+      };
+      await expect(p.setQualityEnabled(false)).resolves.toEqual({ total: 1, acknowledged: 0, failed: 1 });
+      expect(p.qualitySnapshot()).toEqual([{ sessionId: 11, enabled: true }]);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS;
+      else process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = previous;
+    }
+  });
+
+  it('confirms the current Quality toggle on newly spawned workers', async () => {
+    const previous = process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS;
+    process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = '1';
+    try {
+      mockWorker.state.requestImpl = async (type) => type === 'quality.status'
+        ? { enabled: true }
+        : { ok: true };
+      const p = createPool();
+      await p.runFresh(12, { userMessage: 'first' });
+      expect(mockWorker.state.hosts[0].bridge.requests.some((request) => request.type === 'quality.status')).toBe(true);
+      expect(p.qualitySnapshot()).toEqual([{ sessionId: 12, enabled: true }]);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS;
+      else process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS = previous;
+    }
   });
 });

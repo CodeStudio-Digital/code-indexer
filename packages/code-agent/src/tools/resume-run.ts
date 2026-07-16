@@ -10,6 +10,8 @@ import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
   runParallelAgents,
+  countSubagentOutcomes,
+  isPartialSubagentReason,
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import {
@@ -33,8 +35,9 @@ import {
   type ResumableGroup,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
-function reasonToStatus(reason: StopReason): 'completed' | 'aborted' | 'error' {
+function reasonToStatus(reason: StopReason): 'completed' | 'partial' | 'aborted' | 'error' {
   if (reason === 'completed') return 'completed';
+  if (isPartialSubagentReason(reason)) return 'partial';
   if (reason === 'aborted') return 'aborted';
   return 'error';
 }
@@ -177,11 +180,14 @@ export async function relaunchResumedAgents(
     };
   });
 
+  const outcomeCounts = countSubagentOutcomes(results);
   ctx.runner?.emit('agents_group_end', {
     groupId: group.spawnId,
     totalUsage,
     agentCount: results.length,
-    successCount: results.filter((r) => r.reason === 'completed').length,
+    successCount: outcomeCounts.completedCount,
+    ...outcomeCounts,
+    resumableCount: results.filter((r) => r.reason !== 'completed' && (r.transcript?.length ?? 0) > 0).length,
   });
 
   const stillFailed = results.filter((r) => r.reason !== 'completed').length;

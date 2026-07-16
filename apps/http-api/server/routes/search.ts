@@ -23,8 +23,9 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       const type = c.req.query('type') as SearchType | undefined;
       const limit = parseIntQuery(c, 'limit', 20);
       const supersessionKey = c.req.query('supersessionKey');
+      const bypassCache = c.req.query('bypassCache') === '1';
       return c.json(await h.project(
-        { projectId, query, mode, type, limit, supersessionKey },
+        { projectId, query, mode, type, limit, supersessionKey, bypassCache },
         createContext({ signal: c.req.raw.signal, clientInfo: { sourceType: 'http' } }),
       ));
     } catch (err) {

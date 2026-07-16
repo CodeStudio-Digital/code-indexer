@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import type { DupCallEntry } from '../../machine/types.js';
 import type { FailureStreakState } from '../failure-streak.js';
 import { NoProgressTracker } from '../no-progress.js';
+import { ToolCallLedger } from '../../../tool-call-ledger.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../nested-observer.js';
 
 function deps(over?: Partial<Parameters<typeof buildNestedToolObserver>[0]>) {
@@ -183,6 +184,24 @@ describe('nested failure-streak (shared state, pre-check enforcement)', () => {
 });
 
 describe('observer robustness + telemetry sink', () => {
+  it('feeds settled nested results into the shared ledger guard', () => {
+    const ledger = new ToolCallLedger();
+    const obs = buildNestedToolObserver(deps({ toolCallLedger: ledger }));
+    const opts = { repeatPolicy: 'stable' as const, executionClass: 'read' as const };
+    for (let i = 0; i < 4; i++) {
+      expect(obs.beforeNestedCall('search', { query: 'same' }, opts)).toBeNull();
+      obs.afterNestedCall({
+        ...afterArgs('search', false, 'unchanged'),
+        args: { query: 'same' },
+        ...opts,
+      });
+    }
+    expect(obs.beforeNestedCall('search', { query: 'same' }, opts)).toMatchObject({
+      action: 'block',
+      reason: 'cross-turn-no-progress',
+    });
+  });
+
   it('advances shared no-progress epoch only after a successful write/execute', () => {
     const tracker = new NoProgressTracker();
     const obs = buildNestedToolObserver(deps({ noProgressTracker: tracker }));

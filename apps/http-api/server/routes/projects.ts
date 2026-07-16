@@ -340,6 +340,19 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.post('/api/projects/:id/semantic/vectors/cleanup-unused', async (c) => {
+    const id = parseIdParam(c);
+    if (!deps.db.getProject(id)) return notFound(c);
+    try {
+      return c.json({
+        ok: true,
+        result: await deps.semanticCoordinator.cleanupUnusedVectors(id),
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    }
+  });
+
   app.post('/api/projects/:id/semantic/jobs/:jobId/pause', async (c) => {
     const id = parseIdParam(c);
     if (!deps.db.getProject(id)) return notFound(c);

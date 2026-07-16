@@ -80,20 +80,8 @@ import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js'
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
 import {
-  isGlobalQualityClassifierEnabled,
-  runGlobalQualityClassifiers,
-  getGlobalQualityClassificationStore,
-  getGlobalQualityInterventionStore,
-  getGlobalQualityWatchdog,
-  buildQualityNudge,
-  detectToolMisuseStreak,
-  getGlobalPolicyEnforcer,
-  shouldClassifyTurn,
-  worstVerdictOf,
-  fnv1aSample,
+  recordGlobalDeterministicQualitySignal,
 } from '@mcp/services/quality/index.js';
-import type { QualityClassificationRow } from '@mcp/store/quality-classification-store.js';
-import type { InterventionVerdictSnapshot } from '@mcp/store/quality-intervention-store.js';
 import {
   isGlobalContextRelevanceEnabled,
   tryGlobalContextCompact,
@@ -174,7 +162,6 @@ import {
 
 // (Pre-class helpers + tunable constants extracted to ./runner/* sub-modules —
 // see the import block above. The corresponding doc-blocks live in those files.)
-import { hashShort, rowToVerdictSnapshot } from './runner/dup-utils.js';
 import { envInt, doomLoopThreshold } from './runner/constants.js';
 import { capFor } from './runner/output-caps.js';
 import { isEssentialCompanyTool } from './runner/company-essentials.js';
@@ -605,276 +592,23 @@ export class CoderRunner extends EventEmitter {
    */
   private pendingDiffRereads: Map<string, { priorUseId: string; priorTurn: number; path: string }> = new Map();
 
+  private qualityRoundLedgerStart = 0;
 
-  /**
-   * Rolling list of tool names called recently (newest at the end).
-   * Maintained alongside the dominance window but with a wider cap so
-   * the QualityWatchdog can run histogram analysis on a longer horizon
-   * than the dominance guard. Trimmed lazily when it grows past 60.
-   *
-   * Distinct from `toolCallFreq` (which is keyed by arg-hash for the
-   * dup-call cap) — the watchdog wants tool *name* repetition, not
-   * arg repetition.
-   */
-  private watchdogRecentNames: string[] = [];
-
-  /**
-   * Rolling snapshot of recent tool calls (with isError + argsPreview)
-   * forwarded to the watchdog when its LLM check runs. Same cap as
-   * `watchdogRecentNames` — they evict in lockstep.
-   */
-  private watchdogRecentCalls: Array<{
-    turn: number;
-    name: string;
-    isError: boolean;
-    argsPreview?: string;
-  }> = [];
-
-  /**
-   * Last turn the QualityWatchdog LLM was invoked. Used to enforce the
-   * cooldown so the watchdog doesn't burn tokens every turn during a
-   * sustained loop. `-Infinity` = never yet.
-   */
-  private lastWatchdogTurn = -Infinity;
-
-  /**
-   * When the watchdog returns `flagged` with `recommended_action='nudge'`,
-   * this string holds the synthetic system reminder the runner injects
-   * before the next provider call. Consumed-and-cleared once.
-   */
-  private pendingWatchdogNudge: string | null = null;
-
-  /**
-   * Lightweight checklist (the `track` gate of the unified task list). Since
-   * the todos/tasks merge this is a DERIVED VIEW over the single task store
-   * (`coder_tasks_state`): it returns the track-gate items as `TodoItem[]`, or
-   * `[]` when the active list is an `approve` list (or there is none). Writes
-   * go through {@link setTodos}, which records a track `TasksState`. The
-   * `todos_updated` event still fires so the dashboard sidebar stays live.
-   */
   get currentTodos(): TodoItem[] {
     const ctx = this.opts.toolContext;
     return deriveTodosFromState(ctx.getTasksState ? ctx.getTasksState() : null);
   }
 
-  /**
-   * Worktree scope tracking. When `enter_worktree` is called, the runner
-   * remembers the original project root in `originalCwd` and swaps
-   * `toolContext.cwd` for the worktree path. `exit_worktree` reverses both.
-   * Persisted in `coder_sessions.worktree_path` so a session resume after a
-   * server restart continues in the same worktree.
-   */
   public originalCwd: string | null = null;
   public worktreePath: string | null = null;
 
+  private pollingResultRun: Map<string, { hash: string; count: number; firstTurn: number }> = new Map();
 
-
-  /**
-   * Phase C — polling-result stuck detection. Tracks the most recent
-   * consecutive run of identical result content per polling tool. When
-   * a run reaches `POLLING_STUCK_CAP`, the next call's result is
-   * replaced with a refusal so the agent stops polling stuck state.
-   */
-  private pollingResultRun: Map<string, { hash: string; count: number; firstTurn: number }>
-    = new Map();
-
-
-
-  /**
-   * Wire #2 — Tool-misuse streak intervention bookkeeping.
-   *
-   * When the `tool_misuse` classifier flags 3 consecutive turns, the runner
-   * forces the NEXT turn into a "planning intervention" — appends a strong
-   * directive to the system prompt telling the model to stop, name the
-   * loop, propose a different approach. Without this counter, the
-   * intervention would re-fire on every subsequent turn while the streak
-   * verdicts are still in the recent-window — annoying and wasteful.
-   *
-   * We record the turn number at which we LAST intervened, and require at
-   * least N more turns to pass before considering re-intervention.
-   */
-  private lastToolMisuseInterventionTurn: number | null = null;
-
-  /**
-   * Quality v2, D1 — Last-emitted nudge hash per turn. When the nudge
-   * text is byte-identical to one emitted in the last 5 turns, we suppress
-   * the duplicate (the model already received this message) but still
-   * record the suppression event so the dashboard can show "nudge fired
-   * → suppressed because identical to recent".
-   */
-  private lastNudgeHashByTurn = new Map<number, string>();
-
-  /**
-   * Quality v2, C4 — Pending intervention ids per turn. The runner inserts
-   * a row into `quality_interventions` with outcome='pending' the moment
-   * a nudge or planning block is appended; the value here is the row id.
-   * Later, when the classifier for turn (N+1) completes, the global
-   * runner reads this Map and backfills `outcome` based on verdict delta.
-   */
-  private pendingInterventionByTurn = new Map<number, number>();
-
-  /**
-   * Quality v2 — Held-out counterfactual rate. A qualifying nudge is
-   * deterministically withheld with this probability so the dashboard can
-   * compare improved-rate WITH vs WITHOUT a nudge on the same population
-   * (a real A/B baseline — `nudge_suppressed` is NOT a baseline, it's the
-   * repeat/dedup'd subset). 0 disables; default 0.15. Set via
-   * `CODER_NUDGE_HOLDOUT_RATE`.
-   */
-  private readonly nudgeHoldoutRate = parseNudgeHoldoutRate(process.env.CODER_NUDGE_HOLDOUT_RATE);
-
-
-  /**
-   * PR-4 (Row 3): record of the most recent recovery transition the runner
-   * took. Set whenever a recovery path is entered (compact-retry,
-   * transient-retry, fallback-swap, doom-loop, etc.). Read at exit time so
-   * the final `done` event and `RunResult` can attribute the stop to the
-   * recovery path that led there. null = clean run with no recoveries.
-   */
   private lastTransition: TransitionKind | null = null;
   private setTransition(kind: TransitionKind): void {
     this.lastTransition = kind;
   }
 
-  /**
-   * Update the rolling watchdog state with the tools this turn just
-   * fired. Cheap — no LLM. The actual `analyze()` call happens via
-   * `maybeRunWatchdog()` below and only when the pre-filter says the
-   * loop pattern is suspicious AND the cooldown has elapsed.
-   */
-  private recordToolCallsForWatchdog(
-    turn: number,
-    blocks: Array<{ name: string; input: Record<string, unknown> }>,
-    isErrorPerBlock: boolean[],
-  ): void {
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i];
-      this.watchdogRecentNames.push(b.name);
-      let argsPreview: string | undefined;
-      try {
-        argsPreview = JSON.stringify(b.input ?? {}).slice(0, 80);
-      } catch {
-        argsPreview = undefined;
-      }
-      this.watchdogRecentCalls.push({
-        turn,
-        name: b.name,
-        isError: isErrorPerBlock[i] ?? false,
-        argsPreview,
-      });
-    }
-    // Cap rolling window at 60 — wide enough for the watchdog's histogram
-    // to be meaningful, narrow enough to keep memory flat across long runs.
-    while (this.watchdogRecentNames.length > 60) this.watchdogRecentNames.shift();
-    while (this.watchdogRecentCalls.length > 60) this.watchdogRecentCalls.shift();
-  }
-
-  /**
-   * Run the QualityWatchdog asynchronously (fire-and-forget) when the
-   * cheap pre-filter detects a suspect pattern AND the cooldown has
-   * elapsed. The watchdog's LLM call doesn't block the turn loop — its
-   * verdict, if `flagged`, queues a system reminder for the NEXT turn
-   * via `pendingWatchdogNudge`.
-   *
-   * Lives separately from the four existing guards because:
-   *   - It runs on cheap heuristic + LLM, not pure-heuristic
-   *   - It catches semantic patterns (e.g. "model keeps trying to fix
-   *     a missing import that doesn't exist") the others miss
-   *   - It nudges instead of aborting — the existing guards still
-   *     abort the run when their thresholds hit
-   */
-  private maybeRunWatchdog(turn: number, lastAssistantText: string): void {
-    const watchdog = getGlobalQualityWatchdog();
-    if (!watchdog) return;
-    if (turn - this.lastWatchdogTurn < watchdog.cooldownTurns) return;
-    const trigger = watchdog.shouldRun(this.watchdogRecentNames);
-    if (!trigger) return;
-    this.lastWatchdogTurn = turn;
-    const sessionId = this.sessionId ?? 0;
-    const recentCalls = [...this.watchdogRecentCalls];
-    const text = lastAssistantText.slice(0, 1500);
-    void watchdog
-      .analyze({ sessionId, turn, recentToolCalls: recentCalls, lastAssistantText: text })
-      .then((verdict) => {
-        this.handleWatchdogVerdict(verdict, turn, trigger.suspectTool);
-      })
-      .catch((e) => {
-        // Apêndice 4 Fase 1 — include name + stack so the post-mortem
-        // can tell a network blip apart from a TypeError in our own
-        // code. Previously this was just `e.message` which often left
-        // the failure mode ambiguous.
-        const name = e instanceof Error ? e.name : 'unknown';
-        const message = e instanceof Error ? e.message : String(e);
-        const stack = e instanceof Error ? e.stack : undefined;
-        console.warn(
-          `[quality-watchdog] analyze failed at turn ${turn}: ${name}: ${message}` +
-            (stack ? `\n${stack}` : ''),
-        );
-      });
-  }
-
-  /**
-   * Apply a watchdog verdict. Persists the row, emits the bus event,
-   * and queues a system reminder when the verdict warrants a nudge.
-   * Pure side-effects — does not throw.
-   */
-  private handleWatchdogVerdict(
-    verdict: import('@mcp/services/quality/index.js').WatchdogVerdict,
-    turn: number,
-    suspectTool: string,
-  ): void {
-    try {
-      const store = getGlobalQualityClassificationStore();
-      if (store) {
-        // Reuse the existing classifier storage so the dashboard /
-        // admin panels show watchdog verdicts alongside the 5-classifier
-        // pipeline rows. `classifier_name='tool_loop'` keeps them
-        // distinguishable.
-        store.insert({
-          session_id: this.sessionId ?? null,
-          company_session_id: this.opts.companySessionId ?? null,
-          agent_run_id: this.opts.companyAgentRunId ?? null,
-          classifier_name: verdict.classifierName,
-          verdict: verdict.verdict,
-          confidence: verdict.confidence ?? null,
-          reason: verdict.reason ?? null,
-          provider_id: verdict.providerId ?? null,
-          model_id: verdict.modelId ?? null,
-          latency_ms: verdict.latencyMs,
-          raw_response: verdict.raw,
-        });
-      }
-    } catch (e) {
-      console.warn(
-        `[quality-watchdog] persistence failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    this.emit('quality_watchdog_alert', {
-      turn,
-      sessionId: this.sessionId ?? 0,
-      suspectTool,
-      verdict: verdict.verdict,
-      confidence: verdict.confidence ?? 0,
-      reason: verdict.reason ?? '',
-      recommendedAction: verdict.recommendedAction,
-      providerId: verdict.providerId ?? '',
-      modelId: verdict.modelId ?? '',
-    });
-    if (
-      verdict.verdict === 'flagged' &&
-      (verdict.recommendedAction === 'nudge' || verdict.recommendedAction === 'stop')
-    ) {
-      const reason = verdict.reason || `Tool \`${suspectTool}\` appears stuck.`;
-      this.pendingWatchdogNudge =
-        `[QUALITY WATCHDOG] ${reason} ` +
-        `Switch strategy: ask the user, try a different tool, or call update_goal/finish if the work is done. ` +
-        `Repeating \`${suspectTool}\` will not produce new information.`;
-      console.warn(
-        `[quality-watchdog] flagged session=${this.opts.sessionId} turn=${turn} ` +
-          `tool=${suspectTool} action=${verdict.recommendedAction}`,
-      );
-    }
-  }
 
   /**
    * Compose the final {@link RunResult} and emit the matching `done` event
@@ -997,235 +731,68 @@ export class CoderRunner extends EventEmitter {
   }
 
 
-  /**
-   * Quality v2, A1 — Cheap DB peek to feed `shouldClassifyTurn`. Returns
-   * the worst verdict from the MOST RECENT classified turn (or null when
-   * no prior classification exists). Bounded to the last 30 rows so it
-   * stays a single indexed query.
-   *
-   * Never throws — DB errors return null (sampling falls through to the
-   * default 1/3 rate).
-   */
-  private peekLastSessionWorstVerdict(): import('@mcp/store/quality-classification-store.js').QualityVerdict | null {
-    try {
-      if (this.sessionId == null) return null;
-      const store = getGlobalQualityClassificationStore();
-      if (!store) return null;
-      const rows = store.findRecentBySession(this.sessionId, {
-        limit: 5, // 5 classifiers per turn — captures last turn's verdicts
-        sinceMs: 10 * 60_000,
-      });
-      if (rows.length === 0) return null;
-      // Filter to rows from the SINGLE most recent turn (same message_id).
-      const newestMessageId = rows[0].message_id;
-      const lastTurnRows = rows.filter((r) => r.message_id === newestMessageId);
-      return worstVerdictOf(lastTurnRows);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Wires #1 + #2 — Build the per-turn quality-feedback suffix that gets
-   * appended to the static system prompt at chat-call time.
-   *
-   * This is the place where the quality classifiers stop being a passive
-   * monitor and start affecting the model's next reply:
-   *
-   *   - **Wire #1 (Nível 1 — soft nudge):** for every classifier that
-   *     emitted a `warn`/`flagged` verdict above the confidence floor in
-   *     the recent window, a one-line corrective hint is appended.
-   *
-   *   - **Wire #2 (Nível 3a — tool-misuse intervention):** when the last 3
-   *     `tool_misuse` rows are all flagged AND we haven't intervened in
-   *     the last `INTERVENTION_COOLDOWN_TURNS` turns, the runner appends
-   *     a strong "planning turn" directive that overrides the soft nudge.
-   *
-   * Returns the SUFFIX text (empty string when nothing to inject). The
-   * caller concatenates it onto `this.opts.systemPrompt` for the chat
-   * call — the cached prefix isn't broken because we only ADD to the
-   * end. Subsequent turns without any feedback restore the unmodified
-   * prompt, so the prefix cache picks up where it left off.
-   *
-   * Never throws. Any DB / store failure returns ''.
-   */
+  /** Semantic quality is terminal-only and never mutates the next prompt. */
   private buildQualityFeedbackSuffix(): string {
-    try {
-      if (process.env.MCP_QUALITY_ACTIVE_INTERVENTIONS !== '1') return '';
-      if (this.sessionId == null) return '';
-      const store = getGlobalQualityClassificationStore();
-      if (!store) return '';
+    return '';
+  }
 
-      // Read a small recent window — enough to find the latest verdict per
-      // classifier and detect the 3-streak. 30 rows × 5 minutes is plenty;
-      // older verdicts are stale and likely refer to a problem the model
-      // has already moved past.
-      const rows = store.findRecentBySession(this.sessionId, {
-        limit: 30,
-        sinceMs: 5 * 60_000,
-      });
-      if (rows.length === 0) return '';
-
-      const parts: string[] = [];
-      let planningTriggered = false;
-      let planningContextRows: QualityClassificationRow[] = [];
-
-      // Wire #2 first — if the streak triggers, it takes precedence over
-      // the soft nudge (the soft nudge text would dilute the intervention).
-      const cooldown = this.tunables.interventionCooldownTurns;
-      const lastIv = this.lastToolMisuseInterventionTurn;
-      const cooldownOk = lastIv == null || this.turn - lastIv >= cooldown;
-      if (cooldownOk) {
-        const streak = detectToolMisuseStreak(rows, { minConfidence: 0.5, streakLength: 3 });
-        if (streak.triggered) {
-          parts.push(buildToolMisuseInterventionBlock(streak.latestReason, streak.latestConfidence));
-          this.lastToolMisuseInterventionTurn = this.turn;
-          planningTriggered = true;
-          planningContextRows = rows.filter((r) => r.classifier_name === 'tool_misuse').slice(0, 3);
-        }
-      }
-
-      // Wire #1 — always considered; emits empty when nothing meets the bar.
-      // When the intervention block above fired, we still emit the soft nudge
-      // (it covers the OTHER classifiers — off_topic, code_quality, etc.).
-      const nudge = buildQualityNudge(rows, { minConfidence: 0.6 });
-      let nudgeEmitted = false;
-      let nudgeSuppressed = false;
-      let nudgeHeldOut = false;
-      if (nudge.text) {
-        // Quality v2, D1 — Dedup identical nudges within a 5-turn window.
-        // When the same text fires turn after turn, the model has already
-        // received the signal; re-injecting it pollutes the prompt and
-        // wastes cache. We still record the suppression event so the
-        // dashboard can show "nudge fired internally but suppressed".
-        const hash = hashShort(nudge.text);
-        const recentlySent = Array.from(this.lastNudgeHashByTurn.entries()).some(
-          ([t, h]) => h === hash && this.turn - t < 5,
-        );
-        if (recentlySent) {
-          nudgeSuppressed = true;
-        } else if (this.shouldHoldOutNudge()) {
-          // Quality v2 — Counterfactual control. This nudge QUALIFIED but we
-          // deliberately withhold it (deterministic per session×turn) so the
-          // dashboard can compare improved-rate WITH vs WITHOUT a nudge on the
-          // same population. Do NOT inject the text, and do NOT record the
-          // hash — a future identical nudge must still fire, since the model
-          // never actually received this one.
-          nudgeHeldOut = true;
-        } else {
-          parts.push(nudge.text);
-          nudgeEmitted = true;
-          this.lastNudgeHashByTurn.set(this.turn, hash);
-          // Trim old entries (anything older than 10 turns is no longer
-          // relevant for the 5-turn dedup window, with margin).
-          for (const t of this.lastNudgeHashByTurn.keys()) {
-            if (t < this.turn - 10) this.lastNudgeHashByTurn.delete(t);
-          }
-        }
-      }
-
-      const finalText = parts.length > 0 ? `\n${parts.join('\n')}` : '';
-
-      // Quality v2, C4 — Record the intervention(s) for effectiveness
-      // measurement. Outcome starts 'pending' and is backfilled by the
-      // next classifier turn (in global-classifier-runner.ts).
-      if (planningTriggered) {
-        this.recordIntervention(
-          'planning',
-          // Triggering verdicts: the streak that fired the intervention.
-          planningContextRows.map(rowToVerdictSnapshot),
-          finalText.length,
-        );
-      }
-      // nudge / nudge_holdout / nudge_suppressed are mutually exclusive and
-      // share the same triggering verdicts (one per contributing classifier),
-      // so the backfill scores all three identically — that's what makes the
-      // held-out rows a valid counterfactual baseline.
-      if (nudgeEmitted || nudgeHeldOut || nudgeSuppressed) {
-        const triggers = rows
-          .filter((r) => nudge.contributingClassifiers.includes(r.classifier_name))
-          // Dedupe by classifier_name keeping most recent (rows are DESC).
-          .filter((r, i, arr) => arr.findIndex((x) => x.classifier_name === r.classifier_name) === i)
-          .map(rowToVerdictSnapshot);
-        if (nudgeEmitted) {
-          this.recordIntervention('nudge', triggers, finalText.length);
-        } else if (nudgeHeldOut) {
-          this.recordIntervention('nudge_holdout', triggers, 0);
-        } else {
-          this.recordIntervention('nudge_suppressed', triggers, 0);
-        }
-      }
-
-      return finalText;
-    } catch {
-      // Feedback is best-effort; a DB error must never break a turn.
-      return '';
+  /** Bounded terminal evidence; raw arguments and result bodies never leave the runner. */
+  public getTerminalQualityContext(): {
+    taskText: string;
+    outputText: string;
+    toolSummary: {
+      total: number;
+      success: number;
+      error: number;
+      timeout: number;
+      refusal: number;
+      tools: Array<{ name: string; calls: number; success: number; failures: number }>;
+    };
+    guardActions: Array<{ guard: string; tool?: string; count: number; action: string }>;
+    validationSignals: string[];
+  } {
+    const entries = this.opts.toolContext.toolCallLedger?.snapshot(this.qualityRoundLedgerStart) ?? [];
+    const byTool = new Map<string, { calls: number; success: number; failures: number }>();
+    for (const entry of entries) {
+      const current = byTool.get(entry.name) ?? { calls: 0, success: 0, failures: 0 };
+      current.calls += 1;
+      if (entry.outcome === 'success') current.success += 1;
+      else current.failures += 1;
+      byTool.set(entry.name, current);
     }
+    const guardActions = entries
+      .filter((entry) => entry.outcome === 'refusal')
+      .map((entry) => ({
+        guard: entry.refusalKind ?? 'refusal',
+        tool: entry.name,
+        count: 1,
+        action: 'tool_call_refused',
+      }));
+    const validationSignals = [...new Set(entries
+      .map((entry) => entry.validationSignal)
+      .filter((signal): signal is string => signal != null))];
+    return {
+      taskText: this.getLastUserText(),
+      outputText: this.extractLastAssistantText(),
+      toolSummary: {
+        total: entries.length,
+        success: entries.filter((entry) => entry.outcome === 'success').length,
+        error: entries.filter((entry) => entry.outcome === 'tool_error').length,
+        timeout: entries.filter((entry) => entry.outcome === 'timeout').length,
+        refusal: entries.filter((entry) => entry.outcome === 'refusal').length,
+        tools: [...byTool.entries()].map(([name, counts]) => ({ name, ...counts })).slice(0, 40),
+      },
+      guardActions,
+      validationSignals,
+    };
   }
 
-  /**
-   * Quality v2 — Decide whether to hold out (withhold) a qualifying nudge
-   * for the counterfactual baseline. Deterministic per (session, turn) and
-   * salted so it's decorrelated from the classification-sampling decision —
-   * reproducible across re-runs and unbiased.
-   */
-  private shouldHoldOutNudge(): boolean {
-    if (this.nudgeHoldoutRate <= 0) return false;
-    if (this.sessionId == null) return false;
-    return fnv1aSample(this.sessionId, this.turn, 'nudge_holdout') < this.nudgeHoldoutRate;
-  }
-
-  /**
-   * Quality v2, C4 — Persist an intervention row with outcome='pending'.
-   * Never throws. Silently no-op when the global store isn't installed
-   * (tests, opt-out env, etc).
-   */
-  private recordIntervention(
-    type: 'nudge' | 'planning' | 'nudge_suppressed' | 'nudge_holdout',
-    triggers: ReadonlyArray<InterventionVerdictSnapshot>,
-    chars: number,
-  ): void {
-    try {
-      const store = getGlobalQualityInterventionStore();
-      if (!store) return;
-      const id = store.insert({
-        session_id: this.sessionId ?? null,
-        company_session_id: this.opts.companySessionId ?? null,
-        agent_run_id: this.opts.companyAgentRunId ?? null,
-        turn_fired: this.turn,
-        intervention_type: type,
-        triggering_verdicts: triggers,
-        nudge_chars: chars > 0 ? chars : null,
-      });
-      // Track pending id per turn for future synchronous backfill flows
-      // (currently the global runner backfills on the next classify cycle
-      // by querying findPendingByPriorTurn — this map is informational
-      // and could be used by future inline-effectiveness UI).
-      if (type !== 'nudge_suppressed') {
-        this.pendingInterventionByTurn.set(this.turn, id);
-        for (const t of this.pendingInterventionByTurn.keys()) {
-          if (t < this.turn - 5) this.pendingInterventionByTurn.delete(t);
-        }
-      }
-    } catch {
-      /* never throw */
-    }
-  }
-
-  /**
-   * Extract the latest assistant text content (concatenated across text
-   * blocks). Used by the quality classifier observer to score the
-   * agent's just-emitted reply.
-   */
   private extractLastAssistantText(): string {
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const m = this.messages[i];
       if (m.role !== 'assistant') continue;
       if (typeof m.content === 'string') return m.content;
-      const parts: string[] = [];
-      for (const b of m.content) {
-        if (b.type === 'text') parts.push(b.text);
-      }
+      const parts = m.content.filter((block) => block.type === 'text').map((block) => block.text);
       if (parts.length > 0) return parts.join(' ');
     }
     return '';
@@ -1266,9 +833,7 @@ export class CoderRunner extends EventEmitter {
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
     this.opts.toolContext.runner = this;
-    if (rolloutEnabled('CODER_TOOL_LEDGER_ROLLOUT_PERCENT', this.runId)) {
-      this.opts.toolContext.toolCallLedger ??= new ToolCallLedger();
-    }
+    this.opts.toolContext.toolCallLedger ??= new ToolCallLedger();
     this.opts.toolContext.planMode = opts.planMode;
     // Tier filtering: prefer explicit activeTiers, fall back to profile,
     // else null = no filtering.
@@ -1801,12 +1366,16 @@ export class CoderRunner extends EventEmitter {
     if (extras?.selectedSkillIds && extras.selectedSkillIds.length > 0) {
       msg.selectedSkillIds = extras.selectedSkillIds;
     }
-    if (extras?.roundMessageId != null) this.roundMessageId = extras.roundMessageId;
+    if (extras?.roundMessageId != null) {
+      this.roundMessageId = extras.roundMessageId;
+      this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
+    }
     this.messages.push(msg);
   }
 
   setRoundMessageId(roundMessageId: number | null): void {
     this.roundMessageId = roundMessageId;
+    this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
   }
 
   /**
@@ -2069,21 +1638,40 @@ export class CoderRunner extends EventEmitter {
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
-        runQualityCheck: ({ turn, assistantText, toolResults }) => {
-          // Mirror the legacy recordToolCallsForWatchdog + maybeRunWatchdog
-          // pipeline. recordToolCallsForWatchdog updates the rolling
-          // window (60 names + calls); maybeRunWatchdog fires the LLM
-          // classifier asynchronously when the pre-filter says the
-          // pattern is suspicious AND the cooldown has elapsed.
-          if (toolResults.length > 0) {
-            const blocks = toolResults.map((r) => ({
-              name: r.name,
-              input: (r.input ?? {}) as Record<string, unknown>,
-            }));
-            const isErrorPerBlock = toolResults.map((r) => r.isError);
-            this.recordToolCallsForWatchdog(turn, blocks, isErrorPerBlock);
+        runQualityCheck: ({ toolResults }) => {
+          for (const result of toolResults) {
+            if (!result.refusalKind) continue;
+            recordGlobalDeterministicQualitySignal({
+              sessionId: this.sessionId ?? null,
+              companySessionId: this.opts.companySessionId ?? null,
+              agentRunId: this.opts.companyAgentRunId ?? null,
+              coderRunId: this.runId,
+              roundMessageId: this.roundMessageId,
+              classifierName: `runtime_${result.refusalKind}`,
+              verdict: result.refusalKind === 'user_denied' ? 'warn' : 'flagged',
+              reason: `Tool ${result.name} was refused by ${result.refusalKind}.`,
+              actionTaken: 'tool_call_refused',
+              evidence: {
+                tool: result.name,
+                guard: result.guardVerdict?.reason ?? result.refusalKind,
+                count: result.guardVerdict?.count ?? 1,
+              },
+            });
           }
-          this.maybeRunWatchdog(turn, assistantText);
+        },
+        recordStrategyNudge: ({ guard, toolName, count }) => {
+          recordGlobalDeterministicQualitySignal({
+            sessionId: this.sessionId ?? null,
+            companySessionId: this.opts.companySessionId ?? null,
+            agentRunId: this.opts.companyAgentRunId ?? null,
+            coderRunId: this.runId,
+            roundMessageId: this.roundMessageId,
+            classifierName: 'runtime_strategy_nudge',
+            verdict: 'warn',
+            reason: `Strategy-change guidance emitted after ${guard}${toolName ? ` for ${toolName}` : ''}.`,
+            actionTaken: 'strategy_nudge',
+            evidence: { guard, tool: toolName ?? null, count: count ?? 1 },
+          });
         },
         // Drain queued user messages at the top of every Executing turn.
         // Without this, messages pushed by `runner.pushUserMessage`
@@ -2152,7 +1740,10 @@ export class CoderRunner extends EventEmitter {
       if (pending.selectedSkillIds && pending.selectedSkillIds.length > 0) {
         msg.selectedSkillIds = pending.selectedSkillIds;
       }
-      if (pending.roundMessageId != null) this.roundMessageId = pending.roundMessageId;
+      if (pending.roundMessageId != null) {
+        this.roundMessageId = pending.roundMessageId;
+        this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
+      }
       this.messages.push(msg);
     }
   }
@@ -2238,63 +1829,6 @@ export class CoderRunner extends EventEmitter {
       }
     } catch {
       // Observer failures must never break telemetry.
-    }
-
-    // Passive quality evaluator dispatch. It never blocks the agent turn;
-    // prompt intervention remains disabled unless explicitly re-enabled.
-    if (
-      !this.isSubagent
-      && rolloutEnabled('CODER_QUALITY_CLASSIFIER_ROLLOUT_PERCENT', this.runId)
-      && isGlobalQualityClassifierEnabled()
-      && lastUserText
-      && this.sessionId != null
-    ) {
-      try {
-        const lastAssistantText = this.extractLastAssistantText();
-        const hasNarrative = lastAssistantText.length > 0;
-        const activeInterventions = process.env.MCP_QUALITY_ACTIVE_INTERVENTIONS === '1';
-        const lastWorst = activeInterventions ? this.peekLastSessionWorstVerdict() : null;
-        const shouldClassify = shouldClassifyTurn({
-          turn: input.turn,
-          sessionId: this.sessionId,
-          hasNarrativeText: hasNarrative,
-          // Passive default: fixed deterministic 10% sample, no warmup and
-          // no pressure-mode feedback loop. Legacy active behavior remains
-          // available only behind MCP_QUALITY_ACTIVE_INTERVENTIONS=1.
-          lastWorstVerdict: lastWorst,
-          warmupTurns: activeInterventions ? 5 : 0,
-          sampleRate: activeInterventions ? 1 / 3 : 0.1,
-        });
-        if (shouldClassify) {
-          // Snapshot the identifiers into locals — `this` may have been
-          // recycled by the next turn when the Promise resolves.
-          const snapshotSessionId = this.sessionId;
-          const snapshotCompanySessionId = this.opts.companySessionId ?? null;
-          const snapshotAgentRunId = this.opts.companyAgentRunId ?? null;
-          const snapshotTurn = input.turn;
-          setImmediate(() => {
-            void runGlobalQualityClassifiers({
-                sessionId: snapshotSessionId,
-                companySessionId: snapshotCompanySessionId,
-                agentRunId: snapshotAgentRunId,
-                coderRunId: this.runId,
-                parentRunId: this.opts.parentRunId ?? null,
-                isSubagent: false,
-                subagentProfile: null,
-                messageId: `${this.runId}:turn-${snapshotTurn}`,
-                taskText: lastUserText,
-                outputText: lastAssistantText,
-                recentToolCalls: input.toolUseBlocks.map((b) => ({
-                  name: b.name,
-                  success: true,
-                  timestampMs: Date.now(),
-                })),
-              }).catch(() => null);
-          });
-        }
-      } catch {
-        // Classifier failures must never break the run.
-      }
     }
 
     return id;
@@ -2712,7 +2246,7 @@ export class CoderRunner extends EventEmitter {
         : m.content
             .map((b) => (b.type === 'text' && !b.text.trimStart().startsWith('<') ? b.text : ''))
             .join(' ');
-      return text.slice(0, 4000);
+      if (text.trim()) return text.slice(0, 4000);
     }
     return '';
   }
@@ -2798,16 +2332,3 @@ export function isPathInsideScope(candidate: string, scopeFiles: string[]): bool
 // suppress unused-import warning until other helpers reference these
 void pathResolve;
 void pathRelative;
-
-/**
- * Parse `CODER_NUDGE_HOLDOUT_RATE` into a probability in [0, 1].
- * Unset → 0.15 (held-out counterfactual on by default). Explicit 0,
- * negative, or non-numeric → 0 (disabled — every qualifying nudge is sent).
- * Values above 1 are clamped to 1.
- */
-function parseNudgeHoldoutRate(raw: string | undefined): number {
-  if (raw === undefined || raw === '') return 0.15;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(1, n);
-}

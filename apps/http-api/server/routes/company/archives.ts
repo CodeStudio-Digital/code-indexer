@@ -24,6 +24,10 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 interface ResetBody {
   reason?: string;
@@ -38,6 +42,9 @@ export function mountCompanyArchiveRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'session reset/archive');
+    }
 
     const body = await parseJsonBody<ResetBody>(c).catch(() => ({} as ResetBody));
     const archiveKanban = body.archive_kanban !== false; // default true

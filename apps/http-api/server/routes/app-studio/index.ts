@@ -6,15 +6,10 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { mountAppStudioCreateRoutes } from './studio.js';
-import { mountAppStudioSessionRoutes } from './sessions.js';
+import { mountAppStudioV6AppRoutes } from './apps-v6.js';
 import { mountAppStudioDataRoutes } from './data.js';
 import { mountAppStudioLaunchRoutes } from './launch.js';
-import { mountAppStudioSpecRoutes } from './spec.js';
-import { mountAppStudioRevisionRoutes } from './revisions.js';
-import { mountAppStudioArchitectureRoutes } from './architecture.js';
-import { mountAppStudioProductRoutes } from './product.js';
-import { mountAppStudioWorkflowRoutes } from './workflow.js';
-import { mountAppStudioAgentRoutes } from './agents.js';
+import { mountAppStudioTeamRuntimeRoutes } from './team-runtime.js';
 import { requireLocalOrigin } from './origin-guard.js';
 
 export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
@@ -24,13 +19,8 @@ export function mountAppStudioRoutes(app: Hono, deps: ServerDeps): void {
   // primeiro para envolver todos os handlers app-studio abaixo.
   app.use('/api/app-studio/*', requireLocalOrigin);
   mountAppStudioCreateRoutes(app, deps);
-  mountAppStudioSessionRoutes(app, deps);
+  mountAppStudioV6AppRoutes(app, deps);
   mountAppStudioDataRoutes(app, deps);
   mountAppStudioLaunchRoutes(app, deps);
-  mountAppStudioSpecRoutes(app, deps);
-  mountAppStudioRevisionRoutes(app, deps);
-  mountAppStudioArchitectureRoutes(app, deps);
-  mountAppStudioProductRoutes(app, deps);
-  mountAppStudioWorkflowRoutes(app, deps);
-  mountAppStudioAgentRoutes(app, deps);
+  mountAppStudioTeamRuntimeRoutes(app, deps);
 }

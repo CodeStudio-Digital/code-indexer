@@ -7,8 +7,9 @@
  * migrations remotas são incrementais).
  */
 import { setTimeout as delay } from 'node:timers/promises';
-import { parseAppSpec } from '@mcp/app-studio/spec/types.js';
-import { parseAppWorkflowState } from '@mcp/app-studio/workflow/state.js';
+import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
+import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
+import { parseAppPlan } from '@mcp/app-studio/plan/types.js';
 import { writeDeployStatus, type AppDeployStatusFile } from '@mcp/app-studio/status-files.js';
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
 import { runHostCommand } from '@mcp/services/host-scaffold/run-host-command.js';
@@ -45,14 +46,34 @@ export async function runAppLaunchStream(
     emit({ event: 'error', data: { message: `App Studio session ${sessionId} not found.` } });
     return;
   }
-  const workflow = parseAppWorkflowState(session.pipeline_json);
-  if (!workflow?.release_unlocked) {
-    emit({ event: 'error', data: { message: 'Release approval is required before publishing.' } });
+  const revision = deps.appStudioStore.getLatestPlanRevision(sessionId);
+  const plan = parseAppPlan(revision?.plan_json ?? null);
+  if (!revision || revision.status !== 'approved' || !plan) {
+    emit({ event: 'error', data: { message: 'The current App plan must be approved before publishing.' } });
+    return;
+  }
+  const fitness = auditAppPlan(plan);
+  if (fitness.status !== 'ready') {
+    emit({ event: 'error', data: { message: 'The current App plan is no longer ready to publish.' } });
+    return;
+  }
+  const work = deps.appStudioStore.listWorkItems(sessionId).filter((item) => item.plan_revision_id === revision.id);
+  if (work.length === 0 || work.some((item) => item.status !== 'done')) {
+    emit({ event: 'error', data: { message: 'All work and review cards for the approved plan must have current evidence.' } });
     return;
   }
   const project = deps.db.getProject(session.project_id);
   if (!project?.root_path) {
     emit({ event: 'error', data: { message: 'Workspace project missing.' } });
+    return;
+  }
+  const workspaceFingerprint = appWorkspaceFingerprint(project.root_path);
+  const evidenceCurrent = work.every((item) => {
+    const records = (() => { try { return JSON.parse(item.evidence_json) as Array<{ plan_fingerprint?: string; workspace_fingerprint?: string }>; } catch { return []; } })();
+    return records.some((record) => record.plan_fingerprint === fitness.plan_fingerprint && record.workspace_fingerprint === workspaceFingerprint);
+  });
+  if (!evidenceCurrent) {
+    emit({ event: 'error', data: { message: 'Code or database files changed after the recorded evidence. Run the checks and review the affected cards again.' } });
     return;
   }
   if (inflight.has(sessionId)) {
@@ -62,12 +83,17 @@ export async function runAppLaunchStream(
   inflight.add(sessionId);
 
   const workspaceDir = project.root_path;
-  const spec = parseAppSpec(session.spec_json);
   const onLog = (stream: 'stdout' | 'stderr', chunk: string) => emit({ event: 'log', data: { stream, chunk } });
   const phase = (id: string, label: string) => emit({ event: 'phase', data: { phase: id, label } });
 
   try {
     emit({ event: 'start', data: { app_slug: session.app_slug } });
+    deps.appStudioStore.saveDeployment({
+      sessionId,
+      planRevisionId: revision.id,
+      status: 'publishing',
+      detailsJson: JSON.stringify({ fitness_fingerprint: fitness.plan_fingerprint }),
+    });
 
     phase('auth', 'Checking Cloudflare account');
     const who = await runWranglerWhoami(workspaceDir);
@@ -77,8 +103,8 @@ export async function runAppLaunchStream(
     }
 
     let databaseId: string | null = null;
-    if (spec?.database.required) {
-      const provisioner = getDatabaseProvisioner(session.db_engine);
+    if (plan.data.required) {
+      const provisioner = getDatabaseProvisioner('d1');
       const pctx = { workspaceDir, appSlug: session.app_slug, bindingName: 'DB' as const, onLog, signal };
       phase('db', 'Creating the cloud database');
       const remote = await provisioner.provisionRemote(pctx);
@@ -145,22 +171,31 @@ export async function runAppLaunchStream(
       account: who.email ?? who.accounts[0]?.name ?? null,
       deployed_at: new Date().toISOString(),
     };
-    deps.appStudioStore.setDeployJson(sessionId, JSON.stringify(deployStatus));
-    writeDeployStatus(workspaceDir, deployStatus);
-
-    deps.appStudioStore.appendWorkflowEvent(
+    deps.appStudioStore.saveDeployment({
       sessionId,
-      'publish.completed',
-      'deploy',
+      planRevisionId: revision.id,
+      status: healthy ? 'live' : 'failed',
       url,
-      JSON.stringify({ url, health_ok: healthy, deployed_at: deployStatus.deployed_at }),
-    );
+      account: deployStatus.account,
+      databaseId,
+      healthOk: healthy,
+      detailsJson: JSON.stringify({ deployed_at: deployStatus.deployed_at, fitness_fingerprint: fitness.plan_fingerprint }),
+    });
+    writeDeployStatus(workspaceDir, deployStatus);
 
     if (!healthy) {
       throw new Error(`Deployed to ${url} but the health check never turned green — open the app to inspect.`);
     }
     emit({ event: 'done', data: { deploy: deployStatus } });
   } catch (err) {
+    try {
+      deps.appStudioStore.saveDeployment({
+        sessionId,
+        planRevisionId: revision.id,
+        status: 'failed',
+        detailsJson: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+      });
+    } catch { /* preserve the original publish error */ }
     emit({ event: 'error', data: { message: err instanceof Error ? err.message : String(err) } });
   } finally {
     inflight.delete(sessionId);

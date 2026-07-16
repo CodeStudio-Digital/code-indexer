@@ -1,225 +1,74 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ChevronRight, History, Loader2, MessagesSquare, Plus } from 'lucide-react';
+import { ChevronRight, MessagesSquare } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
-import { TooltipProvider } from '../../components/ui/tooltip.js';
-import { MessageList } from '../chat/messages/MessageList.js';
-import { ApprovalBanner } from '../chat/ApprovalBanner.js';
-import { Composer } from '../chat/composer/Composer.js';
-import { QueuedMessages } from '../chat/composer/QueuedMessages.js';
-import { SessionPickerDropdown } from '../project/editor-chat/SessionPickerDropdown.js';
-import { useEditorChatSession } from '../project/editor-chat/useEditorChatSession.js';
-import { activateAppCoordinatorConversation } from './app-studio-api.js';
-import { appStudioConversations } from './conversation-history.js';
+import { BoardPanel } from '../agents/BoardPanel.js';
+import { MasterComposer } from '../agents/MasterComposer.js';
+import type { useCompanyStream } from '../../hooks/useCompanyStream.js';
 
 export function AppStudioChatRail({
-  appSessionId,
-  projectId,
+  companySessionId,
   projectName,
-  coordinatorSessionId,
+  masterSessionId,
   initialPrompt,
+  companyStream,
   onCollapse,
-  onCoordinatorChanged,
 }: {
   appSessionId: number;
+  companySessionId: number | null;
   projectId: number;
   projectName: string;
-  coordinatorSessionId: number | null;
+  masterSessionId: number | null;
   initialPrompt?: string | null;
+  companyStream?: ReturnType<typeof useCompanyStream>;
   onCollapse?: () => void;
-  onCoordinatorChanged?: (coderSessionId: number) => void | Promise<void>;
 }) {
-  const { t } = useTranslation(['appStudio', 'chat']);
-  const initialSent = useRef(false);
-  const [showSessions, setShowSessions] = useState(false);
-  const [changingConversation, setChangingConversation] = useState(false);
-  const [conversationError, setConversationError] = useState<string | null>(null);
-  const session = useEditorChatSession(projectId, {
-    initialSessionId: coordinatorSessionId ?? undefined,
-    initialAgent: 'app_orchestrator',
-    agentLock: 'app_orchestrator',
-    includeEditorContext: false,
-    selectionPrefixSessionId: projectId,
-    newSessionTitle: projectName,
-  });
-  const conversations = useMemo(
-    () => appStudioConversations(session.sessions, coordinatorSessionId),
-    [coordinatorSessionId, session.sessions],
-  );
-  const coordinatorBusy = session.streaming || session.sessionData?.session.status === 'running';
-  const creatingConversation = changingConversation || session.creating;
+  const { t } = useTranslation(['appStudio', 'agents']);
+  const sent = useRef(false);
+
+  const send = async (text: string, attachments: Parameters<NonNullable<typeof companyStream>['resume']>[1] = [], options?: { thinking?: boolean }) => {
+    if (!companyStream) throw new Error('The App team is unavailable.');
+    if (companyStream.connected && companyStream.masterAlive) await companyStream.sendMessage(text, attachments, options);
+    else await companyStream.resume(text, attachments, options);
+  };
 
   useEffect(() => {
-    if (coordinatorSessionId) session.setSelectedId(coordinatorSessionId);
-  }, [coordinatorSessionId, session.setSelectedId]);
+    if (sent.current || !initialPrompt?.trim() || !masterSessionId || !companyStream) return;
+    sent.current = true;
+    void send(
+      `[App Studio] Ideia inicial: ${initialPrompt.trim()}\nCrie o AppPlanV1 mínimo, explique decisões reais e solicite aprovação somente quando a auditoria estiver pronta.`,
+    ).catch(() => { sent.current = false; });
+    // The initial idea is deliberately sent once to the persistent Master.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyStream, initialPrompt, masterSessionId]);
 
-  useEffect(() => {
-    if (initialSent.current || !initialPrompt?.trim() || !session.selectedId || session.streaming) return;
-    initialSent.current = true;
-    void session.handleSend(
-      `[App Studio] Ideia inicial do app: ${initialPrompt.trim()}\nConduza a fase Definir, atualize os cards e solicite apenas as decisões realmente necessárias.`,
-      [],
-    ).catch(() => { initialSent.current = false; });
-  }, [initialPrompt, session.selectedId, session.streaming, session.handleSend]);
-
-  const bindConversation = async (coderSessionId: number) => {
-    const activeId = await activateAppCoordinatorConversation(appSessionId, coderSessionId);
-    session.setSelectedId(activeId);
-    setShowSessions(false);
-    await onCoordinatorChanged?.(activeId);
-  };
-
-  const openConversation = async (coderSessionId: number) => {
-    setConversationError(null);
-    if (coderSessionId === coordinatorSessionId) {
-      session.setSelectedId(coderSessionId);
-      setShowSessions(false);
-      return;
-    }
-    setChangingConversation(true);
-    try {
-      await bindConversation(coderSessionId);
-    } catch (cause) {
-      setConversationError((cause as Error).message);
-    } finally {
-      setChangingConversation(false);
-    }
-  };
-
-  const createConversation = async () => {
-    if (coordinatorBusy || creatingConversation) return;
-    setConversationError(null);
-    setChangingConversation(true);
-    try {
-      const createdId = await session.createSession();
-      if (createdId == null) return;
-      await bindConversation(createdId);
-    } catch (cause) {
-      if (coordinatorSessionId) session.setSelectedId(coordinatorSessionId);
-      setShowSessions(true);
-      setConversationError((cause as Error).message);
-    } finally {
-      setChangingConversation(false);
-    }
-  };
-
-  const selectedTitle = session.sessionData?.session.id === session.selectedId
-    ? session.sessionData.session.title
-    : null;
+  if (!companySessionId || !companyStream) {
+    return <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">{t('appStudio:v6.teamUnavailable')}</div>;
+  }
 
   return (
-    <TooltipProvider delayDuration={300}>
-      <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
-        <header className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-1.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5"
-            onClick={() => setShowSessions((current) => !current)}
-            aria-label={showSessions ? t('appStudio:chatRail.backToConversation') : t('appStudio:chatRail.history')}
-            title={showSessions ? t('appStudio:chatRail.backToConversation') : t('appStudio:chatRail.history')}
-          >
-            {showSessions ? <ArrowLeft className="h-3.5 w-3.5" /> : <History className="h-3.5 w-3.5" />}
-          </Button>
-          <MessagesSquare className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            {showSessions ? t('appStudio:chatRail.sessions') : selectedTitle ?? t('appStudio:workflow.coordinator')}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5"
-            onClick={() => void createConversation()}
-            disabled={coordinatorBusy || creatingConversation}
-            aria-label={t('appStudio:chatRail.newConversation')}
-            title={coordinatorBusy ? t('appStudio:chatRail.waitUntilIdle') : t('appStudio:chatRail.newConversation')}
-          >
-            {creatingConversation ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-          </Button>
-          {onCollapse && <Button variant="ghost" size="icon" className="h-5 w-5" onClick={onCollapse} aria-label={t('appStudio:chatRail.collapse')}>
-            <ChevronRight className="h-3 w-3" />
-          </Button>}
-        </header>
-        {conversationError && <div className="shrink-0 border-b border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-700">{conversationError}</div>}
-        {showSessions ? (
-          <div className="min-h-0 flex-1">
-            <SessionPickerDropdown
-              projectName={projectName}
-              sessions={conversations}
-              onPick={(id) => void openConversation(id)}
-            />
-          </div>
-        ) : session.selectedId == null ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />{t('appStudio:workflow.connectingCoordinator')}
-          </div>
-        ) : (
-          <>
-            <ApprovalBanner
-              approvals={session.pendingApprovals}
-              onRespond={session.respondToToolApproval}
-            />
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <MessageList
-                sessionData={session.sessionData}
-                currentTurn={session.currentTurn}
-                streaming={session.streaming}
-                doneReason={session.doneReason}
-                error={session.error}
-                liveTurnDuplicatedInHistory={session.liveTurnDuplicatedInHistory}
-                persistedToolUseIds={session.persistedToolUseIds}
-                fallbackProviderId={session.provider}
-                tasksState={session.tasksState}
-                handlers={session.handlers}
-                onLoadEarlier={session.loadEarlierMessages}
-                snapshotActions={session.snapshotActions}
-                snapshotFiles={session.snapshotFiles}
-              />
-            </div>
-            <Composer
-              compact
-              hideAgentPicker
-              agent={session.agent}
-              setAgent={session.setAgent}
-              provider={session.provider}
-              model={session.model}
-              setModel={session.setModel}
-              onSwitchProvider={session.onSwitchProvider}
-              onSend={session.handleSend}
-              onAbort={session.abort}
-              streaming={session.streaming}
-              providerOptions={session.providerOptions}
-              currentProviderModels={session.currentProviderModels}
-              maxTurns={session.maxTurns}
-              setMaxTurns={session.setMaxTurns}
-              sessionId={session.selectedId}
-              thinking={session.thinking}
-              setThinking={session.setThinking}
-              supportsThinking={session.supportsThinking}
-              describeImages={session.describeImages}
-              setDescribeImages={session.setDescribeImages}
-              outputCapLevel={session.outputCapLevel}
-              setOutputCapLevel={session.setOutputCapLevel}
-              toolPermissionMode={session.toolPermissionMode}
-              setToolPermissionMode={session.setToolPermissionMode}
-              fallbackProvider={session.fallbackProvider}
-              fallbackModel={session.fallbackModel}
-              onFallbackChange={session.onFallbackChange}
-              temperature={session.temperature}
-              setTemperature={session.setTemperature}
-              reasoningEffort={session.reasoningEffort}
-              setReasoningEffort={session.setReasoningEffort}
-              reasoningLevels={session.reasoningLevels}
-              planDepth={session.planDepth}
-              setPlanDepth={session.setPlanDepth}
-              getModelsForProvider={session.getModelsForProvider}
-              queueable
-              onQueue={session.handleQueue}
-              queuedStrip={<QueuedMessages items={session.queue.items} onPromote={session.queue.promote} onRemove={session.queue.remove} />}
-            />
-          </>
-        )}
+    <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
+      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2.5">
+        <MessagesSquare className="h-3.5 w-3.5 text-violet-400" />
+        <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {t('appStudio:workflow.coordinator')}
+        </span>
+        {onCollapse && <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onCollapse}><ChevronRight className="h-3.5 w-3.5" /></Button>}
+      </header>
+      {companyStream.error && <div className="border-b border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-700">{companyStream.error}</div>}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <BoardPanel
+          messages={companyStream.boardMessages}
+          masterPrompts={Array.from(companyStream.masterPrompts.values())}
+          onAnswerQuestion={(promptId, answer) => companyStream.respondToMasterQuestion(promptId, answer)}
+          onRespondPlan={(promptId, approved, feedback) => companyStream.respondToMasterPlan(promptId, approved, feedback)}
+          sessionId={companySessionId}
+          sessionName={projectName}
+        />
       </div>
-    </TooltipProvider>
+      <div className="shrink-0 border-t p-2">
+        <MasterComposer sessionId={companySessionId} onSend={send} placeholder={t('agents:company.inputPlaceholderMaster')} />
+      </div>
+    </div>
   );
 }

@@ -8,8 +8,13 @@
 
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { CompanySessionProject } from '@mcp/company/types.js';
+import type {
+  CompanyRuntimeKind,
+  CompanySessionCapabilities,
+  CompanySessionProject,
+} from '@mcp/company/types.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
+import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 
 export interface SessionContextOpts {
   companySessionId: number;
@@ -24,6 +29,9 @@ export interface SessionContextOpts {
    * mutations beyond the explicit refresh.
    */
   parentSessionId?: number | null;
+  runtimeKind?: CompanyRuntimeKind;
+  appStudioSessionId?: number | null;
+  capabilities?: CompanySessionCapabilities;
 }
 
 export class SessionContext {
@@ -32,6 +40,9 @@ export class SessionContext {
   readonly db: CodeIndexDB;
   readonly metaBus: CoderRunBus;
   readonly parentSessionId: number | null;
+  readonly runtimeKind: CompanyRuntimeKind;
+  readonly appStudioSessionId: number | null;
+  readonly capabilities: CompanySessionCapabilities;
 
   private _aborted = false;
   private _projects: CompanySessionProject[];
@@ -42,6 +53,12 @@ export class SessionContext {
     this.db = opts.db;
     this.metaBus = opts.metaBus;
     this.parentSessionId = opts.parentSessionId ?? null;
+    this.capabilities = opts.capabilities ?? resolveCompanySessionCapabilities(
+      opts.runtimeKind ?? 'company',
+      opts.appStudioSessionId ?? null,
+    );
+    this.runtimeKind = this.capabilities.runtimeKind;
+    this.appStudioSessionId = this.capabilities.appStudioSessionId;
     this._projects = this.loadProjects();
   }
 

@@ -92,6 +92,14 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       resumeJob: vi.fn((id: number) => ({ id, status: 'pending' })),
       catchUpCodeProject: vi.fn(async () => undefined),
       pauseJob: vi.fn((id: number) => ({ id, status: 'paused' })),
+      cleanupUnusedVectors: vi.fn(async () => ({
+        tables_removed: 2,
+        items_removed: 240,
+        databases_compacted: 1,
+        bytes_reclaimed: 12_582_912,
+        skipped_referenced: 1,
+        failures: [],
+      })),
     },
   } as unknown as ServerDeps;
   return Object.assign(deps, overrides);
@@ -211,6 +219,25 @@ describe('project indexing routes', () => {
     expect(response.status).toBe(202);
     expect(deps.semanticCoordinator.resumeJob).toHaveBeenCalledWith(60);
     expect(deps.semanticCoordinator.enqueueCodeProjectReindex).not.toHaveBeenCalled();
+  });
+
+  it('cleans only unused vector generations from the selected project', async () => {
+    const deps = makeDeps();
+    const response = await appWith(deps).request(
+      '/api/projects/7/semantic/vectors/cleanup-unused',
+      { method: 'POST' },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      result: {
+        tables_removed: 2,
+        databases_compacted: 1,
+        skipped_referenced: 1,
+      },
+    });
+    expect(deps.semanticCoordinator.cleanupUnusedVectors).toHaveBeenCalledWith(7);
   });
 
   it('removes the paid legacy HTTP index routes', async () => {

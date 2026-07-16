@@ -53,15 +53,7 @@ import {
 import {
   setGlobalQualityClassifierPipeline,
   setGlobalQualityClassificationStore,
-  setGlobalQualityInterventionStore,
-  setGlobalQualityResultObserver,
-  setGlobalPolicyEnforcer,
-  PolicyEnforcer,
-  QualityWatchdog,
-  setGlobalQualityWatchdog,
-  type WatchdogChatRunner,
 } from '@mcp/services/quality/index.js';
-import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -70,7 +62,6 @@ import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 // AgentSupervisor: workers-only architecture — each company-worker
 // owns its own supervisor instance. Main process holds nothing.
 import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
-import { makeQualityAlertObserver } from './server/quality-observer.js';
 import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
 import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
@@ -160,66 +151,6 @@ import { startMemoryConsolidator, memoryConsolidateEnabled } from './sse/memory-
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
-
-/**
- * Resolve and install the global Quality Watchdog (Apêndice 3 — tool-loop
- * detector). Reads env config, instantiates the cheap chat provider once,
- * and registers a `WatchdogChatRunner` that consumes the provider's stream
- * and joins the text deltas into a single reply string.
- *
- * Defensive: if the env disables the watchdog, the provider creation
- * fails, or the provider stream is unsupported, the global stays null
- * and the runner short-circuits the watchdog hook with zero overhead.
- */
-async function wireQualityWatchdog(): Promise<void> {
-  if (process.env.MCP_QUALITY_WATCHDOG_ENABLED === '0') {
-    setGlobalQualityWatchdog(null);
-    return;
-  }
-  const provider = process.env.MCP_QUALITY_WATCHDOG_PROVIDER ?? 'anthropic';
-  const model = process.env.MCP_QUALITY_WATCHDOG_MODEL ?? 'claude-haiku-4-5';
-
-  let chatProvider;
-  try {
-    chatProvider = await createCoderProvider(provider, model);
-  } catch (e) {
-    console.warn(
-      `[quality-watchdog] provider creation failed (${provider}/${model}): ` +
-        `${e instanceof Error ? e.message : String(e)} — watchdog disabled`,
-    );
-    setGlobalQualityWatchdog(null);
-    return;
-  }
-
-  const runChat: WatchdogChatRunner = async ({ system, user, maxOutputTokens }) => {
-    // The runner uses the AsyncIterable<ChatDelta> stream contract.
-    // For the watchdog we only need the final text, so we consume the
-    // stream and concatenate text deltas. No tools, no thinking.
-    const stream = chatProvider.chat({
-      system,
-      messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
-      tools: [],
-    });
-    let text = '';
-    for await (const delta of stream) {
-      if (delta.type === 'text_delta') text += delta.text;
-      if (maxOutputTokens && text.length > maxOutputTokens * 4) break;
-    }
-    return { text };
-  };
-
-  setGlobalQualityWatchdog(
-    new QualityWatchdog({
-      provider,
-      model,
-      runChat,
-      prefilterCount: Number(process.env.MCP_QUALITY_WATCHDOG_PREFILTER_COUNT ?? 4),
-      prefilterWindow: Number(process.env.MCP_QUALITY_WATCHDOG_PREFILTER_WINDOW ?? 5),
-      cooldownTurns: Number(process.env.MCP_QUALITY_WATCHDOG_COOLDOWN_TURNS ?? 5),
-    }),
-  );
-  console.log(`[quality-watchdog] wired (provider=${provider}, model=${model})`);
-}
 
 // ─── Company auto-resume (Phase 1 — metabolism at rest) ──────────────
 //
@@ -345,52 +276,9 @@ export function createApp() {
     deps.qualityClassifierPipeline,
     process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
   );
-  // Read side — the runner peeks at recent verdicts when building each
-  // next system prompt (Wire #1 nudge, Wire #2 tool-misuse intervention).
-  // Always installed; the runner short-circuits via the env flag.
   setGlobalQualityClassificationStore(deps.qualityClassificationStore);
-  // Quality v2, C4 — Intervention store. Runner records every nudge /
-  // planning intervention; global runner backfills the outcome when the
-  // next classifier turn lands. Powers the "Intervention effectiveness"
-  // dashboard panel.
-  setGlobalQualityInterventionStore(deps.qualityInterventionStore);
-  // Observer side — Wire #4 v2 aggregated alerts. Replaces the v1
-  // per-flag spam with bucketed alerts that flush by threshold/interval
-  // and then cooldown. Also widens coverage from off_topic-only to
-  // off_topic + policy + tool_misuse (each in its own bucket).
-  setGlobalQualityResultObserver(makeQualityAlertObserver());
-  // Wire #5 (Nível 2) — Policy hard-block enforcer. Off by default;
-  // operators opt in with MCP_PIPELINES_POLICY_HARD_BLOCK=1. The
-  // regex pre-filter runs in microseconds — only the optional LLM
-  // classifier path (gated by *_LLM=1) adds latency. We deliberately
-  // keep the classifier path off by default to avoid 500ms-1s per
-  // Bash call.
-  if (process.env.MCP_PIPELINES_POLICY_HARD_BLOCK === '1') {
-    setGlobalPolicyEnforcer(
-      new PolicyEnforcer({
-        useClassifier: process.env.MCP_PIPELINES_POLICY_HARD_BLOCK_LLM === '1',
-      }),
-    );
-  } else {
-    setGlobalPolicyEnforcer(undefined);
-  }
-
-  // Quality Watchdog — lightweight LLM that detects tool-loop / stuck
-  // progress patterns. Gated by `MCP_QUALITY_WATCHDOG_ENABLED` (default
-  // ON when provider+model are configured) so operators can disable.
-  // Picks its own cheap model via `MCP_QUALITY_WATCHDOG_PROVIDER` and
-  // `MCP_QUALITY_WATCHDOG_MODEL` (defaults to anthropic/claude-haiku-4-5)
-  // so the main runner's tokens aren't spent on it.
-  //
-  // Fire-and-forget construction: provider creation is async (OAuth
-  // shapes), so we kick it off in the background. If it fails, the
-  // global stays null and the runner short-circuits — no behaviour
-  // change vs. having the watchdog off.
-  void wireQualityWatchdog().catch((e) => {
-    console.warn(
-      `[quality-watchdog] boot wiring failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  });
+  // Semantic verdicts are consultative. PermissionGate and deterministic
+  // pre-dispatch guards remain the only action-blocking path.
   // C8 — Inbox message watchdog (Sprint 3.5). Detects messages stuck
   // pending/delivered past the threshold and publishes
   // `inbox_message_stuck` events BEFORE the timeout fires EXPIRED.

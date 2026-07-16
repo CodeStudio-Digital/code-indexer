@@ -16,7 +16,7 @@ import { DeployProgressCard } from './DeployProgressCard.js';
 import { LiveAppCard } from './LiveAppCard.js';
 
 export function publishTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
-  return detail?.workflow.state.release_unlocked === true;
+  return detail?.stage === 'ready' || detail?.stage === 'live';
 }
 
 export function PublishPanel({ detail, onChanged }: { detail: AppStudioSessionDetail; onChanged: () => void }) {
@@ -26,7 +26,7 @@ export function PublishPanel({ detail, onChanged }: { detail: AppStudioSessionDe
   const sessionId = detail.session.id;
   const projectId = detail.project?.id ?? detail.session.project_id;
   const unlocked = publishTabUnlocked(detail);
-  const liveUrl = freshDeploy?.url ?? detail.deploy?.url ?? null;
+  const liveUrl = freshDeploy?.url ?? detail.deployment?.url ?? null;
 
   // Estado de conexão CF — checado ao abrir a aba (spawn barato de whoami).
   useEffect(() => {

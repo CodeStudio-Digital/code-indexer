@@ -22,6 +22,7 @@ import {
   type GitStatusFile,
   type GitCommit,
   type GitCommitFileChange,
+  type GitPushPreview,
   type GitBranch,
   type GitRunResult,
   type GitStashEntry,
@@ -868,6 +869,90 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     return promise;
   }
 
+  async function buildPushPreview(input: {
+    projectId: number;
+    repoPath?: string;
+    remote?: string;
+    branch?: string;
+    setUpstream?: boolean;
+  }): Promise<GitPushPreview> {
+    const root = await resolveCwd(input.projectId, input.repoPath);
+    let branch = input.branch;
+    if (branch) await ensureLocalBranch(root, branch);
+    else {
+      const current = await runGit(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { profile: 'read' });
+      branch = current.code === 0 ? current.stdout.trim() : '';
+      if (!branch) throw new ApiError('git_push_detached', 409, 'Detached HEAD cannot be pushed from the review dialog.');
+    }
+
+    const [headResult, upstreamResult, remotesResult] = await Promise.all([
+      runGit(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { profile: 'read' }),
+      runGit(root, ['for-each-ref', '--format=%(upstream:short)', `refs/heads/${branch}`], { profile: 'read' }),
+      runGit(root, ['remote'], { profile: 'read' }),
+    ]);
+    if (headResult.code !== 0) throwGitReadFailure('git_push_preview', headResult, 'failed to resolve branch tip');
+    if (remotesResult.code !== 0) throwGitReadFailure('git_remote_list', remotesResult, 'failed to list remotes');
+    const upstream = upstreamResult.code === 0 ? upstreamResult.stdout.trim() || null : null;
+    const remotes = remotesResult.stdout.split('\n').map((item) => item.trim()).filter(Boolean);
+    const upstreamRemote = upstream
+      ? [...remotes].sort((a, b) => b.length - a.length).find((name) => upstream.startsWith(`${name}/`))
+      : undefined;
+    let remote = input.remote ?? upstreamRemote;
+    if (!remote) {
+      const configured = await runGit(root, ['config', '--get', 'remote.pushDefault'], { profile: 'read' });
+      const candidate = configured.code === 0 ? configured.stdout.trim() : '';
+      remote = candidate || (remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : undefined);
+    }
+    if (!remote) throw new ApiError('git_push_remote_required', 409, 'No unambiguous push remote is configured.');
+    await ensureRemote(root, remote);
+
+    const targetBranch = upstream && upstreamRemote === remote
+      ? upstream.slice(remote.length + 1)
+      : branch;
+    const trackingRef = `refs/remotes/${remote}/${targetBranch}`;
+    const tracking = await runGit(root, ['show-ref', '--verify', '--quiet', trackingRef], { profile: 'read' });
+    const revisions = tracking.code === 0
+      ? [`${trackingRef}..refs/heads/${branch}`]
+      : [`refs/heads/${branch}`, '--not', `--remotes=${remote}`];
+    const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%P%x1f%D';
+    const [countResult, commitsResult, tagsResult] = await Promise.all([
+      runGit(root, ['rev-list', '--count', ...revisions], { profile: 'read' }),
+      runGit(root, ['log', `--pretty=format:${fmt}`, '--date=iso-strict', '--decorate=short', '-n501', ...revisions], {
+        profile: 'read',
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      }),
+      runGit(root, ['for-each-ref', '--format=%(refname:short)%09%(objectname:short)%09%(contents:subject)', '--count=501', 'refs/tags'], {
+        profile: 'read',
+        maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
+      }),
+    ]);
+    if (countResult.code !== 0) throwGitReadFailure('git_push_preview', countResult, 'failed to count outgoing commits');
+    if (commitsResult.code !== 0) throwGitReadFailure('git_push_preview', commitsResult, 'failed to read outgoing commits');
+    if (tagsResult.code !== 0) throwGitReadFailure('git_push_tags', tagsResult, 'failed to read local tags');
+    const commitCount = Number(countResult.stdout.trim()) || 0;
+    const commits = parseGitLog(commitsResult.stdout).slice(0, 500);
+    const parsedTags = tagsResult.stdout.split('\n').filter(Boolean).map((line) => {
+      const [name = '', target = '', subject = ''] = line.split('\t');
+      return { name, target, subject };
+    });
+    const tagsTruncated = parsedTags.length > 500;
+    const tags = parsedTags.slice(0, 500);
+    return {
+      branch,
+      headSha: headResult.stdout.trim(),
+      remote,
+      targetBranch,
+      upstream,
+      setUpstream: input.setUpstream ?? !upstream,
+      commits,
+      commitCount,
+      commitsTruncated: commitCount > commits.length,
+      tags,
+      tagCount: tagsTruncated ? 501 : tags.length,
+      tagsTruncated,
+    };
+  }
+
   const base: Omit<
     ProjectGitApi,
     | 'mergeState'
@@ -1488,18 +1573,30 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     // can render "non-zero exit but here's the helpful stderr" — git's
     // failure messages on push/pull are rich (rejected fast-forward,
     // diverged branches, suggested next steps).
-    async push({ projectId, remote, branch, force, setUpstream, repoPath }) {
+    async pushPreview(input) {
+      return buildPushPreview(input);
+    },
+
+    async push({ projectId, remote, branch, targetBranch, expectedHead, force, setUpstream, pushTags, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
       await ensureRemote(root, remote);
       if (branch) await ensureCommitRef(root, branch);
+      if (targetBranch) await ensureBranchName(root, targetBranch);
+      if (expectedHead && branch) {
+        const actualHead = await runGit(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { profile: 'read' });
+        if (actualHead.code !== 0 || actualHead.stdout.trim() !== expectedHead) {
+          throw new ApiError('git_push_preview_stale', 409, 'The branch changed after this push preview was opened. Review it again before pushing.');
+        }
+      }
       const args = ['push'];
       // --force-with-lease is the safe variant: rejects when the
       // remote moved since we last fetched. Never expose plain --force
       // from the UI — that's a footgun behind a button.
       if (force) args.push('--force-with-lease');
       if (setUpstream) args.push('-u');
+      if (pushTags) args.push('--tags');
       if (remote) args.push(remote);
-      if (branch) args.push(branch);
+      if (branch) args.push(targetBranch && targetBranch !== branch ? `${branch}:${targetBranch}` : branch);
       return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 

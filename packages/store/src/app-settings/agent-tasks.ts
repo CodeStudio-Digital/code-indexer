@@ -3,7 +3,7 @@ import type { SettingDef } from './types.js';
 /**
  * Agent — execute_tasks per-kind limits (PR-A..F).
  *
- * Per-kind caps applied by `execute_tasks` when it dispatches each subagent
+ * Optional per-kind caps applied by `execute_tasks` when it dispatches each subagent
  * (investigate / implement / verify). `estimated_complexity` multiplies these
  * (small=0.5x, medium=1x, large=2x) BEFORE the runner enforces them — so
  * changing them here shifts the BASELINE for every complexity tier.
@@ -16,61 +16,61 @@ export const AGENT_TASK_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_TASK_INVESTIGATE_MAX_TOOLS',
     label: 'Investigate task — max tool calls',
     description:
-      'Cap on tool invocations for an `investigate` subagent (read-only exploration). ' +
-      'Multiplied by complexity (small 0.5x, large 2x) before enforcement. Default 40.',
+      'Cap on tool invocations for an `investigate` subagent. 0 = unlimited; ' +
+      'positive values are multiplied by complexity. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '40',
-    min: 1,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_INVESTIGATE_TIMEOUT_MS',
     label: 'Investigate task — wall-clock timeout (ms)',
-    description: 'Maximum wall-clock duration for an `investigate` subagent. Default 600000 (10 min).',
+    description: 'Optional wall-clock duration for an `investigate` subagent. 0 = unlimited. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '600000',
-    min: 30_000,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_IMPLEMENT_MAX_TOOLS',
     label: 'Implement task — max tool calls',
     description:
-      'Cap on tool invocations for an `implement` subagent (read + write + shell). ' +
-      'Multiplied by complexity. Default 80.',
+      'Cap on tool invocations for an `implement` subagent. 0 = unlimited; ' +
+      'positive values are multiplied by complexity. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '80',
-    min: 1,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_IMPLEMENT_TIMEOUT_MS',
     label: 'Implement task — wall-clock timeout (ms)',
-    description: 'Maximum wall-clock duration for an `implement` subagent. Default 1200000 (20 min).',
+    description: 'Optional wall-clock duration for an `implement` subagent. 0 = unlimited. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '1200000',
-    min: 30_000,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_VERIFY_MAX_TOOLS',
     label: 'Verify task — max tool calls',
     description:
-      'Cap on tool invocations for a `verify` subagent (tests/linters/lsp, no write). ' +
-      'Multiplied by complexity. Default 30.',
+      'Cap on tool invocations for a `verify` subagent. 0 = unlimited; ' +
+      'positive values are multiplied by complexity. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '30',
-    min: 1,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_VERIFY_TIMEOUT_MS',
     label: 'Verify task — wall-clock timeout (ms)',
-    description: 'Maximum wall-clock duration for a `verify` subagent. Default 900000 (15 min).',
+    description: 'Optional wall-clock duration for a `verify` subagent. 0 = unlimited. Default 0.',
     type: 'int',
     category: 'agent',
-    default: '900000',
-    min: 30_000,
+    default: '0',
+    min: 0,
   },
   {
     key: 'CODER_TASK_STALL_MS',

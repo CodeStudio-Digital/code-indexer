@@ -50,6 +50,8 @@ export interface FailoverResult {
   attemptIndex: number;
   /** True when at least one earlier binding failed before this one served. */
   failedOver: boolean;
+  /** Physical provider requests, excluding preflight config failures. */
+  providerCalls: number;
 }
 
 /**
@@ -68,6 +70,7 @@ export async function callChatWithFailover(
       binding: null,
       attemptIndex: -1,
       failedOver: false,
+      providerCalls: 0,
     };
   }
 
@@ -75,6 +78,7 @@ export async function callChatWithFailover(
   let last: ChatCallResult = { content: '', errorBody: '[no_binding] empty failover chain', latencyMs: 0 };
   let lastBinding: ResolvedBinding = chain[0];
   let lastIndex = 0;
+  let providerCalls = 0;
 
   for (let i = 0; i < chain.length; i++) {
     const binding = chain[i];
@@ -94,7 +98,10 @@ export async function callChatWithFailover(
 
     let result: ChatCallResult;
     try {
-      result = await withChatRetry(() => runOne(binding), opts.retry);
+      result = await withChatRetry(() => {
+        providerCalls += 1;
+        return runOne(binding);
+      }, opts.retry);
     } catch (e) {
       // A chat fn that throws (network layer, adapter bug) is a transport
       // failure too — turn it into a result so we fail over instead of
@@ -104,10 +111,10 @@ export async function callChatWithFailover(
     last = result;
     const usable = !result.errorBody && (!treatEmptyAsError || (result.content ?? '').trim().length > 0);
     if (usable) {
-      return { result, binding, attemptIndex: i, failedOver: i > 0 };
+      return { result, binding, attemptIndex: i, failedOver: i > 0, providerCalls };
     }
     // errored / empty → fall over to the next binding (if any)
   }
 
-  return { result: last, binding: lastBinding, attemptIndex: lastIndex, failedOver: chain.length > 1 };
+  return { result: last, binding: lastBinding, attemptIndex: lastIndex, failedOver: chain.length > 1, providerCalls };
 }

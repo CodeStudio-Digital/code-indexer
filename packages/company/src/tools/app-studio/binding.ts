@@ -1,8 +1,7 @@
 /**
  * AppToolBinding — resolve a qual AppStudioSession uma chamada de tool
- * pertence, sem acoplar as tools ao runtime que as hospeda. Host único:
- * sessão single de chat sobre um projeto-workspace `kind:'app'` (a sessão
- * App Studio é a vinculada ao projeto — UNIQUE project_id).
+ * pertence, sem acoplar as tools ao runtime que as hospeda. App Studio v6
+ * aceita somente o binding explícito da equipe Company persistente.
  */
 import type { AppStudioSession, AppStudioStore } from '@mcp/store/app-studio-store.js';
 
@@ -13,9 +12,9 @@ export interface AppToolBinding {
   describeBinding(): string;
 }
 
-export function appStudioBinding(projectId: number): AppToolBinding {
+export function appStudioSessionBinding(appSessionId: number): AppToolBinding {
   return {
-    resolveAppSession: (store) => store.getSessionByProjectId(projectId),
-    describeBinding: () => `project_id=${projectId}`,
+    resolveAppSession: (store) => store.getSession(appSessionId),
+    describeBinding: () => `app_session_id=${appSessionId}`,
   };
 }

@@ -106,6 +106,10 @@ export function getCoderWorkerPool(): CoderWorkerPool {
   return cachedPool;
 }
 
+export function peekCoderWorkerPool(): CoderWorkerPool | null {
+  return cachedPool;
+}
+
 /**
  * Wire main-thread doc-corpus deps into the coder worker pool. Called by
  * `server.ts` right after `DocHybridSearch` + `DocsResearchBridge` are

@@ -121,6 +121,7 @@ function toolStatus(event: string, data: Record<string, unknown>): string {
 
 function nodeClass(status: string): string {
   if (status === 'completed' || status === 'done') return 'border border-emerald-500 bg-emerald-950/20 text-xs p-2 rounded';
+  if (status === 'partial') return 'border border-amber-500 bg-amber-950/20 text-xs p-2 rounded';
   if (status === 'error' || status === 'failed' || status === 'timed_out' || status === 'aborted') {
     return 'border border-red-500 bg-red-950/20 text-xs p-2 rounded';
   }

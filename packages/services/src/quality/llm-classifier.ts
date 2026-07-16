@@ -44,6 +44,10 @@ export interface LLMClassifierOptions {
   /** Retry policy for the chat call. Defaults to 2 retries on the
    *  rate-limit family. Pass `{ maxRetries: 0 }` to disable. */
   retry?: ChatRetryOptions;
+  /** Terminal quality is deliberately one provider attempt: no retry/failover. */
+  singleAttempt?: boolean;
+  timeoutMs?: number;
+  maxTokens?: number;
 }
 
 /**
@@ -61,6 +65,7 @@ export abstract class LLMClassifier {
   abstract readonly classifierName: string;
   abstract readonly pipelineName: string;
   readonly bindingRole = 'classifier';
+  protected readonly fallbackPipelineNames: readonly string[] = [];
 
   constructor(
     protected resolver: PipelineProviderResolver,
@@ -76,7 +81,13 @@ export abstract class LLMClassifier {
    * implementation expects a strict JSON object — subclasses can override
    * for non-JSON parsing.
    */
-  protected parseVerdict(text: string): { verdict: QualityVerdict; systemError?: boolean; confidence?: number; reason?: string } {
+  protected parseVerdict(text: string): {
+    verdict: QualityVerdict;
+    systemError?: boolean;
+    confidence?: number;
+    reason?: string;
+    dimensions?: ClassificationVerdict['dimensions'];
+  } {
     const json = tryParseJson(text);
     if (!json || typeof json !== 'object') {
       return { verdict: 'error', systemError: true, reason: 'unparseable response' };
@@ -87,10 +98,12 @@ export abstract class LLMClassifier {
     if (!isQualityVerdict(verdict)) {
       return { verdict: 'error', systemError: true, reason: `bad verdict field: ${String(verdict)}` };
     }
+    const dimensions = parseDimensions((json as { dimensions?: unknown }).dimensions);
     return {
       verdict,
       confidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : undefined,
       reason: typeof reason === 'string' ? reason.slice(0, 1000) : undefined,
+      ...(dimensions.length > 0 ? { dimensions } : {}),
     };
   }
 
@@ -109,7 +122,11 @@ export abstract class LLMClassifier {
     // Resolve the full failover chain: if the highest-priority binding is
     // broken at runtime (dead key, provider down), the next enabled binding
     // for this pipeline/role serves instead of returning verdict:'error'.
-    const chain = await this.resolver.resolveChain(this.pipelineName, this.bindingRole, ctx);
+    let chain = await this.resolver.resolveChain(this.pipelineName, this.bindingRole, ctx);
+    for (const fallback of this.fallbackPipelineNames) {
+      if (chain.length > 0) break;
+      chain = await this.resolver.resolveChain(fallback, this.bindingRole, ctx);
+    }
     if (chain.length === 0) {
       return {
         classifierName: this.classifierName,
@@ -117,6 +134,7 @@ export abstract class LLMClassifier {
         systemError: true,
         reason: '[no_binding] no provider binding configured',
         latencyMs: performance.now() - startedAt,
+        providerRequests: 0,
       };
     }
 
@@ -129,13 +147,14 @@ export abstract class LLMClassifier {
     const runOne = (binding: ResolvedBinding): Promise<ChatCallResult> => {
       const cfg = binding.config as Record<string, unknown>;
       const chatOptions: ChatCallOptions = {
-        timeoutMs: toNumber(cfg.timeout) ?? CLASSIFIER_DEFAULT_TIMEOUT_MS,
-        maxTokens: toNumber(cfg.max_tokens) ?? CLASSIFIER_DEFAULT_MAX_TOKENS,
+        timeoutMs: this.options.timeoutMs ?? toNumber(cfg.timeout) ?? CLASSIFIER_DEFAULT_TIMEOUT_MS,
+        maxTokens: this.options.maxTokens ?? toNumber(cfg.max_tokens) ?? CLASSIFIER_DEFAULT_MAX_TOKENS,
       };
       const chat = this.options.chatFn ?? pickChatFn(binding);
       return chat(binding, messages, chatOptions);
     };
-    const { result, binding, failedOver } = await callChatWithFailover(chain, runOne, {
+    const eligibleChain = this.options.singleAttempt ? chain.slice(0, 1) : chain;
+    const { result, binding, failedOver, providerCalls } = await callChatWithFailover(eligibleChain, runOne, {
       retry: this.options.retry,
       label: `${this.pipelineName} classifier`,
       codePrefix: this.pipelineName,
@@ -152,6 +171,7 @@ export abstract class LLMClassifier {
         latencyMs: result.latencyMs,
         providerId,
         modelId,
+        providerRequests: providerCalls,
       };
     }
     const parsed = this.parseVerdict(result.content);
@@ -167,9 +187,32 @@ export abstract class LLMClassifier {
       latencyMs: result.latencyMs,
       providerId,
       modelId,
+      tokensIn: result.tokensIn,
+      tokensOut: result.tokensOut,
+      providerRequests: providerCalls,
+      dimensions: parsed.dimensions,
       raw: result.content,
     };
   }
+}
+
+function parseDimensions(value: unknown): NonNullable<ClassificationVerdict['dimensions']> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const out: NonNullable<ClassificationVerdict['dimensions']> = [];
+  for (const [classifierName, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const item = raw as { verdict?: unknown; confidence?: unknown; reason?: unknown };
+    if (!isQualityVerdict(item.verdict)) continue;
+    out.push({
+      classifierName,
+      verdict: item.verdict,
+      confidence: typeof item.confidence === 'number'
+        ? Math.max(0, Math.min(1, item.confidence))
+        : undefined,
+      reason: typeof item.reason === 'string' ? item.reason.slice(0, 1000) : undefined,
+    });
+  }
+  return out;
 }
 
 function toNumber(value: unknown): number | undefined {

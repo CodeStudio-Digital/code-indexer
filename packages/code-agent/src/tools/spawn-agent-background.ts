@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { ok, err, type ToolResult, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
   runParallelAgents,
+  countSubagentOutcomes,
   type ParallelAgentSpec,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { MICRO_AGENT_PROFILES } from '@mcp/code-agent/tools/micro-agent-profiles.js';
@@ -141,8 +142,8 @@ async function runBackgroundJob(
       label: r.label, type: agents[i].type, reason: r.reason, toolCallCount: r.toolCallCount,
       usage: r.usage, finalText: r.finalText, collected: r.collected,
     })));
-    const failed = results.filter((r) => r.reason !== 'completed').length;
-    const hint = failed > 0 ? renderResumeHint(job.groupId, failed) : '';
+    const unfinished = results.filter((r) => r.reason !== 'completed').length;
+    const hint = unfinished > 0 ? renderResumeHint(job.groupId, unfinished) : '';
 
     // Persistence side-effects are BEST-EFFORT: a background job outlives its
     // spawning run, so the worker/DB may be tearing down when it settles. A
@@ -155,25 +156,32 @@ async function runBackgroundJob(
         captureInvestigation(deps, ctx, agents[i], results[i].finalText ?? '', '', results[i].usage.input_tokens + results[i].usage.output_tokens);
       }
     } catch { /* captureInvestigation is itself guarded; belt-and-suspenders */ }
+    let resumableCount = 0;
     try {
-      retainSpawnGroup({
+      resumableCount = retainSpawnGroup({
         sessionId, spawnId: job.groupId, provider: info.provider, model: info.model,
         agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r), toolCallCount: r.toolCallCount })),
       });
     } catch (e) { console.warn(`[coder] background retainSpawnGroup failed: ${e instanceof Error ? e.message : String(e)}`); }
+    job.resumableCount = resumableCount;
 
+    const outcomeCounts = countSubagentOutcomes(results);
     try {
       ctx.runner?.emit('agents_group_end', {
         groupId: job.groupId, jobId: job.jobId, status: 'completed', totalUsage,
-        agentCount: results.length, successCount: results.length - failed,
+        agentCount: results.length, successCount: outcomeCounts.completedCount,
+        ...outcomeCounts, resumableCount,
       });
     } catch { /* emit is best-effort */ }
     manager.settle(job, header + body + hint, totalUsage, 'done');
   } catch (e) {
     const aborted = job.abort.signal.aborted;
+    job.resumableCount = 0;
     const usage = { input_tokens: 0, output_tokens: 0 };
     ctx.runner?.emit('agents_group_end', {
-      groupId: job.groupId, jobId: job.jobId, status: aborted ? 'aborted' : 'completed', totalUsage: usage, agentCount: job.agents.length, successCount: 0,
+      groupId: job.groupId, jobId: job.jobId, status: aborted ? 'aborted' : 'completed',
+      totalUsage: usage, agentCount: job.agents.length, successCount: 0,
+      completedCount: 0, partialCount: 0, failedCount: job.agents.length, resumableCount: 0,
     });
     manager.settle(job, `[background job ${job.jobId} ${aborted ? 'aborted' : 'failed'}: ${e instanceof Error ? e.message : String(e)}]`, usage, aborted ? 'aborted' : 'done');
   }

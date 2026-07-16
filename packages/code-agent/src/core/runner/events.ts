@@ -295,7 +295,7 @@ export interface RunnerEvents {
       provider?: string;
       model?: string;
       task?: string;
-      status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+      status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
       attempt?: number;
     }>;
   }) => void;
@@ -304,8 +304,8 @@ export interface RunnerEvents {
     groupId: string;
     agentIndex: number;
     label: string;
-    event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
-    status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+    event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
+    status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
     provider?: string;
     model?: string;
     toolCallCount?: number;
@@ -333,6 +333,10 @@ export interface RunnerEvents {
     totalUsage: ChatUsage;
     agentCount: number;
     successCount: number;
+    completedCount: number;
+    partialCount: number;
+    failedCount: number;
+    resumableCount: number;
     /** Background job handle — present for background groups. */
     jobId?: string;
     /** Terminal disposition of a background group. */

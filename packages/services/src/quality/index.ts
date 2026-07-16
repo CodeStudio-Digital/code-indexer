@@ -3,7 +3,12 @@ export type {
   ClassificationVerdict,
   QualityResult,
   QualityVerdict,
+  QualityAssessmentScope,
+  QualityAssessmentSource,
+  QualityActionTaken,
 } from './types.js';
+
+export { createQualityRuntime, type QualityRuntime } from './runtime.js';
 
 export { LLMClassifier, type LLMClassifierOptions } from './llm-classifier.js';
 export {
@@ -73,6 +78,7 @@ export {
   setGlobalQualityClassifierPipeline,
   isGlobalQualityClassifierEnabled,
   runGlobalQualityClassifiers,
+  recordGlobalDeterministicQualitySignal,
   setGlobalQualityClassificationStore,
   getGlobalQualityClassificationStore,
   setGlobalQualityInterventionStore,

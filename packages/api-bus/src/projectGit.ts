@@ -94,6 +94,29 @@ export interface GitCommitDetail {
   files: GitCommitFileChange[];
 }
 
+export interface GitPushTag {
+  name: string;
+  target: string;
+  subject: string;
+}
+
+/** Read-only plan shown before every interactive push. */
+export interface GitPushPreview {
+  branch: string;
+  /** Branch tip that was inspected; confirmation rejects if it changes. */
+  headSha: string;
+  remote: string;
+  targetBranch: string;
+  upstream: string | null;
+  setUpstream: boolean;
+  commits: GitCommit[];
+  commitCount: number;
+  commitsTruncated: boolean;
+  tags: GitPushTag[];
+  tagCount: number;
+  tagsTruncated: boolean;
+}
+
 export interface GitBranch {
   /** Short name (e.g. `main`, `origin/feature/x`). */
   name: string;
@@ -605,6 +628,16 @@ export interface ProjectGitApi {
   ): Promise<GitOptimizations>;
 
   // ── Remote sync ────────────────────────────────────────────
+  /** Resolve the exact outgoing commits and local tags without mutating refs. */
+  pushPreview(
+    input: GitScope & {
+      remote?: string;
+      branch?: string;
+      setUpstream?: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<GitPushPreview>;
+
   /**
    * Push the current (or given) branch to remote. `setUpstream: true`
    * publishes the local branch when it doesn't yet track a remote ref
@@ -616,8 +649,11 @@ export interface ProjectGitApi {
     input: GitScope & {
       remote?: string;
       branch?: string;
+      targetBranch?: string;
+      expectedHead?: string;
       force?: boolean;
       setUpstream?: boolean;
+      pushTags?: boolean;
     },
     ctx: ApiContext,
   ): Promise<GitRunResult>;

@@ -32,9 +32,11 @@ interface SidebarPanelsProps {
   databaseSlot?: React.ReactNode;
   /** Contributed tool windows — render the matching one's webview. */
   pluginWindows?: ContribToolWindow[];
+  readOnly?: boolean;
 }
 
-export function SidebarPanels({ sessionId, active, companyConfigSlot, databaseSlot, pluginWindows = [] }: SidebarPanelsProps) {
+export function SidebarPanels({ sessionId, active, companyConfigSlot, databaseSlot, pluginWindows = [], readOnly = false }: SidebarPanelsProps) {
+  if (readOnly && active !== 'company-config') return null;
   // Plugin-contributed tool window → its sandboxed webview fills the drawer.
   if (active.startsWith('plugin:')) {
     const win = pluginWindows.find((w) => `plugin:${w.pluginNs}:${w.id}` === active);

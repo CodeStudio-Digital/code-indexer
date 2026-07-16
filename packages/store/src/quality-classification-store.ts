@@ -7,6 +7,9 @@ import type DatabaseConstructor from 'better-sqlite3';
 type DB = InstanceType<typeof DatabaseConstructor>;
 
 export type QualityVerdict = 'ok' | 'warn' | 'flagged' | 'error';
+export type QualityScope = 'run_final' | 'runtime' | 'legacy_turn';
+export type QualitySource = 'terminal_llm' | 'deterministic_guard' | 'legacy_llm';
+export type QualityAction = 'none' | 'advisory' | 'tool_call_refused' | 'strategy_nudge';
 
 export interface QualityClassificationRow {
   id: number;
@@ -18,6 +21,12 @@ export interface QualityClassificationRow {
   is_subagent: 0 | 1;
   subagent_profile: string | null;
   message_id: string | null;
+  assessment_id: string | null;
+  round_message_id: number | null;
+  scope: QualityScope;
+  source: QualitySource;
+  action_taken: QualityAction;
+  evidence_json: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
   /**
@@ -32,6 +41,9 @@ export interface QualityClassificationRow {
   model_id: string | null;
   latency_ms: number | null;
   cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  provider_requests: number;
   raw_response_json: string | null;
   created_at: string;
 }
@@ -45,6 +57,12 @@ export interface QualityClassificationInsert {
   is_subagent?: boolean;
   subagent_profile?: string | null;
   message_id?: string | null;
+  assessment_id?: string | null;
+  round_message_id?: number | null;
+  scope?: QualityScope;
+  source?: QualitySource;
+  action_taken?: QualityAction;
+  evidence?: unknown;
   classifier_name: string;
   verdict: QualityVerdict;
   /** True quando a falha é do SISTEMA classifier, não julgamento (mig 202). */
@@ -55,6 +73,9 @@ export interface QualityClassificationInsert {
   model_id?: string | null;
   latency_ms?: number | null;
   cost_usd?: number | null;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  provider_requests?: number;
   raw_response?: unknown;
 }
 
@@ -67,13 +88,15 @@ export class QualityClassificationStore {
         `INSERT INTO quality_classifications (
            session_id, company_session_id, agent_run_id, coder_run_id, parent_run_id,
            is_subagent, subagent_profile, message_id,
+           assessment_id, round_message_id, scope, source, action_taken, evidence_json,
            classifier_name, verdict, system_error, confidence, reason,
-           provider_id, model_id, latency_ms, cost_usd, raw_response_json
+           provider_id, model_id, latency_ms, cost_usd, tokens_in, tokens_out, provider_requests, raw_response_json
          ) VALUES (
            @session_id, @company_session_id, @agent_run_id, @coder_run_id, @parent_run_id,
            @is_subagent, @subagent_profile, @message_id,
+           @assessment_id, @round_message_id, @scope, @source, @action_taken, @evidence_json,
            @classifier_name, @verdict, @system_error, @confidence, @reason,
-           @provider_id, @model_id, @latency_ms, @cost_usd, @raw_response_json
+           @provider_id, @model_id, @latency_ms, @cost_usd, @tokens_in, @tokens_out, @provider_requests, @raw_response_json
          )`,
       )
       .run({
@@ -85,6 +108,12 @@ export class QualityClassificationStore {
         is_subagent: row.is_subagent ? 1 : 0,
         subagent_profile: row.subagent_profile ?? null,
         message_id: row.message_id ?? null,
+        assessment_id: row.assessment_id ?? null,
+        round_message_id: row.round_message_id ?? null,
+        scope: row.scope ?? 'legacy_turn',
+        source: row.source ?? 'legacy_llm',
+        action_taken: row.action_taken ?? 'none',
+        evidence_json: row.evidence != null ? JSON.stringify(row.evidence) : null,
         classifier_name: row.classifier_name,
         verdict: row.verdict,
         system_error: row.system_error ? 1 : 0,
@@ -94,6 +123,9 @@ export class QualityClassificationStore {
         model_id: row.model_id ?? null,
         latency_ms: row.latency_ms ?? null,
         cost_usd: row.cost_usd ?? null,
+        tokens_in: row.tokens_in ?? null,
+        tokens_out: row.tokens_out ?? null,
+        provider_requests: Math.max(0, Math.trunc(row.provider_requests ?? 0)),
         raw_response_json: row.raw_response != null ? JSON.stringify(row.raw_response) : null,
       });
     return Number(result.lastInsertRowid);
@@ -127,11 +159,8 @@ export class QualityClassificationStore {
   /**
    * Read recent verdicts for a coder session.
    *
-   * The feedback loops (Wire #1 quality-nudge, Wire #2 tool-misuse streak)
-   * call this once per turn to peek at how the previous turn(s) were judged.
-   * The classifiers run fire-and-forget after the turn, so when the next
-   * turn fires the row(s) MAY or MAY NOT be there yet — that's fine; an
-   * empty result means "skip the nudge this turn".
+   * Compatibility read for historical diagnostics. Active hybrid Quality
+   * does not feed semantic verdicts back into the next prompt.
    *
    * @param sessionId   coder session id (`coder_sessions.id`)
    * @param opts.limit  max rows to scan (default 30 — newest first)
@@ -171,10 +200,8 @@ export class QualityClassificationStore {
   /**
    * Read verdicts for any of the given agent_run_ids.
    *
-   * Wire #3 (kanban quality gate) uses this to look up all verdicts attached
-   * to subordinates that worked a card — when the master tries to move the
-   * card to `done`, we redirect to `review` if any verdict is `warn` or
-   * `flagged` within the cutoff window.
+   * Company uses this to attach consultative review evidence when a card is
+   * moved to done. Semantic verdicts never redirect the destination.
    */
   findRecentByAgentRunIds(
     agentRunIds: ReadonlyArray<number>,
@@ -204,7 +231,7 @@ export class QualityClassificationStore {
       .all(params) as QualityClassificationRow[];
   }
 
-  verdictDistribution(opts: { classifierName?: string; since?: string; excludeSystemErrors?: boolean } = {}): Array<{
+  verdictDistribution(opts: { classifierName?: string; since?: string; excludeSystemErrors?: boolean; scope?: QualityScope } = {}): Array<{
     classifier_name: string;
     verdict: QualityVerdict;
     count: number;
@@ -213,6 +240,7 @@ export class QualityClassificationStore {
     const params: Record<string, unknown> = {};
     if (opts.classifierName) { where.push('classifier_name = @classifierName'); params.classifierName = opts.classifierName; }
     if (opts.since) { where.push('created_at >= @since'); params.since = opts.since; }
+    if (opts.scope) { where.push('scope = @scope'); params.scope = opts.scope; }
     // Mig 202 — sem esse filtro a distribuição mistura flakiness de infra
     // (~90% dos 'error' históricos) com julgamento de conteúdo.
     if (opts.excludeSystemErrors) { where.push('system_error = 0'); }
@@ -239,6 +267,67 @@ export class QualityClassificationStore {
       .prepare(`SELECT COUNT(*) AS n FROM quality_classifications WHERE ${where.join(' AND ')}`)
       .get(params) as { n: number };
     return row.n;
+  }
+
+  listRecent(opts: { scope?: QualityScope; source?: QualitySource; since?: string; limit?: number } = {}): QualityClassificationRow[] {
+    const where: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (opts.scope) { where.push('scope = @scope'); params.scope = opts.scope; }
+    if (opts.source) { where.push('source = @source'); params.source = opts.source; }
+    if (opts.since) { where.push('created_at >= @since'); params.since = opts.since; }
+    const limit = Math.max(1, Math.min(2000, opts.limit ?? 200));
+    return this.db.prepare(
+      `SELECT * FROM quality_classifications
+       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
+    ).all(params) as QualityClassificationRow[];
+  }
+
+  overview(opts: { since?: string } = {}): {
+    completedTasks: number;
+    assessments: number;
+    llmRequests: number;
+    tokensIn: number;
+    tokensOut: number;
+    averageLatencyMs: number;
+    infrastructureFailures: number;
+    runtimeIncidents: number;
+  } {
+    const sinceSql = opts.since ? 'AND created_at >= @since' : '';
+    const params = opts.since ? { since: opts.since } : {};
+    const row = this.db.prepare(`
+      WITH terminal AS (
+        SELECT * FROM quality_classifications
+        WHERE scope = 'run_final' ${sinceSql}
+      ), attempts AS (
+        SELECT assessment_id,
+               MAX(COALESCE(tokens_in, 0)) AS tokens_in,
+               MAX(COALESCE(tokens_out, 0)) AS tokens_out,
+               MAX(COALESCE(latency_ms, 0)) AS latency_ms,
+               MAX(system_error) AS system_error,
+               SUM(COALESCE(provider_requests, 0)) AS llm_requests
+        FROM terminal WHERE assessment_id IS NOT NULL GROUP BY assessment_id
+      )
+      SELECT
+        (SELECT COUNT(DISTINCT round_message_id) FROM terminal WHERE round_message_id IS NOT NULL) AS completed_tasks,
+        (SELECT COUNT(*) FROM attempts) AS assessments,
+        (SELECT COALESCE(SUM(llm_requests), 0) FROM attempts) AS llm_requests,
+        (SELECT COALESCE(SUM(tokens_in), 0) FROM attempts) AS tokens_in,
+        (SELECT COALESCE(SUM(tokens_out), 0) FROM attempts) AS tokens_out,
+        (SELECT COALESCE(AVG(latency_ms), 0) FROM attempts WHERE llm_requests > 0) AS avg_latency_ms,
+        (SELECT COALESCE(SUM(system_error), 0) FROM attempts) AS infra_failures,
+        (SELECT COUNT(*) FROM quality_classifications WHERE scope = 'runtime' ${sinceSql}) AS runtime_incidents
+    `).get(params) as Record<string, number>;
+    return {
+      completedTasks: row.completed_tasks ?? 0,
+      assessments: row.assessments ?? 0,
+      llmRequests: row.llm_requests ?? 0,
+      tokensIn: row.tokens_in ?? 0,
+      tokensOut: row.tokens_out ?? 0,
+      averageLatencyMs: row.avg_latency_ms ?? 0,
+      infrastructureFailures: row.infra_failures ?? 0,
+      runtimeIncidents: row.runtime_incidents ?? 0,
+    };
   }
 
   pruneOlderThan(cutoff: string): number {

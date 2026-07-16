@@ -18,15 +18,14 @@ import {
 import { AppStudioCreateDialog } from './AppStudioCreateDialog.js';
 
 function cardStatus(entry: AppStudioListEntry, t: (k: string, o?: object) => string): { label: string; cls: string } {
-  if (entry.live_url) return { label: t('home.status.live'), cls: 'bg-green-500/15 text-green-600' };
-  if (!entry.current_phase) return { label: t('home.status.done'), cls: 'bg-green-500/15 text-green-600' };
-  if (entry.current_phase_status === 'attention') {
-    return { label: t('home.status.review'), cls: 'bg-amber-500/15 text-amber-600' };
-  }
-  return {
-    label: t('home.status.building', { n: entry.phase_done + 1, total: entry.phase_total }),
-    cls: 'bg-primary/10 text-primary',
+  const labels: Record<AppStudioListEntry['stage'], string> = {
+    planning: t('v6.stages.planning'), building: t('v6.stages.building'), reviewing: t('v6.stages.reviewing'), ready: t('v6.stages.ready'), live: t('v6.stages.live'),
   };
+  return entry.stage === 'live' || entry.stage === 'ready'
+    ? { label: labels[entry.stage], cls: 'bg-green-500/15 text-green-600' }
+    : entry.stage === 'reviewing'
+      ? { label: labels[entry.stage], cls: 'bg-amber-500/15 text-amber-600' }
+      : { label: labels[entry.stage], cls: 'bg-primary/10 text-primary' };
 }
 
 export function AppStudioHome() {
@@ -64,11 +63,11 @@ export function AppStudioHome() {
   async function remove(entry: AppStudioListEntry) {
     const go = await confirm({
       title: t('home.delete'),
-      description: t('home.deleteConfirm', { name: entry.name }),
+      description: t('home.deleteConfirm', { name: entry.session.name }),
       confirmLabel: t('home.delete'),
     });
     if (!go) return;
-    await deleteAppStudioSession(entry.id);
+    await deleteAppStudioSession(entry.session.id);
     void refresh();
   }
 
@@ -95,15 +94,15 @@ export function AppStudioHome() {
           const status = cardStatus(entry, t as never);
           return (
             <div
-              key={entry.id}
+              key={entry.session.id}
               role="button"
               tabIndex={0}
-              onClick={() => navigate(`/apps/${entry.id}`)}
-              onKeyDown={(e) => e.key === 'Enter' && navigate(`/apps/${entry.id}`)}
+              onClick={() => navigate(`/apps/${entry.session.id}`)}
+              onKeyDown={(e) => e.key === 'Enter' && navigate(`/apps/${entry.session.id}`)}
               className="group flex min-h-32 cursor-pointer flex-col justify-between rounded-lg border bg-card p-4 transition-colors hover:border-primary/50"
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="min-w-0 truncate font-medium">{entry.name}</span>
+                <span className="min-w-0 truncate font-medium">{entry.session.name}</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -117,9 +116,9 @@ export function AppStudioHome() {
               </div>
               <div className="space-y-1.5">
                 <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] ${status.cls}`}>{status.label}</span>
-                {entry.live_url && (
+                {entry.deployment?.url && (
                   <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    <Globe className="h-3 w-3 shrink-0" /> {entry.live_url.replace(/^https?:\/\//, '')}
+                    <Globe className="h-3 w-3 shrink-0" /> {entry.deployment.url.replace(/^https?:\/\//, '')}
                   </p>
                 )}
               </div>
@@ -134,9 +133,9 @@ export function AppStudioHome() {
       {creating && (
         <AppStudioCreateDialog
           onClose={closeCreate}
-          onCreated={(appSessionId, coderSessionId, idea) => {
+          onCreated={(appSessionId, masterSessionId, idea) => {
             closeCreate();
-            navigate(`/apps/${appSessionId}`, { state: { coderSessionId, idea } });
+            navigate(`/apps/${appSessionId}`, { state: { masterSessionId, idea } });
           }}
         />
       )}

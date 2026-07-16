@@ -25,9 +25,10 @@ function statusCounts(agents: BackgroundAgentSlot[]): { done: number; failed: nu
 
 export function renderCompletionNotice(job: SubagentJob): string {
   const { done, failed } = statusCounts(job.agents);
+  const partial = job.agents.filter((a) => a.status === 'partial').length;
   const lines: string[] = [
     '<system-reminder>',
-    `background agents finished — job ${job.jobId} (${job.agents.length} agents): ${done} completed, ${failed} failed.`,
+    `background agents finished — job ${job.jobId} (${job.agents.length} agents): ${done} completed, ${partial} partial, ${failed} failed.`,
   ];
   for (const a of job.agents) {
     const digest = a.summary ? ` — "${a.summary.replace(/\s+/g, ' ').slice(0, SUMMARY_CAP)}"` : '';
@@ -35,7 +36,9 @@ export function renderCompletionNotice(job: SubagentJob): string {
   }
   lines.push(
     `Summaries above are truncated. Call collect_agents({job_id:"${job.jobId}"}) for the full findings (instant, no waiting).` +
-    (failed > 0 ? ` To retry failures: resume_agent({spawn_id:"${job.groupId}"}).` : '') +
+    (job.resumableCount > 0
+      ? ` To resume ${job.resumableCount} unfinished agent(s): resume_agent({spawn_id:"${job.groupId}"}).`
+      : '') +
     ` Do not re-spawn these tasks.`,
     '</system-reminder>',
   );

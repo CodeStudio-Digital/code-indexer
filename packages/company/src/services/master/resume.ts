@@ -23,6 +23,7 @@ import {
 } from '@mcp/code-agent/index.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
@@ -31,17 +32,113 @@ import {
 } from '@mcp/company/services/master/prompt-builder.js';
 import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 import type { MasterStartStateMutators } from '@mcp/company/services/master/start.js';
+import type { AllowedModel, RoleSkills } from '@mcp/company/types.js';
+import {
+  MASTER_EXPLICIT_FALLBACK_REASON,
+  runWithExplicitMasterFallback,
+} from '@mcp/company/services/master/fallback.js';
 
 export interface MasterResumeOpts {
   userMessage: string;
+  /** Authoritative configured Master tuple. Required by the App runtime. */
+  provider?: string;
+  model?: string;
   maxTurns?: number;
   roleConfigs?: RoleConfig[];
   attachments?: CoderAttachment[];
   /** Enable extended thinking on the resumed master's next turn. */
   thinking?: boolean;
+  thinkingBudgetTokens?: number;
+  /** Sampling temperature from the persisted App Master role. */
+  temperature?: number;
   /** Sticky reasoning-effort override for the master (config_json
    *  `master_reasoning_effort`). Orthogonal to `thinking`. */
   reasoningEffort?: string;
+  /** Ordered user-configured Master fallbacks. App runtime only. */
+  fallbackModels?: AllowedModel[];
+  /** Skills and prompt configured for the App's app_orchestrator role. */
+  skills?: RoleSkills;
+  systemPromptOverride?: string;
+}
+
+interface AppMasterResumeRuntimeInput {
+  configuredProvider: string;
+  configuredModel: string;
+  persistedConfiguredProvider: string;
+  persistedConfiguredModel: string;
+  persistedFallbackReason: string | null;
+  sessionProvider: string;
+  sessionModel: string;
+  fallbackModels: readonly AllowedModel[];
+}
+
+export interface AppMasterResumeRuntime {
+  configuredProvider: string;
+  configuredModel: string;
+  effectiveProvider: string;
+  effectiveModel: string;
+  fallbackReason: string | null;
+  resetResponseState: boolean;
+}
+
+function runtimeKey(provider: string, model: string): string {
+  return `${provider.trim()}\u0000${model.trim()}`;
+}
+
+/**
+ * Reconcile the durable App Master run with the coder session that will be
+ * resumed. A changed role config starts using its new primary tuple on this
+ * dispatch. An unchanged explicit fallback remains sticky across pause/restart.
+ * Any other tuple (for example a leaked global mini override) is rejected and
+ * repaired back to the configured primary before runCoder can observe it.
+ */
+export function resolveAppMasterResumeRuntime(
+  input: AppMasterResumeRuntimeInput,
+): AppMasterResumeRuntime {
+  const configuredProvider = input.configuredProvider.trim();
+  const configuredModel = input.configuredModel.trim();
+  if (!configuredProvider || !configuredModel) {
+    throw new Error('App Master resume requires an authoritative provider and model');
+  }
+
+  const configuredKey = runtimeKey(configuredProvider, configuredModel);
+  const persistedConfiguredKey = runtimeKey(
+    input.persistedConfiguredProvider,
+    input.persistedConfiguredModel,
+  );
+  const sessionKey = runtimeKey(input.sessionProvider, input.sessionModel);
+  const fallbackKeys = new Set(
+    input.fallbackModels
+      .filter((candidate) => candidate.provider.trim() && candidate.model.trim())
+      .map((candidate) => runtimeKey(candidate.provider, candidate.model)),
+  );
+  fallbackKeys.delete(configuredKey);
+
+  const configChanged = persistedConfiguredKey !== configuredKey;
+  const sessionIsConfigured = sessionKey === configuredKey;
+  const sessionIsExplicitFallback = fallbackKeys.has(sessionKey);
+  if (configChanged || (!sessionIsConfigured && !sessionIsExplicitFallback)) {
+    return {
+      configuredProvider,
+      configuredModel,
+      effectiveProvider: configuredProvider,
+      effectiveModel: configuredModel,
+      fallbackReason: null,
+      resetResponseState: true,
+    };
+  }
+
+  return {
+    configuredProvider,
+    configuredModel,
+    effectiveProvider: input.sessionProvider.trim(),
+    effectiveModel: input.sessionModel.trim(),
+    fallbackReason: sessionIsConfigured
+      ? null
+      : input.persistedFallbackReason
+        ?? `${MASTER_EXPLICIT_FALLBACK_REASON}: resumed persisted explicit fallback`,
+    resetResponseState: false,
+  };
 }
 
 export interface MasterResumeDeps {
@@ -78,8 +175,64 @@ export async function resumeMaster(
     return ack;
   }
 
+  let resumedProvider = masterRun.provider;
+  let resumedModel = masterRun.model;
+  if (ctx.runtimeKind === 'app_studio') {
+    const sessionStore = new SessionStore(ctx.db.raw());
+    try {
+      const coderSession = sessionStore.getSession(masterRun.coder_session_id);
+      if (!coderSession) {
+        throw new Error(`App Master coder session ${masterRun.coder_session_id} was not found`);
+      }
+      const runtime = resolveAppMasterResumeRuntime({
+        configuredProvider: opts.provider ?? '',
+        configuredModel: opts.model ?? '',
+        persistedConfiguredProvider: masterRun.configured_provider,
+        persistedConfiguredModel: masterRun.configured_model,
+        persistedFallbackReason: masterRun.fallback_reason,
+        sessionProvider: coderSession.provider,
+        sessionModel: coderSession.model,
+        fallbackModels: opts.fallbackModels ?? [],
+      });
+      resumedProvider = runtime.effectiveProvider;
+      resumedModel = runtime.effectiveModel;
+      if (
+        coderSession.provider !== runtime.effectiveProvider
+        || coderSession.model !== runtime.effectiveModel
+      ) {
+        sessionStore.updateSessionProvider(
+          masterRun.coder_session_id,
+          runtime.effectiveProvider,
+          runtime.effectiveModel,
+        );
+      }
+      if (runtime.resetResponseState) {
+        // Response ids are provider/model-specific. The transcript remains;
+        // runCoder reconstructs the next request from persisted messages.
+        sessionStore.setLastResponseState(masterRun.coder_session_id, null, null);
+      }
+      ctx.companyStore.updateAgentRunRuntimeSnapshot(masterRun.id, {
+        configuredProvider: runtime.configuredProvider,
+        configuredModel: runtime.configuredModel,
+        effectiveProvider: runtime.effectiveProvider,
+        effectiveModel: runtime.effectiveModel,
+        dispatchSource: 'app_studio',
+        fallbackReason: runtime.fallbackReason,
+      });
+    } finally {
+      sessionStore.close();
+    }
+  }
+
   // ── Fast path (awaited inside the RPC): cheap DB writes + board post ──
   deps.state.setAgentRunId(masterRun.id);
+  deps.state.setRuntimeSnapshot({
+    fallbackModels: [...(opts.fallbackModels ?? [])],
+    temperature: opts.temperature,
+    thinking: opts.thinking,
+    thinkingBudgetTokens: opts.thinkingBudgetTokens,
+    reasoningEffort: opts.reasoningEffort,
+  });
   deps.state.setRoleConfigs((opts.roleConfigs ?? []) as RoleConfig[]);
   deps.state.loadConfigFromDb();
 
@@ -92,7 +245,7 @@ export async function resumeMaster(
     'system',
     null,
     'message',
-    `Master resumed from existing session (${masterRun.provider}/${masterRun.model}).`,
+    `Master resumed from existing session (${resumedProvider}/${resumedModel}).`,
   );
 
   // ── Background phase: sandbox provision (can be a multi-minute cold
@@ -105,6 +258,8 @@ export async function resumeMaster(
       deps.state.roleConfigs,
       deps.state.allowedModels,
       deps.orchestratorRef,
+      undefined,
+      { masterSystemPromptOverride: opts.systemPromptOverride },
     );
 
     configureMasterSkills({
@@ -112,25 +267,33 @@ export async function resumeMaster(
       configuredStack: inputs.configuredStack,
       coderSessionId: masterRun.coder_session_id,
       primaryProjectId: ctx.projects[0]?.project_id,
+      masterSkills: opts.skills,
     });
 
     deps.state.setCompanyContext(inputs.companyContext);
     deps.state.setPromptBlock(inputs.promptBlock);
     deps.state.setLastUserAttachments(opts.attachments ?? []);
 
-    const handle = await runCoder({
-      session: { id: masterRun.coder_session_id },
-      userMessage: opts.userMessage,
-      attachments: opts.attachments,
-      maxTurns: opts.maxTurns ?? 100,
-      planMode: false,
-      profile: 'full',
-      companyContext: inputs.companyContext,
-      companyPromptBlock: inputs.promptBlock,
-      thinking: opts.thinking,
-      reasoningEffort: opts.reasoningEffort,
-      onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
-    } as RunCoderOptions & { companyPromptBlock: string });
+    const handle = await runWithExplicitMasterFallback(
+      () => runCoder({
+        session: { id: masterRun.coder_session_id },
+        userMessage: opts.userMessage,
+        attachments: opts.attachments,
+        maxTurns: opts.maxTurns ?? 100,
+        planMode: false,
+        profile: 'full',
+        companyContext: inputs.companyContext,
+        companyPromptBlock: inputs.promptBlock,
+        roleTemperature: opts.temperature,
+        thinking: opts.thinking,
+        thinkingBudgetTokens: opts.thinkingBudgetTokens,
+        reasoningEffort: opts.reasoningEffort,
+        onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
+      } as RunCoderOptions & { companyPromptBlock: string }),
+      masterRun.id,
+      opts.fallbackModels ?? [],
+      { ctx, board: deps.board },
+    );
 
     deps.state.setHandle(handle);
     deps.state.setRunnerExited(false);

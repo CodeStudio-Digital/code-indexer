@@ -95,11 +95,13 @@ export class CompanyStore {
 
   // ─── Agent Runs ────────────────────────────────────────────────
   createAgentRun(input: agentRuns.CreateAgentRunInput): CompanyAgentRun { return agentRuns.create(this.db, input); }
+  getOrCreateAgentRun(input: agentRuns.CreateAgentRunInput): { run: CompanyAgentRun; created: boolean } { return agentRuns.getOrCreate(this.db, input); }
   getAgentRun(id: number): CompanyAgentRun | null { return agentRuns.get(this.db, id); }
   listAgentRuns(companySessionId: number): CompanyAgentRun[] { return agentRuns.list(this.db, companySessionId); }
   countActiveSubordinatesGlobal(): number { return agentRuns.countActiveSubordinatesGlobal(this.db); }
   listArchivedAgentRuns(archiveId: number): CompanyAgentRun[] { return agentRuns.listArchived(this.db, archiveId); }
-  updateAgentRunProvider(id: number, provider: string, model: string): void { agentRuns.updateProvider(this.db, id, provider, model); }
+  updateAgentRunProvider(id: number, provider: string, model: string, fallbackReason?: string | null): void { agentRuns.updateProvider(this.db, id, provider, model, fallbackReason); }
+  updateAgentRunRuntimeSnapshot(id: number, input: Parameters<typeof agentRuns.updateRuntimeSnapshot>[2]): void { agentRuns.updateRuntimeSnapshot(this.db, id, input); }
   updateAgentRunStatus(id: number, status: AgentRunStatus, statusMessage?: string): void { agentRuns.updateStatus(this.db, id, status, statusMessage); }
   deleteAgentRun(id: number): void { agentRuns.remove(this.db, id); }
   recoverStaleAgentRuns(): { agentRuns: number; companySessions: number } { return agentRuns.recoverStale(this.db); }

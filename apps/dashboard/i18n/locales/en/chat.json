@@ -1,4 +1,11 @@
 {
+  "notifications.background.collectWith": "Collect with",
+  "notifications.background.resumeWith": "Resume {{count}} with",
+  "notifications.background.statusDone": "done",
+  "notifications.background.statusFailed": "{{count}} failed",
+  "notifications.background.statusPartial": "{{count}} partial",
+  "notifications.background.summary": "{{completed}} completed, {{partial}} partial, {{failed}} failed.",
+  "notifications.background.title": "Background agents finished",
   "openSessions": "Open sessions",
   "sessions": "Sessions",
   "newSession": "New Session",

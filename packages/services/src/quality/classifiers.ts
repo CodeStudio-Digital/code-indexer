@@ -2,11 +2,11 @@
  * One combined passive evaluator plus five legacy single-task classifiers.
  * with a tight system prompt that asks for a specific JSON verdict.
  *
- * The combined evaluator is the default; the five-call shape remains only for
- * rollback compatibility behind MCP_QUALITY_LEGACY_FIVE=1.
+ * The combined evaluator is the only active runtime path. The five single-axis
+ * classes remain importable only for reading historical data and old tests.
  */
 import { LLMClassifier } from './llm-classifier.js';
-import type { AgentOutputForClassification } from './types.js';
+import type { AgentOutputForClassification, ClassificationVerdict, QualityVerdict } from './types.js';
 
 /**
  * Strong opener that fights GLM-5 / DeepSeek-R1 / o1 style behaviors:
@@ -35,28 +35,70 @@ const JSON_FOOTER = [
 
 /** Default passive evaluator: one provider call covers the five old axes. */
 export class CombinedQualityClassifier extends LLMClassifier {
-  readonly classifierName = 'quality_combined';
-  // Reuse the completeness binding so existing installations work without a
-  // binding migration. Operators can keep the legacy five behind a flag.
-  readonly pipelineName = 'quality_completeness';
+  readonly classifierName = 'delivery_overall';
+  readonly pipelineName = 'quality_delivery';
+  protected override readonly fallbackPipelineNames = ['quality_completeness'];
   protected systemPrompt(): string {
     return [
       JSON_HEADER,
-      'You passively evaluate an AI coding agent. Do not prescribe or intervene.',
-      'Assess task relevance, completeness, code quality, policy safety, and tool-use health.',
+      'You passively evaluate the FINAL delivery of an AI coding agent. Do not prescribe, block, or intervene.',
+      'Judge only what the final response claims against the bounded runtime evidence provided.',
       'Schema: { "verdict": "ok" | "warn" | "flagged" | "error", "confidence": 0.0-1.0,',
-      '"reason": "<short aggregate reason>", "dimensions": {',
-      '"relevance": "ok|warn|flagged", "completeness": "ok|warn|flagged",',
-      '"code_quality": "ok|warn|flagged", "policy": "ok|warn|flagged",',
-      '"tool_use": "ok|warn|flagged" } }',
-      'Use the worst meaningful dimension as the aggregate verdict. Reserve error for a broken output.',
+      '"reason": "<short overall reason>", "dimensions": {',
+      '"delivery_relevance": { "verdict": "ok|warn|flagged", "confidence": 0.0-1.0, "reason": "<short>" },',
+      '"delivery_completeness": { "verdict": "ok|warn|flagged", "confidence": 0.0-1.0, "reason": "<short>" },',
+      '"evidence_alignment": { "verdict": "ok|warn|flagged", "confidence": 0.0-1.0, "reason": "<short>" } } }',
+      'The root verdict is delivery_overall. Use the worst meaningful dimension as overall.',
+      'Do not claim code quality: no diff or source code is provided. Infrastructure/tool errors are evidence, not automatically poor delivery.',
+      'Reserve error for a genuinely broken final response, not evaluator infrastructure.',
       JSON_FOOTER,
     ].join('\n');
   }
   protected buildUserPrompt(output: AgentOutputForClassification): string {
-    const tools = (output.recentToolCalls ?? []).slice(-30)
-      .map((t) => `${t.success ? 'ok' : 'fail'}:${t.name}`).join(', ');
-    return `Task:\n${truncate(output.taskText, 4000)}\n\nTools:\n${tools || '(none)'}\n\nAgent output:\n${truncate(output.outputText, 8000)}`;
+    const evidence = {
+      stop_reason: output.stopReason ?? null,
+      changed_files: (output.changedFiles ?? []).slice(0, 50),
+      tool_totals: output.toolSummary ?? null,
+      guards: (output.guardActions ?? []).slice(0, 30),
+      validation_signals: (output.validationSignals ?? []).slice(0, 30),
+    };
+    return [
+      `User request:\n${truncate(output.taskText, 5000)}`,
+      `Final response:\n${truncate(output.outputText, 9000)}`,
+      `Observed evidence (bounded JSON, no raw arguments or diffs):\n${truncate(JSON.stringify(evidence), 5000)}`,
+    ].join('\n\n');
+  }
+
+  protected override parseVerdict(text: string): {
+    verdict: QualityVerdict;
+    systemError?: boolean;
+    confidence?: number;
+    reason?: string;
+    dimensions?: ClassificationVerdict['dimensions'];
+  } {
+    const parsed = super.parseVerdict(text);
+    if (parsed.systemError) return parsed;
+    const required = ['delivery_relevance', 'delivery_completeness', 'evidence_alignment'];
+    const byName = new Map((parsed.dimensions ?? []).map((dimension) => [dimension.classifierName, dimension]));
+    const dimensions = required.map((name) => byName.get(name));
+    if (dimensions.some((dimension) => !dimension || dimension.verdict === 'error')) {
+      return {
+        verdict: 'error',
+        systemError: true,
+        reason: `[schema] expected ${required.join(', ')}`,
+      };
+    }
+    const normalized = dimensions as NonNullable<ClassificationVerdict['dimensions']>;
+    const order: Record<Exclude<QualityVerdict, 'error'>, number> = { ok: 0, warn: 1, flagged: 2 };
+    const worst = normalized.reduce<Exclude<QualityVerdict, 'error'>>((current, dimension) => {
+      const verdict = dimension.verdict as Exclude<QualityVerdict, 'error'>;
+      return order[verdict] > order[current] ? verdict : current;
+    }, 'ok');
+    return {
+      ...parsed,
+      verdict: parsed.verdict === 'error' ? 'error' : worst,
+      dimensions: normalized,
+    };
   }
 }
 

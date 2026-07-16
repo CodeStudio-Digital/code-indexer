@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { SemanticStore } from '@mcp/store/semantic-store.js';
 import { createDurableSemanticMutationSink } from '@mcp/services/semantic-mutation-sink.js';
+import { runTerminalQualityAssessment } from '@mcp/code-agent/terminal-quality.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { coderToolOutputsBaseDir } from '@mcp/shared/utils/data-paths.js';
@@ -18,6 +19,7 @@ import type {
 } from '@mcp/code-agent/core/runner/types.js';
 import { parseToolOutputCapLevel, levelFromLegacyBoolean } from '@mcp/code-agent/core/runner/output-caps.js';
 import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/core/permission-gate.js';
+import { shouldEnableEphemeralSubagents } from '@mcp/code-agent/core/ephemeral-subagent-capability.js';
 import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
 import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
 import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
@@ -93,7 +95,7 @@ import {
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
-import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
+import { parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
 import { buildDsConsumerBlock } from '@mcp/code-agent/core/ds-consumer-prompt.js';
 import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
@@ -449,6 +451,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const registerCompanyTools = (tools: readonly CoderTool[]): void => {
     registry.registerAll(withCompanyToolsMetadata(tools));
   };
+  const appCompanyCapabilities = opts.companyContext?.capabilities;
+  const isAppStudioCompany = opts.companyContext != null
+    && (appCompanyCapabilities?.runtimeKind === 'app_studio'
+      || opts.companyContext.runtimeKind === 'app_studio');
+  const allowAppCompanyTools = isAppStudioCompany
+    && (appCompanyCapabilities?.allowAppTools ?? opts.companyContext?.appStudioSessionId != null);
+  const allowCompanyKanban = appCompanyCapabilities?.allowCompanyKanban ?? !isAppStudioCompany;
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   // A synthetic union root is not itself a Git repository. Keep the existing
@@ -578,15 +587,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (dsConsumer && config.features.designSystemEnabled) {
     registerCompanyTools(buildDesignSystemConsumerTools(dsConsumer));
   }
-  // App Studio — single sessions on a `kind:'app'` workspace project
-  // (Code Studio para leigos) get the app_* tools (pipeline/spec/interview/
-  // provision) bound to the project. Same posture as DS Studio: outside
-  // company context, gated by the feature flag; mutually exclusive with
-  // the DS shapes (parseAppWorkspace returns null unless kind==='app').
-  const appWorkspace =
-    !opts.companyContext && !dsWorkspace ? parseAppWorkspace(project.builder_json) : null;
-  if (appWorkspace && config.features.appStudioEnabled) {
-    registerCompanyTools(buildAppStudioTools(project.id));
+  // App Studio v6 tools exist only inside its persistent Company team.
+  if (
+    allowAppCompanyTools
+    && opts.companyContext != null
+    && opts.companyContext.appStudioSessionId != null
+    && config.features.appStudioEnabled
+  ) {
+    registerCompanyTools(buildAppStudioTools(project.id, {
+      audience: opts.companyContext.isMaster ? 'company-master' : 'company-subordinate',
+      appSessionId: opts.companyContext.appStudioSessionId,
+      role: opts.companyContext.agentRole,
+    }));
   }
   // Sprite Studio — single sessions on a project that has a `.sprite-studio/`
   // directory get the sprite_* tools (get_project/list_assets/generate/
@@ -784,17 +796,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // registered so the reviewer's REVIEW_ALLOWLIST resolves correctly. The
   // reviewerProvider falls back to the parent provider when subagentTarget
   // hasn't been configured (legacy single-family behaviour).
-  registry.registerAll([
-    buildRequestReviewTool({
-      provider,
-      parentTools: registry.list(),
-      sessionId: session.id,
-      sessionStore: store,
-      // Reuse the subagent provider plumbing: when an admin has set a
-      // different family for subagents (subagentTarget), use it for review.
-      reviewerProvider: undefined, // wired at run-time via subagentProvider in subagent.ts
-    }),
-  ]);
+  if (!isAppStudioCompany) {
+    registry.registerAll([
+      buildRequestReviewTool({
+        provider,
+        parentTools: registry.list(),
+        sessionId: session.id,
+        sessionStore: store,
+        // Reuse the subagent provider plumbing: when an admin has set a
+        // different family for subagents (subagentTarget), use it for review.
+        reviewerProvider: undefined, // wired at run-time via subagentProvider in subagent.ts
+      }),
+    ]);
+  }
 
   // Load disabled tools early so the subagent parentTools snapshot is already
   // filtered. Must happen before registry.list() is captured below.
@@ -814,7 +828,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // company Master (it must use spawn_subordinate_agent instead — ephemeral
   // subagents don't fit the orchestration role).
   let subagentDeps: SubagentDeps | null = null;
-  if (process.env.CODER_DISABLE_SUBAGENTS !== '1' && !opts.companyContext?.isMaster) {
+  if (shouldEnableEphemeralSubagents(opts.companyContext)) {
     const allDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
     const parentTools = allDisabled.size > 0
       ? registry.list().filter((t) => !allDisabled.has(t.name))
@@ -869,7 +883,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Company tools — registered when this runner is part of a company session.
   if (opts.companyContext) {
     const { orchestrator, agentRole, isMaster, agentRunId } = opts.companyContext;
-    registerCompanyTools(buildBoardTools(orchestrator, agentRole, agentRunId));
+    const boardTools = buildBoardTools(orchestrator, agentRole, agentRunId);
+    registerCompanyTools(allowCompanyKanban
+      ? boardTools
+      : boardTools.filter((tool) => !tool.name.startsWith('kanban_')));
     // Shared drive: persistent file pool scoped to the company template,
     // visible to master and every subordinate. Lets agents exchange large
     // documents without inflating board posts or inbox messages.
@@ -885,11 +902,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.registerAll(followupTaskTools);
     // Subordinate kanban tools: self-service card updates (comment, checklist, move-to-review)
     if (!isMaster && agentRunId != null) {
-      registerCompanyTools(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
-      // QA tools: gated by skill (qa-playwright) via the skill's allowed-tools.
-      // The tool is harmless when not used, so we register unconditionally for
-      // subordinates and let the prompt-injector instructions discipline usage.
-      registerCompanyTools(buildQaTools(orchestrator, agentRole, agentRunId));
+      if (allowCompanyKanban) {
+        registerCompanyTools(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
+      }
+      // Generic QA tools synchronize results into Company Kanban. App teams
+      // use app_run_test_cycle + app_record_work_evidence instead and must not
+      // create a second work graph.
+      if (!isAppStudioCompany) {
+        registerCompanyTools(buildQaTools(orchestrator, agentRole, agentRunId));
+      }
       // ds_* tools são exclusivas do DS Studio (sessão single) — o pipeline
       // company de Design System foi aposentado e sessões legacy são
       // read-only, então subordinados não recebem mais esse surface.
@@ -904,9 +925,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           getProjectRoot: (projectId: number) => db.getProject(projectId)?.root_path ?? null,
         }),
       );
-      registerCompanyTools(buildKanbanTools(orchestrator));
+      if (allowCompanyKanban) registerCompanyTools(buildKanbanTools(orchestrator));
       // Strip code-level tools from Master — it should only orchestrate, not read code
-      registry.filterInPlace(isMasterAllowed);
+      registry.filterInPlace((tool) => isMasterAllowed(tool, {
+        allowAppStudio: allowAppCompanyTools,
+      }));
       console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
     }
   }
@@ -1713,17 +1736,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.
     systemPrompt = appendStaticPromptSection(systemPrompt, buildDsConsumerBlock(dsConsumer));
-  } else if (appWorkspace && config.features.appStudioEnabled) {
-    // App Studio block — appended (not replacing the agent prompt) so the
-    // `builder` agent identity stays intact and the prefix remains
-    // cache-stable: every value comes from builder_json, fixed at scaffold
-    // time, no DB query per turn (spec/auth details reach the agent via
-    // the app_* tools at runtime, never via the prompt).
-    systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt('app-studio'), {
-      appName: appWorkspace.appName ?? '(see app_get_workflow)',
-      appSlug: appWorkspace.appSlug ?? '',
-      dbEngine: appWorkspace.dbEngine,
-    }));
   }
 
   // Draw.io diagram guidance — appended only when the `diagram` tier will be
@@ -2014,23 +2026,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     return createCoderProvider(name, model);
   };
   let fallbackChain: import('@mcp/code-agent/core/fallback.js').FallbackChain | undefined;
-  try {
-    const { buildFallbackChain } = await import('@mcp/code-agent/core/fallback.js');
-    const providerStore = new ProviderStore(config.dbPath);
-    const sessionFallback = store.getSessionFallback(session.id);
-    const providerChain = providerStore.getFallbackChain(session.provider);
-    providerStore.close();
-    const chain = buildFallbackChain(
-      sessionFallback,
-      providerChain,
-      process.env.CODER_FALLBACK_CHAIN,
-    );
-    if (chain.entries.length > 0) {
-      fallbackChain = chain;
-      console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
+  // App role fallbacks are owned by the Company lifecycle, which records the
+  // effective model and fallback reason on company_agent_runs before retrying.
+  // Letting the coder-local provider/env chain run here could silently jump to
+  // a global mini model without updating that provenance. Generic Company and
+  // solo sessions retain their existing fallback chain unchanged.
+  if (!isAppStudioCompany) {
+    try {
+      const { buildFallbackChain } = await import('@mcp/code-agent/core/fallback.js');
+      const providerStore = new ProviderStore(config.dbPath);
+      const sessionFallback = store.getSessionFallback(session.id);
+      const providerChain = providerStore.getFallbackChain(session.provider);
+      providerStore.close();
+      const chain = buildFallbackChain(
+        sessionFallback,
+        providerChain,
+        process.env.CODER_FALLBACK_CHAIN,
+      );
+      if (chain.entries.length > 0) {
+        fallbackChain = chain;
+        console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
+      }
+    } catch {
+      // Fallback config not available (migration not run yet) — skip silently
     }
-  } catch {
-    // Fallback config not available (migration not run yet) — skip silently
   }
 
   // ─── A1: independent goal-completion verifier (CODER_GOAL_VERIFY) ─────
@@ -2388,11 +2407,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     context_window: sessionContextWindow,
     isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,
     companyRoleOverride: opts.companyRoleOverride,
-    // Plumb the company identifiers through so per-turn quality verdicts
-    // can be attributed to the right subordinate run and routed back via
-    // the global QualityResultObserver (Wire #3 kanban gate, Wire #4
-    // off-topic→master inbox alert). Null for chat-individual sessions
-    // — those don't carry company context.
+    // Attribute terminal delivery assessments and deterministic incidents to
+    // the owning Company run. Null for individual coder sessions.
     companyAgentRunId: opts.companyContext?.agentRunId ?? null,
     companySessionId: opts.companyContext?.companySessionId ?? null,
     adminOverride: opts.adminOverride,
@@ -3182,6 +3198,35 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .then(async (res) => {
       await flushPendingTurn();
       await retryPendingDurableCheckpoint();
+      // Terminal Quality runs after the runner emitted `done` (the response is
+      // already visible) but before this handle resolves and the worker is
+      // released. Exactly one provider attempt; no subagent/abort/error calls.
+      try {
+        const roundMessageId = runner.roundMessageId;
+        const terminal = runner.getTerminalQualityContext();
+        const changedFiles = roundMessageId == null
+          ? []
+          : snapshotStore
+              .listRoundSnapshots('coder', session.id, roundMessageId, { includeClosed: true })
+              .map((row) => row.file_path);
+        await runTerminalQualityAssessment({
+          reason: res.reason,
+          isSubagent: runner.isSubagent,
+          sessionId: session.id,
+          companySessionId: opts.companyContext?.companySessionId ?? null,
+          agentRunId: opts.companyContext?.agentRunId ?? null,
+          coderRunId: runner.runId,
+          roundMessageId,
+          taskText: terminal.taskText || opts.userMessage,
+          outputText: terminal.outputText,
+          changedFiles,
+          toolSummary: terminal.toolSummary,
+          guardActions: terminal.guardActions,
+          validationSignals: terminal.validationSignals,
+        });
+      } catch (error) {
+        console.warn(`[quality] terminal assessment skipped: ${error instanceof Error ? error.message : String(error)}`);
+      }
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
     })

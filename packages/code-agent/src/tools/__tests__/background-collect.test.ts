@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) => {
@@ -18,6 +19,7 @@ const { runBackgroundEphemeral } = await import('@mcp/code-agent/tools/spawn-age
 const { buildCollectAgentsTool } = await import('@mcp/code-agent/tools/collect-agents.js');
 const { runParallelAgents } = await import('@mcp/code-agent/tools/implement-subagent.js');
 const { getSubagentJobManager } = await import('@mcp/code-agent/tools/subagent-jobs.js');
+const { getGroup } = await import('@mcp/code-agent/tools/subagent-resume-registry.js');
 const { MICRO_AGENT_PROFILES } = await import('@mcp/code-agent/tools/micro-agent-profiles.js');
 
 const usage: ChatUsage = { input_tokens: 20, output_tokens: 10 };
@@ -46,11 +48,18 @@ beforeEach(() => {
   runParallel.mockReset();
 });
 
-function mockResult(reason: 'completed' | 'error' = 'completed') {
+function mockResult(reason: StopReason = 'completed') {
   runParallel.mockResolvedValue({
     results: [{
       reason, finalText: 'FOUND: the thing', usage, sandboxViolations: [],
-      collected: { memos: [], snapshots: [], boardPosts: [] }, transcript: [], label: 'scout', toolCallCount: 3,
+      collected: { memos: [], snapshots: [], boardPosts: [] },
+      transcript: reason === 'completed'
+        ? []
+        : [
+            { role: 'user', content: [{ type: 'text', text: 'inspect' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'partial findings' }] },
+          ],
+      label: 'scout', toolCallCount: 3,
     }],
     totalUsage: usage,
   });
@@ -89,6 +98,27 @@ describe('spawn_agent background + collect_agents', () => {
     // Usage accounted exactly once, at settle.
     expect(bump).toHaveBeenCalledTimes(1);
     expect(bump).toHaveBeenCalledWith(SID, usage);
+  });
+
+  it('retains partial work before emitting one resumable group-end event', async () => {
+    mockResult('tool_budget');
+    const spawn = await runBackgroundEphemeral(deps, [agent('scout')], ctx);
+    const jobId = jobIdFrom(String(spawn.content));
+    const job = getSubagentJobManager().get(SID, jobId)!;
+    await job.settled;
+
+    expect(getGroup(SID, job.groupId)?.agents[0].reason).toBe('tool_budget');
+    expect(job.resumableCount).toBe(1);
+    const endEvents = emit.mock.calls.filter((call) => call[0] === 'agents_group_end');
+    expect(endEvents).toHaveLength(1);
+    expect(endEvents[0][1]).toMatchObject({
+      groupId: job.groupId,
+      jobId,
+      completedCount: 0,
+      partialCount: 1,
+      failedCount: 0,
+      resumableCount: 1,
+    });
   });
 
   it('collect wait:false returns a snapshot while running, without blocking', async () => {

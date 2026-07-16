@@ -27,12 +27,13 @@ import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { publish as busPublish } from '@apps/http-api/coder-bus.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import type { AllowedModel } from '@mcp/company/types.js';
+import type { AllowedModel, RoleSkills } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import { buildMasterPromptInputs } from '@mcp/company/services/master/prompt-builder.js';
 import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
+import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
 
 export interface MasterStartOpts {
   userMessage: string;
@@ -44,6 +45,10 @@ export interface MasterStartOpts {
   attachments?: CoderAttachment[];
   /** Enable extended thinking on the master's first turn. */
   thinking?: boolean;
+  /** Optional provider-specific extended-thinking budget. */
+  thinkingBudgetTokens?: number;
+  /** Sampling temperature from the persisted App Master role. */
+  temperature?: number;
   /**
    * Sticky reasoning-effort override for the master (config_json
    * `master_reasoning_effort`). Orthogonal to `thinking`. Forwarded to
@@ -51,12 +56,26 @@ export interface MasterStartOpts {
    * effort levels (Codex/OpenRouter). Undefined → model default.
    */
   reasoningEffort?: string;
+  /** Ordered user-configured Master fallbacks. App runtime only. */
+  fallbackModels?: AllowedModel[];
+  /** Skills and prompt configured for the App's app_orchestrator role. */
+  skills?: RoleSkills;
+  systemPromptOverride?: string;
   /**
    * Route work through the built-in SDD pipeline by default. Threaded into
    * `MasterPromptContext.sddMode` via `buildMasterPromptInputs` so the master
    * prompt picks up the SDD MODE block.
    */
   sddMode?: boolean;
+}
+
+/** Immutable runtime snapshot reused by fallback/resurrection cycles. */
+export interface MasterRuntimeSnapshot {
+  fallbackModels: AllowedModel[];
+  temperature?: number;
+  thinking?: boolean;
+  thinkingBudgetTokens?: number;
+  reasoningEffort?: string;
 }
 
 /**
@@ -69,6 +88,7 @@ export interface MasterStartStateMutators {
   readonly roleConfigs: readonly RoleConfig[];
   readonly allowedModels: readonly AllowedModel[];
   setAgentRunId: (id: number) => void;
+  setRuntimeSnapshot: (snapshot: MasterRuntimeSnapshot) => void;
   setRoleConfigs: (configs: RoleConfig[]) => void;
   /** Calls `parseMasterConfigFromDb` + assigns into `_allowedModels` / `_roleConfigs`. */
   loadConfigFromDb: () => void;
@@ -138,9 +158,20 @@ export async function startMaster(
     project_ids: ctx.projects.map((p) => p.project_id),
     provider: opts.provider,
     model: opts.model,
+    configured_provider: opts.provider,
+    configured_model: opts.model,
+    dispatch_source: ctx.runtimeKind === 'app_studio' ? 'app_studio' : 'company',
+    fallback_reason: null,
   });
 
   deps.state.setAgentRunId(masterRun.id);
+  deps.state.setRuntimeSnapshot({
+    fallbackModels: [...(opts.fallbackModels ?? [])],
+    temperature: opts.temperature,
+    thinking: opts.thinking,
+    thinkingBudgetTokens: opts.thinkingBudgetTokens,
+    reasoningEffort: opts.reasoningEffort,
+  });
   deps.state.setRoleConfigs((opts.roleConfigs ?? []) as RoleConfig[]);
   // Populate `_allowedModels` from the persisted session config. Must
   // happen before any `spawn_subordinate_agent` call, so we do it here
@@ -179,7 +210,10 @@ export async function startMaster(
       deps.state.allowedModels,
       deps.orchestratorRef,
       opts.signal,
-      { sddMode: !!opts.sddMode },
+      {
+        sddMode: !!opts.sddMode,
+        masterSystemPromptOverride: opts.systemPromptOverride,
+      },
     );
 
     // Configure skill enablement on the master's coder session — must
@@ -190,28 +224,36 @@ export async function startMaster(
       configuredStack: inputs.configuredStack,
       coderSessionId: masterSessionId,
       primaryProjectId,
+      masterSkills: opts.skills,
     });
 
     deps.state.setCompanyContext(inputs.companyContext);
     deps.state.setPromptBlock(inputs.promptBlock);
     deps.state.setLastUserAttachments(opts.attachments ?? []);
 
-    const handle = await runCoder({
-      session: { id: masterSessionId },
-      userMessage: opts.userMessage,
-      attachments: opts.attachments,
-      maxTurns: opts.maxTurns ?? 100,
-      signal: opts.signal,
-      planMode: false,
-      profile: 'full',
-      companyContext: inputs.companyContext,
-      companyPromptBlock: inputs.promptBlock,
-      thinking: opts.thinking,
-      reasoningEffort: opts.reasoningEffort,
-      // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
-      // that calls `ask_user` immediately is still captured.
-      onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
-    } as RunCoderOptions & { companyPromptBlock: string });
+    const handle = await runWithExplicitMasterFallback(
+      () => runCoder({
+        session: { id: masterSessionId },
+        userMessage: opts.userMessage,
+        attachments: opts.attachments,
+        maxTurns: opts.maxTurns ?? 100,
+        signal: opts.signal,
+        planMode: false,
+        profile: 'full',
+        companyContext: inputs.companyContext,
+        companyPromptBlock: inputs.promptBlock,
+        roleTemperature: opts.temperature,
+        thinking: opts.thinking,
+        thinkingBudgetTokens: opts.thinkingBudgetTokens,
+        reasoningEffort: opts.reasoningEffort,
+        // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
+        // that calls `ask_user` immediately is still captured.
+        onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
+      } as RunCoderOptions & { companyPromptBlock: string }),
+      agentRunId,
+      opts.fallbackModels ?? [],
+      { ctx, board: deps.board },
+    );
 
     deps.state.setHandle(handle);
     deps.state.setRunnerExited(false);

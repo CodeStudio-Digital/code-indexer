@@ -7,11 +7,15 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  Search,
+  Trash2,
 } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../../components/ui/badge.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../../components/ui/card.js';
+import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
 import { Progress } from '../../../../components/ui/progress.js';
 import { useIndexStatus } from '../../../workspace/jetbrains/status-bar/useIndexStatus.js';
 import {
@@ -20,6 +24,7 @@ import {
   semanticWorkIsActive,
 } from './project-semantic-api.js';
 import { useProjectSemanticStatus } from './useProjectSemanticStatus.js';
+import { SemanticSearchTestDialog } from './SemanticSearchTestDialog.js';
 
 type Tone = 'muted' | 'info' | 'success' | 'warning' | 'destructive';
 
@@ -45,8 +50,17 @@ function StatusBadge({ label, tone }: { label: string; tone: Tone }) {
   return <Badge variant={tone}>{label}</Badge>;
 }
 
-export function RunSection({ projectId }: { projectId: number }) {
+export function RunSection({
+  projectId,
+  projectName,
+  onOpenFile,
+}: {
+  projectId: number;
+  projectName: string;
+  onOpenFile?: (path: string) => void;
+}) {
   const { t } = useTranslation('projects');
+  const [semanticTestOpen, setSemanticTestOpen] = useState(false);
   const structural = useIndexStatus(projectId);
   const semantic = useProjectSemanticStatus(projectId);
   const code = codeNamespaceStatus(semantic.status);
@@ -90,6 +104,8 @@ export function RunSection({ projectId }: { projectId: number }) {
 
   const localAutomatic = profile?.embedding_target.kind === 'onnx'
     || profile?.embedding_target.kind === 'local_http';
+  const remoteInference = profile?.embedding_target.kind === 'provider'
+    || profile?.reranker_target?.kind === 'provider';
   const activeTarget = semantic.status?.active_generation?.embedding_target;
   const buildingTarget = semantic.status?.building_generation?.embedding_target;
   const resolvedReranker = semantic.status?.resolved_reranker;
@@ -229,11 +245,79 @@ export function RunSection({ projectId }: { projectId: number }) {
                     <CheckCircle2 className="h-4 w-4 shrink-0" /> {t('index.overview.activeServing')}
                   </div>
                 ) : null}
-                <div className="flex justify-end gap-2 border-t pt-3">
-                  <Button type="button" size="sm" variant="ghost" onClick={() => void semantic.refresh()} disabled={semantic.requesting}>
+                {semantic.cleanupResult ? (
+                  <div className={semantic.cleanupResult.failures.length > 0
+                    ? 'rounded-md border border-amber-500/20 bg-amber-500/10 p-2 text-amber-500'
+                    : 'rounded-md border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-500'}>
+                    {t('index.overview.cleanupResult', {
+                      tables: semantic.cleanupResult.tables_removed,
+                      bytes: bytes(semantic.cleanupResult.bytes_reclaimed),
+                    })}
+                    {semantic.cleanupResult.failures.length > 0
+                      ? ` · ${t('index.overview.cleanupPartial', { count: semantic.cleanupResult.failures.length })}`
+                      : null}
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void semantic.refresh()}
+                    disabled={semantic.requesting || semantic.cleaning}
+                  >
                     <RefreshCw className="mr-2 h-4 w-4" /> {t('index.overview.refresh')}
                   </Button>
-                  <Button type="button" size="sm" onClick={() => void semantic.reindex()} disabled={semanticDisabled || semanticBusy || semantic.requesting}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSemanticTestOpen(true)}
+                    disabled={semantic.loading && !semantic.status}
+                  >
+                    <Search className="mr-2 h-4 w-4" /> {t('index.overview.testSearch')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      const accepted = await confirm({
+                        title: t('index.overview.cleanupConfirmTitle'),
+                        description: t('index.overview.cleanupConfirm'),
+                        confirmLabel: t('index.overview.cleanupUnused'),
+                        tone: 'destructive',
+                      });
+                      if (!accepted) return;
+                      try {
+                        const result = await semantic.cleanupUnused();
+                        const description = t('index.overview.cleanupResult', {
+                          tables: result.tables_removed,
+                          bytes: bytes(result.bytes_reclaimed),
+                        });
+                        if (result.failures.length > 0) {
+                          toast.warning(t('index.overview.cleanupPartialTitle'), {
+                            description: `${description} · ${t('index.overview.cleanupPartial', {
+                              count: result.failures.length,
+                            })}`,
+                          });
+                        } else {
+                          toast.success(t('index.overview.cleanupSuccessTitle'), { description });
+                        }
+                      } catch (error) {
+                        toast.error(t('index.overview.cleanupErrorTitle'), {
+                          description: error instanceof Error ? error.message : String(error),
+                        });
+                      }
+                    }}
+                    disabled={semanticBusy || semantic.requesting || semantic.cleaning}
+                  >
+                    {semantic.cleaning
+                      ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      : <Trash2 className="mr-2 h-4 w-4" />}
+                    {t('index.overview.cleanupUnused')}
+                  </Button>
+                  <Button type="button" size="sm" onClick={() => void semantic.reindex()} disabled={semanticDisabled || semanticBusy || semantic.requesting || semantic.cleaning}>
                     {semantic.requesting || semanticBusy
                       ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       : <Play className="mr-2 h-4 w-4" />}
@@ -262,6 +346,14 @@ export function RunSection({ projectId }: { projectId: number }) {
           </CardContent>
         </Card>
       </div>
+      <SemanticSearchTestDialog
+        projectId={projectId}
+        projectName={projectName}
+        open={semanticTestOpen}
+        onOpenChange={setSemanticTestOpen}
+        remoteInference={remoteInference}
+        onOpenFile={onOpenFile}
+      />
     </div>
   );
 }

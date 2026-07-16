@@ -37,6 +37,10 @@ import {
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 interface ReestablishBody {
   /** Optional override of the master's provider/model. */
@@ -80,6 +84,9 @@ export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'Master rotation/recovery');
+    }
 
     const body = (await parseJsonBody<ReestablishBody>(c)) ?? {};
 

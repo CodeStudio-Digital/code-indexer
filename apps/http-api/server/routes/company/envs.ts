@@ -25,6 +25,10 @@ import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -36,6 +40,9 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     const reveal = c.req.query('reveal') === '1';
+    if (reveal && isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'environment secret reveal');
+    }
     const keyFilter = c.req.query('key');
     const all = companySessionEnvStore.list(id);
     const rows = keyFilter ? all.filter((r) => r.key === keyFilter) : all;
@@ -71,6 +78,9 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
 
   app.put('/api/company/sessions/:id/envs/:key', async (c) => {
     const id = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'environment configuration');
+    }
     const key = c.req.param('key');
     if (!key || !KEY_RE.test(key)) {
       return c.json({ error: `Invalid key '${key}'. Use letters/digits/underscore only.` }, 400);
@@ -108,6 +118,9 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
 
   app.delete('/api/company/sessions/:id/envs/:key', async (c) => {
     const id = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'environment configuration');
+    }
     const key = c.req.param('key');
     if (!key) return c.json({ error: 'key required' }, 400);
     const session = companyStore.getCompanySession(id);

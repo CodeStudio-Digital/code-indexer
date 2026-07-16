@@ -51,6 +51,7 @@ import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-p
 import {
   startMaster,
   type MasterStartOpts,
+  type MasterRuntimeSnapshot,
   type MasterStartStateMutators,
 } from '@mcp/company/services/master/start.js';
 import {
@@ -61,11 +62,14 @@ import {
   resurrectMaster,
   type MasterResurrectStateMutators,
 } from '@mcp/company/services/master/resurrect.js';
+import { applyExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
+import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
 
 import { resolveRoleSkills, type RoleSkills } from '@mcp/company/types.js';
 
 export type RoleConfig = {
   role: string;
+  enabled?: boolean;
   provider: string;
   model: string;
   tier: string;
@@ -108,6 +112,8 @@ export type RoleConfig = {
    */
   thinking?: boolean;
   thinkingBudgetTokens?: number;
+  /** Ordered, explicit provider/model fallbacks for this role. */
+  fallbackModels?: AllowedModel[];
 };
 
 function buildPromptRoster(
@@ -207,6 +213,8 @@ export class MasterLifecycle implements IMasterNotifier {
    * compat for sessions that predate this feature).
    */
   private _allowedModels: AllowedModel[] = [];
+  /** Immutable effective Master settings for resurrection/fallback cycles. */
+  private _runtimeSnapshot: MasterRuntimeSnapshot = { fallbackModels: [] };
 
   /** Flag consumed by IdleController to trigger auto-continue. */
   private _shouldContinue = false;
@@ -250,6 +258,7 @@ export class MasterLifecycle implements IMasterNotifier {
   get endedAt(): string | null { return this._endedAt; }
   /** ISO timestamp of when a user message most recently arrived. */
   get lastUserMessageAt(): string | null { return this._lastUserMessageAt; }
+  get canRotateConversation(): boolean { return !this.isAlive && !this.resumingPromise; }
 
   setShouldContinue(value: boolean): void {
     this._shouldContinue = value;
@@ -276,9 +285,10 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; reasoningEffort?: string } | null {
+  getRoleDefaults(role: string): { enabled?: boolean; provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; reasoningEffort?: string; fallbackModels?: AllowedModel[] } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
     return cfg ? {
+      enabled: cfg.enabled,
       provider: cfg.provider,
       model: cfg.model,
       tier: cfg.tier,
@@ -289,6 +299,7 @@ export class MasterLifecycle implements IMasterNotifier {
       thinking: cfg.thinking,
       thinkingBudgetTokens: cfg.thinkingBudgetTokens,
       reasoningEffort: cfg.reasoningEffort,
+      fallbackModels: cfg.fallbackModels,
     } : null;
   }
 
@@ -379,6 +390,7 @@ export class MasterLifecycle implements IMasterNotifier {
       });
       return;
     }
+    if (this.resumeDormantAppMaster(enriched)) return;
     this.notifyIdleResurrected();
     void this.resurrect(enriched);
   }
@@ -407,7 +419,27 @@ export class MasterLifecycle implements IMasterNotifier {
   // ─── Start (fresh) ──────────────────────────────────────────────
 
   async start(opts: MasterStartOpts): Promise<MasterStartResult> {
-    const result = await startMaster(opts, {
+    let effectiveOpts = opts;
+    if (this.deps.ctx.runtimeKind === 'app_studio') {
+      const session = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      const runtime = resolveEffectiveMasterRuntime({
+        configJson: session?.config_json,
+        runtimeKind: 'app_studio',
+      });
+      effectiveOpts = {
+        ...opts,
+        provider: runtime.provider,
+        model: runtime.model,
+        temperature: runtime.temperature,
+        thinking: opts.thinking ?? runtime.thinking,
+        thinkingBudgetTokens: runtime.thinkingBudgetTokens,
+        reasoningEffort: runtime.reasoningEffort,
+        fallbackModels: runtime.fallbackModels,
+        skills: runtime.skills,
+        systemPromptOverride: runtime.roleOverride,
+      };
+    }
+    const result = await startMaster(effectiveOpts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
       orchestratorRef: this.deps.orchestratorRef,
@@ -429,6 +461,7 @@ export class MasterLifecycle implements IMasterNotifier {
       get roleConfigs() { return self._roleConfigs; },
       get allowedModels() { return self._allowedModels; },
       setAgentRunId: (id) => { self._agentRunId = id; },
+      setRuntimeSnapshot: (snapshot) => { self._runtimeSnapshot = snapshot; },
       setRoleConfigs: (configs) => { self._roleConfigs = configs; },
       loadConfigFromDb: () => self.loadConfigFromDb(),
       setCompanyContext: (ctx) => { self._companyContext = ctx; },
@@ -448,7 +481,27 @@ export class MasterLifecycle implements IMasterNotifier {
   // ─── Resume existing (cold-start) ───────────────────────────────
 
   async resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
-    const result = await resumeMaster(opts, {
+    let effectiveOpts = opts;
+    if (this.deps.ctx.runtimeKind === 'app_studio') {
+      const session = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      const runtime = resolveEffectiveMasterRuntime({
+        configJson: session?.config_json,
+        runtimeKind: 'app_studio',
+      });
+      effectiveOpts = {
+        ...opts,
+        provider: runtime.provider,
+        model: runtime.model,
+        temperature: runtime.temperature,
+        thinking: opts.thinking ?? runtime.thinking,
+        thinkingBudgetTokens: runtime.thinkingBudgetTokens,
+        reasoningEffort: runtime.reasoningEffort,
+        fallbackModels: runtime.fallbackModels,
+        skills: runtime.skills,
+        systemPromptOverride: runtime.roleOverride,
+      };
+    }
+    const result = await resumeMaster(effectiveOpts, {
       ctx: this.deps.ctx,
       board: this.deps.board,
       orchestratorRef: this.deps.orchestratorRef,
@@ -459,6 +512,32 @@ export class MasterLifecycle implements IMasterNotifier {
     // B3 — cold-started sessions may already own live containers.
     this.deps.serviceSupervisor?.start();
     return result;
+  }
+
+  /**
+   * Forget only the dormant Master runner after App Studio rotates its
+   * coordinator conversation. Subordinates, inbox, scheduler and sandbox stay
+   * attached to the same Company session; the next user message cold-resumes
+   * the newest persisted master agent_run.
+   */
+  rotateToPersistedMaster(): boolean {
+    if (!this.canRotateConversation) return false;
+    if (this._agentRunId != null) {
+      try { this.deps.humanInLoop.clearForAgent(this._agentRunId); } catch { /* best-effort */ }
+    }
+    try { this._attentionOff?.(); } catch { /* best-effort */ }
+    this._attentionOff = null;
+    this._handle = null;
+    this._agentRunId = null;
+    this._ended = false;
+    this._runnerExited = false;
+    this._endedWithError = null;
+    this._endedAt = null;
+    this._companyContext = null;
+    this._promptBlock = '';
+    this._lastUserAttachments = [];
+    this.resumeQueue.splice(0, this.resumeQueue.length);
+    return true;
   }
 
   // ─── Resurrection (subordinate finished after master exited) ───
@@ -481,6 +560,33 @@ export class MasterLifecycle implements IMasterNotifier {
     });
   }
 
+  /**
+   * App role edits are next-dispatch settings. When a dormant Master wakes,
+   * discard only its ended in-memory runner and enter the cold-resume path so
+   * provider/model, reasoning, prompt and skills are resolved from the latest
+   * persisted App team config. Specialists and the Company session survive.
+   */
+  private resumeDormantAppMaster(
+    message: string,
+    attachments?: CoderAttachment[],
+    thinking?: boolean,
+  ): boolean {
+    if (this.deps.ctx.runtimeKind !== 'app_studio' || this.isAlive) return false;
+    if (!this.rotateToPersistedMaster()) return false;
+    this.notifyIdleResurrected();
+    void this.resumeExisting({
+      userMessage: message,
+      attachments,
+      thinking,
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      try {
+        this.deps.board.post('system', null, 'blocker', `Master resume failed: ${detail}`);
+      } catch { /* best-effort */ }
+    });
+    return true;
+  }
+
   /** Build the state-mutator surface used by the resurrect helper. */
   private buildResurrectStateMutators(): MasterResurrectStateMutators {
     const self = this;
@@ -489,6 +595,7 @@ export class MasterLifecycle implements IMasterNotifier {
       get companyContext() { return self._companyContext; },
       get promptBlock() { return self._promptBlock; },
       get agentRunId() { return self._agentRunId; },
+      get runtimeSnapshot() { return self._runtimeSnapshot; },
       get resumingPromise() { return self.resumingPromise; },
       setResumingPromise: (p) => { self.resumingPromise = p; },
       get resumeQueue() { return self.resumeQueue; },
@@ -540,6 +647,9 @@ export class MasterLifecycle implements IMasterNotifier {
     options: { interject?: boolean; attachments?: CoderAttachment[]; thinking?: boolean } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
     const attachments = options.attachments;
+    if (options.thinking !== undefined) {
+      this._runtimeSnapshot = { ...this._runtimeSnapshot, thinking: options.thinking };
+    }
     this._lastUserAttachments = attachments ?? [];
     const boardMessage = attachments && attachments.length > 0
       ? `${message}\n\n_[${attachments.length} ${attachments.length === 1 ? 'attachment' : 'attachments'}]_`
@@ -591,6 +701,24 @@ export class MasterLifecycle implements IMasterNotifier {
       this.resumeQueue.push({
         message: attachments && attachments.length > 0 ? message : this.enrichWithBoard(message),
         attachments,
+      });
+      return { ok: true };
+    }
+    if (this.resumeDormantAppMaster(message, attachments, options.thinking)) {
+      return { ok: true };
+    }
+    // A live Company worker can outlive/precede its Master runner. App Studio
+    // deliberately uses this state when rotating the Master conversation while
+    // preserving specialist sessions. Cold-resume the newest persisted Master
+    // instead of calling resurrect(), which requires an old handle.
+    if (!this._handle) {
+      void this.resumeExisting({
+        userMessage: message,
+        attachments,
+        thinking: options.thinking,
+      }).catch((error) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        try { this.deps.board.post('system', null, 'blocker', `Master resume failed: ${detail}`); } catch { /* best-effort */ }
       });
       return { ok: true };
     }
@@ -716,6 +844,40 @@ export class MasterLifecycle implements IMasterNotifier {
       board: this.deps.board,
       humanInLoop: this.deps.humanInLoop,
       state: this.buildRunnerStateMutators(),
+      tryExplicitFallback: (detail) => this.continueWithExplicitFallback(detail),
     });
+  }
+
+  /**
+   * Swap to the next explicit App Master fallback, persist provenance, then
+   * re-open the same coder session/transcript. Generic Company returns false
+   * from `applyExplicitMasterFallback` and keeps its legacy local behaviour.
+   */
+  private async continueWithExplicitFallback(errorDetail: string): Promise<boolean> {
+    const runId = this._agentRunId;
+    if (!runId) return false;
+    const applied = applyExplicitMasterFallback(
+      runId,
+      this._runtimeSnapshot.fallbackModels,
+      errorDetail,
+      { ctx: this.deps.ctx, board: this.deps.board },
+    );
+    if (!applied) return false;
+
+    try {
+      await this.resurrect(
+        `[SYSTEM] The previous Master provider failed transiently (${errorDetail}). ` +
+        `Continue the same task using the explicitly configured fallback ${applied.to.provider}/${applied.to.model}.`,
+        undefined,
+        this._runtimeSnapshot.thinking,
+      );
+      return !this._runnerExited && !!this._handle?.runner;
+    } catch (error) {
+      console.warn(
+        `[company s=${this.deps.ctx.companySessionId}] Master fallback continuation failed:`,
+        error,
+      );
+      return false;
+    }
   }
 }

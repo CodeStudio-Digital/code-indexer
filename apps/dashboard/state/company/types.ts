@@ -14,6 +14,7 @@ import type {
   KanbanCardFull,
   MasterPrompt,
   AgentRunStatus,
+  CompanyAgentDispatchSource,
 } from '@mcp/company-contracts';
 import type { StreamActivityBlock } from '../../hooks/agent-stream/types.js';
 
@@ -27,6 +28,14 @@ export interface AgentStreamState {
   toolCalls: ToolCallState[];
   status: AgentRunStatus;
   statusMessage?: string;
+  /** App-owned runs carry authoritative configured/effective model provenance
+   * on status events; generic Company events may omit these fields. */
+  configuredProvider?: string;
+  configuredModel?: string;
+  effectiveProvider?: string;
+  effectiveModel?: string;
+  dispatchSource?: CompanyAgentDispatchSource;
+  fallbackReason?: string | null;
   usage?: AgentUsage;
   doneReason?: string;
   /** Live "currently doing X" pill (provider call / tool / operation). Null

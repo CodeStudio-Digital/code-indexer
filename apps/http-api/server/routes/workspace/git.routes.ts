@@ -1,7 +1,20 @@
 import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { guardWorkspaceRequest } from './guards.js';
-import { gitStatus, gitDiff, gitLog, gitInit, gitAdd, gitReset, gitCommit, gitDiscard, gitPush } from './git-service.js';
+import {
+  gitStatus,
+  gitDiff,
+  gitLog,
+  gitInit,
+  gitAdd,
+  gitReset,
+  gitCommit,
+  gitDiscard,
+  gitPush,
+  gitPushPreview,
+  gitCommitDetail,
+  gitCommitFileDiff,
+} from './git-service.js';
 import { parseIntQuery, parseJsonBody } from '../_helpers.js';
 import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-general/generalClient.js';
 import { extractFirstJson } from '@mcp/services/ai-general/extract-json.js';
@@ -71,6 +84,37 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({ entries: await gitLog(guard.resolved.root, limit) });
   });
 
+  app.get('/api/company/sessions/:sid/projects/:pid/git/push-preview', async (c) => {
+    const guard = guardWorkspaceRequest(c, deps, '.');
+    if (guard instanceof Response) return guard;
+    try {
+      return c.json(await gitPushPreview(guard.resolved.root));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get('/api/company/sessions/:sid/projects/:pid/git/commit-detail', async (c) => {
+    const guard = guardWorkspaceRequest(c, deps, '.');
+    if (guard instanceof Response) return guard;
+    try {
+      return c.json(await gitCommitDetail(guard.resolved.root, c.req.query('sha') ?? ''));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get('/api/company/sessions/:sid/projects/:pid/git/commit-file-diff', async (c) => {
+    const filePath = c.req.query('path') ?? '';
+    const guard = guardWorkspaceRequest(c, deps, filePath);
+    if (guard instanceof Response) return guard;
+    try {
+      return c.json(await gitCommitFileDiff(guard.resolved.root, c.req.query('sha') ?? '', filePath));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
   app.post('/api/company/sessions/:sid/projects/:pid/git/init', async (c) => {
     const guard = guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
@@ -129,7 +173,15 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/company/sessions/:sid/projects/:pid/git/push', async (c) => {
     const guard = guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
-    const result = await gitPush(guard.resolved.root);
+    const body = await parseJsonBody<{
+      remote?: string;
+      branch?: string;
+      targetBranch?: string;
+      expectedHead?: string;
+      setUpstream?: boolean;
+      pushTags?: boolean;
+    }>(c);
+    const result = await gitPush(guard.resolved.root, body);
     if (!result.ok) return c.json({ error: result.message }, 400);
     return c.json({
       ok: true,

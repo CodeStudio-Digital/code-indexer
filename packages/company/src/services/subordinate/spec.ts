@@ -10,10 +10,13 @@
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { RoleSkills } from '@mcp/company/types.js';
+import type { RoleDispatchSource } from '@mcp/company/services/subordinate/role-runtime.js';
 
 export interface SpawnSubordinateSpec {
   role: string;
   task: string;
+  /** Origin of this fresh run, persisted for runtime provenance. */
+  dispatchSource?: RoleDispatchSource;
   /**
    * Project id to run the subordinate in. Optional when the role has a
    * single-project binding (`CompanyRoleConfig.projectIds.length === 1`):

@@ -90,6 +90,26 @@ describe('resume_agent', () => {
     expect(text).toContain('full tool-call budget');
   });
 
+  it('describes explicit time and turn cutoffs as operational interruptions', async () => {
+    const t = buildResumeAgentTool(deps);
+
+    retain('time_budget');
+    mockRun('completed');
+    await t.handler({ spawn_id: 'g1' }, ctx);
+    let specs = (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    let seed = specs[0].initialMessages as AgentMessage[];
+    expect((seed.at(-1)!.content[0] as { text: string }).text).toContain('time/stall watchdog');
+
+    clearSession(SID);
+    (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockClear();
+    retain('max_turns');
+    mockRun('completed');
+    await t.handler({ spawn_id: 'g1' }, ctx);
+    specs = (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    seed = specs[0].initialMessages as AgentMessage[];
+    expect((seed.at(-1)!.content[0] as { text: string }).text).toContain('explicit turn ceiling');
+  });
+
   it('re-emits the SAME groupId and bumps attempt', async () => {
     retain('error', { failureNote: 'boom' });
     mockRun('completed');

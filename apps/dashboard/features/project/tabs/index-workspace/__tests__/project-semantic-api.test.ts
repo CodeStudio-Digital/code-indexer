@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  cleanupProjectUnusedVectors,
   codeNamespaceStatus,
   fetchProjectSemanticStatus,
   requestProjectSemanticReindex,
   semanticCoveragePercent,
   semanticWorkIsActive,
+  testProjectSemanticSearch,
   type ProjectSemanticStatus,
 } from '../project-semantic-api.js';
 
@@ -66,6 +68,66 @@ describe('project semantic API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'start' }),
     });
+  });
+
+  it('cleans unused vectors only in the selected project', async () => {
+    const result = {
+      tables_removed: 1,
+      items_removed: 20,
+      databases_compacted: 1,
+      bytes_reclaimed: 4096,
+      skipped_referenced: 1,
+      failures: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(cleanupProjectUnusedVectors(91)).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/91/semantic/vectors/cleanup-unused',
+      { method: 'POST' },
+    );
+  });
+
+  it('runs a fresh project search through the production semantic route', async () => {
+    const payload = {
+      results: [],
+      diagnostics: {
+        vectorAvailable: true,
+        embeddingAvailable: true,
+        effectiveMode: 'hybrid',
+        rerankerApplied: true,
+      },
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await expect(testProjectSemanticSearch(91, {
+      query: 'onde a sessão do agente é retomada',
+      mode: 'hybrid',
+      type: 'all',
+      limit: 10,
+    }, controller.signal)).resolves.toEqual(payload);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    const parsed = new URL(String(url), 'http://localhost');
+    expect(parsed.pathname).toBe('/api/projects/91/search');
+    expect(Object.fromEntries(parsed.searchParams.entries())).toEqual({
+      q: 'onde a sessão do agente é retomada',
+      mode: 'hybrid',
+      type: 'all',
+      limit: '10',
+      supersessionKey: 'semantic-test:p91',
+      bypassCache: '1',
+    });
+    expect(init).toEqual({ signal: controller.signal });
   });
 
   it('treats only a running job as active work', () => {

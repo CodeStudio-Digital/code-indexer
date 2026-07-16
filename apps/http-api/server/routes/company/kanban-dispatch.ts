@@ -19,6 +19,10 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
 import { getOrSpawnCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { recommendRolesForSession } from './recommend-core.js';
+import {
+  companySurfaceConflict,
+  resolveCompanyRouteRuntime,
+} from './runtime-capabilities.js';
 
 const MAX_SUGGESTIONS = 5;
 
@@ -33,7 +37,11 @@ export function mountCompanyKanbanDispatchRoutes(app: Hono, deps: ServerDeps): v
   app.post('/api/company/sessions/:id/kanban/cards/:cardId/dispatch', async (c) => {
     const sessionId = parseIdParam(c);
     const cardId = parseIdParam(c, 'cardId');
-    if (!companyStore.getCompanySession(sessionId)) return notFound(c, 'Session not found');
+    const runtime = resolveCompanyRouteRuntime(companyStore, sessionId);
+    if (!runtime) return notFound(c, 'Session not found');
+    if (!runtime.capabilities.allowCompanyKanban) {
+      return companySurfaceConflict(c, 'kanban');
+    }
 
     let body: { role?: string } = {};
     try { body = (await c.req.json()) as typeof body; } catch { /* empty body ok */ }
@@ -57,6 +65,10 @@ export function mountCompanyKanbanDispatchRoutes(app: Hono, deps: ServerDeps): v
     const rootId = sessionRoot(c);
     const session = companyStore.getCompanySession(rootId);
     if (!session) return notFound(c, 'Session not found');
+    const runtime = resolveCompanyRouteRuntime(companyStore, rootId);
+    if (runtime && !runtime.capabilities.allowCompanyKanban) {
+      return c.json({ suggestions: [] });
+    }
 
     // Ready pool: dispatchable columns, unblocked, nobody assigned. `todo`
     // outranks `backlog`; inside a column the board position is the order.

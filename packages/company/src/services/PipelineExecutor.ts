@@ -392,6 +392,7 @@ export class PipelineExecutor {
       const spec: SpawnSubordinateSpec = {
         role: node.role,
         task: renderedTask,
+        dispatchSource: 'pipeline',
         projectId: node.projectId,
         skills: node.extraSkills,
         // SDD pipeline: spec-writer nodes run their subordinate under

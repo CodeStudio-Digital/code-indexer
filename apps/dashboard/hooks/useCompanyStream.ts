@@ -11,7 +11,7 @@
  * per session managed by `state/company/sseConnection.ts`) and replace
  * the `kanban_*` REST refetch fallbacks with pure SSE invalidation.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
@@ -36,7 +36,96 @@ import type { NotificationSourceContext } from '../features/notifications/index.
 // Re-export client state types so legacy consumers keep their imports.
 export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/company/types.js';
 
-export function useCompanyStream(companySessionId: number | null, _notificationContext?: NotificationSourceContext) {
+export type CompanyStreamSurface =
+  | { kind: 'company' }
+  | { kind: 'app_studio'; appSessionId: number };
+
+export interface CompanyStreamTransport {
+  basePath: string;
+  statePath: string;
+  includeKanban: boolean;
+  allowDirectAgentControls: boolean;
+  allowRuntimeSwitch: boolean;
+  /** App scheduler/specialists remain live even while the Master is dormant. */
+  keepAttachedWhileOrchestratorLive: boolean;
+}
+
+interface MutableCurrent<T> { current: T }
+
+/** Shared teardown primitive for unmount and session rotation. */
+export function disposeCompanyStreamLifecycle(
+  lifecycleGenerationRef: MutableCurrent<number>,
+  abortRef: MutableCurrent<AbortController | null>,
+  generation: number,
+): void {
+  if (lifecycleGenerationRef.current === generation) {
+    lifecycleGenerationRef.current += 1;
+  }
+  abortRef.current?.abort();
+  abortRef.current = null;
+}
+
+/** Pure transport resolver kept exported so route selection can be asserted
+ * without mounting React. App Studio is keyed by its App id; the linked
+ * Company id remains an internal server concern. */
+export function resolveCompanyStreamTransport(
+  companySessionId: number | null,
+  surface: CompanyStreamSurface = { kind: 'company' },
+): CompanyStreamTransport | null {
+  if (companySessionId == null) return null;
+  if (surface.kind === 'app_studio') {
+    return {
+      basePath: `/api/app-studio/apps/${surface.appSessionId}/team/commands`,
+      statePath: '/state',
+      includeKanban: false,
+      allowDirectAgentControls: false,
+      allowRuntimeSwitch: false,
+      keepAttachedWhileOrchestratorLive: true,
+    };
+  }
+  return {
+    basePath: `/api/company/sessions/${companySessionId}`,
+    statePath: '',
+    includeKanban: true,
+    allowDirectAgentControls: true,
+    allowRuntimeSwitch: true,
+    keepAttachedWhileOrchestratorLive: false,
+  };
+}
+
+function invalidatesTeamOverview(eventType: string, data: unknown): boolean {
+  if (
+    eventType === 'agent_status'
+    || eventType === 'done'
+    || eventType === 'error'
+    || eventType.startsWith('subordinate_')
+    || eventType.startsWith('master_')
+    || eventType.startsWith('inbox_')
+    || eventType.startsWith('app_')
+  ) return true;
+  if (eventType !== 'agent_event') return false;
+  const nested = (data as { event?: unknown } | null)?.event;
+  return nested === 'done' || nested === 'error' || nested === 'fallback_activated';
+}
+
+function isLiveMasterStatus(status: AgentStatusPayload['status']): boolean {
+  return status !== 'idle'
+    && status !== 'completed'
+    && status !== 'error'
+    && status !== 'aborted'
+    && status !== 'interrupted';
+}
+
+export function useCompanyStream(
+  companySessionId: number | null,
+  _notificationContext?: NotificationSourceContext,
+  surface: CompanyStreamSurface = { kind: 'company' },
+) {
+  const transport = resolveCompanyStreamTransport(companySessionId, surface);
+  const routeUrl = useCallback(
+    (suffix = '') => transport ? `${apiBaseUrl()}${transport.basePath}${suffix}` : '',
+    [transport?.basePath],
+  );
   // ─── Selectors ───────────────────────────────────────────────
   const stream = useCompanyStore((s) => selectStream(s, companySessionId));
 
@@ -49,6 +138,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     pendingMasterInboxCount: number;
     liveOrchestrator: boolean;
   }>({ masterAlive: true, pendingMasterInboxCount: 0, liveOrchestrator: true });
+  const [teamRevision, setTeamRevision] = useState(0);
 
   // ─── Action dispatchers (stable refs from zustand) ───────────
   const streamReset = useCompanyStore((s) => s.streamReset);
@@ -82,14 +172,29 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
 
   // ─── Transport refs ──────────────────────────────────────────
   const abortRef = useRef<AbortController | null>(null);
+  const lifecycleGenerationRef = useRef(0);
   const lastSeenSeqRef = useRef<number>(-1);
   const receivedDoneRef = useRef<boolean>(false);
+
+  // A rail can be closed while reattach is still awaiting its snapshot. Abort
+  // an already-open stream and invalidate the async continuation so it cannot
+  // create a second, orphaned SSE client after unmount/session rotation.
+  useEffect(() => {
+    const generation = lifecycleGenerationRef.current + 1;
+    lifecycleGenerationRef.current = generation;
+    return () => {
+      disposeCompanyStreamLifecycle(lifecycleGenerationRef, abortRef, generation);
+    };
+  }, [companySessionId, transport?.basePath]);
 
   // ─── SSE event dispatch ──────────────────────────────────────
 
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown) => {
       if (companySessionId == null) return;
+      if (invalidatesTeamOverview(eventType, data)) {
+        setTeamRevision((revision) => revision + 1);
+      }
       if (eventType === 'agent_event') {
         streamApplyAgentEvent(companySessionId, data as AgentEventEnvelope);
         return;
@@ -123,7 +228,14 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         return;
       }
       if (eventType === 'agent_status') {
-        streamApplyAgentStatus(companySessionId, data as AgentStatusPayload);
+        const status = data as AgentStatusPayload;
+        if (status.role === 'master') {
+          setMasterLiveness((current) => ({
+            ...current,
+            masterAlive: isLiveMasterStatus(status.status),
+          }));
+        }
+        streamApplyAgentStatus(companySessionId, status);
         return;
       }
       if (
@@ -142,6 +254,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         return;
       }
       if (eventType === 'session_idle') {
+        setMasterLiveness((current) => ({ ...current, masterAlive: false }));
         streamApplySessionIdle(companySessionId, data as SessionIdlePayload);
         return;
       }
@@ -155,6 +268,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       }
       if (eventType === 'error') {
         receivedDoneRef.current = true;
+        setMasterLiveness((current) => ({ ...current, masterAlive: false }));
         streamSetConnected(companySessionId, false);
         streamSetError(
           companySessionId,
@@ -285,6 +399,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       }
       if (eventType === 'done') {
         receivedDoneRef.current = true;
+        setMasterLiveness((current) => ({ ...current, masterAlive: false }));
         streamSetConnected(companySessionId, false);
       }
     },
@@ -335,21 +450,21 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
   // ─── Data loaders ────────────────────────────────────────────
 
   const loadKanbanFromDB = useCallback(async () => {
-    if (companySessionId == null) return;
+    if (companySessionId == null || !transport?.includeKanban) return;
     try {
-      const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/kanban?full=true`);
+      const res = await fetch(routeUrl('/kanban?full=true'));
       if (!res.ok) return;
       const cards = await res.json();
       if (Array.isArray(cards)) kanbanHydrate(companySessionId, cards);
     } catch {
       /* best-effort */
     }
-  }, [companySessionId, kanbanHydrate]);
+  }, [companySessionId, transport?.includeKanban, routeUrl, kanbanHydrate]);
 
   const loadFinalStateFromDB = useCallback(async () => {
     if (companySessionId == null) return;
     try {
-      const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}`);
+      const res = await fetch(routeUrl(transport?.statePath ?? ''));
       if (!res.ok) return;
       const data = (await res.json()) as InitialFetchResponse;
       const boardMessages: BoardMessage[] = (data.recentBoard ?? []).map((b) => ({
@@ -386,7 +501,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       /* ignore */
     }
     await loadKanbanFromDB();
-  }, [companySessionId, streamHydrateFromInitialFetch, loadKanbanFromDB]);
+  }, [companySessionId, transport?.statePath, routeUrl, streamHydrateFromInitialFetch, loadKanbanFromDB]);
 
   // ─── Stream open helper ──────────────────────────────────────
 
@@ -455,8 +570,13 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       streamSetStarted(companySessionId, true);
       streamSetConnected(companySessionId, true);
       streamSetUserMessage(companySessionId, userMessage);
+      setMasterLiveness((current) => ({
+        ...current,
+        masterAlive: true,
+        liveOrchestrator: true,
+      }));
       await openStream({
-        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/start`,
+        url: routeUrl('/start'),
         method: 'POST',
         body: {
           user_message: userMessage,
@@ -465,7 +585,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         },
       });
     },
-    [companySessionId, openStream, streamReset, streamSetStarted, streamSetConnected, streamSetUserMessage],
+    [companySessionId, routeUrl, openStream, streamReset, streamSetStarted, streamSetConnected, streamSetUserMessage],
   );
 
   const resume = useCallback(
@@ -474,8 +594,13 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       streamSetStarted(companySessionId, true);
       streamSetConnected(companySessionId, true);
       streamSetError(companySessionId, null);
+      setMasterLiveness((current) => ({
+        ...current,
+        masterAlive: true,
+        liveOrchestrator: true,
+      }));
       await openStream({
-        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/resume`,
+        url: routeUrl('/resume'),
         method: 'POST',
         body: {
           message,
@@ -484,11 +609,12 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         },
       });
     },
-    [companySessionId, openStream, streamSetStarted, streamSetConnected, streamSetError],
+    [companySessionId, routeUrl, openStream, streamSetStarted, streamSetConnected, streamSetError],
   );
 
   const reattach = useCallback(async () => {
     if (companySessionId == null) return;
+    const generation = lifecycleGenerationRef.current;
     // First decide whether there's actually an alive master to attach
     // to. The new /state-snapshot endpoint always returns 200 (when the
     // session exists) with `liveOrchestrator` + `masterAlive` flags +
@@ -499,17 +625,19 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     // (which used to be a no-op when masterState was null).
     streamSetError(companySessionId, null);
     await loadKanbanFromDB();
+    if (generation !== lifecycleGenerationRef.current) return;
     let snapshot: {
       liveOrchestrator?: boolean;
       masterAlive?: boolean;
       pendingMasterInboxCount?: number;
     } | null = null;
     try {
-      const r = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/state-snapshot`);
+      const r = await fetch(routeUrl('/state-snapshot'));
       if (r.ok) snapshot = (await r.json()) as typeof snapshot;
     } catch {
       /* fall through to /attach optimistic path */
     }
+    if (generation !== lifecycleGenerationRef.current) return;
     // Latch the liveness flags so the UI can read them while deciding
     // whether to show a spinner, the standby badge, or the wake CTA.
     if (snapshot) {
@@ -522,7 +650,10 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     // No orchestrator OR master finished: hydrate from DB and stop.
     // The UI renders the master-idle/standby pill via the phase
     // indicator selector — never the loader.
-    if (snapshot && (!snapshot.liveOrchestrator || !snapshot.masterAlive)) {
+    if (snapshot && (
+      !snapshot.liveOrchestrator
+      || (!snapshot.masterAlive && !transport?.keepAttachedWhileOrchestratorLive)
+    )) {
       streamSetStarted(companySessionId, false);
       streamSetConnected(companySessionId, false);
       await loadFinalStateFromDB();
@@ -536,8 +667,9 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     streamSetConnected(companySessionId, true);
     let attached = false;
     try {
+      if (generation !== lifecycleGenerationRef.current) return;
       await openStream({
-        url: `${apiBaseUrl()}/api/company/sessions/${companySessionId}/attach`,
+        url: routeUrl('/attach'),
         method: 'GET',
         suppressError: (e) => {
           if (e.message === 'HTTP 404') {
@@ -548,12 +680,16 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
           return false;
         },
       });
-      attached = true;
+      attached = generation === lifecycleGenerationRef.current;
     } finally {
-      if (attached) await loadFinalStateFromDB();
+      if (attached && generation === lifecycleGenerationRef.current) {
+        await loadFinalStateFromDB();
+      }
     }
   }, [
     companySessionId,
+    transport?.keepAttachedWhileOrchestratorLive,
+    routeUrl,
     openStream,
     streamSetStarted,
     streamSetConnected,
@@ -566,12 +702,12 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     if (companySessionId == null) return;
     abortRef.current?.abort();
     try {
-      await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/abort`, { method: 'POST' });
+      await fetch(routeUrl('/abort'), { method: 'POST' });
     } catch {
       /* ignore */
     }
     streamSetConnected(companySessionId, false);
-  }, [companySessionId, streamSetConnected]);
+  }, [companySessionId, routeUrl, streamSetConnected]);
 
   const sendMessage = useCallback(
     async (
@@ -581,7 +717,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     ) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/message`, {
+        const res = await fetch(routeUrl('/message'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -614,14 +750,14 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError, streamSetStarted, reattach],
+    [companySessionId, routeUrl, streamSetError, streamSetStarted, reattach],
   );
 
   const respondToMasterPlan = useCallback(
     async (promptId: number, approved: boolean, feedback?: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/plan-response`, {
+        const res = await fetch(routeUrl('/plan-response'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
@@ -638,14 +774,14 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         console.error('Failed to respond to master plan:', e);
       }
     },
-    [companySessionId, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
+    [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
   );
 
   const respondToMasterQuestion = useCallback(
     async (promptId: number, answer: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/answer`, {
+        const res = await fetch(routeUrl('/answer'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ answer, prompt_id: promptId }),
@@ -668,7 +804,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
+    [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
   );
 
   const switchProvider = useCallback(
@@ -678,8 +814,12 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
       roleAssignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>,
     ) => {
       if (companySessionId == null) return;
+      if (!transport?.allowRuntimeSwitch) {
+        streamSetError(companySessionId, 'Use the App Studio team editor to change this runtime.');
+        return;
+      }
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/switch`, {
+        const res = await fetch(routeUrl('/switch'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ provider, model, role_assignments: roleAssignments }),
@@ -692,7 +832,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
         streamSetError(companySessionId, `Switch error: ${(e as Error).message}`);
       }
     },
-    [companySessionId, streamSetError],
+    [companySessionId, transport?.allowRuntimeSwitch, routeUrl, streamSetError],
   );
 
   const hydrateMasterPrompts = useCallback(
@@ -722,7 +862,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
   > => {
     if (companySessionId == null) return null;
     try {
-      const r = await fetch(`${apiBaseUrl()}/api/company/sessions/${companySessionId}/wake-master`, {
+      const r = await fetch(routeUrl('/wake-master'), {
         method: 'POST',
       });
       if (!r.ok) return null;
@@ -741,7 +881,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     } catch {
       return null;
     }
-  }, [companySessionId]);
+  }, [companySessionId, routeUrl]);
 
   // Per-agent (subordinate) control — pause / resume / delete. Lives in a
   // dedicated hook to keep this file from growing further.
@@ -749,6 +889,7 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     companySessionId,
     streamSetError,
     streamRemoveSubordinate,
+    transport?.allowDirectAgentControls === false ? null : undefined,
   );
 
   return {
@@ -773,6 +914,8 @@ export function useCompanyStream(companySessionId: number | null, _notificationC
     masterAlive: masterLiveness.masterAlive,
     pendingMasterInboxCount: masterLiveness.pendingMasterInboxCount,
     liveOrchestrator: masterLiveness.liveOrchestrator,
+    /** Monotonic invalidation key for App agent overview/status/inbox data. */
+    teamRevision,
     start,
     resume,
     reattach,

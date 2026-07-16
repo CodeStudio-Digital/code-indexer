@@ -2,8 +2,8 @@
  * Global classifier runner — module-level holder for the quality pipeline.
  *
  * The runtime (CoderRunner) doesn't know about `@mcp/services/quality`
- * directly — it just calls `runGlobalQualityClassifiers(output)` after a
- * turn completes. When the boot path has installed a pipeline (and the
+ * directly — the terminal dispatcher calls `runGlobalQualityClassifiers`
+ * once after a completed main round. When boot installed a pipeline (and the
  * env flag is on), the call runs the configured passive evaluator and
  * persists verdicts to `quality_classifications`. Otherwise it's a no-op.
  *
@@ -11,33 +11,14 @@
  * — same singleton-holder pattern the codebase uses for cross-cutting
  * concerns (`setCompanySandboxStore`, `setEnvToolStore`, …).
  *
- * In addition to the write side, this module also publishes:
- *
- *   1. A **READER** — `getGlobalQualityClassificationStore()` — used by
- *      the runner to peek at recent verdicts when building the next
- *      system prompt (Wire #1 nudge, Wire #2 tool-misuse streak).
- *
- *   2. An **OBSERVER** — `setGlobalQualityResultObserver()` — invoked
- *      with the just-computed result + output. Cross-cutting concerns
- *      (Wire #4 off-topic→inbox) register here at boot to react without
- *      coupling the pipeline to company-side services.
- *
- * Both are opt-in: nothing fires when nothing is installed.
+ * The store is also used by deterministic runtime guards. Legacy reader and
+ * observer setters remain exported for compatibility but are not boot-wired.
  */
 import type { AgentOutputForClassification, QualityResult } from './types.js';
 import type { QualityClassifierPipeline } from './quality-pipeline.js';
 import type { QualityClassificationStore } from '@mcp/store/quality-classification-store.js';
+import { randomUUID } from 'node:crypto';
 import type { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
-import { scoreOutcome } from './feedback-builder.js';
-
-/**
- * How many turns back the backfill looks for still-pending interventions.
- * The immediate next turn (N+1) is the ideal "after", but it may be skipped
- * (no narrative / sampled out) or unmeasurable (all target classifiers
- * errored). A small window lets the first CLEAN classified turn resolve the
- * row instead of leaving it pending forever.
- */
-const MAX_BACKFILL_LOOKBACK = 3;
 
 let globalPipeline: QualityClassifierPipeline | undefined;
 let enabled = false;
@@ -137,79 +118,46 @@ export async function runGlobalQualityClassifiers(
     if (globalObserver) {
       try { globalObserver(result, output); } catch { /* swallow observer errors */ }
     }
-    // Quality v2, C4 — Backfill any pending interventions whose
-    // "next-turn" is THIS turn's classification. Outcome is computed via
-    // `computeOutcome` (improved/unchanged/worsened). Done synchronously
-    // with the classify() resolution so the dashboard reflects the answer
-    // as soon as the row lands.
-    try {
-      backfillPendingInterventions(result, output);
-    } catch { /* never break the classifier path */ }
     return result;
   } catch {
     return null;
   }
 }
 
-/**
- * Quality v2, C4 — Walk the pending interventions for `(sessionId,
- * turn_fired = currentTurn - 1)` and record the outcome based on this
- * turn's verdicts.
- *
- * Why one turn behind: when intervention fires at turn N, we want to know
- * if the model's response at turn N+1 was better. Turn N+1 produces a
- * classify result; this function looks back to turn N and resolves any
- * pending rows.
- */
-function backfillPendingInterventions(
-  result: QualityResult,
-  output: AgentOutputForClassification,
-): void {
-  const store = globalInterventionStore;
-  if (!store) return;
-  if (output.sessionId == null) return;
-  // messageId format: "turn-N" — extract N.
-  const m = (output.messageId ?? '').match(/(?:^|:)turn-(\d+)$/);
-  if (!m) return;
-  const currentTurn = Number(m[1]);
-  if (!Number.isFinite(currentTurn) || currentTurn <= 0) return;
-  const maxTurn = currentTurn - 1;
-  const minTurn = Math.max(1, currentTurn - MAX_BACKFILL_LOOKBACK);
-  if (maxTurn < minTurn) return;
-  const pending = store.findPendingByPriorTurnRange(output.sessionId, minTurn, maxTurn);
-  if (pending.length === 0) return;
-  const after = result.verdicts.map((v) => ({
-    classifierName: v.classifierName,
-    verdict: v.verdict,
-    confidence: v.confidence ?? null,
-    reason: v.reason ?? null,
-  }));
-  for (const row of pending) {
-    let before: ReturnType<typeof parseVerdicts>;
-    try { before = parseVerdicts(row.triggering_verdicts_json); }
-    catch { continue; } // bad JSON — skip silently
-    const { outcome, measurable } = scoreOutcome(before, after);
-    // Unmeasurable (every target classifier errored on this turn): leave the
-    // row pending so a later, cleaner turn can score it. Recording it now
-    // would mislabel it 'unchanged' and deflate the effectiveness rate.
-    if (measurable === 0) continue;
-    try {
-      store.recordOutcome({
-        id: row.id,
-        next_turn_verdicts: after,
-        outcome,
-      });
-    } catch { /* never throw from backfill */ }
+/** Persist an objective runtime signal without making an LLM request. */
+export function recordGlobalDeterministicQualitySignal(input: {
+  sessionId?: number | null;
+  companySessionId?: number | null;
+  agentRunId?: number | null;
+  coderRunId?: string | null;
+  roundMessageId?: number | null;
+  classifierName: string;
+  verdict: 'warn' | 'flagged';
+  reason: string;
+  scope?: 'run_final' | 'runtime';
+  actionTaken: 'advisory' | 'tool_call_refused' | 'strategy_nudge';
+  evidence?: unknown;
+}): string | null {
+  if (!globalStore) return null;
+  const assessmentId = randomUUID();
+  try {
+    globalStore.insert({
+      session_id: input.sessionId ?? null,
+      company_session_id: input.companySessionId ?? null,
+      agent_run_id: input.agentRunId ?? null,
+      coder_run_id: input.coderRunId ?? null,
+      assessment_id: assessmentId,
+      round_message_id: input.roundMessageId ?? null,
+      scope: input.scope ?? 'runtime',
+      source: 'deterministic_guard',
+      action_taken: input.actionTaken,
+      classifier_name: input.classifierName,
+      verdict: input.verdict,
+      reason: input.reason,
+      evidence: input.evidence,
+    });
+    return assessmentId;
+  } catch {
+    return null;
   }
-}
-
-function parseVerdicts(
-  json: string,
-): Array<{ classifierName: string; verdict: 'ok' | 'warn' | 'flagged' | 'error' }> {
-  const parsed = JSON.parse(json) as unknown;
-  if (!Array.isArray(parsed)) throw new Error('triggering_verdicts_json not an array');
-  return parsed
-    .filter((v): v is { classifierName: string; verdict: 'ok' | 'warn' | 'flagged' | 'error' } =>
-      typeof v === 'object' && v !== null && 'classifierName' in v && 'verdict' in v,
-    );
 }

@@ -12,6 +12,7 @@ function session(overrides: Partial<CompanySession> = {}): CompanySession {
   return {
     id: 1,
     template_id: null,
+    runtime_kind: 'company',
     name: 'Main',
     status: 'idle',
     master_session_id: null,

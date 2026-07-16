@@ -37,7 +37,7 @@ interface Props {
   subordinateCount: number;
   /** Number of subordinates whose status is 'running' or 'waiting_*'. */
   activeSubordinateCount: number;
-  onWakeMaster: () => void;
+  onWakeMaster?: () => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any;
 }
@@ -135,7 +135,7 @@ export function CompanyStatusBar(props: Props) {
 
       {/* Right — wake action as a status chip (fits the 20px bar, mirrors
           the ProjectView status-bar chips). */}
-      {phase === 'idle_pending' && (
+      {phase === 'idle_pending' && props.onWakeMaster && (
         <button
           type="button"
           onClick={props.onWakeMaster}

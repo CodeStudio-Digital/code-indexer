@@ -37,6 +37,15 @@ export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
 export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
 export { runAppStudioScaffoldStream } from './app-studio/studio-scaffold.js';
 export type { AppStudioCreateInput, AppStudioStreamEvent } from './app-studio/studio-scaffold.js';
+export {
+  canonicalAppTeamRole,
+  createAppTeamSession,
+  getAppTeamSession,
+} from './app-studio/app-team-session.js';
+export type {
+  AppTeamSessionView,
+  CreateAppTeamSessionResult,
+} from './app-studio/app-team-session.js';
 export { runWranglerLoginStream, runWranglerWhoami } from './app-studio/login-stream.js';
 export type { AppCfLoginEvent, CfWhoami } from './app-studio/login-stream.js';
 export { runAppLaunchStream } from './app-studio/launch-stream.js';

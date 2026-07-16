@@ -153,6 +153,34 @@ describe('agent_progress handlers', () => {
     expect(blocks.some((block) => block.type === 'activity')).toBe(false);
   });
 
+  it('keeps an operational cutoff visible as a terminal partial result', () => {
+    const { handlers, blocks } = setup();
+    handlers.agents_group_start(
+      {
+        groupId: 'grp_1',
+        agents: [{ index: 0, label: 'Explore HTTP' }],
+      },
+      'agents_group_start',
+    );
+
+    handlers.agent_progress(
+      {
+        groupId: 'grp_1',
+        agentIndex: 0,
+        label: 'Explore HTTP',
+        event: 'partial',
+        status: 'partial',
+        summary: 'Mapped the routes before the explicit time budget ended.',
+      },
+      'agent_progress',
+    );
+
+    expect(group(blocks).agents[0]).toMatchObject({
+      status: 'partial',
+      summary: 'Mapped the routes before the explicit time budget ended.',
+    });
+  });
+
   it('upserts a re-emitted group by groupId (resume) and preserves non-resumed agent data', () => {
     const { handlers, blocks } = setup();
     handlers.agents_group_start(

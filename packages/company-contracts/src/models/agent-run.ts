@@ -14,6 +14,15 @@ export type AgentRunStatus =
   | 'paused'
   | 'interrupted';
 
+export type CompanyAgentDispatchSource =
+  | 'company'
+  | 'manual'
+  | 'scheduler'
+  | 'pipeline'
+  | 'fanout'
+  | 'app_studio'
+  | 'retry';
+
 export interface CompanyAgentRun {
   id: number;
   company_session_id: number;
@@ -22,6 +31,13 @@ export interface CompanyAgentRun {
   project_ids_json: string;
   provider: string;
   model: string;
+  /** Provider/model selected by the persisted role before any explicit fallback. */
+  configured_provider: string;
+  configured_model: string;
+  /** Runtime entry point that created this run. */
+  dispatch_source: CompanyAgentDispatchSource;
+  /** Null unless an explicitly configured fallback changed the effective model. */
+  fallback_reason: string | null;
   status: AgentRunStatus;
   status_message: string;
   created_at: string;

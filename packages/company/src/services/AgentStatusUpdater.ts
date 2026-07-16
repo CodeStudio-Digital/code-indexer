@@ -36,12 +36,24 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
     opts?: { message?: string; coderSessionId?: number },
   ): void {
     this.setStatus(agentRunId, status, opts?.message);
+    const run = this.ctx.runtimeKind === 'app_studio'
+      ? this.ctx.companyStore.getAgentRun(agentRunId)
+      : null;
+    const runtime = run && run.company_session_id === this.ctx.companySessionId ? {
+      configuredProvider: run.configured_provider,
+      configuredModel: run.configured_model,
+      effectiveProvider: run.provider,
+      effectiveModel: run.model,
+      dispatchSource: run.dispatch_source,
+      fallbackReason: run.fallback_reason,
+    } : {};
     this.bus.publish('agent_status', {
       agentRunId,
       role,
       status,
       message: opts?.message ?? '',
       coderSessionId: opts?.coderSessionId,
+      ...runtime,
     });
   }
 

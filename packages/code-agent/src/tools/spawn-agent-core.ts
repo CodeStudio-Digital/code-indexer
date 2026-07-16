@@ -33,40 +33,48 @@ function envBudget(name: string, fallback: number, allowZero = false): number {
   return value;
 }
 
-export const SPAWN_LIMITS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
+const SPAWN_LIMIT_DEFAULTS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
   explore: {
     // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
     // of tools available (the env name is kept for back-compat). Default 0 =
     // unlimited: explore is read-only, so we let it run until it concludes or
-    // trips the time/turn/stall guards below.
-    maxToolCalls: envBudget('CODER_SPAWN_EXPLORE_MAX_TOOLS', 0, true),
-    timeoutMs: envBudget('CODER_SPAWN_EXPLORE_TIMEOUT_MS', 10 * 60_000),
-    stallMs: envBudget('CODER_SPAWN_EXPLORE_STALL_MS', 90_000),
+    // trips a real liveness guard.
+    maxToolCalls: 0,
+    timeoutMs: 0,
+    stallMs: 90_000,
   },
   implement: {
-    maxToolCalls: envBudget('CODER_SPAWN_IMPLEMENT_MAX_TOOLS', 80, true),
-    timeoutMs: envBudget('CODER_SPAWN_IMPLEMENT_TIMEOUT_MS', 20 * 60_000),
-    stallMs: envBudget('CODER_SPAWN_IMPLEMENT_STALL_MS', 120_000),
+    maxToolCalls: 0,
+    timeoutMs: 0,
+    stallMs: 120_000,
   },
   verify: {
-    maxToolCalls: envBudget('CODER_SPAWN_VERIFY_MAX_TOOLS', 40, true),
-    timeoutMs: envBudget('CODER_SPAWN_VERIFY_TIMEOUT_MS', 15 * 60_000),
-    stallMs: envBudget('CODER_SPAWN_VERIFY_STALL_MS', 120_000),
+    maxToolCalls: 0,
+    timeoutMs: 0,
+    stallMs: 120_000,
   },
   review: {
-    maxToolCalls: envBudget('CODER_SPAWN_REVIEW_MAX_TOOLS', 40, true),
-    timeoutMs: envBudget('CODER_SPAWN_REVIEW_TIMEOUT_MS', 15 * 60_000),
-    stallMs: envBudget('CODER_SPAWN_REVIEW_STALL_MS', 120_000),
+    maxToolCalls: 0,
+    timeoutMs: 0,
+    stallMs: 120_000,
   },
   full: {
-    maxToolCalls: envBudget('CODER_SPAWN_FULL_MAX_TOOLS', 80, true),
-    timeoutMs: envBudget('CODER_SPAWN_FULL_TIMEOUT_MS', 20 * 60_000),
-    stallMs: envBudget('CODER_SPAWN_FULL_STALL_MS', 120_000),
+    maxToolCalls: 0,
+    timeoutMs: 0,
+    stallMs: 120_000,
   },
 };
 
 export function limitsForAgent(agent: NormalizedAgent): SubagentLimits {
-  return SPAWN_LIMITS[agent.type];
+  const defaults = SPAWN_LIMIT_DEFAULTS[agent.type];
+  const prefix = `CODER_SPAWN_${agent.type.toUpperCase()}`;
+  // Resolve on every dispatch so admin changes hot-apply without restarting
+  // the worker. Zero is a first-class value for the optional hard caps.
+  return {
+    maxToolCalls: envBudget(`${prefix}_MAX_TOOLS`, defaults.maxToolCalls, true),
+    timeoutMs: envBudget(`${prefix}_TIMEOUT_MS`, defaults.timeoutMs, true),
+    stallMs: envBudget(`${prefix}_STALL_MS`, defaults.stallMs),
+  };
 }
 
 export function buildSubagentWorkspaceBriefing(ctx: ToolContext): string {

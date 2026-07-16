@@ -57,9 +57,10 @@ export function retainSpawnGroup(args: {
   provider: string;
   model: string;
   agents: SpawnRetentionAgent[];
-}): void {
-  if (args.sessionId == null) return;
-  if (countFailed(args.agents) === 0 && process.env.CODER_RESUME_RETAIN_COMPLETED !== '1') return;
+}): number {
+  if (args.sessionId == null) return 0;
+  const resumableCount = args.agents.filter((a) => a.reason !== 'completed' && (a.transcript?.length ?? 0) > 0).length;
+  if (countFailed(args.agents) === 0 && process.env.CODER_RESUME_RETAIN_COMPLETED !== '1') return 0;
   const now = Date.now();
   const group: ResumableGroup = {
     spawnId: args.spawnId,
@@ -89,4 +90,5 @@ export function retainSpawnGroup(args: {
     })),
   };
   retainGroup(args.sessionId, group);
+  return resumableCount;
 }

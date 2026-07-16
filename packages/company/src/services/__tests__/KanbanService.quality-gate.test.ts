@@ -1,11 +1,11 @@
 /**
- * Tests for Wire #3 (Kanban Quality Gate) in `KanbanService.moveCard`.
+ * Tests for the consultative Kanban Quality advisory in `moveCard`.
  *
  * Invariants verified:
  *   1. With NO quality_classifications rows → move to `done` works normally.
- *   2. With a recent `flagged` verdict on an assigned agent → move to `done`
- *      is redirected to `review` and a comment is posted.
- *   3. Moving from `review` to `done` BYPASSES the gate (explicit second
+ *   2. With a recent `flagged` verdict on an assigned agent → `done` remains
+ *      `done` and an evidence comment is posted.
+ *   3. Moving from `review` to `done` BYPASSES the advisory (explicit second
  *      pass represents human review).
  *   4. Verdicts older than the window do NOT block.
  *   5. Verdicts below the confidence floor do NOT block.
@@ -121,33 +121,33 @@ describe('KanbanService quality gate (Wire #3)', () => {
     expect((moveEvent!.data as { qualityGateBlocked?: boolean }).qualityGateBlocked).toBeUndefined();
   });
 
-  it('redirects move to done → review when a recent flagged verdict exists', () => {
+  it('keeps done and adds an advisory when a recent flagged verdict exists', () => {
     h.qualityStore.insert({
       agent_run_id: h.agentRunId,
       classifier_name: 'completeness',
       verdict: 'flagged',
       confidence: 0.95,
       reason: 'agent abandoned the task',
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     const moved = h.kanban.moveCard(h.cardId, 'done');
-    expect(moved.column).toBe('review');
+    expect(moved.column).toBe('done');
 
     const moveEvent = h.events.find((e) => e.event === 'kanban_card_moved');
     expect(moveEvent).toBeDefined();
     const payload = moveEvent!.data as {
-      requestedColumn?: string;
-      qualityGateBlocked?: boolean;
-      blockingVerdictCount?: number;
+      qualityAdvisory?: boolean;
+      advisoryVerdictCount?: number;
     };
-    expect(payload.requestedColumn).toBe('done');
-    expect(payload.qualityGateBlocked).toBe(true);
-    expect(payload.blockingVerdictCount).toBe(1);
+    expect(payload.qualityAdvisory).toBe(true);
+    expect(payload.advisoryVerdictCount).toBe(1);
 
     // A comment explaining the gate should also have been published.
     const commentEvent = h.events.find((e) => e.event === 'kanban_comment_added');
     expect(commentEvent).toBeDefined();
     const commentPayload = commentEvent!.data as { comment?: { content: string; author_role: string } };
-    expect(commentPayload.comment?.author_role).toBe('quality-gate');
+    expect(commentPayload.comment?.author_role).toBe('quality-advisory');
     expect(commentPayload.comment?.content).toMatch(/completeness/);
     expect(commentPayload.comment?.content).toMatch(/flagged/);
   });
@@ -158,6 +158,8 @@ describe('KanbanService quality gate (Wire #3)', () => {
       classifier_name: 'completeness',
       verdict: 'flagged',
       confidence: 0.95,
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     h.companyStore.moveKanbanCard(h.cardId, 'review');
     h.events.length = 0;
@@ -174,6 +176,8 @@ describe('KanbanService quality gate (Wire #3)', () => {
       classifier_name: 'completeness',
       verdict: 'flagged',
       confidence: 0.3, // below 0.7 floor
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     const moved = h.kanban.moveCard(h.cardId, 'done');
     expect(moved.column).toBe('done');
@@ -185,6 +189,8 @@ describe('KanbanService quality gate (Wire #3)', () => {
       classifier_name: 'completeness',
       verdict: 'ok',
       confidence: 0.99,
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     const moved = h.kanban.moveCard(h.cardId, 'done');
     expect(moved.column).toBe('done');
@@ -201,20 +207,24 @@ describe('KanbanService quality gate (Wire #3)', () => {
       classifier_name: 'completeness',
       verdict: 'flagged',
       confidence: 0.99,
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     const moved = h.kanban.moveCard(card2.id, 'done');
     expect(moved.column).toBe('done');
   });
 
-  it('blocks on warn verdicts as well as flagged', () => {
+  it('advises on warn verdicts as well as flagged', () => {
     h.qualityStore.insert({
       agent_run_id: h.agentRunId,
       classifier_name: 'tool_misuse',
       verdict: 'warn',
       confidence: 0.85,
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     const moved = h.kanban.moveCard(h.cardId, 'done');
-    expect(moved.column).toBe('review');
+    expect(moved.column).toBe('done');
   });
 
   it('does not gate moves to columns other than done', () => {
@@ -223,6 +233,8 @@ describe('KanbanService quality gate (Wire #3)', () => {
       classifier_name: 'completeness',
       verdict: 'flagged',
       confidence: 0.99,
+      scope: 'run_final',
+      source: 'terminal_llm',
     });
     h.companyStore.moveKanbanCard(h.cardId, 'in_progress');
     const moved = h.kanban.moveCard(h.cardId, 'review');

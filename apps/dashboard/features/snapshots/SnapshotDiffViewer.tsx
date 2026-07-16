@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, MessageSquarePlus, Send } from 'lucide-react';
+import { Bot, Check, MessageSquarePlus, RotateCcw, Send } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { prompt } from '../../components/ui/prompt-dialog.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { ReviewCommentList } from './diff/ReviewComment.js';
 import { DiffRowsView } from './diff/DiffRowsView.js';
 import { type DiffRowHandlers } from './diff/DiffRow.js';
@@ -109,31 +110,91 @@ export function SnapshotDiffViewer({
   );
 
   const actions = (
-    <div className="flex gap-1.5 flex-shrink-0 overflow-x-auto">
-      <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => void runAddComment(null)} className="h-7 text-xs">
-        <MessageSquarePlus className="h-3.5 w-3.5 mr-1" />
-        {t('snapshotDiff.fileComment')}
-      </Button>
-      <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onAutoReview().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        <Bot className="h-3.5 w-3.5 mr-1" />
-        {t('snapshotDiff.autoReview')}
-      </Button>
-      <Button size="sm" variant="default" disabled={isBusy || !canSubmitReview} onClick={() => { setLocalBusy(true); onSubmitReview().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        <Send className="h-3.5 w-3.5 mr-1" />
-        {t('snapshotDiff.sendReview')}
-      </Button>
-      <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onAcceptFile().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        {t('snapshotDiff.keepFile')}
-      </Button>
-      <Button size="sm" variant="outline" disabled={isBusy} onClick={() => { setLocalBusy(true); onRevertFile().finally(() => setLocalBusy(false)); }} className="h-7 text-xs">
-        {t('snapshotDiff.revertFile')}
-      </Button>
+    <div className="flex flex-shrink-0 items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            disabled={isBusy}
+            onClick={() => void runAddComment(null)}
+            className="h-7 w-7"
+            aria-label={t('snapshotDiff.fileComment')}
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('snapshotDiff.fileComment')}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            disabled={isBusy}
+            onClick={() => { setLocalBusy(true); onAutoReview().finally(() => setLocalBusy(false)); }}
+            className="h-7 w-7"
+            aria-label={t('snapshotDiff.autoReview')}
+          >
+            <Bot className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('snapshotDiff.autoReview')}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon-sm"
+            variant="outline"
+            disabled={isBusy || !canSubmitReview}
+            onClick={() => { setLocalBusy(true); onSubmitReview().finally(() => setLocalBusy(false)); }}
+            className="h-7 w-7"
+            aria-label={t('snapshotDiff.sendReview')}
+          >
+            <Send className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('snapshotDiff.sendReview')}</TooltipContent>
+      </Tooltip>
+      <div className="mx-0.5 h-5 w-px bg-border" />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon-sm"
+            variant="default"
+            disabled={isBusy}
+            onClick={() => { setLocalBusy(true); onAcceptFile().finally(() => setLocalBusy(false)); }}
+            className="h-7 w-7"
+            aria-label={t('snapshotDiff.keepFile')}
+          >
+            <Check className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('snapshotDiff.keepFile')}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon-sm"
+            variant="outline"
+            disabled={isBusy}
+            onClick={() => { setLocalBusy(true); onRevertFile().finally(() => setLocalBusy(false)); }}
+            className="h-7 w-7"
+            aria-label={t('snapshotDiff.revertFile')}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('snapshotDiff.revertFile')}</TooltipContent>
+      </Tooltip>
     </div>
   );
 
   const header = (
-    <div className="flex items-center justify-between px-3 py-2 border-b bg-card gap-2">
-      <div className="font-mono text-xs truncate flex-1 min-w-0">{diff.baseline.filePath}</div>
+    <div className="flex min-h-10 items-center justify-between gap-2 border-b bg-card px-2.5 py-1.5">
+      <div className="min-w-0 flex-1 truncate font-mono text-xs" title={diff.baseline.filePath}>
+        {diff.baseline.filePath}
+      </div>
       {actions}
     </div>
   );

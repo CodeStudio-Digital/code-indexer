@@ -27,6 +27,7 @@ import {
   type InvocationGuardState,
 } from './tuple-hash-dedup.js';
 import type { NoProgressTracker } from './no-progress.js';
+import type { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import type { DupCallEntry } from '../machine/types.js';
 import type {
   NestedToolObserver,
@@ -57,6 +58,7 @@ export interface NestedObserverDeps {
   invocationState?: InvocationGuardState;
   /** Shared post-result tracker; its epoch advances on successful nested writes/executes. */
   noProgressTracker?: NoProgressTracker;
+  toolCallLedger?: ToolCallLedger;
   /** Telemetry sink; absent = guards only. */
   onNestedCall?: (e: NestedToolCallRecord) => void;
 }
@@ -104,6 +106,27 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
           }
         }
 
+        const noProgress = deps.toolCallLedger?.checkRepeat({
+          name,
+          args,
+          repeatPolicy,
+          mutates: repeatPolicy === 'mutating',
+        });
+        if (noProgress) {
+          return {
+            action: 'block',
+            reason: 'cross-turn-no-progress',
+            refusalKind: 'dedup',
+            shouldReflect: true,
+            affectsFailureStreak: false,
+            count: noProgress.count,
+            sourceTool: name,
+            originToolUseId: attemptId,
+            refusalText: `[no-progress REFUSED: \`${name}\` repeated without new results. Switch strategy before retrying.]`,
+            kind: 'dedup',
+          };
+        }
+
         const dedup = checkDupCall({
           name,
           input: args,
@@ -133,6 +156,17 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
     },
 
     afterNestedCall(e) {
+      const ledgerEntry = deps.toolCallLedger?.record({
+        name: e.name,
+        args: e.args,
+        content: e.resultPreview,
+        isError: e.isError,
+        refusalKind: e.refusalKind,
+        mutates: e.repeatPolicy === 'mutating' || e.executionClass === 'write' || e.executionClass === 'execute',
+        durationMs: e.durationMs,
+        executionClass: e.executionClass,
+        repeatPolicy: e.repeatPolicy,
+      });
       try {
         // A successful different write/execute establishes a new local state
         // epoch. Preserve the successful operation's own counter so repeating
@@ -168,13 +202,17 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
           turn: deps.turn,
           toolUseId: `${deps.parentToolUseId}#${recordSeq}`,
           repeatPolicy: e.repeatPolicy ?? (e.repeatable ? 'pollable' : 'stable'),
-          resultNovel: e.resultNovel,
-          coverageNovel: e.coverageNovel,
-          productive: e.productive,
+          resultNovel: ledgerEntry?.resultNovel ?? e.resultNovel,
+          coverageNovel: ledgerEntry?.coverageNovel ?? e.coverageNovel,
+          productive: ledgerEntry?.productive ?? e.productive,
           stateEpoch: deps.noProgressTracker.stateEpoch,
         }) ?? null;
         deps.onNestedCall?.({
           ...e,
+          logicalOperationId: ledgerEntry?.logicalOperationId ?? e.logicalOperationId,
+          resultNovel: ledgerEntry?.resultNovel ?? e.resultNovel,
+          coverageNovel: ledgerEntry?.coverageNovel ?? e.coverageNovel,
+          productive: ledgerEntry?.productive ?? e.productive,
           ...(e.guardVerdict || !noProgressVerdict ? {} : { guardVerdict: noProgressVerdict }),
           stateEpoch: deps.noProgressTracker?.stateEpoch ?? e.stateEpoch,
           parentToolUseId: deps.parentToolUseId,

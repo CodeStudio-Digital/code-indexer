@@ -106,8 +106,8 @@ function subagentLimit(name: string, fallback: number, allowZero = false): numbe
 }
 
 const DEFAULT_SUBAGENT_LIMITS: Required<SubagentLimits> = {
-  maxToolCalls: subagentLimit('CODER_SUBAGENT_MAX_TOOLS', 80, true),
-  timeoutMs: subagentLimit('CODER_SUBAGENT_TIMEOUT_MS', 10 * 60_000),
+  maxToolCalls: subagentLimit('CODER_SUBAGENT_MAX_TOOLS', 0, true),
+  timeoutMs: subagentLimit('CODER_SUBAGENT_TIMEOUT_MS', 0, true),
   stallMs: subagentLimit('CODER_SUBAGENT_STALL_MS', 120_000),
 };
 
@@ -124,13 +124,16 @@ function withDefaultLimits(limits?: SubagentLimits): SubagentLimits {
  * ('limit') is a benign, expected cutoff — report it as `'tool_budget'`, NOT
  * `'error'`, so the parent doesn't treat a truncated-but-progressing subagent
  * as a crash (and the session store doesn't mark the parent session errored).
+ * The optional wall-clock budget maps to `'time_budget'` for the same reason.
  * An explicit/parent abort maps to `'aborted'`. Genuine anomalies (stall /
- * timeout / provider_timeout / quality) stay `'error'`.
+ * provider_timeout / quality) stay `'error'`.
  */
 function phaseToReason(phase: string | undefined): SubagentRunResult['reason'] {
   switch (phase) {
     case 'limit':
       return 'tool_budget';
+    case 'timeout':
+      return 'time_budget';
     case 'aborted':
       return 'aborted';
     default:
@@ -146,6 +149,36 @@ export interface SubagentCollected {
 
 export function emptyCollected(): SubagentCollected {
   return { memos: [], snapshots: [], boardPosts: [] };
+}
+
+function emptyUsage(): ChatUsage {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    thinking_tokens: 0,
+  };
+}
+
+function addChatUsage(acc: ChatUsage, usage: ChatUsage | null | undefined): void {
+  if (!usage) return;
+  acc.input_tokens += usage.input_tokens ?? 0;
+  acc.output_tokens += usage.output_tokens ?? 0;
+  acc.cache_read_input_tokens =
+    (acc.cache_read_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+  acc.cache_creation_input_tokens =
+    (acc.cache_creation_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  acc.thinking_tokens = (acc.thinking_tokens ?? 0) + (usage.thinking_tokens ?? 0);
+  if (usage.prompt_tokens_total != null) {
+    acc.prompt_tokens_total = (acc.prompt_tokens_total ?? 0) + usage.prompt_tokens_total;
+  }
+}
+
+function combinedUsage(left: ChatUsage, right: ChatUsage): ChatUsage {
+  const out = { ...left };
+  addChatUsage(out, right);
+  return out;
 }
 
 export interface SubagentRunResult {
@@ -236,6 +269,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const logicalOperations = new Set<string>();
   let watchdogFailed = false;
   let watchdogPhase: string | undefined;
+  const accruedRunnerUsage = emptyUsage();
   let lastStreamProgressAt = 0;
   const streamProgressThrottleMs =
     Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
@@ -517,7 +551,11 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   // 0 disables). State `QUALITY_NO_TOOL_MAX` and `consecutiveNoToolCount`
   // are declared above the tool_call_result handler so both listeners
   // can mutate them.
-  subRunner.on('message_complete', (message) => {
+  subRunner.on('message_complete', (message, usage) => {
+    // `CoderRunner.run()` owns the canonical total on normal completion. Keep
+    // a parallel per-turn accumulator only for interrupted/error exits where
+    // the runner result never becomes available.
+    addChatUsage(accruedRunnerUsage, usage);
     if (message.role !== 'assistant') return;
     const hasToolUse = Array.isArray(message.content)
       && message.content.some((b: { type?: string }) => b && typeof b === 'object' && b.type === 'tool_use');
@@ -660,7 +698,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       return finishTelemetry({
         reason,
         finalText: salvaged.text,
-        usage: salvaged.usage,
+        usage: combinedUsage(accruedRunnerUsage, salvaged.usage),
         sandboxViolations,
         collected,
         transcript: subRunner.messages.slice(),
@@ -670,10 +708,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     return finishTelemetry({
       reason,
       finalText: e instanceof Error ? e.message : String(e),
-      usage: {
-        input_tokens: 0,
-        output_tokens: 0,
-      },
+      usage: accruedRunnerUsage,
       sandboxViolations,
       collected,
       transcript: subRunner.messages.slice(),
@@ -960,10 +995,9 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
     systemPrompt,
     allowlist: IMPLEMENT_ALLOWLIST,
     initialMessages,
-    // Implement subagents need more turns than explore — they read, edit,
-    // verify, and report. 40 gives realistic margin for non-trivial tasks.
-    // Override via CODER_IMPLEMENT_MAX_TURNS.
-    maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 40),
+    // Progressing implementers run to natural completion by default. Operators
+    // can still provide an exact positive ceiling via CODER_IMPLEMENT_MAX_TURNS.
+    maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 0),
     pathScope: task.files,
     pathScopeMode: 'enforce-writes',
   });
@@ -1183,8 +1217,8 @@ export interface ParallelAgentSpec {
 export interface ParallelAgentProgress {
   agentIndex: number;
   label: string;
-  event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
-  status?: 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+  event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
+  status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
   provider?: string;
   model?: string;
   toolCallCount?: number;
@@ -1204,6 +1238,32 @@ export interface ParallelAgentProgress {
 
 export type ParallelAgentResult = SubagentRunResult & { label: string; toolCallCount: number };
 
+export interface SubagentOutcomeCounts {
+  completedCount: number;
+  partialCount: number;
+  failedCount: number;
+}
+
+export function isPartialSubagentReason(reason: SubagentRunResult['reason']): boolean {
+  return reason === 'tool_budget' || reason === 'time_budget' || reason === 'max_turns';
+}
+
+export function countSubagentOutcomes(
+  results: ReadonlyArray<{ reason: SubagentRunResult['reason'] }>,
+): SubagentOutcomeCounts {
+  let completedCount = 0;
+  let partialCount = 0;
+  for (const result of results) {
+    if (result.reason === 'completed') completedCount++;
+    else if (isPartialSubagentReason(result.reason)) partialCount++;
+  }
+  return {
+    completedCount,
+    partialCount,
+    failedCount: results.length - completedCount - partialCount,
+  };
+}
+
 function classifySubagentTerminal(
   reason: SubagentRunResult['reason'],
   text: string,
@@ -1215,7 +1275,9 @@ function classifySubagentTerminal(
   if (reason === 'aborted') return { event: 'aborted', status: 'aborted' };
   // Benign budget cutoff — show as a soft terminal in the parallel timeline,
   // not an error.
-  if (reason === 'tool_budget') return { event: 'timed_out', status: 'timed_out' };
+  if (isPartialSubagentReason(reason)) {
+    return { event: 'partial', status: 'partial' };
+  }
   const lower = text.toLowerCase();
   if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('stalled')) {
     return { event: 'timed_out', status: 'timed_out' };
@@ -1301,7 +1363,9 @@ export async function runParallelAgents(
         toolCallCount,
         usage: runResult.usage,
         summary: finalText.slice(0, 500),
-        error: terminal.status === 'completed' ? undefined : finalText.slice(0, 500),
+        error: terminal.status === 'error' || terminal.status === 'timed_out' || terminal.status === 'aborted'
+          ? finalText.slice(0, 500)
+          : undefined,
       });
       return agentResult;
     } catch (e) {

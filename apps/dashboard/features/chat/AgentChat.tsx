@@ -77,7 +77,7 @@ import type { NotificationSourceContext } from '../notifications/index.js';
 import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
 export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker, workbenchSlots }: AgentChatProps) {
-  const { t } = useTranslation(['chat', 'common']);
+  const { t } = useTranslation(['chat', 'common', 'projects']);
   const confirm = useConfirm();
   // Global (multi-project) mode: the session list is cross-project (no
   // project_id filter), groups are disabled, and new sessions go through the
@@ -1848,13 +1848,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       {selectedId != null && (
         <Dialog open={snapshotsOpen} onOpenChange={setSnapshotsOpen}>
           <DialogContent
-            className="p-0 gap-0 max-w-[100vw] sm:max-w-[1400px] w-[100vw] sm:w-[95vw] h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] rounded-none sm:rounded-xl overflow-hidden flex flex-col"
+            className="p-0 gap-0 max-w-[100vw] sm:max-w-[1500px] w-[100vw] sm:w-[96vw] h-[100dvh] sm:h-[92dvh] sm:max-h-[92dvh] rounded-none sm:rounded-xl overflow-hidden flex flex-col"
           >
-            <DialogHeader className="px-4 py-2.5 border-b bg-card flex-shrink-0">
-              <DialogTitle className="text-sm">Session Snapshots</DialogTitle>
-              <DialogDescription className="sr-only">
-                Review every file altered by the agent in this session. Accept or revert per hunk, per file, or all at once.
-              </DialogDescription>
+            <DialogHeader className="sr-only">
+              <DialogTitle>{t('projects:snapshotPanel.dialogTitle')}</DialogTitle>
+              <DialogDescription>{t('projects:snapshotPanel.dialogDescription')}</DialogDescription>
             </DialogHeader>
             <div className="flex-1 min-h-0">
               <SnapshotsPanel
@@ -1863,6 +1861,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 refreshKey={snapshotTick}
                 initialBaselineId={snapshotInitialBaselineId}
                 onSubmitReviewMessage={handleSnapshotReviewMessage}
+                dialogMode
               />
             </div>
           </DialogContent>

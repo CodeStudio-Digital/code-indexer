@@ -52,6 +52,7 @@ import type { MasterInboxRouter } from './services/MasterInboxRouter.js';
 import type { RuntimeReconciler } from './services/RuntimeReconciler.js';
 import type { ServiceSupervisor } from './services/service-supervisor/ServiceSupervisor.js';
 import type { CompanyScheduler } from './services/scheduler/CompanyScheduler.js';
+import type { AppStudioScheduler } from './services/scheduler/AppStudioScheduler.js';
 import { dispatchCard, type DispatchCardResult } from './services/scheduler/dispatch-card.js';
 import { getGlobalCompanyRecommend } from './services/scheduler/recommend-shim.js';
 import type { CompanyDriveStore } from './services/CompanyDriveStore.js';
@@ -70,6 +71,11 @@ import {
 } from './orchestrator/sandbox-helpers.js';
 import { readBoardWithWatermarks, type ReadBoardOptions } from './orchestrator/board-helpers.js';
 import { consolidateBoardToMemory } from './services/memory/board-consolidator.js';
+import {
+  readRoleRuntimePolicy,
+  resolveEffectiveMasterRuntime,
+} from './services/subordinate/role-runtime.js';
+import { CompanyCapabilityUnavailableError } from './services/session-capabilities.js';
 
 export type { SpawnSubordinateSpec };
 
@@ -107,7 +113,7 @@ export class CompanyOrchestrator {
 
   private readonly ctx: SessionContext;
   private readonly publisher: MetaBusPublisher;
-  private readonly kanban: KanbanService;
+  private readonly kanban: KanbanService | null;
   private readonly board: BoardBridge;
   private readonly status: AgentStatusUpdater;
   private readonly attention: MasterAttention;
@@ -116,13 +122,14 @@ export class CompanyOrchestrator {
   private readonly watchdog: IdleWatchdog;
   private readonly subordinates: SubordinateLifecycle;
   private readonly master: MasterLifecycle;
-  private readonly pipelines: PipelineService;
-  private readonly pipelineExecutor: PipelineExecutor;
+  private readonly pipelines: PipelineService | null;
+  private readonly pipelineExecutor: PipelineExecutor | null;
   private readonly inbox: InboxQueue;
   private readonly masterInbox: MasterInboxRouter;
   private readonly reconciler: RuntimeReconciler;
   private readonly serviceSupervisor: ServiceSupervisor;
-  private readonly scheduler: CompanyScheduler;
+  private readonly scheduler: CompanyScheduler | null;
+  private readonly appStudioScheduler: AppStudioScheduler | null;
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = opts.companySessionId;
@@ -150,6 +157,7 @@ export class CompanyOrchestrator {
     this.reconciler = w.reconciler;
     this.serviceSupervisor = w.serviceSupervisor;
     this.scheduler = w.scheduler;
+    this.appStudioScheduler = w.appStudioScheduler;
     this.autonomy = w.autonomy;
   }
 
@@ -165,6 +173,27 @@ export class CompanyOrchestrator {
   get hasMasterStarted(): boolean { return !!this.master?.handle; }
   get masterEndedAt(): string | null { return this.master?.endedAt ?? null; }
   getMasterAgentRunId(): number | null { return this.master.agentRunId; }
+
+  private requireCompanyKanban(): KanbanService {
+    if (!this.ctx.capabilities.allowCompanyKanban || !this.kanban) {
+      throw new CompanyCapabilityUnavailableError('kanban', this.ctx.runtimeKind);
+    }
+    return this.kanban;
+  }
+
+  private requireCompanyPipelines(): {
+    pipelines: PipelineService;
+    executor: PipelineExecutor;
+  } {
+    if (
+      !this.ctx.capabilities.allowCompanyPipelines ||
+      !this.pipelines ||
+      !this.pipelineExecutor
+    ) {
+      throw new CompanyCapabilityUnavailableError('pipelines', this.ctx.runtimeKind);
+    }
+    return { pipelines: this.pipelines, executor: this.pipelineExecutor };
+  }
 
   /**
    * POJO master-status snapshot for the MAIN thread. The worker-backed
@@ -190,8 +219,12 @@ export class CompanyOrchestrator {
     userMessage: string; provider: string; model: string; maxTurns?: number; signal?: AbortSignal;
     roleConfigs?: RoleConfig[]; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[];
     thinking?: boolean;
+    thinkingBudgetTokens?: number;
+    temperature?: number;
     /** Sticky master reasoning-effort override (orthogonal to thinking). */
     reasoningEffort?: string;
+    /** Ordered explicit fallback chain; consumed only by App lifecycle. */
+    fallbackModels?: import('@mcp/company/types.js').AllowedModel[];
     /**
      * When true the master prompt routes non-trivial work through the
      * built-in SDD pipeline. Threaded into `MasterPromptContext.sddMode`.
@@ -207,8 +240,11 @@ export class CompanyOrchestrator {
   async resumeExistingMaster(opts: {
     userMessage: string; maxTurns?: number; roleConfigs?: RoleConfig[];
     attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean;
+    provider?: string; model?: string;
+    thinkingBudgetTokens?: number; temperature?: number;
     /** Sticky master reasoning-effort override (orthogonal to thinking). */
     reasoningEffort?: string;
+    fallbackModels?: import('@mcp/company/types.js').AllowedModel[];
   }): Promise<MasterStartResult> {
     return this.master.resumeExisting(opts);
   }
@@ -259,18 +295,33 @@ export class CompanyOrchestrator {
     // Lazy-start: sub-session's master is dormant until the first message.
     if (!this.master.isAlive && this.master.agentRunId == null) {
       const session = this.ctx.companyStore.getCompanySession(this.companySessionId);
-      let cfg: { master_provider?: string; master_model?: string; master_reasoning_effort?: string; role_assignments?: RoleConfig[] } = {};
-      try { cfg = session ? JSON.parse(session.config_json || '{}') : {}; } catch { /* defaults */ }
-      void this.master.start({
+      const runtime = resolveEffectiveMasterRuntime({
+        configJson: session?.config_json,
+        runtimeKind: session?.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+      });
+      let cfg: { role_assignments?: RoleConfig[] } = {};
+      // The authoritative resolver above has already rejected malformed JSON.
+      if (session?.config_json) cfg = JSON.parse(session.config_json) as typeof cfg;
+      const opts = {
         userMessage: message,
-        provider: cfg.master_provider ?? 'anthropic',
-        model: cfg.master_model ?? 'claude-sonnet-4-6',
+        provider: runtime.provider,
+        model: runtime.model,
         maxTurns: 100,
         roleConfigs: cfg.role_assignments ?? [],
         attachments: options.attachments,
-        thinking: options.thinking,
-        reasoningEffort: cfg.master_reasoning_effort,
-      }).catch((e) => {
+        thinking: options.thinking ?? runtime.thinking,
+        thinkingBudgetTokens: runtime.thinkingBudgetTokens,
+        temperature: runtime.temperature,
+        reasoningEffort: runtime.reasoningEffort,
+        fallbackModels: runtime.fallbackModels,
+      };
+      const hasPersistedMaster = this.ctx.companyStore
+        .listAgentRuns(this.companySessionId)
+        .some((run) => run.role === 'master');
+      const launch = hasPersistedMaster
+        ? this.master.resumeExisting(opts)
+        : this.master.start(opts);
+      void launch.catch((e) => {
         console.error(`[company s=${this.companySessionId}] lazy master start failed:`, e);
       });
       return { ok: true };
@@ -278,8 +329,45 @@ export class CompanyOrchestrator {
     return this.master.sendUserMessage(message, options);
   }
 
+  /** Rotate only the dormant Master conversation; App specialists stay live. */
+  rotateMasterToPersistedSession(): boolean { return this.master.rotateToPersistedMaster(); }
+  canRotateMasterConversation(): boolean { return this.master.canRotateConversation; }
+
   getMasterLastUserAttachments(): readonly import('@mcp/code-agent/index.js').CoderAttachment[] { return this.master.getLastUserAttachments(); }
-  getRoleDefaults(role: string): ReturnType<MasterLifecycle['getRoleDefaults']> { return this.master.getRoleDefaults(role); }
+  getRoleDefaults(role: string): ReturnType<MasterLifecycle['getRoleDefaults']> {
+    // Scheduler/App dispatch can run while the Master is dormant, before its
+    // in-memory roster has been hydrated. Read the persisted assignment first
+    // so this facade is authoritative independently of Master lifecycle state.
+    const session = this.ctx.companyStore.getCompanySession(this.companySessionId);
+    try {
+      const policy = readRoleRuntimePolicy(
+        session?.config_json,
+        role,
+        session?.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+      );
+      const cfg = policy.roleConfig;
+      if (cfg) {
+        return {
+          enabled: cfg.enabled,
+          provider: cfg.provider,
+          model: cfg.model,
+          tier: cfg.tier,
+          skills: cfg.skills,
+          systemPromptOverride: cfg.systemPromptOverride,
+          projectIds: cfg.projectIds,
+          temperature: cfg.temperature,
+          thinking: cfg.thinking,
+          thinkingBudgetTokens: cfg.thinkingBudgetTokens,
+          reasoningEffort: cfg.reasoningEffort,
+          fallbackModels: cfg.fallbackModels,
+        };
+      }
+    } catch {
+      // Keep a running generic Company usable when a legacy config row is
+      // malformed; fresh spawns still fail closed in the central resolver.
+    }
+    return this.master.getRoleDefaults(role);
+  }
   /** Project-first view: roles bound to `projectId` via `CompanyRoleConfig.projectIds`. */
   getRolesForProject(projectId: number): string[] {
     return this.master.roleConfigs.filter((r) => Array.isArray(r.projectIds) && r.projectIds.includes(projectId)).map((r) => r.role);
@@ -340,6 +428,39 @@ export class CompanyOrchestrator {
   getSubordinate(agentRunId: number): SubordinateHandle | undefined { return this.subordinates.get(agentRunId); }
   getSubordinateStatus(agentRunId: number): AgentRunStatus | null { return this.subordinates.statusOf(agentRunId); }
   listSubordinates() { return this.subordinates.list(); }
+  /** Capacity snapshot consumed by the App-owned scheduler/dispatcher. */
+  getAppDispatchCapacity(): {
+    concurrencyLimit: number;
+    activeConcurrent: number;
+    maxSubordinates: number | null;
+    activeSubordinates: number;
+  } {
+    return {
+      concurrencyLimit: this.subordinates.concurrencyPolicy.limit,
+      activeConcurrent: this.subordinates.concurrencyOccupancy,
+      maxSubordinates: this.autonomy.get().maxSubordinates,
+      activeSubordinates: this.ctx.companyStore.countActiveSubordinatesGlobal(),
+    };
+  }
+  getAppAgentRuntimeProvenance(agentRunId: number): {
+    configuredProvider: string;
+    configuredModel: string;
+    effectiveProvider: string;
+    effectiveModel: string;
+    dispatchSource: import('@mcp/company/types.js').CompanyAgentDispatchSource;
+    fallbackReason: string | null;
+  } | null {
+    const run = this.ctx.companyStore.getAgentRun(agentRunId);
+    if (!run || run.company_session_id !== this.companySessionId || run.role === 'master') return null;
+    return {
+      configuredProvider: run.configured_provider,
+      configuredModel: run.configured_model,
+      effectiveProvider: run.provider,
+      effectiveModel: run.model,
+      dispatchSource: run.dispatch_source,
+      fallbackReason: run.fallback_reason,
+    };
+  }
   hasRunningSubordinates(): boolean { return this.subordinates.runningCount > 0; }
   /** Subscribe to master-attention events (subordinate question/plan/tasks/terminal). */
   onSubordinateAttention(listener: AttentionListener): () => void { return this.attention.on(listener); }
@@ -407,29 +528,30 @@ export class CompanyOrchestrator {
   }
 
   // ─── Kanban ────────────────────────────────────────────────────
-  kanbanCreateCard(input: Parameters<KanbanService['createCard']>[0]): KanbanCardFull { return this.kanban.createCard(input); }
-  kanbanMoveCard(cardId: number, column: KanbanColumn, position?: number): KanbanCard { return this.kanban.moveCard(cardId, column, position); }
-  kanbanUpdateCard(cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }): KanbanCard | null { return this.kanban.updateCard(cardId, patch); }
-  kanbanDeleteCard(cardId: number): boolean { return this.kanban.deleteCard(cardId); }
-  kanbanAddComment(cardId: number, authorRole: string, agentRunId: number | null, content: string): KanbanComment { return this.kanban.addComment(cardId, authorRole, agentRunId, content); }
-  kanbanUpdateChecklist(cardId: number, items: Array<{ id?: number; text: string; checked: boolean }>): KanbanChecklistItem[] { return this.kanban.updateChecklist(cardId, items); }
-  kanbanAddDependency(cardId: number, dependsOnId: number): KanbanCardDependency { return this.kanban.addDependency(cardId, dependsOnId); }
-  kanbanRemoveDependency(cardId: number, dependsOnId: number): boolean { return this.kanban.removeDependency(cardId, dependsOnId); }
-  kanbanAssignAgent(cardId: number, agentRunId: number, role: string): KanbanCardAgent { return this.kanban.assignAgent(cardId, agentRunId, role); }
-  kanbanUnassignAgent(cardId: number, agentRunId: number): void { this.kanban.unassignAgent(cardId, agentRunId); }
-  kanbanListCards(opts?: { column?: KanbanColumn }): KanbanCard[] { return this.kanban.listCards(opts); }
-  kanbanGetCard(cardId: number): KanbanCardFull | null { return this.kanban.getCard(cardId); }
-  kanbanListCardsFull(): KanbanCardFull[] { return this.kanban.listCardsFull(); }
+  kanbanCreateCard(input: Parameters<KanbanService['createCard']>[0]): KanbanCardFull { return this.requireCompanyKanban().createCard(input); }
+  kanbanMoveCard(cardId: number, column: KanbanColumn, position?: number): KanbanCard { return this.requireCompanyKanban().moveCard(cardId, column, position); }
+  kanbanUpdateCard(cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }): KanbanCard | null { return this.requireCompanyKanban().updateCard(cardId, patch); }
+  kanbanDeleteCard(cardId: number): boolean { return this.requireCompanyKanban().deleteCard(cardId); }
+  kanbanAddComment(cardId: number, authorRole: string, agentRunId: number | null, content: string): KanbanComment { return this.requireCompanyKanban().addComment(cardId, authorRole, agentRunId, content); }
+  kanbanUpdateChecklist(cardId: number, items: Array<{ id?: number; text: string; checked: boolean }>): KanbanChecklistItem[] { return this.requireCompanyKanban().updateChecklist(cardId, items); }
+  kanbanAddDependency(cardId: number, dependsOnId: number): KanbanCardDependency { return this.requireCompanyKanban().addDependency(cardId, dependsOnId); }
+  kanbanRemoveDependency(cardId: number, dependsOnId: number): boolean { return this.requireCompanyKanban().removeDependency(cardId, dependsOnId); }
+  kanbanAssignAgent(cardId: number, agentRunId: number, role: string): KanbanCardAgent { return this.requireCompanyKanban().assignAgent(cardId, agentRunId, role); }
+  kanbanUnassignAgent(cardId: number, agentRunId: number): void { this.requireCompanyKanban().unassignAgent(cardId, agentRunId); }
+  kanbanListCards(opts?: { column?: KanbanColumn }): KanbanCard[] { return this.kanban?.listCards(opts) ?? []; }
+  kanbanGetCard(cardId: number): KanbanCardFull | null { return this.kanban?.getCard(cardId) ?? null; }
+  kanbanListCardsFull(): KanbanCardFull[] { return this.kanban?.listCardsFull() ?? []; }
   /**
    * C3 — manual dispatch of one card ("quick-dispatch" route / suggestion
    * chip). Same recommend→spawn→assign→move→comment unit the autonomous
    * scheduler uses; an explicit `role` skips the recommender entirely.
    */
   async dispatchCard(cardId: number, role?: string): Promise<DispatchCardResult> {
+    const kanban = this.requireCompanyKanban();
     return dispatchCard(
       {
         sessionId: this.companySessionId,
-        kanban: this.kanban,
+        kanban,
         subordinates: this.subordinates,
         recommend: getGlobalCompanyRecommend(),
         publish: (event, data) => this.publisher.publish(event, data),
@@ -438,8 +560,8 @@ export class CompanyOrchestrator {
       { role, source: 'manual' },
     );
   }
-  findCardForAgent(agentRunId: number): number | null { return this.kanban.findCardForAgent(agentRunId); }
-  getCardContextForSubordinate(cardId: number): string { return this.kanban.getCardContextForSubordinate(cardId); }
+  findCardForAgent(agentRunId: number): number | null { return this.kanban?.findCardForAgent(agentRunId) ?? null; }
+  getCardContextForSubordinate(cardId: number): string { return this.kanban?.getCardContextForSubordinate(cardId) ?? ''; }
 
   // ─── Projects / status ─────────────────────────────────────────
   listProjects() {
@@ -470,7 +592,8 @@ export class CompanyOrchestrator {
     this.watchdog.dispose();
     this.reconciler.stop();
     this.serviceSupervisor.stop();
-    this.scheduler.stop();
+    this.scheduler?.stop();
+    this.appStudioScheduler?.stop();
     this.subordinates.abortAll();
     this.master.abort();
     try { this.humanInLoop.cancelPendingMasterPrompts(); } catch { /* best-effort */ }
@@ -499,34 +622,41 @@ export class CompanyOrchestrator {
 
   // ─── Pipelines ─────────────────────────────────────────────────
   pipelineList(opts?: { scope?: 'this' | 'global' | 'all'; templateId?: number | null }): Pipeline[] {
+    if (!this.pipelines) return [];
     if (opts?.scope === 'this') return this.pipelines.list({ companySessionId: this.companySessionId, templateId: opts.templateId ?? undefined });
     if (opts?.scope === 'global') return this.pipelines.list({ companySessionId: null, templateId: opts.templateId ?? undefined });
     return this.pipelines.list({ templateId: opts?.templateId ?? undefined });
   }
-  pipelineGet(id: number): Pipeline | null { return this.pipelines.get(id); }
+  pipelineGet(id: number): Pipeline | null { return this.pipelines?.get(id) ?? null; }
   pipelineCreate(input: { name: string; description?: string; graph: PipelineGraph; scope?: 'this' | 'global'; templateId?: number | null }): Pipeline {
-    return this.pipelines.create({
+    return this.requireCompanyPipelines().pipelines.create({
       name: input.name, description: input.description, graph: input.graph,
       companySessionId: input.scope === 'global' ? null : this.companySessionId,
       templateId: input.templateId ?? null,
     });
   }
-  pipelineUpdate(id: number, patch: { name?: string; description?: string; graph?: PipelineGraph }, opts?: { expectedVersion?: number }): Pipeline | null { return this.pipelines.update(id, patch, opts); }
-  pipelineDelete(id: number): boolean { return this.pipelines.delete(id); }
+  pipelineUpdate(id: number, patch: { name?: string; description?: string; graph?: PipelineGraph }, opts?: { expectedVersion?: number }): Pipeline | null { return this.requireCompanyPipelines().pipelines.update(id, patch, opts); }
+  pipelineDelete(id: number): boolean { return this.requireCompanyPipelines().pipelines.delete(id); }
   /** Validate a graph against the session's role roster. */
   pipelineValidate(graph: PipelineGraph): PipelineValidationResult {
-    return this.pipelines.validate(graph, new Set(this.master.roleConfigs.map((r) => r.role)));
+    return this.requireCompanyPipelines().pipelines.validate(graph, new Set(this.master.roleConfigs.map((r) => r.role)));
   }
-  async pipelineStart(pipelineId: number, initialInput: string, startedBy?: string): Promise<PipelineExecution> { return this.pipelineExecutor.start(pipelineId, initialInput, startedBy); }
-  pipelineAbort(executionId: number, reason?: string): boolean { return this.pipelineExecutor.abort(executionId, reason); }
-  pipelinePause(executionId: number): boolean { return this.pipelineExecutor.pause(executionId); }
-  async pipelineResume(executionId: number): Promise<boolean> { return this.pipelineExecutor.resume(executionId); }
+  async pipelineStart(pipelineId: number, initialInput: string, startedBy?: string): Promise<PipelineExecution> { return this.requireCompanyPipelines().executor.start(pipelineId, initialInput, startedBy); }
+  pipelineAbort(executionId: number, reason?: string): boolean { return this.requireCompanyPipelines().executor.abort(executionId, reason); }
+  pipelinePause(executionId: number): boolean { return this.requireCompanyPipelines().executor.pause(executionId); }
+  async pipelineResume(executionId: number): Promise<boolean> { return this.requireCompanyPipelines().executor.resume(executionId); }
   /** Approve a `requires_confirmation` pause (re-runs the gated next node). */
-  async pipelineConfirm(executionId: number): Promise<boolean> { return this.pipelineExecutor.confirm(executionId); }
+  async pipelineConfirm(executionId: number): Promise<boolean> { return this.requireCompanyPipelines().executor.confirm(executionId); }
   /** Boot-time recovery: any run still `running` in DB has no in-memory listener → flip to `paused` and emit. */
-  async pipelineRecoverRunning(): Promise<{ paused: number }> { return this.pipelineExecutor.recoverRunning(); }
-  pipelineStatus(executionId: number): { execution: PipelineExecution; nodes: PipelineNodeExecution[] } | null { return this.pipelineExecutor.status(executionId); }
-  pipelineListExecutions(opts?: { pipelineId?: number; status?: PipelineExecutionStatus; limit?: number }): PipelineExecution[] { return this.pipelineExecutor.listExecutions(opts); }
+  async pipelineRecoverRunning(): Promise<{ paused: number }> {
+    // Recovery is a boot hook and callers intentionally fire-and-forget it.
+    // App runtimes have no Company pipeline executor, so the only safe and
+    // deterministic result is a no-op (never touch persisted executions).
+    if (!this.pipelineExecutor) return { paused: 0 };
+    return this.pipelineExecutor.recoverRunning();
+  }
+  pipelineStatus(executionId: number): { execution: PipelineExecution; nodes: PipelineNodeExecution[] } | null { return this.pipelineExecutor?.status(executionId) ?? null; }
+  pipelineListExecutions(opts?: { pipelineId?: number; status?: PipelineExecutionStatus; limit?: number }): PipelineExecution[] { return this.pipelineExecutor?.listExecutions(opts) ?? []; }
 
   // ─── Agent inbox ───────────────────────────────────────────────
   inboxSend(args: InboxSendArgs): InboxSendResult { return this.inbox.send(args); }

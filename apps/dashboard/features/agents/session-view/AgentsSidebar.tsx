@@ -44,6 +44,8 @@ interface AgentsSidebarProps {
   onOpenPersistedRun: (coderSessionId: number, role: string, status: string) => void;
   /** Open the role modal: `{ draft }` creates, `{ draft, editIdx }` edits that row. */
   onOpenRoleDialog: (args: { draft: RoleConfig; editIdx?: number }) => void;
+  /** App-owned teams are inspected here but configured/controlled via App Studio. */
+  readOnly?: boolean;
 }
 
 /**
@@ -73,6 +75,7 @@ export function AgentsSidebar({
   onOpenAgentRun,
   onOpenPersistedRun,
   onOpenRoleDialog,
+  readOnly = false,
 }: AgentsSidebarProps) {
   const { t } = useTranslation('agents');
   const [addingProject, setAddingProject] = useState(false);
@@ -190,7 +193,7 @@ export function AgentsSidebar({
         icon={Folder}
         title={t('company.projects')}
         count={projects.length}
-        action={
+        action={!readOnly ? (
           <button
             type="button"
             onClick={() => {
@@ -202,7 +205,7 @@ export function AgentsSidebar({
           >
             <Plus className="h-3 w-3" />
           </button>
-        }
+        ) : undefined}
       >
         <div className="flex flex-wrap gap-1.5">
           {projects.map((p) => (
@@ -212,12 +215,12 @@ export function AgentsSidebar({
               name={p.project_name}
               label={p.label}
               onRenamed={refetch}
-              canDelete={projects.length > 1}
+              canDelete={!readOnly && projects.length > 1}
               onDelete={() => deleteProject(p)}
             />
           ))}
         </div>
-        {addingProject && (
+        {!readOnly && addingProject && (
           availableProjects.length > 0 ? (
             <div className="flex gap-1 mt-1.5">
               <select
@@ -248,7 +251,7 @@ export function AgentsSidebar({
       </SidebarSection>
 
       {/* ── Agentes por projeto (bindings) ── */}
-      {hasProjects && hasRoles && (
+      {!readOnly && hasProjects && hasRoles && (
         <SidebarSection
           storageKey="projectRoles"
           icon={GitBranch}
@@ -270,7 +273,7 @@ export function AgentsSidebar({
           icon={Users}
           title={t('company.configuredRoles')}
           count={roleAssignments.length}
-          action={
+          action={!readOnly ? (
             <button
               type="button"
               onClick={openNewRoleDialog}
@@ -279,14 +282,17 @@ export function AgentsSidebar({
             >
               <Plus className="h-3 w-3" />
             </button>
-          }
+          ) : undefined}
         >
           <div className="space-y-1">
             {roleAssignments.map((r, i) => (
               <div key={i} className="rounded border p-1.5 space-y-1">
                 <div
-                  className="flex items-center gap-2 text-[10px] cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
-                  onClick={() => openEditRoleDialog(i)}
+                  className={cn(
+                    'flex items-center gap-2 text-[10px] rounded px-1 py-0.5',
+                    !readOnly && 'cursor-pointer hover:bg-muted/50',
+                  )}
+                  onClick={() => { if (!readOnly) openEditRoleDialog(i); }}
                 >
                   {r.role === 'master' ? (
                     <Crown className="h-3 w-3 text-yellow-400 shrink-0" />
@@ -302,7 +308,7 @@ export function AgentsSidebar({
                       {r.tier}
                     </Badge>
                   )}
-                  {r.role !== 'master' && (
+                  {!readOnly && r.role !== 'master' && (
                     <button
                       type="button"
                       title={t('role.remove', 'Remover papel')}
@@ -323,34 +329,38 @@ export function AgentsSidebar({
       )}
 
       {/* ── Regras Operacionais (política da sessão, injetada em todo agente) ── */}
-      <SidebarSection
-        storageKey="operationalRules"
-        icon={ScrollText}
-        title={t('company.operationalRules.label')}
-        defaultOpen={false}
-      >
-        <OperationalRulesEditor
-          sessionId={sessionId}
-          value={(config?.operational_rules as string | undefined) ?? ''}
-          refetch={refetch}
-        />
-      </SidebarSection>
+      {!readOnly && (
+        <SidebarSection
+          storageKey="operationalRules"
+          icon={ScrollText}
+          title={t('company.operationalRules.label')}
+          defaultOpen={false}
+        >
+          <OperationalRulesEditor
+            sessionId={sessionId}
+            value={(config?.operational_rules as string | undefined) ?? ''}
+            refetch={refetch}
+          />
+        </SidebarSection>
+      )}
 
       {/* ── Autonomia (C1 — organismo: toggles + freeze + feed de atividade) ── */}
-      <SidebarSection
-        storageKey="autonomy"
-        icon={Activity}
-        title={t('company.autonomy.label')}
-        defaultOpen={false}
-      >
-        <AutonomyPanel sessionId={sessionId} />
-      </SidebarSection>
+      {!readOnly && (
+        <SidebarSection
+          storageKey="autonomy"
+          icon={Activity}
+          title={t('company.autonomy.label')}
+          defaultOpen={false}
+        >
+          <AutonomyPanel sessionId={sessionId} />
+        </SidebarSection>
+      )}
 
       {/* ── Microservices — only when the session can actually have them:
           builder mode (sandbox network) or services already attached
           (session projects with a label). Permanent "No services yet"
           noise in plain sessions helped nobody. ── */}
-      {(!!config?.builder || projects.some((p) => !!p.label)) && (
+      {!readOnly && (!!config?.builder || projects.some((p) => !!p.label)) && (
         <SidebarSection
           storageKey="microservices"
           icon={Server}
@@ -390,9 +400,9 @@ export function AgentsSidebar({
             key={agent.agentRunId}
             agent={agent}
             onClick={() => onOpenAgentRun(agent.agentRunId, agent.role, agent.status)}
-            onPause={() => void stream.pauseAgent(agent.agentRunId)}
-            onResume={() => void stream.resumeAgent(agent.agentRunId)}
-            onDelete={async () => {
+            onPause={readOnly ? undefined : () => void stream.pauseAgent(agent.agentRunId)}
+            onResume={readOnly ? undefined : () => void stream.resumeAgent(agent.agentRunId)}
+            onDelete={readOnly ? undefined : async () => {
               if (await confirm({
                 title: t('agentActions.delete'),
                 description: t('agentActions.deleteConfirm', { role: agent.role }),

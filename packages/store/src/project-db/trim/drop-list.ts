@@ -76,7 +76,8 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'sprite_generation_jobs', 'sprite_animations', 'sprite_frames', 'ssh_secrets',
   'installed_plugins', 'plugin_storage', 'verdaccio_configs', 'disabled_tools_global',
   // guided App Studio lives in the central product DB, never in code-index DBs
-  'app_studio_workflow_snapshots', 'app_studio_delivery_blueprints', 'app_studio_work_items',
+  'app_studio_plan_revisions', 'app_studio_deployments', 'app_studio_decisions', 'app_studio_events',
+  'app_studio_workflow_snapshots', 'app_studio_delivery_blueprints', 'app_studio_work_items', 'app_studio_work_item_runs',
   'app_studio_approvals', 'app_studio_decision_requests', 'app_studio_workflow_events',
   'app_studio_build_task_evidence', 'app_studio_build_groups', 'app_studio_wireframe_revisions', 'app_studio_ux_revisions', 'app_studio_product_revisions',
   'app_studio_pipeline_repairs', 'app_studio_architecture_revisions', 'app_studio_evolutions', 'app_studio_spec_revisions',

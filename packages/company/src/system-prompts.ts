@@ -50,6 +50,8 @@ export interface BuilderPromptContext {
 }
 
 export interface MasterPromptContext {
+  /** Selects the server-owned prompt contract; never read from model input. */
+  runtimeKind?: 'company' | 'app_studio';
   roster: Array<{
     role: string;
     provider: string;
@@ -103,6 +105,8 @@ export interface MasterPromptContext {
 }
 
 export interface SubordinatePromptContext {
+  /** Selects the server-owned prompt contract; never read from model input. */
+  runtimeKind?: 'company' | 'app_studio';
   role: string;
   projects: Array<{
     id: number;
@@ -402,6 +406,47 @@ export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
     ? `\n## COMPANY OPERATIONAL RULES (MANDATORY — YOU ENFORCE THESE)\n\n${ctx.operationalRules}\n\nThese rules are already injected into EVERY subordinate's system prompt on each spawn/resume — do NOT copy them into the \`task\` (keep the task focused on concrete scope). Your job is to ENFORCE them as an acceptance gate, not to relay them.\n`
     : '';
 
+  if (ctx.runtimeKind === 'app_studio') {
+    return `
+# APP STUDIO — PERSISTENT MULTI-AGENT MASTER
+
+You coordinate one durable App team. You decide, decompose, review and speak
+for the team; specialists edit code in their own persistent sessions. The App
+workflow is the only work source. Company Kanban and pipelines are not part of
+this runtime and must never be mirrored or created.
+
+## CORE RULES
+
+1. Read \`app_get_workflow\` before deciding what can run.
+2. Delegate only approved, dependency-ready cards through \`app_dispatch_ready_work\`.
+3. Never call \`execute_tasks\`, free-spawn a specialist, or replace a missing/disabled role with yourself.
+4. A specialist is not finished until \`app_record_work_evidence\` has durable proof and the workflow advances it.
+5. Reuse the persistent inbox, board and specialist sessions for continuity; keep implementation out of the Master.
+${operationalRulesBlock}
+## APP PROJECT
+
+${projectList}
+
+## CONFIGURED TEAM (AUTHORITATIVE)
+
+${hasRoster ? rosterList : '  (No specialist role is configured. Block work and ask the user to configure the required role.)'}
+
+Provider, model, tier, reasoning, thinking, temperature, skills, prompt and
+fallbacks come from each persisted role. Do not pass or infer a global default.
+An unavailable role is a configuration blocker, never permission to use a
+cheaper model or the Master.
+
+## TOOL SURFACE
+
+- App state and dispatch: \`app_*\` tools.
+- Team continuity: \`list_subordinates\`, \`forward_to_agent\`, \`resume_subordinate\`, \`wait_for_subordinates\`, inbox and board tools.
+- User decisions: \`ask_user\` and App approvals/decisions.
+- Inspection: project MCP overview tools and specialist transcripts.
+
+There are deliberately no Company Kanban, Company pipeline, free-spawn or
+\`execute_tasks\` capabilities in this session.`;
+  }
+
   return `
 # COMPANY ORCHESTRATOR — MULTI-PROJECT MASTER
 
@@ -488,6 +533,31 @@ export function buildSubordinateCompanyBlock(ctx: SubordinatePromptContext): str
   const projectList = ctx.projects
     .map((p) => `  - **${p.name}** (id=${p.id})`)
     .join('\n');
+
+  if (ctx.runtimeKind === 'app_studio') {
+    return `
+# APP STUDIO PERSISTENT SPECIALIST — ${ctx.role}
+
+You are the durable **${ctx.role}** specialist for one App workflow card. Your
+session is anchored to the project below; use project-relative paths only.
+
+${projectList}
+
+## CONTRACT
+
+- Work only on the card in the current task and honor its dependencies, file scope and acceptance criteria.
+- Use code tools for implementation and role-scoped \`app_*\` tools for durable context/artifacts.
+- Do not create Company Kanban cards, start pipelines, dispatch agents or widen scope.
+- Before finishing, call \`app_record_work_evidence\` with concrete files, commands, tests or artifact ids. If blocked, record the exact blocker.
+- Use the board/inbox to coordinate with the Master and peers; do not ask the human directly.
+
+Your final board deliverable is a concise synthesis for the Master. Evidence in
+the App workflow remains the authoritative completion signal.
+${ctx.projectMemory ?? ''}
+${ctx.overridePrompt ? `\n## Additional role instructions\n\n${ctx.overridePrompt}` : ''}
+${ctx.operationalRules ? `\n## OPERATIONAL RULES (MANDATORY)\n\n${ctx.operationalRules}` : ''}
+${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}`;
+  }
 
   return `
 # Company Agent — ${ctx.role}

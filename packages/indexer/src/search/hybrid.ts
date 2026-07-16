@@ -59,6 +59,18 @@ export interface SearchDiagnostics {
    * Unset when the stream is off (`MCP_FTS_CONTENT_STREAM=0`) or empty.
    */
   contentCount?: number;
+  /** True only when this response was served by the short-lived query cache. */
+  cacheHit?: boolean;
+  /** Complete retrieval + fusion + reranking latency for this request. */
+  totalTimeMs?: number;
+  /** Whether the cross-encoder successfully replaced the RRF ordering. */
+  rerankerApplied?: boolean;
+  /** Expanded candidate set submitted to the reranker. */
+  rerankerCandidates?: number;
+  /** Valid rows returned by the reranker. */
+  rerankerReturned?: number;
+  /** Reranker error when the pipeline preserved the RRF ordering. */
+  rerankerError?: string;
 }
 
 export interface HybridSearchOptions {
@@ -69,6 +81,8 @@ export interface HybridSearchOptions {
   supersessionKey?: string;
   /** Abort signal owned by the transport/request lifecycle. */
   signal?: AbortSignal;
+  /** Force a fresh execution for diagnostics/benchmarks. Never used by normal consumers. */
+  bypassCache?: boolean;
 }
 
 export interface GlobalHybridSearchResult {
@@ -208,7 +222,11 @@ export class HybridSearch {
     if (pipelineQuery.diag.contentCount !== undefined) diagAccum.contentCount = pipelineQuery.diag.contentCount;
     if (pipelineQuery.diag.graphExpansionCount !== undefined) diagAccum.graphExpansionCount = pipelineQuery.diag.graphExpansionCount;
     if (pipelineQuery.diag.generationUsed !== undefined) diagAccum.generationUsed = pipelineQuery.diag.generationUsed;
+    if (pipelineQuery.diag.rerankerApplied !== undefined) diagAccum.rerankerApplied = pipelineQuery.diag.rerankerApplied;
+    if (pipelineQuery.diag.rerankerCandidates !== undefined) diagAccum.rerankerCandidates = pipelineQuery.diag.rerankerCandidates;
+    if (pipelineQuery.diag.rerankerReturned !== undefined) diagAccum.rerankerReturned = pipelineQuery.diag.rerankerReturned;
     if (pipelineQuery.diag.rerankerError !== undefined) {
+      diagAccum.rerankerError = pipelineQuery.diag.rerankerError;
       diagAccum.fallback = true;
       diagAccum.fallbackReason = pipelineQuery.diag.rerankerError;
     }
@@ -381,6 +399,7 @@ export class HybridSearch {
     query: string,
     options?: HybridSearchOptions,
   ): Promise<{ results: HybridSearchResult[]; diagnostics: SearchDiagnostics }> {
+    const startedAt = performance.now();
     const requestedMode = options?.mode ?? 'auto';
     const type = options?.type ?? 'all';
     const limit = options?.limit ?? 20;
@@ -403,14 +422,23 @@ export class HybridSearch {
 
     // Check cache (key includes resolved mode so `auto` and `hybrid`
     // share a result row when the planner picks `hybrid`).
-    const cacheKey = this.queryCacheKey(projectId, query, mode, type, limit);
+    const cacheKey = options?.bypassCache
+      ? null
+      : this.queryCacheKey(projectId, query, mode, type, limit);
     const cached = cacheKey ? this.queryCache.get(cacheKey) : undefined;
     if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
       // Return the diagnostics of the run that produced the entry — a
       // stripped object here made consumers (e.g. the agent-facing
       // diagnostics trailer) report "all fine" on cache hits even when the
       // cached run had degraded to FTS-only.
-      return { results: cached.results, diagnostics: cached.diagnostics };
+      return {
+        results: cached.results,
+        diagnostics: {
+          ...cached.diagnostics,
+          cacheHit: true,
+          totalTimeMs: performance.now() - startedAt,
+        },
+      };
     }
 
     const diag: SearchDiagnostics = {
@@ -419,6 +447,7 @@ export class HybridSearch {
       requestedMode,
       plannedMode: mode,
       effectiveMode: mode,
+      cacheHit: false,
       ...(mode !== 'fts'
         ? { embedder: this.embeddingService.cacheRevisionForNamespace?.(codeNamespace(projectId))
             ?? this.embeddingService.fingerprint?.()
@@ -431,6 +460,7 @@ export class HybridSearch {
     };
 
     const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {
+      r.diagnostics.totalTimeMs = performance.now() - startedAt;
       // A transient semantic failure must not pin an FTS-only fallback for the
       // full cache TTL. No-active/disabled namespace-aware services surface
       // through vectorError as well, and their revision changes when serving

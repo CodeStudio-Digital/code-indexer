@@ -16,6 +16,8 @@ export interface ToolCallLedgerEntry {
   readCoverage?: { path: string; start: number | null; end: number | null };
   resultNovel: boolean;
   coverageNovel: boolean;
+  /** Allowlisted validation command/tool label; never a raw command line. */
+  validationSignal?: string;
 }
 
 const CONTINUATION_KEYS = new Set([
@@ -49,7 +51,9 @@ export function logicalOperationId(name: string, args: unknown): string {
 
 export class ToolCallLedger {
   private seq = 0;
+  private readonly entries: ToolCallLedgerEntry[] = [];
   private readonly resultsByOperation = new Map<string, Set<string>>();
+  private readonly noProgressByOperation = new Map<string, number>();
   private readonly coverage = new Set<string>();
   private unsafeLane: Promise<void> = Promise.resolve();
 
@@ -70,6 +74,29 @@ export class ToolCallLedger {
       released = true;
       release();
     };
+  }
+
+  get lastSeq(): number { return this.seq; }
+
+  snapshot(afterSeq = 0): ToolCallLedgerEntry[] {
+    return this.entries.filter((entry) => entry.seq > afterSeq).map((entry) => ({ ...entry }));
+  }
+
+  /** Pre-dispatch guard: refuse only after repeated, observed no-progress. */
+  checkRepeat(input: {
+    name: string;
+    args: unknown;
+    repeatPolicy?: string;
+    mutates?: boolean;
+  }): { operationId: string; count: number } | null {
+    const operationId = logicalOperationId(input.name, input.args);
+    if (input.mutates || input.repeatPolicy === 'mutating' || input.repeatPolicy === 'pollable') return null;
+    const count = this.noProgressByOperation.get(operationId) ?? 0;
+    return count >= 3 ? { operationId, count: count + 1 } : null;
+  }
+
+  resetNoProgress(): void {
+    this.noProgressByOperation.clear();
   }
 
   record(input: {
@@ -116,7 +143,8 @@ export class ToolCallLedger {
         : input.refusalKind
           ? 'refusal'
           : input.isError ? 'tool_error' : 'success';
-    return {
+    const validationSignal = extractValidationSignal(input.name, argRecord);
+    const entry: ToolCallLedgerEntry = {
       seq: ++this.seq,
       name: input.name,
       logicalOperationId: operation,
@@ -131,6 +159,43 @@ export class ToolCallLedger {
       ...(readCoverage ? { readCoverage } : {}),
       resultNovel: novel,
       coverageNovel,
+      ...(validationSignal ? { validationSignal } : {}),
     };
+    this.entries.push(entry);
+    while (this.entries.length > 500) this.entries.shift();
+    if (outcome === 'success') {
+      if (input.mutates || input.repeatPolicy === 'mutating' || input.repeatPolicy === 'pollable' || entry.productive) {
+        this.noProgressByOperation.set(operation, 0);
+      } else {
+        this.noProgressByOperation.set(operation, (this.noProgressByOperation.get(operation) ?? 0) + 1);
+      }
+    }
+    return entry;
   }
+}
+
+function extractValidationSignal(name: string, args: Record<string, unknown>): string | undefined {
+  const command = [args.command, args.cmd, args.script].find((value): value is string => typeof value === 'string');
+  if (command) {
+    const normalized = command.replace(/\s+/g, ' ').trim().toLowerCase();
+    const patterns: Array<[RegExp, string]> = [
+      [/\bgit diff --check\b/, 'git diff --check'],
+      [/\b(?:npm|pnpm|yarn|bun) (?:run )?(?:test|typecheck|lint|build|check)\b/, 'package validation'],
+      [/\bvitest(?: run)?\b/, 'vitest run'],
+      [/\bjest\b/, 'jest'],
+      [/\bpytest\b/, 'pytest'],
+      [/\bcargo (?:test|check|clippy|build)\b/, 'cargo validation'],
+      [/\bgo (?:test|vet|build)\b/, 'go validation'],
+      [/\bdotnet (?:test|build)\b/, 'dotnet validation'],
+      [/\b(?:mvn|gradle|gradlew) (?:test|verify|check|build)\b/, 'jvm validation'],
+      [/\btsc(?: --noemit)?\b/, 'tsc --noEmit'],
+      [/\b(?:eslint|biome check|ruff check|vite build)\b/, 'static validation'],
+    ];
+    for (const [pattern, label] of patterns) {
+      const match = normalized.match(pattern);
+      if (match) return label === 'package validation' ? match[0] : label;
+    }
+  }
+  if (/(?:^|[_-])(?:test|typecheck|lint|diagnostic|build)(?:$|[_-])/i.test(name)) return name;
+  return undefined;
 }

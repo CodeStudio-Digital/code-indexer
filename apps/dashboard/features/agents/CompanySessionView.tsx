@@ -54,6 +54,8 @@ interface CompanySessionViewProps {
   sessionsListOpen?: boolean;
   onToggleSessionsList?: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
+  runtimeKind?: 'company' | 'app_studio';
+  appSessionId?: number | null;
 }
 
 interface SessionFullData {
@@ -96,6 +98,8 @@ export function CompanySessionView({
   sessionsListOpen,
   onToggleSessionsList,
   workbenchSlots,
+  runtimeKind = 'company',
+  appSessionId = null,
 }: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
   const contribWindows = useContributions((s) => s.toolWindows);
@@ -228,6 +232,7 @@ export function CompanySessionView({
   // tools once replaced the central surface. Open the corresponding bottom
   // tab and normalize the center back to the regular Build surface.
   useEffect(() => {
+    if (runtimeKind === 'app_studio') return;
     const legacyBottom = routeParams.zone === 'build' &&
       (routeParams.tab === 'terminal' || routeParams.tab === 'runners')
       ? routeParams.tab
@@ -238,7 +243,7 @@ export function CompanySessionView({
       buildAgentsUrl(sessionId, activeFrontId, 'build', DEFAULT_TAB_FOR_ZONE.build),
       { replace: true },
     );
-  }, [activeFrontId, navigate, persistBottom, routeParams.tab, routeParams.zone, sessionId]);
+  }, [activeFrontId, navigate, persistBottom, routeParams.tab, routeParams.zone, runtimeKind, sessionId]);
   const [modalSession, setModalSession] = useState<{
     coderSessionId: number;
     role: string;
@@ -283,6 +288,7 @@ export function CompanySessionView({
   // regardless of which tab inside ZoneLayout has focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (runtimeKind === 'app_studio') return;
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'j') {
         e.preventDefault();
         toggleBottom('terminal');
@@ -290,7 +296,7 @@ export function CompanySessionView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [toggleBottom]);
+  }, [runtimeKind, toggleBottom]);
 
   // Reset stream state when the active sub-session changes (tab switch
   // or explicit session change). Each sub-session has its own metaBus
@@ -361,7 +367,10 @@ export function CompanySessionView({
     setSidePanel((cur) => (cur === panel ? null : panel));
   };
 
-  const databaseMode = sidePanel === 'databases';
+  const visibleSidePanel = runtimeKind === 'app_studio' && sidePanel !== 'company-config'
+    ? null
+    : sidePanel;
+  const databaseMode = runtimeKind === 'company' && visibleSidePanel === 'databases';
   const selectedDatabaseProject = (sessionData?.projects ?? []).find(
     (project) => project.project_id === selectedDatabaseProjectId,
   ) ?? null;
@@ -439,7 +448,7 @@ export function CompanySessionView({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--workbench-canvas)]">
-      {selectedDatabaseProject && (
+      {runtimeKind === 'company' && selectedDatabaseProject && (
         <DatabaseToolWindow
           key={`company-database-${selectedDatabaseProject.project_id}`}
           projectId={selectedDatabaseProject.project_id}
@@ -451,14 +460,34 @@ export function CompanySessionView({
       )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Same hierarchy as ProjectWorkbench: the vertical split owns the
-            whole workbench, so the bottom dock spans primary + right dock.
+            whole workbench, so the bottom dock spans catalog + primary + right dock.
             The fixed-width activity rail remains outside every resizable
             panel and every surface gets the shared 6px workbench gutter. */}
         <div className="min-w-0 flex-1 p-1.5">
           <PanelGroup direction="vertical" autoSaveId={`mcp-agents-vert-${sessionId}`}>
             <Panel id="company-main" order={1} minSize={28} className="min-h-0">
               <PanelGroup direction="horizontal" autoSaveId={`mcp-agents-horiz-${sessionId}`}>
-                <Panel id="company-primary" order={1} minSize={34} className="min-w-0">
+                {runtimeKind === 'company' && workbenchSlots?.catalog.open && (
+                  <>
+                    <Panel
+                      id="company-catalog-dock"
+                      order={1}
+                      defaultSize={22}
+                      minSize={16}
+                      maxSize={34}
+                      collapsible
+                      collapsedSize={0}
+                      onCollapse={() => workbenchSlots.catalog.onOpenChange(false)}
+                      onExpand={() => workbenchSlots.catalog.onOpenChange(true)}
+                      className="min-w-0"
+                    >
+                      {workbenchSlots.catalogPanel}
+                    </Panel>
+                    <WorkbenchResizeHandle direction="horizontal" />
+                  </>
+                )}
+
+                <Panel id="company-primary" order={2} minSize={34} className="min-w-0">
                   <WorkbenchSurface className="flex h-full flex-col bg-[var(--workbench-canvas)]">
                     {/* Session context belongs to the primary surface. Keeping
                         it here aligns it with every tool-window header instead
@@ -473,14 +502,32 @@ export function CompanySessionView({
                       onToggleSessionsList={onToggleSessionsList}
                       recoveredAt={sessionData?.session.recovered_at ?? null}
                       recoveredReason={sessionData?.session.recovered_reason ?? null}
-                      onResetClick={() => setResetDialogOpen(true)}
-                      onReestablishMasterClick={() => setReestablishMasterOpen(true)}
+                      allowAbort={runtimeKind === 'company'}
+                      onResetClick={runtimeKind === 'company' ? () => setResetDialogOpen(true) : undefined}
+                      onReestablishMasterClick={runtimeKind === 'company' ? () => setReestablishMasterOpen(true) : undefined}
                     />
-                    <SessionBanners stream={stream} sessionId={activeSessionId} />
+                    <SessionBanners
+                      stream={stream}
+                      sessionId={activeSessionId}
+                      readOnly={runtimeKind === 'app_studio'}
+                    />
+                    {runtimeKind === 'app_studio' && appSessionId != null && (
+                      <div className="flex h-8 items-center gap-2 border-b border-violet-500/20 bg-violet-500/5 px-3 text-[10px] text-muted-foreground">
+                        <span className="font-medium text-violet-300">{t('company.appTeam.title')}</span>
+                        <span>{t('company.appTeam.description')}</span>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/apps/${appSessionId}`)}
+                          className="ml-auto text-violet-300 hover:underline"
+                        >
+                          {t('company.openAppWorkflow')}
+                        </button>
+                      </div>
+                    )}
 
                     {/* Front tabs — visible across every zone so the user always
                         has a way to switch between Main and child fronts. */}
-                    {siblings.parent && (
+                    {runtimeKind === 'company' && siblings.parent && (
                       <FrontTabsBar
                         parent={siblings.parent}
                         children={siblings.children}
@@ -511,7 +558,8 @@ export function CompanySessionView({
                           bottomOpen={activeBottom !== null}
                           onToggleBottom={() => toggleBottom('terminal')}
                           workbenchSlots={workbenchSlots}
-                          composer={
+                          runtimeKind={runtimeKind}
+                          composer={runtimeKind === 'company' ? (
                             <MasterComposer
                               sessionId={activeSessionId}
                               onSend={handleSend}
@@ -525,7 +573,7 @@ export function CompanySessionView({
                               setReasoningEffort={handleMasterEffortChange}
                               reasoningLevels={masterReasoningLevels}
                             />
-                          }
+                          ) : undefined}
                         />
                       </div>
                       {databaseMode && (
@@ -538,14 +586,14 @@ export function CompanySessionView({
                 {/* Right dock is a sibling of the primary surface, exactly like
                     ProjectWorkbench. The rail that controls it stays outside
                     the padded/resizable workbench below. */}
-                {sidePanel !== null && (
+                {visibleSidePanel !== null && (
                   <>
                     <WorkbenchResizeHandle direction="horizontal" />
-                    <Panel id="company-right-dock" order={2} defaultSize={26} minSize={20} maxSize={46} className="min-w-0">
+                    <Panel id="company-right-dock" order={3} defaultSize={26} minSize={20} maxSize={46} className="min-w-0">
                       <WorkbenchSurface className="flex h-full flex-col bg-[var(--workbench-surface)]">
                         <SidebarPanels
                           sessionId={sessionId}
-                          active={sidePanel}
+                          active={visibleSidePanel}
                           databaseSlot={
                             <CompanyDbConnectionsPanel
                               projects={sessionData?.projects ?? []}
@@ -571,9 +619,11 @@ export function CompanySessionView({
                               onOpenAgentRun={openAgentRun}
                               onOpenPersistedRun={openPersistedRun}
                               onOpenRoleDialog={(args) => setRoleDialog(args)}
+                              readOnly={runtimeKind === 'app_studio'}
                             />
                           }
                           pluginWindows={contribWindows}
+                          readOnly={runtimeKind === 'app_studio'}
                         />
                       </WorkbenchSurface>
                     </Panel>
@@ -582,9 +632,10 @@ export function CompanySessionView({
               </PanelGroup>
             </Panel>
 
-            {/* Bottom dock spans the complete resizable workbench (primary +
-                right dock) rather than being nested inside the conversation. */}
-            {activeBottom && (
+            {/* Bottom dock spans the complete resizable workbench (catalog +
+                primary + right dock) rather than being nested inside the
+                conversation. The fixed activity rails remain outside it. */}
+            {runtimeKind === 'company' && activeBottom && (
               <>
                 <WorkbenchResizeHandle direction="vertical" />
                 <Panel id="company-bottom-dock" order={2} defaultSize={28} minSize={12} maxSize={62} className="min-h-0">
@@ -605,9 +656,10 @@ export function CompanySessionView({
           </PanelGroup>
         </div>
         <SidebarRail
-          active={sidePanel}
+          active={visibleSidePanel}
           onToggle={togglePanel}
           pluginWindows={contribWindows}
+          readOnly={runtimeKind === 'app_studio'}
         />
       </div>
 
@@ -630,7 +682,7 @@ export function CompanySessionView({
               s.status === 'waiting_tasks',
           ).length
         }
-        onWakeMaster={() => void stream.wakeMaster()}
+        onWakeMaster={runtimeKind === 'company' ? () => void stream.wakeMaster() : undefined}
         t={t}
       />
 
@@ -643,7 +695,7 @@ export function CompanySessionView({
         />
       )}
 
-      {resetDialogOpen && (
+      {runtimeKind === 'company' && resetDialogOpen && (
         <ResetSessionDialog
           sessionId={sessionId}
           sessionName={sessionName}
@@ -656,7 +708,7 @@ export function CompanySessionView({
         />
       )}
 
-      {reestablishMasterOpen && (
+      {runtimeKind === 'company' && reestablishMasterOpen && (
         <ReestablishMasterDialog
           sessionId={sessionId}
           sessionName={sessionName}
@@ -665,7 +717,7 @@ export function CompanySessionView({
         />
       )}
 
-      {roleDialog && config && (
+      {runtimeKind === 'company' && roleDialog && config && (
         <RoleDialog
           sessionId={sessionId}
           config={config}

@@ -23,6 +23,7 @@ import { apiCall } from '../../../../../lib/api-client.js';
 import { Button } from '../../../../../components/ui/button.js';
 import { toast } from '../../../../../components/ui/prompt-dialog.js';
 import { readGitAiDiffConsent, writeGitAiDiffConsent } from './git-ai-consent.js';
+import { openProjectPushDialog } from '../../../../git-push/push-dialog-store.js';
 
 interface CommitBoxProps {
   projectId: number;
@@ -76,21 +77,17 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
         message: message.trim(),
         amend,
       });
-      if (push) {
-        const res = await apiCall<{ ok: boolean; stderr: string }>('projectGit.push', {
-          projectId,
-          repoPath,
-          setUpstream: !upstream,
-        });
-        // The commit already landed — surface a push failure without
-        // losing it, so the user can retry the push from the status bar.
-        if (!res.ok) {
-          toast.error(t('git.pushFailed'), { description: res.stderr });
-        }
-      }
       setMessage('');
       setAmend(false);
       onCommitted();
+      if (push) {
+        openProjectPushDialog({
+          projectId,
+          repoPath,
+          setUpstream: !upstream,
+          onPushed: onCommitted,
+        });
+      }
     } catch (e) {
       toast.error(t('git.commitFailed'), {
         description: e instanceof Error ? e.message : String(e),

@@ -5,6 +5,7 @@ import { Users, ShieldCheck, KeyRound } from 'lucide-react';
 import type { OrgMemberPublic, OrgPublic, OrgRolePublic } from '@mcp/api-bus';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
+import { confirm } from '../lib/confirm.js';
 import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Spinner } from '../lib/ui.js';
 
 type Membership = { org: OrgPublic; role: OrgRolePublic };
@@ -138,7 +139,14 @@ function OrgCard({
   }, [load]);
 
   const removeMember = async (accountId: string) => {
-    if (!confirm('Remove this member from the team?')) return;
+    if (
+      !(await confirm({
+        title: 'Remove this member from the team?',
+        confirmLabel: 'Remove',
+        tone: 'destructive',
+      }))
+    )
+      return;
     setError(null);
     try {
       await api.orgRemoveMember(org.id, accountId);
@@ -324,7 +332,16 @@ function VaultSection({ orgId }: { orgId: string }) {
   }, [load]);
 
   const rotate = async () => {
-    if (!confirm('Rotate the team vault key? Everyone must pull again, and anyone removed loses access to future changes. Re-share from the desktop app to re-grant members.')) return;
+    if (
+      !(await confirm({
+        title: 'Rotate the team vault key?',
+        description:
+          'Everyone must pull again, and anyone removed loses access to future changes. Re-share from the desktop app to re-grant members.',
+        confirmLabel: 'Rotate key',
+        tone: 'destructive',
+      }))
+    )
+      return;
     setBusy(true);
     setError(null);
     setMsg(null);

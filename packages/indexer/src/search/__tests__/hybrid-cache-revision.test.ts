@@ -56,6 +56,39 @@ describe('HybridSearch semantic cache revisions', () => {
     expect(vectorSearch).toHaveBeenCalledTimes(2);
   });
 
+  it('bypasses a valid cache entry for an explicit diagnostic run', async () => {
+    const embedQueryForNamespace = vi.fn(async () => ({
+      vector: [1],
+      tokens: 0,
+      generationId: 17,
+    }));
+    const embedding: EmbeddingService = {
+      embed: vi.fn(async (texts) => ({ vectors: texts.map(() => [1]), tokens: 0 })),
+      embedQuery: vi.fn(async () => ({ vector: [1], tokens: 0 })),
+      embedQueryForNamespace,
+      cacheRevisionForNamespace: () => 'code:p7:g17',
+    };
+    const hybrid = new HybridSearch(
+      database(),
+      { search: vi.fn(async () => []) } as unknown as VectorStore,
+      embedding,
+    );
+    const options = { mode: 'vector' as const, type: 'files' as const, limit: 5 };
+
+    const first = await hybrid.searchWithDiag(7, 'project-seven', 'processEmbeddings', options);
+    const cached = await hybrid.searchWithDiag(7, 'project-seven', 'processEmbeddings', options);
+    const fresh = await hybrid.searchWithDiag(7, 'project-seven', 'processEmbeddings', {
+      ...options,
+      bypassCache: true,
+    });
+
+    expect(first.diagnostics.cacheHit).toBe(false);
+    expect(cached.diagnostics.cacheHit).toBe(true);
+    expect(fresh.diagnostics.cacheHit).toBe(false);
+    expect(fresh.diagnostics.totalTimeMs).toBeTypeOf('number');
+    expect(embedQueryForNamespace).toHaveBeenCalledTimes(2);
+  });
+
   it('caches within one reranker target and misses after the target changes', async () => {
     vi.stubEnv('MCP_FTS_CONTENT_STREAM', '0');
     let rerankerRevision = 'reranker-a';

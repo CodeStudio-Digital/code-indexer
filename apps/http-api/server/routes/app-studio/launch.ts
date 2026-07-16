@@ -4,7 +4,7 @@
  *   GET  /api/app-studio/cf/whoami?session_id=N  → { logged_in, email, accounts }
  *   POST /api/app-studio/login                   → SSE (wrangler login OAuth)
  *        body opcional { session_id } — usa o wrangler pinado do workspace
- *   POST /api/app-studio/sessions/:id/launch     → SSE (auth→db→migrate→
+ *   POST /api/app-studio/apps/:id/publish        → SSE (auth→db→migrate→
  *        build→deploy→health→persist)
  */
 import type { Hono } from 'hono';
@@ -23,20 +23,14 @@ export function mountAppStudioLaunchRoutes(app: Hono, deps: ServerDeps): void {
     return deps.db.getProject(session.project_id)?.root_path ?? null;
   }
 
-  app.get('/api/app-studio/cf/whoami', async (c) => {
-    const sessionId = Number(c.req.query('session_id') ?? NaN);
-    const who = await runWranglerWhoami(workspaceOf(Number.isFinite(sessionId) ? sessionId : null));
+  app.get('/api/app-studio/apps/:id/publish', async (c) => {
+    const sessionId = parseIdParam(c);
+    const who = await runWranglerWhoami(workspaceOf(sessionId));
     return c.json(who);
   });
 
-  app.post('/api/app-studio/login', async (c) => {
-    let sessionId: number | null = null;
-    try {
-      const body = (await c.req.json()) as { session_id?: number };
-      sessionId = typeof body.session_id === 'number' ? body.session_id : null;
-    } catch {
-      /* body vazio ok */
-    }
+  app.post('/api/app-studio/apps/:id/publish/login', async (c) => {
+    const sessionId = parseIdParam(c);
     const cwd = workspaceOf(sessionId);
     const signal = c.req.raw.signal;
     return streamSSE(c, (stream) =>
@@ -44,7 +38,7 @@ export function mountAppStudioLaunchRoutes(app: Hono, deps: ServerDeps): void {
     );
   });
 
-  app.post('/api/app-studio/sessions/:id/launch', (c) => {
+  app.post('/api/app-studio/apps/:id/publish', (c) => {
     const id = parseIdParam(c);
     const signal = c.req.raw.signal;
     return streamSSE(c, (stream) =>

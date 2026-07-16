@@ -151,6 +151,8 @@ export interface RunContext {
    * can't loop the run forever. Incremented only when a nudge is actually issued.
    */
   goalVerifyAttempts: number;
+  /** Dedup deterministic loop-strategy reminders for five turns. */
+  lastStrategyNudgeTurnByKey: Map<string, number>;
   /**
    * EMA of `real_prompt_tokens / tokenizer_estimate`, learned on turns where
    * the provider reported usage. Calibrates the pre-emit projection and the
@@ -347,7 +349,7 @@ export interface BridgeCallbacks {
   buildActiveSkillsBlock?: (compactedHistory: AgentMessage[]) => string | null;
   /** Build the `<active-context>` block (goal + todos + scope). */
   buildActiveContextBlock?: () => string | null;
-  /** Build the quality-feedback suffix appended to the system prompt. */
+  /** Legacy compatibility hook; terminal semantic Quality always returns an empty suffix. */
   buildQualityFeedbackSuffix?: () => string;
   /**
    * Resolve the temperature for this turn. Returns null when the model
@@ -451,17 +453,24 @@ export interface BridgeCallbacks {
     isRepeatable: boolean,
     turn: number,
   ) => string | null;
-  /**
-   * Quality watchdog — fire-and-forget classifier triggered AFTER each
-   * turn finishes. The callback is expected to schedule the LLM call
-   * asynchronously and emit `quality_watchdog_alert` when relevant.
-   * The Executing node MUST NOT await this — degrades silently if it
-   * throws synchronously.
-   */
+  /** Persist objective tool refusals after a batch; this never calls an LLM. */
   runQualityCheck?: (args: {
     turn: number;
     assistantText: string;
-    toolResults: Array<{ name: string; input: unknown; content: string; isError: boolean }>;
+    toolResults: Array<{
+      name: string;
+      input: unknown;
+      content: string;
+      isError: boolean;
+      refusalKind?: string;
+      guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
+    }>;
+  }) => void;
+  /** Persist a deduplicated deterministic strategy reminder. */
+  recordStrategyNudge?: (args: {
+    guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
+    toolName?: string;
+    count?: number;
   }) => void;
   /**
    * A1 — independent goal-completion verifier (host-implemented). At a text-only

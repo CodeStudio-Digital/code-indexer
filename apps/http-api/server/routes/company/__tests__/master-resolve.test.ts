@@ -41,15 +41,15 @@ describe('resolveAndRunMaster', () => {
     expect(orch.resumeExistingMaster).not.toHaveBeenCalled();
   });
 
-  it('resume path forwards the user message and does NOT pass provider/model', async () => {
+  it('resume path forwards the authoritative provider/model without creating a new run', async () => {
     const orch = makeOrch();
     await resolveAndRunMaster(orch as unknown as Orch, true, opts);
     expect(orch.resumeExistingMaster).toHaveBeenCalledWith(
-      expect.objectContaining({ userMessage: 'siga para os próximos' }),
-    );
-    // resume reuses the existing run's provider/model — never re-passes them.
-    expect(orch.resumeExistingMaster).not.toHaveBeenCalledWith(
-      expect.objectContaining({ provider: expect.anything() }),
+      expect.objectContaining({
+        userMessage: 'siga para os próximos',
+        provider: 'openai-chatgpt',
+        model: 'gpt-5.5',
+      }),
     );
   });
 });

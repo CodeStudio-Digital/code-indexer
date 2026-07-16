@@ -14,10 +14,12 @@ import { AutonomyIncidentBanner } from './AutonomyIncidentBanner.js';
 export function SessionBanners({
   stream,
   sessionId = null,
+  readOnly = false,
 }: {
   stream: ReturnType<typeof useCompanyStream>;
   /** C1 — needed by the autonomy incident banner; optional for older call-sites. */
   sessionId?: number | null;
+  readOnly?: boolean;
 }) {
   return (
     <>
@@ -38,7 +40,7 @@ export function SessionBanners({
         errorDetail={stream.masterErrorDetail}
       />
 
-      <SessionStalledBanner
+      {!readOnly && <SessionStalledBanner
         stalledSinceMs={stream.sessionStalledSinceMs}
         onContinue={async () => {
           // Triple-prong wake-up because a stall can be in any of:
@@ -60,7 +62,7 @@ export function SessionBanners({
           );
           await stream.wakeMaster();
         }}
-      />
+      />}
     </>
   );
 }

@@ -14,6 +14,7 @@ import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dial
 import { requestGitReload } from '../../../editor/conflict-registry.js';
 import type { GitBranch } from '@mcp/api-bus';
 import { checkoutBranch } from './branch-actions.js';
+import { openProjectPushDialog } from '../../../../git-push/push-dialog-store.js';
 
 interface GitRunResult { ok: boolean; stdout: string; stderr: string }
 
@@ -98,15 +99,17 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
       }
     };
 
-    const push = async (b: GitBranch) => {
-      try {
-        const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
-        const r = await apiCall<GitRunResult>('projectGit.push', { projectId, repoPath, remote, branch: b.name, setUpstream: !b.upstream });
-        r.ok ? toast.success(t('git.branch.pushed', { branch: b.name })) : toast.error(t('git.branch.pushIssues'), { description: tail(r) });
-        await after();
-      } catch (e) {
-        toast.error(t('git.pushFailed'), { description: e instanceof Error ? e.message : String(e) });
-      }
+    const push = (b: GitBranch) => {
+      const remote = b.upstream ? b.upstream.split('/')[0] : 'origin';
+      openProjectPushDialog({
+        projectId,
+        repoPath,
+        remote,
+        branch: b.name,
+        setUpstream: !b.upstream,
+        onPushed: after,
+      });
+      onClose?.();
     };
 
     const remove = async (b: GitBranch) => {
@@ -209,7 +212,7 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
       onShowDiff: (b) => void compare(b, true),
       onPull: (b, mode) => void pull(b, mode),
       onUpdate: (b) => void update(b),
-      onPush: (b) => void push(b),
+      onPush: push,
       onDelete: (b) => void remove(b),
     };
   }, [projectId, repoPath, getBranches, onMutated, onClose, openGitLog, openDiff, t]);

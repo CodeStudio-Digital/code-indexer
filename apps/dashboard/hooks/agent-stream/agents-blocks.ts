@@ -4,7 +4,7 @@ export interface AgentProgressPayload {
   groupId: string;
   agentIndex: number;
   label: string;
-  event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'error' | 'timed_out' | 'aborted';
+  event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
   status?: AgentStatus;
   provider?: string;
   model?: string;
@@ -92,6 +92,8 @@ function patchAgent(agent: ParallelAgent, d: AgentProgressPayload): ParallelAgen
       };
     case 'completed':
       return { ...base, status: 'completed', usage: d.usage, summary: d.summary };
+    case 'partial':
+      return { ...base, status: 'partial', usage: d.usage, summary: d.summary };
     case 'timed_out':
       return { ...base, status: 'timed_out', error: d.error, summary: d.summary };
     case 'aborted':

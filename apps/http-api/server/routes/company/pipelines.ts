@@ -8,6 +8,10 @@ import type {
   PipelineGraph,
   PipelineExecutionStatus,
 } from '@mcp/company/types.js';
+import {
+  companySurfaceConflict,
+  resolveCompanyRouteRuntime,
+} from './runtime-capabilities.js';
 
 /**
  * HTTP routes for the Pipeline Builder + Executor.
@@ -24,6 +28,20 @@ import type {
 export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore } = deps;
 
+  const pipelinesUnavailable = (sessionId: number): boolean => {
+    const runtime = resolveCompanyRouteRuntime(companyStore, sessionId);
+    return runtime != null && !runtime.capabilities.allowCompanyPipelines;
+  };
+
+  const pipelineOwnerUnavailable = (pipeline: { company_session_id: number | null }): boolean =>
+    pipeline.company_session_id != null && pipelinesUnavailable(pipeline.company_session_id);
+
+  const executionOwnerUnavailable = (executionId: number): boolean => {
+    const execution = companyStore.getPipelineExecution(executionId);
+    return execution?.company_session_id != null &&
+      pipelinesUnavailable(execution.company_session_id);
+  };
+
   // ─── Pipeline CRUD ───────────────────────────────────────────
 
   app.get('/api/company/pipelines', (c) => {
@@ -33,7 +51,10 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     if (sessionRaw === 'null') opts.companySessionId = null;
     else if (sessionRaw != null) {
       const n = parseInt(sessionRaw, 10);
-      if (Number.isFinite(n)) opts.companySessionId = n;
+      if (Number.isFinite(n)) {
+        if (pipelinesUnavailable(n)) return c.json([]);
+        opts.companySessionId = n;
+      }
     }
     if (templateRaw != null) {
       const n = parseInt(templateRaw, 10);
@@ -46,6 +67,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const pipeline = companyStore.getPipeline(id);
     if (!pipeline) return notFound(c, 'Pipeline not found');
+    if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
     return c.json(pipeline);
   });
 
@@ -60,6 +82,12 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
 
     if (!body.name) return c.json({ error: 'name is required' }, 400);
     if (!body.graph) return c.json({ error: 'graph is required' }, 400);
+    if (
+      typeof body.company_session_id === 'number' &&
+      pipelinesUnavailable(body.company_session_id)
+    ) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
 
     // Validate graph shape; without a session we can't verify roles —
     // pass null so the validator only checks structural invariants.
@@ -87,6 +115,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
 
   app.patch('/api/company/pipelines/:id', async (c) => {
     const id = parseIdParam(c);
+    const current = companyStore.getPipeline(id);
+    if (!current) return notFound(c, 'Pipeline not found');
+    if (pipelineOwnerUnavailable(current)) return companySurfaceConflict(c, 'pipelines');
     const body = await parseJsonBody<{
       name?: string;
       description?: string;
@@ -118,6 +149,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
 
   app.delete('/api/company/pipelines/:id', (c) => {
     const id = parseIdParam(c);
+    const pipeline = companyStore.getPipeline(id);
+    if (!pipeline) return notFound(c, 'Pipeline not found');
+    if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
     const ok = companyStore.deletePipeline(id);
     if (!ok) return notFound(c, 'Pipeline not found');
     return c.json({ ok: true });
@@ -148,11 +182,15 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     if (!graph) {
       const pipeline = companyStore.getPipeline(id);
       if (!pipeline) return notFound(c, 'Pipeline not found');
+      if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
       graph = pipeline.graph;
     }
 
     let validRoles: ReadonlySet<string> | null = null;
     if (typeof body.session_id === 'number') {
+      if (pipelinesUnavailable(body.session_id)) {
+        return companySurfaceConflict(c, 'pipelines');
+      }
       const orchestrator = activeOrchestrators.get(body.session_id);
       if (orchestrator) {
         const roleSummary = orchestrator.pipelineValidate(graph);
@@ -170,6 +208,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     // the root so the same orchestrator + execution rows are used.
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const pipelineId = parseIdParam(c, 'pid');
+    if (pipelinesUnavailable(sessionId)) return companySurfaceConflict(c, 'pipelines');
+    const pipeline = companyStore.getPipeline(pipelineId);
+    if (pipeline && pipelineOwnerUnavailable(pipeline)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
     const body = await parseJsonBody<{ initial_input?: string }>(c);
 
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -192,6 +235,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/company/sessions/:id/pipelines/executions', (c) => {
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
+    if (pipelinesUnavailable(sessionId)) return c.json([]);
     const orchestrator = activeOrchestrators.get(sessionId);
     const status = c.req.query('status') as PipelineExecutionStatus | undefined;
     const pipelineRaw = c.req.query('pipeline_id');
@@ -214,6 +258,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/pipelines/executions/:execId', (c) => {
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
+    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
 
     const orchestrator = activeOrchestrators.get(sessionId);
     if (orchestrator) {
@@ -228,8 +275,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/abort', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
+    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
     const body = await parseJsonBody<{ reason?: string }>(c);
 
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -244,8 +294,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/pause', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
+    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
     const orchestrator = activeOrchestrators.get(sessionId);
     if (!orchestrator) {
       return c.json({ error: 'Session is not running.' }, 409);
@@ -256,8 +309,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/resume', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
+    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
     const orchestrator = activeOrchestrators.get(sessionId);
     if (!orchestrator) {
       return c.json({ error: 'Session is not running.' }, 409);
@@ -272,8 +328,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/confirm', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
+    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+      return companySurfaceConflict(c, 'pipelines');
+    }
     const orchestrator = activeOrchestrators.get(sessionId);
     if (!orchestrator) {
       return c.json({ error: 'Session is not running.' }, 409);

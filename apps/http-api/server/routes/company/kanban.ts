@@ -4,6 +4,10 @@ import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
 import type { KanbanColumn, KanbanTag } from '@mcp/company/types.js';
 import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
+import {
+  companySurfaceConflict,
+  resolveCompanyRouteRuntime,
+} from './runtime-capabilities.js';
 
 export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore } = deps;
@@ -16,6 +20,11 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   const sessionRoot = (c: Context) =>
     resolveRootSessionId(companyStore, parseIdParam(c));
 
+  const kanbanUnavailable = (c: Context) => {
+    const runtime = resolveCompanyRouteRuntime(companyStore, parseIdParam(c));
+    return runtime != null && !runtime.capabilities.allowCompanyKanban;
+  };
+
   /** Helper: publish a kanban event through the active orchestrator's metaBus if available. */
   function publishKanbanEvent(sessionId: number, event: string, data: unknown): void {
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -27,6 +36,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── List all cards (full) ──────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban', (c) => {
+    if (kanbanUnavailable(c)) return c.json([]);
     const id = sessionRoot(c);
     const column = c.req.query('column') as KanbanColumn | undefined;
     if (column) {
@@ -39,6 +49,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Get single card (full) ─────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban/:cardId', (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const cardId = parseIdParam(c, 'cardId');
     const card = companyStore.getKanbanCardFull(cardId);
     if (!card) return notFound(c, 'Card not found');
@@ -48,6 +59,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Create card ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const body = await c.req.json<{
       title: string;
@@ -82,6 +94,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update card ────────────────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/:cardId', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
@@ -100,6 +113,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Move card ──────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/move', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{
@@ -138,6 +152,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete card ────────────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId', (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const ok = companyStore.deleteKanbanCard(cardId);
@@ -150,6 +165,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add comment ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/comments', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ content: string }>();
@@ -164,6 +180,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── List comments ──────────────────────────────────────────
 
   app.get('/api/company/sessions/:id/kanban/:cardId/comments', (c) => {
+    if (kanbanUnavailable(c)) return c.json([]);
     const cardId = parseIdParam(c, 'cardId');
     return c.json(companyStore.listKanbanComments(cardId));
   });
@@ -171,6 +188,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add checklist item ─────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/checklist', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ text: string }>();
@@ -185,6 +203,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Update checklist item ──────────────────────────────────
 
   app.patch('/api/company/sessions/:id/kanban/checklist/:itemId', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const itemId = parseIdParam(c, 'itemId');
     const body = await c.req.json<{
@@ -202,6 +221,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Delete checklist item ──────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const itemId = parseIdParam(c, 'itemId');
     // Resolve card_id BEFORE deletion so we can include it in the event.
@@ -221,6 +241,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Add dependency ─────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/dependencies', async (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const body = await c.req.json<{ depends_on_card_id: number }>();
@@ -239,6 +260,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
   // ─── Remove dependency ──────────────────────────────────────
 
   app.delete('/api/company/sessions/:id/kanban/:cardId/dependencies/:depCardId', (c) => {
+    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
     const sessionId = sessionRoot(c);
     const cardId = parseIdParam(c, 'cardId');
     const depCardId = parseIdParam(c, 'depCardId');

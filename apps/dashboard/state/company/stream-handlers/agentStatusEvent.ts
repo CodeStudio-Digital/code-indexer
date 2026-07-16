@@ -7,7 +7,7 @@
  * without touching tool calls or text. `session_idle` rolls into the
  * master state with a synthetic status.
  */
-import type { AgentRunStatus } from '@mcp/company-contracts';
+import type { AgentRunStatus, CompanyAgentDispatchSource } from '@mcp/company-contracts';
 import type { AgentStreamState, StreamState } from '../types.js';
 
 export interface AgentStatusPayload {
@@ -23,6 +23,12 @@ export interface AgentStatusPayload {
    * the gap in that case.
    */
   coderSessionId?: number;
+  configuredProvider?: string;
+  configuredModel?: string;
+  effectiveProvider?: string;
+  effectiveModel?: string;
+  dispatchSource?: CompanyAgentDispatchSource;
+  fallbackReason?: string | null;
 }
 
 export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): StreamState {
@@ -44,6 +50,12 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
           status: d.status,
           statusMessage: d.message,
           coderSessionId: prev.masterState.coderSessionId ?? d.coderSessionId,
+          configuredProvider: d.configuredProvider ?? prev.masterState.configuredProvider,
+          configuredModel: d.configuredModel ?? prev.masterState.configuredModel,
+          effectiveProvider: d.effectiveProvider ?? prev.masterState.effectiveProvider,
+          effectiveModel: d.effectiveModel ?? prev.masterState.effectiveModel,
+          dispatchSource: d.dispatchSource ?? prev.masterState.dispatchSource,
+          fallbackReason: d.fallbackReason ?? prev.masterState.fallbackReason,
         },
       };
     }
@@ -57,6 +69,12 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
         toolCalls: [],
         status: d.status,
         statusMessage: d.message,
+        configuredProvider: d.configuredProvider,
+        configuredModel: d.configuredModel,
+        effectiveProvider: d.effectiveProvider,
+        effectiveModel: d.effectiveModel,
+        dispatchSource: d.dispatchSource,
+        fallbackReason: d.fallbackReason,
       },
     };
   }
@@ -75,6 +93,12 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
       status: d.status,
       statusMessage: d.message,
       coderSessionId: existing.coderSessionId ?? d.coderSessionId,
+      configuredProvider: d.configuredProvider ?? existing.configuredProvider,
+      configuredModel: d.configuredModel ?? existing.configuredModel,
+      effectiveProvider: d.effectiveProvider ?? existing.effectiveProvider,
+      effectiveModel: d.effectiveModel ?? existing.effectiveModel,
+      dispatchSource: d.dispatchSource ?? existing.dispatchSource,
+      fallbackReason: d.fallbackReason ?? existing.fallbackReason,
     });
   } else {
     subs.set(d.agentRunId, {
@@ -85,6 +109,12 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
       toolCalls: [],
       status: d.status,
       statusMessage: d.message,
+      configuredProvider: d.configuredProvider,
+      configuredModel: d.configuredModel,
+      effectiveProvider: d.effectiveProvider,
+      effectiveModel: d.effectiveModel,
+      dispatchSource: d.dispatchSource,
+      fallbackReason: d.fallbackReason,
     });
   }
   return { ...prev, subordinateStates: subs };

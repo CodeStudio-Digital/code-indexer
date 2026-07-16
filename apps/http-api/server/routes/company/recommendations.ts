@@ -24,6 +24,7 @@ import {
   type KanbanColumn,
   type KanbanTag,
 } from '@mcp/company/kanban-priority/index.js';
+import { resolveCompanyRouteRuntime } from './runtime-capabilities.js';
 
 /** FNV-1a hash — matches the hash used by the ToolSelection shadow producer
  *  so role-pipeline shadow rows correlate cleanly with future analytics. */
@@ -103,6 +104,10 @@ export function mountCompanyRecommendationsRoutes(app: Hono, deps: ServerDeps): 
     const sessionId = parseIdParam(c);
     const session = companyStore.getCompanySession(sessionId);
     if (!session) return c.json({ error: 'session_not_found' }, 404);
+    const runtime = resolveCompanyRouteRuntime(companyStore, sessionId);
+    if (runtime && !runtime.capabilities.allowCompanyKanban) {
+      return c.json({ ordered: [], diagnostics: [] });
+    }
 
     const cardsFull = companyStore.listKanbanCardsFull(sessionId);
     // Build a reverse-blocks map: who does each card block? Iterate all

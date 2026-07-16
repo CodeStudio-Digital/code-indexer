@@ -35,7 +35,7 @@ function TabSpinner() {
 
 export function IndexWorkspace({
   projectId,
-  projectName: _projectName,
+  projectName,
   onOpenFile,
   initialSection,
 }: {
@@ -63,7 +63,9 @@ export function IndexWorkspace({
         </TabsList>
         <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
           <Suspense fallback={<TabSpinner />}>
-            {section === 'overview' && <RunSection projectId={projectId} />}
+            {section === 'overview' && (
+              <RunSection projectId={projectId} projectName={projectName} onOpenFile={onOpenFile} />
+            )}
             {section === 'files' && <IndexedFilesTab projectId={projectId} onOpenFile={onOpenFile} />}
             {section === 'dependencies' && <DependenciesTab projectId={projectId} />}
           </Suspense>

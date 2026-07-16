@@ -310,13 +310,18 @@ describe('RerankerHydrator', () => {
       { ...makeCandidate(1, { fts: 1 }), score: 0.5 },
       { ...makeCandidate(2, { fts: 2 }), score: 0.4 },
     ];
-    const q: HybridSearchPipelineQuery = { ...emptyQuery, limit: 2 };
+    const q: HybridSearchPipelineQuery = { ...emptyQuery, limit: 2, diag: {} };
     const out = await hydrator.hydrate(q, candidates);
     expect(out).toHaveLength(2);
     if (!out[0].ok || !out[1].ok) return;
     expect(out[0].candidate.score).toBe(100);
     expect(out[1].candidate.score).toBe(99);
     expect(out[0].candidate.result.score).toBe(100);
+    expect(q.diag).toMatchObject({
+      rerankerApplied: true,
+      rerankerCandidates: 2,
+      rerankerReturned: 2,
+    });
   });
 
   it('preserves the complete RRF ordering when the reranker returns a partial set', async () => {
@@ -559,6 +564,12 @@ describe('hybrid pipeline rerank selection', () => {
 
     expect(results.map((result) => result.id)).toEqual([1, 2, 3]);
     expect(results.every((result, index) => index === 0 || results[index - 1].score >= result.score)).toBe(true);
+    expect(query.diag).toMatchObject({
+      rerankerApplied: false,
+      rerankerCandidates: 6,
+      rerankerReturned: 0,
+      rerankerError: 'offline',
+    });
   });
 
   it('forwards latest-wins identity and request cancellation to the reranker', async () => {

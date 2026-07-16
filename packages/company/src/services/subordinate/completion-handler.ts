@@ -24,7 +24,6 @@
 import type { RunCoderHandle, CoderAttachment } from '@mcp/code-agent/index.js';
 import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import type { AllowedModel } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type {
@@ -39,6 +38,11 @@ import {
 } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { logSkillOutcome } from '@mcp/company/services/subordinate/skill-telemetry.js';
 import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
+import {
+  readRoleRuntimePolicy,
+  resolveRoleFallback,
+} from '@mcp/company/services/subordinate/role-runtime.js';
+import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 
 /**
  * Resume signature the completion handler invokes for auto-retry. Same
@@ -61,11 +65,7 @@ export interface SubordinateCompletionDeps {
   master: IMasterNotifier;
   attention: MasterAttention;
   retryPolicy: RetryPolicy;
-  /**
-   * Orchestrator facade. We need `getAllowedModels` / `getPoolDefault`
-   * for the model-fallback path. The cast in the consumer makes the
-   * orchestrator ref opaque; we declare the narrow surface here.
-   */
+  /** Orchestrator facade retained for the lifecycle's shared deps shape. */
   orchestratorRef: unknown;
   runningIds: Set<number>;
   notifyIdleChanged: () => void;
@@ -76,14 +76,14 @@ export interface SubordinateCompletionDeps {
 interface ModelFallbackResult {
   from: { provider: string; model: string };
   to: { provider: string; model: string };
+  reason: string;
 }
 
 /**
- * Move the agent run to a different curated model before retrying.
- * Prefer the session's pool default; if the agent is already on it,
- * use the first OTHER allowed model. Updates both `coder_sessions`
- * (so the resumed runner picks up the new provider) and the
- * `agent_runs` row (UI consistency).
+ * Move the agent run to the next explicitly configured fallback before
+ * retrying. A configured role may use only its own `fallbackModels` chain;
+ * an unconfigured generic Company role may use the explicitly persisted
+ * `allowed_models` pool. App Studio never falls through to that global pool.
  *
  * Returns `null` when no fallback is possible (no pool, only one
  * candidate, store write failed). All branches are logged.
@@ -93,23 +93,33 @@ export function applySubordinateModelFallback(
   role: string,
   deps: SubordinateCompletionDeps,
 ): ModelFallbackResult | null {
-  const orchestratorForPool = deps.orchestratorRef as unknown as {
-    getAllowedModels?: () => readonly AllowedModel[];
-    getPoolDefault?: () => AllowedModel | null;
-  };
-
   const agentRun = deps.ctx.companyStore.getAgentRun(agentRunId);
   if (!agentRun) return null;
 
-  const allowedModels = orchestratorForPool.getAllowedModels?.() ?? [];
-  const poolDefault = orchestratorForPool.getPoolDefault?.() ?? null;
-  const candidates = [
-    ...(poolDefault ? [poolDefault] : []),
-    ...allowedModels,
-  ];
-  const fallback = candidates.find(
-    (candidate) => candidate.provider !== agentRun.provider || candidate.model !== agentRun.model,
-  );
+  const companySession = deps.ctx.companyStore.getCompanySession(agentRun.company_session_id);
+  const runtimeKind = companySession?.runtime_kind === 'app_studio'
+    ? 'app_studio'
+    : 'company';
+  let policy: ReturnType<typeof readRoleRuntimePolicy>;
+  try {
+    policy = readRoleRuntimePolicy(
+      companySession?.config_json,
+      role,
+      runtimeKind,
+    );
+  } catch (e) {
+    console.warn(
+      `[company] fallback policy is invalid for ${role}#${agentRunId}: ` +
+      `${e instanceof Error ? e.message : String(e)}`,
+    );
+    return null;
+  }
+  const fallback = resolveRoleFallback({
+    current: { provider: agentRun.provider, model: agentRun.model },
+    runtimeKind: policy.runtimeKind,
+    roleConfig: policy.roleConfig,
+    allowedModels: policy.allowedModels,
+  });
   if (!fallback) return null;
 
   const from = { provider: agentRun.provider, model: agentRun.model };
@@ -126,14 +136,33 @@ export function applySubordinateModelFallback(
     } finally {
       store.close();
     }
-    deps.ctx.companyStore.updateAgentRunProvider(agentRunId, to.provider, to.model);
+    deps.ctx.companyStore.updateAgentRunProvider(
+      agentRunId,
+      to.provider,
+      to.model,
+      fallback.reason,
+    );
     deps.board.post(
       'system',
       agentRunId,
       'message',
-      `[AUTO-FALLBACK] @${role} ${from.provider}/${from.model} -> ${to.provider}/${to.model}`,
+      `[AUTO-FALLBACK] (${fallback.reason}) @${role} ${from.provider}/${from.model} -> ${to.provider}/${to.model}`,
     );
-    return { from, to };
+    if (runtimeKind === 'app_studio' && deps.ctx.appStudioSessionId != null) {
+      try {
+        getAppStudioStore()?.appendEvent(
+          deps.ctx.appStudioSessionId,
+          'agents.model_fallback',
+          'company_agent_run',
+          String(agentRunId),
+          JSON.stringify({ role, from, to, reason: fallback.reason }),
+          `app-agent-fallback:${agentRunId}:${to.provider}:${to.model}`,
+        );
+      } catch {
+        // Telemetry is best-effort and must never prevent the configured retry.
+      }
+    }
+    return { from, to, reason: fallback.reason };
   } catch (e) {
     console.warn(
       `[company] auto-fallback failed for ${role}#${agentRunId}: ` +

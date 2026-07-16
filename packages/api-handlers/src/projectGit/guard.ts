@@ -8,7 +8,7 @@ export const PROJECT_GIT_RPC_METHODS = [
   'commit', 'branchList', 'branchCheckout', 'branchesDetailed', 'branchCreate',
   'branchDelete', 'branchRename', 'merge', 'rebase', 'reset', 'revert',
   'cherryPick', 'mergeState', 'conflictFile', 'resolveConflict', 'mergeContinue',
-  'mergeAbort', 'gitOptimizations', 'configureGitOptimizations', 'push', 'fetch',
+  'mergeAbort', 'gitOptimizations', 'configureGitOptimizations', 'pushPreview', 'push', 'fetch',
   'pull', 'updateBranch', 'stashList', 'stashSave', 'stashPop', 'stashApply',
   'stashDrop', 'stashShow', 'stashDetail', 'stashFileDiff', 'aiPlan', 'aiExecute',
   'aiCommitMessage', 'detectRemote',
@@ -53,7 +53,7 @@ export const PROJECT_GIT_MUTATIONS = new Set<ProjectGitRpcMethod>([
 ]);
 
 const PATH_KEYS = ['path'] as const;
-const REF_KEYS = ['sha', 'branch', 'name', 'oldName', 'newName', 'from', 'onto', 'target', 'commit'] as const;
+const REF_KEYS = ['sha', 'branch', 'targetBranch', 'expectedHead', 'name', 'oldName', 'newName', 'from', 'onto', 'target', 'commit'] as const;
 const MAX_PATHS = 2_000;
 const MAX_PATH_LENGTH = 4_096;
 const MAX_REF_LENGTH = 1_024;

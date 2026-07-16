@@ -95,6 +95,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
     planNudges: 0,
+    lastStrategyNudgeTurnByKey: new Map(),
     goalVerifyAttempts: 0,
     estimateCalibration: null,
     runId: 'test-run',

@@ -204,8 +204,12 @@ export const BoardPanel = memo(function BoardPanel({
               <MasterPromptCard
                 key={item.key}
                 prompt={item.prompt}
-                onAnswerQuestion={(answer) => onAnswerQuestion?.(item.prompt.id, answer)}
-                onRespondPlan={(approved, fb) => onRespondPlan?.(item.prompt.id, approved, fb)}
+                onAnswerQuestion={onAnswerQuestion
+                  ? (answer) => onAnswerQuestion(item.prompt.id, answer)
+                  : undefined}
+                onRespondPlan={onRespondPlan
+                  ? (approved, fb) => onRespondPlan(item.prompt.id, approved, fb)
+                  : undefined}
               />
             );
           }

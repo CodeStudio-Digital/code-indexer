@@ -39,10 +39,11 @@ function row(partial: Partial<QualityClassificationRow>): QualityClassificationR
     model_id: null,
     latency_ms: null,
     cost_usd: null,
+    provider_requests: 0,
     raw_response_json: null,
     created_at: '2026-05-18 01:00:00',
     ...partial,
-  };
+  } as QualityClassificationRow;
 }
 
 describe('buildQualityNudge', () => {

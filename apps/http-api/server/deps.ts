@@ -1,6 +1,7 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
 import { getMemoryLedger } from './perf/memory-ledger.js';
+import { createProjectFeatureStoreResolver } from './project-feature-store.js';
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 import { projectMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
@@ -101,13 +102,8 @@ import { QualityClassificationStore } from '@mcp/store/quality-classification-st
 import { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
 import { CounterfactualLogStore } from '@mcp/store/counterfactual-log-store.js';
 import {
-  CodeQualityClassifier,
-  CompletenessClassifier,
-  OffTopicClassifier,
-  PolicyClassifier,
   QualityClassifierPipeline,
-  ToolMisuseClassifier,
-  CombinedQualityClassifier,
+  createQualityRuntime,
 } from '@mcp/services/quality/index.js';
 import {
   ShadowTrafficRunner,
@@ -889,42 +885,26 @@ export function createDeps(): ServerDeps {
   const designSystemStore = new DesignSystemStore(db.raw());
   const appStudioStore = new AppStudioStore(db.raw());
   const apiClientStore = new ApiClientStore(db.raw());
-  // R1 — per-project feature stores. Flag-off (`useProjectDb` false) hands back
-  // the central instance so behaviour is byte-identical to today; flag-on builds
-  // a store on the project's own DB handle, cached per projectId so the whole
-  // project feature graph lives in one connection.
-  const apiClientStoreByProject = new Map<number, ApiClientStore>();
-  const apiClientFor = (projectId: number): ApiClientStore => {
-    if (!db.useProjectDb(projectId)) return apiClientStore;
-    let s = apiClientStoreByProject.get(projectId);
-    if (!s) {
-      s = new ApiClientStore(db.projectScopedDb(projectId));
-      apiClientStoreByProject.set(projectId, s);
-    }
-    return s;
-  };
+  // R1 — per-project feature stores. The ProjectDbPool caches the live SQLite
+  // connection; wrappers must be recreated on access because an idle/LRU
+  // eviction closes the raw handle they retain.
+  const apiClientFor = createProjectFeatureStoreResolver(
+    db,
+    apiClientStore,
+    (handle) => new ApiClientStore(handle),
+  );
   const sshStore = new SshStore(db.raw());
-  const sshStoreByProject = new Map<number, SshStore>();
-  const sshStoreFor = (projectId: number): SshStore => {
-    if (!db.useProjectDb(projectId)) return sshStore;
-    let s = sshStoreByProject.get(projectId);
-    if (!s) {
-      s = new SshStore(db.projectScopedDb(projectId));
-      sshStoreByProject.set(projectId, s);
-    }
-    return s;
-  };
+  const sshStoreFor = createProjectFeatureStoreResolver(
+    db,
+    sshStore,
+    (handle) => new SshStore(handle),
+  );
   const dbClientStore = new DbClientStore(db.raw());
-  const dbClientStoreByProject = new Map<number, DbClientStore>();
-  const dbClientFor = (projectId: number): DbClientStore => {
-    if (!db.useProjectDb(projectId)) return dbClientStore;
-    let s = dbClientStoreByProject.get(projectId);
-    if (!s) {
-      s = new DbClientStore(db.projectScopedDb(projectId));
-      dbClientStoreByProject.set(projectId, s);
-    }
-    return s;
-  };
+  const dbClientFor = createProjectFeatureStoreResolver(
+    db,
+    dbClientStore,
+    (handle) => new DbClientStore(handle),
+  );
   // Sprite Studio (migration 196) — central DB, same shared handle as the
   // sibling stores above (jobs/costs feed admin metering; churn is low).
   const spriteProjectsStore = new SpriteProjectsStore(db.raw());
@@ -1211,25 +1191,12 @@ export function createDeps(): ServerDeps {
   // template revision invalidates entries automatically.
   const roleEmbeddingStore = new InMemoryRoleEmbeddingStore();
 
-  // Quality pipeline — one passive combined evaluator by default. The old
-  // five-call form remains an explicit rollback flag only.
-  const qualityClassificationStore = new QualityClassificationStore(db.raw());
+  // One shared hybrid runtime factory is used here and inside worker threads.
+  const qualityRuntime = createQualityRuntime(db.raw(), { telemetry: pipelineTelemetrySink });
+  const qualityClassificationStore = qualityRuntime.classificationStore;
   const qualityInterventionStore = new QualityInterventionStore(db.raw());
   const counterfactualLogStore = new CounterfactualLogStore(db.raw());
-  const legacyQualityClassifiers = process.env.MCP_QUALITY_LEGACY_FIVE === '1';
-  const qualityClassifierPipeline = new QualityClassifierPipeline({
-    classifiers: legacyQualityClassifiers
-      ? [
-          new OffTopicClassifier(pipelineProviderResolver),
-          new CompletenessClassifier(pipelineProviderResolver),
-          new CodeQualityClassifier(pipelineProviderResolver),
-          new PolicyClassifier(pipelineProviderResolver),
-          new ToolMisuseClassifier(pipelineProviderResolver),
-        ]
-      : [new CombinedQualityClassifier(pipelineProviderResolver)],
-    store: qualityClassificationStore,
-    telemetry: pipelineTelemetrySink,
-  });
+  const qualityClassifierPipeline = qualityRuntime.pipeline;
 
   // Shadow-traffic for ToolSelectionPipeline. Sample rate is environment
   // controlled — keep it off by default so test/dev runs don't burn

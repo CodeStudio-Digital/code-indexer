@@ -507,6 +507,41 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       forceReread: tu.input.force_reread === true,
     });
 
+    const noProgressRefusal = args.toolContext.toolCallLedger?.checkRepeat({
+      name: tu.name,
+      args: normalizedInput,
+      repeatPolicy: resolvedMetadata?.repeatPolicy,
+      mutates: resolvedMetadata?.mutates,
+    });
+    if (noProgressRefusal) {
+      const guardVerdict: GuardVerdict = {
+        action: 'block',
+        reason: 'cross-turn-no-progress',
+        refusalKind: 'dedup',
+        shouldReflect: true,
+        affectsFailureStreak: false,
+        count: noProgressRefusal.count,
+        sourceTool: tu.name,
+        originToolUseId: tu.id,
+        stateEpoch: invocationGuard.stateEpoch,
+      };
+      results.push({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: `[no-progress REFUSED: \`${tu.name}\` repeated without new results. Switch strategy before retrying.]`,
+        isError: true,
+        durationMs: 0,
+        wasRefusedByDedup: true,
+        refusalKind: 'dedup',
+        guardVerdict,
+        stateEpoch: invocationGuard.stateEpoch,
+      });
+      toolLoopDetected = true;
+      loopGuard = 'doom-loop';
+      loopDetail = { toolName: tu.name, count: noProgressRefusal.count };
+      continue;
+    }
+
     if (verdict.action === 'block') {
       results.push({
         toolUseId: tu.id,

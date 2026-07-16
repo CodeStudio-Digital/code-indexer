@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { apiCall } from '../../../../lib/api-client.js';
 import { prompt, toast } from '../../../../components/ui/prompt-dialog.js';
 import type { BranchRowData } from './branch-popover-rows.js';
+import { openProjectPushDialog } from '../../../git-push/push-dialog-store.js';
 
 interface GitRunResult {
   ok: boolean;
@@ -37,7 +38,7 @@ export function useBranchActions({ projectId, repoPath, onMutated, onClose }: Us
 
   const runRemoteOp = async (
     label: string,
-    method: 'projectGit.push' | 'projectGit.fetch' | 'projectGit.pull',
+    method: 'projectGit.fetch' | 'projectGit.pull',
     payload: object,
   ): Promise<boolean> => {
     setBusyAction(label);
@@ -76,8 +77,15 @@ export function useBranchActions({ projectId, repoPath, onMutated, onClose }: Us
     await runRemoteOp('Pull (rebase)', 'projectGit.pull', { rebase: true });
   };
 
-  const onPush = (currentHasUpstream: boolean) =>
-    runRemoteOp('Push', 'projectGit.push', { setUpstream: !currentHasUpstream });
+  const onPush = (currentHasUpstream: boolean) => {
+    openProjectPushDialog({
+      projectId,
+      repoPath,
+      setUpstream: !currentHasUpstream,
+      onPushed: onMutated,
+    });
+    onClose();
+  };
 
   const onNewBranch = async () => {
     const name = await prompt({

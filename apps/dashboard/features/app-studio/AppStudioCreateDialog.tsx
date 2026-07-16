@@ -5,12 +5,11 @@
  * "Opções avançadas". Progresso do scaffold em frases humanas; log
  * técnico atrás de <details>.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Sparkles, X } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { useProviders } from '../../hooks/useProviders.js';
-import { resolveReasoningLevels } from '../chat/composer/provider-caps.js';
 import { createAppStudio } from './app-studio-api.js';
 
 export function AppStudioCreateDialog({
@@ -18,17 +17,15 @@ export function AppStudioCreateDialog({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: (appSessionId: number, coderSessionId: number, idea: string) => void;
+  onCreated: (appSessionId: number, masterSessionId: number, idea: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
-  const { providerOptions, getModelsForProvider, getDefaultModel, loading: providersLoading } = useProviders();
+  const { providerOptions, getDefaultModel } = useProviders();
 
   const [name, setName] = useState('');
   const [idea, setIdea] = useState('');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
-  const [effort, setEffort] = useState<string>(''); // '' = auto (model default)
-  const [showAdvanced, setShowAdvanced] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phaseLabel, setPhaseLabel] = useState<string | null>(null);
@@ -45,21 +42,6 @@ export function AppStudioCreateDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerOptions.length]);
 
-  const models = useMemo(
-    () => (provider ? getModelsForProvider(provider) : []),
-    [provider, getModelsForProvider],
-  );
-  // Níveis de raciocínio (low/medium/high/xhigh…) que o modelo aceita. Vazio
-  // = modelo sem esforço discreto → não mostra o seletor.
-  const reasoningLevels = useMemo(
-    () => resolveReasoningLevels(provider, providerOptions, model),
-    [provider, providerOptions, model],
-  );
-  // Modelo trocou e não expõe o esforço escolhido → volta pro automático.
-  useEffect(() => {
-    if (effort && !reasoningLevels.includes(effort)) setEffort('');
-  }, [reasoningLevels, effort]);
-
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [logTail]);
@@ -72,13 +54,13 @@ export function AppStudioCreateDialog({
     setLogTail('');
     try {
       const created = await createAppStudio(
-        { name: name.trim(), provider, model, reasoning_effort: effort || null },
+        { name: name.trim(), provider, model },
         {
           onPhase: (phase, label) => setPhaseLabel(t(`create.phase.${phase}`, { defaultValue: label })),
           onLog: (_stream, chunk) => setLogTail((prev) => (prev + chunk).slice(-6000)),
         },
       );
-      onCreated(created.app_session.id, created.coder_session_id, idea.trim());
+      onCreated(created.app_session.id, created.master_session_id, idea.trim());
     } catch (e) {
       setError((e as Error).message);
       setPhaseLabel(null);
@@ -120,60 +102,6 @@ export function AppStudioCreateDialog({
               placeholder={t('create.ideaPlaceholder')}
             />
           </label>
-
-          {providerOptions.length > 1 && (
-            <details open={showAdvanced} onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}>
-              <summary className="cursor-pointer text-xs text-muted-foreground">{t('create.advanced')}</summary>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-muted-foreground">{t('create.provider')}</span>
-                  <select
-                    value={provider}
-                    disabled={busy || providersLoading}
-                    onChange={(e) => {
-                      setProvider(e.target.value);
-                      setModel(getDefaultModel(e.target.value));
-                    }}
-                    className="w-full rounded border bg-background px-2 py-1"
-                  >
-                    {providerOptions.map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="mb-1 block text-xs text-muted-foreground">{t('create.model')}</span>
-                  {models.length > 0 ? (
-                    <select value={model} disabled={busy} onChange={(e) => setModel(e.target.value)} className="w-full rounded border bg-background px-2 py-1">
-                      {models.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}{m.mode ? ` (${m.mode})` : ''}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input value={model} disabled={busy} onChange={(e) => setModel(e.target.value)} className="w-full rounded border px-2 py-1 font-mono" />
-                  )}
-                </label>
-                {reasoningLevels.length > 0 && (
-                  <label className="col-span-2 block">
-                    <span className="mb-1 block text-xs text-muted-foreground">
-                      {t('create.effort', { defaultValue: 'Capacidade de raciocínio' })}
-                    </span>
-                    <select
-                      value={effort}
-                      disabled={busy}
-                      onChange={(e) => setEffort(e.target.value)}
-                      className="w-full rounded border bg-background px-2 py-1"
-                    >
-                      <option value="">{t('create.effortAuto', { defaultValue: 'Automático (padrão do modelo)' })}</option>
-                      {reasoningLevels.map((lv) => (
-                        <option key={lv} value={lv}>{lv}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </div>
-            </details>
-          )}
 
           {busy && (
             <div className="space-y-2 rounded border bg-muted/20 p-3">

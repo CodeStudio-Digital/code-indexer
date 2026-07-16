@@ -31,8 +31,7 @@ import { TableSheetDialog } from './TableSheetDialog.js';
 import { type AppDataQueryResult, type AppDataTable, provisionAppData, runAppDataQuery, useAppData } from './useAppData.js';
 
 export function dataTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
-  const blueprint = detail?.workflow.state.phases.find((phase) => phase.id === 'blueprint');
-  return !!blueprint && blueprint.status !== 'locked';
+  return detail != null;
 }
 
 function q(name: string): string {
@@ -83,7 +82,7 @@ export function DataPanel({
   const provisionKnownClean = provision?.needed === false || provisionResolved;
   const provisionFallbackNeeded = provision === null && !loading && (tables === null || tables.length === 0);
   const needsProvision = provision?.needed === true || (!!error && provision?.needed !== false) || provisionFallbackNeeded;
-  const showProvisionAction = detail.session.db_engine === 'd1' && !provisionKnownClean && needsProvision;
+  const showProvisionAction = !provisionKnownClean && needsProvision;
   const filteredTables = useMemo(() => {
     const term = filter.trim().toLowerCase();
     if (!term) return loadedTables;

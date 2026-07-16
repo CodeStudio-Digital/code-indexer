@@ -198,7 +198,7 @@ export interface AgentAttachment {
 
 // ─── Parallel agents ──────────────────────────────────────────
 
-export type AgentStatus = 'pending' | 'running' | 'completed' | 'error' | 'timed_out' | 'aborted';
+export type AgentStatus = 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
 
 export interface ParallelAgent {
   index: number;

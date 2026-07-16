@@ -16,7 +16,8 @@ function makeRun(over: Partial<CompanyAgentRun> & Pick<CompanyAgentRun, 'id' | '
   return {
     id: over.id, company_session_id: SID, role: over.role, coder_session_id: 0,
     project_ids_json: '[]', status: over.status ?? 'waiting', status_message: '',
-    provider: '', model: '', created_at: '2026-05-25T10:00:00Z',
+    provider: '', model: '', configured_provider: '', configured_model: '',
+    dispatch_source: 'company', fallback_reason: null, created_at: '2026-05-25T10:00:00Z',
     updated_at: over.updated_at ?? new Date().toISOString(), archive_id: null,
   };
 }

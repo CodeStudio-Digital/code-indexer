@@ -1,6 +1,6 @@
 /**
  * Fetch das fichas de dados ("Seus dados") — introspecção do D1 local via
- * GET /api/app-studio/sessions/:id/data. Refetch manual + no mount.
+ * GET /api/app-studio/apps/:id/data. Refetch manual + no mount.
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -75,7 +75,7 @@ export function useAppData(sessionId: number, enabled: boolean): {
   const refresh = useCallback(() => {
     if (!enabled) return;
     setLoading(true);
-    void fetch(`/api/app-studio/sessions/${sessionId}/data`)
+    void fetch(`/api/app-studio/apps/${sessionId}/data`)
       .then(async (r) => {
         const body = (await r.json()) as DataResponse;
         if (!r.ok || body.error) throw new Error(body.error ?? r.statusText);
@@ -101,14 +101,14 @@ export async function fetchTableSheet(
   sessionId: number,
   table: string,
 ): Promise<{ columns: string[]; rows: Array<Record<string, unknown>> }> {
-  const r = await fetch(`/api/app-studio/sessions/${sessionId}/data?table=${encodeURIComponent(table)}`);
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/data?table=${encodeURIComponent(table)}`);
   const body = (await r.json()) as { columns?: string[]; rows?: Array<Record<string, unknown>>; error?: string };
   if (!r.ok || body.error) throw new Error(body.error ?? r.statusText);
   return { columns: body.columns ?? [], rows: body.rows ?? [] };
 }
 
 export async function runAppDataQuery(sessionId: number, sql: string): Promise<AppDataQueryResult> {
-  const r = await fetch(`/api/app-studio/sessions/${sessionId}/data/query`, {
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/data/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sql }),
@@ -125,7 +125,7 @@ export async function runAppDataQuery(sessionId: number, sql: string): Promise<A
 }
 
 export async function provisionAppData(sessionId: number): Promise<AppDataProvisionResult> {
-  const r = await fetch(`/api/app-studio/sessions/${sessionId}/data/provision`, { method: 'POST' });
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/data/provision`, { method: 'POST' });
   const body = (await r.json()) as Partial<AppDataProvisionResult> & { error?: string };
   if (!r.ok || body.error) throw new Error(body.error ?? r.statusText);
   return {

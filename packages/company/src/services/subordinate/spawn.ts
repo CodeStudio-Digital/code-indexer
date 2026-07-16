@@ -3,8 +3,8 @@
  *
  *   1. Resolve project binding (role's `projectIds` vs spec.projectId).
  *   2. Concurrency cap enforcement.
- *   3. Resolve (provider, model) — spec > pool default > master inherit > legacy.
- *   4. Reject when an allowed_models pool is set and (provider, model) is outside.
+ *   3. Resolve the authoritative persisted role runtime for every dispatch source.
+ *   4. Reject disabled/malformed roles and models outside allowed_models.
  *   5. Create coder session row + agent_run row.
  *   6. Inherit master's disabled-tools config.
  *   7. Resolve sandbox binding + skill set for the subordinate's stack.
@@ -28,7 +28,6 @@ import { readOperationalRules } from '@mcp/company/services/master/config-loader
 import {
   resolveRoleSkills,
   type AgentRunStatus,
-  type AllowedModel,
   type CompanyContext,
   type SubordinateHandle,
 } from '@mcp/company/types.js';
@@ -50,6 +49,11 @@ import {
   type SpawnSubordinateSpec,
 } from '@mcp/company/services/subordinate/spec.js';
 import {
+  readRoleRuntimePolicy,
+  resolveEffectiveRoleRuntime,
+  type CompanyRuntimeKind,
+} from '@mcp/company/services/subordinate/role-runtime.js';
+import {
   resolveBindingForProject,
 } from '@mcp/company/services/subordinate/binding.js';
 import { resolveAutonomy } from '@mcp/company/services/autonomy/autonomy-config.js';
@@ -64,6 +68,7 @@ import {
 } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
+import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 
 export interface SpawnSubordinateDeps {
   ctx: SessionContext;
@@ -116,11 +121,24 @@ export async function spawnSubordinate(
 ): Promise<SpawnResult> {
   const ctx = deps.ctx;
 
+  const companySession = ctx.companyStore.getCompanySession(ctx.companySessionId);
+  const rowRuntimeKind = (companySession as { runtime_kind?: unknown } | null)?.runtime_kind;
+  const runtimeKind: CompanyRuntimeKind = rowRuntimeKind === 'app_studio'
+    ? 'app_studio'
+    : 'company';
+  const runtimePolicy = readRoleRuntimePolicy(
+    companySession?.config_json,
+    spec.role,
+    runtimeKind,
+  );
+
   // ── Project binding resolution ────────────────────────────────────
   const orchestratorForBinding = deps.orchestratorRef as {
     getProjectIdsForRole?: (role: string) => number[];
   };
-  const boundProjectIds = orchestratorForBinding.getProjectIdsForRole?.(spec.role) ?? [];
+  const boundProjectIds = Array.isArray(runtimePolicy.roleConfig?.projectIds)
+    ? [...runtimePolicy.roleConfig.projectIds]
+    : (orchestratorForBinding.getProjectIdsForRole?.(spec.role) ?? []);
   const projectId = resolveSpawnProjectBinding({
     role: spec.role,
     specProjectId: spec.projectId,
@@ -191,59 +209,36 @@ export async function spawnSubordinate(
     }
   }
 
+  // ── Authoritative role runtime resolution ────────────────────────
+  // Every caller (Master, scheduler/manual dispatch, pipeline, fan-out and
+  // App Studio) converges here. The persisted role assignment wins over any
+  // caller-supplied model and never consults the global subagent override.
+  let masterRuntime: { provider: string; model: string } | null = null;
+  try {
+    const masterRun = ctx.companyStore
+      .listAgentRuns(ctx.companySessionId)
+      .filter((run) => run.role === 'master')
+      .pop();
+    if (masterRun) masterRuntime = { provider: masterRun.provider, model: masterRun.model };
+  } catch {
+    // Generic Company sessions retain their legacy default when the lookup
+    // fails. App Studio roles cannot reach that branch because they must be
+    // configured in role_assignments.
+  }
+  const roleRuntime = resolveEffectiveRoleRuntime({
+    role: spec.role,
+    runtimeKind: runtimePolicy.runtimeKind,
+    roleConfig: runtimePolicy.roleConfig,
+    requested: spec,
+    allowedModels: runtimePolicy.allowedModels,
+    poolDefault: runtimePolicy.poolDefault,
+    masterRuntime,
+    dispatchSource: spec.dispatchSource,
+  });
+  const { provider, model } = roleRuntime;
+
   const config = loadConfig();
   const store = new SessionStore(config.dbPath);
-
-  // ── Provider/model resolution + allowed-models enforcement ────────
-  const orchestratorForPool = deps.orchestratorRef as {
-    getAllowedModels?: () => readonly AllowedModel[];
-    getPoolDefault?: () => AllowedModel | null;
-  };
-  const allowedModels = orchestratorForPool.getAllowedModels?.() ?? [];
-  const poolDefault = orchestratorForPool.getPoolDefault?.() ?? null;
-
-  let provider = spec.provider;
-  let model = spec.model;
-  if ((!provider || !model) && poolDefault) {
-    provider = provider ?? poolDefault.provider;
-    model = model ?? poolDefault.model;
-  }
-  // Last-resort fallback: inherit from the MASTER's provider/model
-  // rather than the hardcoded anthropic/sonnet. This prevents the
-  // "master is zai but subordinates spawn anthropic" mismatch when
-  // the operator configured neither a template role nor a model pool.
-  if (!provider || !model) {
-    try {
-      const masterRun = ctx.companyStore
-        .listAgentRuns(ctx.companySessionId)
-        .filter((r) => r.role === 'master')
-        .pop();
-      if (masterRun) {
-        provider = provider ?? masterRun.provider;
-        model = model ?? masterRun.model;
-      }
-    } catch {
-      // fall through to the legacy hardcode on any failure — never
-      // block a spawn just because the master lookup glitched.
-    }
-  }
-  provider = provider ?? 'anthropic';
-  model = model ?? 'claude-sonnet-4-6';
-
-  if (allowedModels.length > 0) {
-    const matched = allowedModels.some(
-      (a) => a.provider === provider && a.model === model,
-    );
-    if (!matched) {
-      const options = allowedModels
-        .map((a) => `${a.provider}/${a.model}${a.is_default ? ' (default)' : ''}`)
-        .join(', ');
-      throw new Error(
-        `Model '${provider}/${model}' is not in this session's allowed_models pool. ` +
-          `Retry with one of: ${options}.`,
-      );
-    }
-  }
 
   const project = ctx.db.getProject(spec.projectId);
   const projectName = project?.name ?? `project-${spec.projectId}`;
@@ -287,7 +282,7 @@ export async function spawnSubordinate(
   // Resolve skills now that the subordinate stack is known. Conditional
   // template branches like `{ when: "session.stack === 'react-ts'", skill: 'ds-components-react' }`
   // pick the right primary; chain entries are appended verbatim.
-  const resolvedSkills = resolveRoleSkills(spec.skills, { stack: subordinateStack });
+  const resolvedSkills = resolveRoleSkills(roleRuntime.skills, { stack: subordinateStack });
   if (resolvedSkills.length > 0) {
     try {
       const skillStore = new SkillStore(config.dbPath);
@@ -314,10 +309,17 @@ export async function spawnSubordinate(
     project_ids: [spec.projectId],
     provider,
     model,
+    configured_provider: roleRuntime.configuredProvider ?? provider,
+    configured_model: roleRuntime.configuredModel ?? model,
+    dispatch_source: roleRuntime.dispatchSource,
+    fallback_reason: null,
   });
   const companyContext: CompanyContext = {
     orchestrator: deps.orchestratorRef as never,
     companySessionId: ctx.companySessionId,
+    runtimeKind: ctx.runtimeKind,
+    appStudioSessionId: ctx.appStudioSessionId ?? undefined,
+    capabilities: ctx.capabilities,
     agentRole: spec.role,
     agentRunId: agentRun.id,
     allowedProjectIds: [spec.projectId],
@@ -342,7 +344,7 @@ export async function spawnSubordinate(
     fetchUserMemoryBlock({ taskText: spec.task }),
   ]);
 
-  const subordinateBlock = buildSubordinateCompanyBlock({
+  let subordinateBlock = buildSubordinateCompanyBlock({
     role: spec.role,
     projects: [
       {
@@ -373,13 +375,20 @@ export async function spawnSubordinate(
             ) ?? undefined,
         }
       : undefined,
-    overridePrompt: spec.roleOverride,
+    overridePrompt: roleRuntime.roleOverride,
     // Session-level operational rules, injected verbatim into every spawn so
     // policy survives reactivation/compaction (system prompt, not turn history).
     operationalRules: readOperationalRules(
       ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
     ),
+    runtimeKind: ctx.capabilities.promptProfile,
   });
+  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
+    subordinateBlock += `\n\n${buildAppStudioSubordinateRuntimeBlock({
+      appSessionId: ctx.appStudioSessionId,
+      role: spec.role,
+    })}`;
+  }
 
   // Stored in the outer closure so `attachSubordinateCompletionHandler`
   // can call it from the `.finally` block after handle.done resolves
@@ -399,17 +408,17 @@ export async function spawnSubordinate(
     userMessage: spec.task,
     attachments: spec.attachments,
     maxTurns: 50,
-    profile: spec.tier ?? 'navigate',
+    profile: roleRuntime.tier,
     agent: spec.agent,
     memoryRetriever: memoryPorts?.memoryRetriever,
     runEndMemory: memoryPorts?.runEndMemory,
     companyContext,
     companyPromptBlock: subordinateBlock,
-    companyRoleOverride: spec.roleOverride,
-    roleTemperature: spec.temperature,
-    thinking: spec.thinking,
-    thinkingBudgetTokens: spec.thinkingBudgetTokens,
-    reasoningEffort: spec.reasoningEffort,
+    companyRoleOverride: roleRuntime.roleOverride,
+    roleTemperature: roleRuntime.temperature,
+    thinking: roleRuntime.thinking,
+    thinkingBudgetTokens: roleRuntime.thinkingBudgetTokens,
+    reasoningEffort: roleRuntime.reasoningEffort,
     // Wire HumanInTheLoop + meta-bus listeners BEFORE the runner takes
     // turn 1, so a sub that calls `submit_plan_to_master` or
     // `ask_master` immediately on turn 1 doesn't slip through (same

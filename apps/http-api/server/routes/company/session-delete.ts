@@ -43,6 +43,28 @@ export function nodeModulesVolumeName(sessionId: number | string, serviceId?: st
   return serviceId ? `${base}-${serviceId}` : base;
 }
 
+/** Stop the worker-owned Company runtime before its durable rows disappear. */
+export async function stopCompanySessionRuntime(sessionId: number): Promise<void> {
+  try {
+    const orchestrator = getCompanyOrchestrator(sessionId);
+    if (orchestrator) {
+      orchestrator.abortAll();
+      deleteCompanyOrchestrator(sessionId);
+    }
+  } catch (e) {
+    console.warn(
+      `[company] abort orchestrator ${sessionId} during delete failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  try {
+    await getSandboxManager().destroy(String(sessionId), 'session-deleted');
+  } catch (e) {
+    console.warn(
+      `[company] destroy sandbox ${sessionId} during delete failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
 export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): void {
   const { db, companyStore, companySandboxStore, companySandboxServicesStore } = deps;
 
@@ -96,11 +118,25 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    if (session.runtime_kind === 'app_studio') {
+      return c.json({
+        error: 'This team is owned by App Studio. Delete the App so its workflow, team and project are removed together.',
+        app_session_id: deps.appStudioStore.getSessionByCompanySessionId(id)?.id ?? null,
+      }, 409);
+    }
     return c.json(buildSessionDeletePlan(id));
   });
 
   app.delete('/api/company/sessions/:id', async (c) => {
     const id = parseIdParam(c);
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
+    if (session.runtime_kind === 'app_studio') {
+      return c.json({
+        error: 'App Studio owns this team. Delete it from the App Studio surface to avoid orphaning workflow state.',
+        app_session_id: deps.appStudioStore.getSessionByCompanySessionId(id)?.id ?? null,
+      }, 409);
+    }
     const deleteBody = (await c.req.json().catch(() => ({}))) as {
       remove_project_paths?: string[];
       remove_node_modules_volumes?: string[];
@@ -166,24 +202,7 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     // 2. If no orchestrator is live but a sandbox still lingers in
     //    the manager map (TTL-alive after the user left the tab),
     //    destroy it directly.
-    try {
-      const orch = getCompanyOrchestrator(id);
-      if (orch) {
-        orch.abortAll();
-        deleteCompanyOrchestrator(id);
-      }
-    } catch (e) {
-      console.warn(
-        `[company] abort orchestrator ${id} during delete failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    try {
-      await getSandboxManager().destroy(String(id), 'session-deleted');
-    } catch (e) {
-      console.warn(
-        `[company] destroy sandbox ${id} during delete failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await stopCompanySessionRuntime(id);
 
     // ── Delete the DB row (cascades to agent_runs, kanban, etc) ──
     const deleted = companyStore.deleteCompanySession(id);

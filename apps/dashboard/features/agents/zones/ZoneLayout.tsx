@@ -46,6 +46,7 @@ interface ZoneLayoutProps {
   bottomOpen: boolean;
   onToggleBottom: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
+  runtimeKind?: 'company' | 'app_studio';
 }
 
 export function ZoneLayout({
@@ -60,7 +61,12 @@ export function ZoneLayout({
   bottomOpen,
   onToggleBottom,
   workbenchSlots,
+  runtimeKind = 'company',
 }: ZoneLayoutProps) {
+  const appTabUnavailable = runtimeKind === 'app_studio'
+    && (zone !== 'work' || tab !== 'board');
+  const effectiveZone: Zone = appTabUnavailable ? 'work' : zone;
+  const effectiveTab = appTabUnavailable ? 'board' : tab;
   const handleChange = useCallback(
     (nextZone: Zone, nextTab: string) => {
       const finalTab = isValidTab(nextZone, nextTab)
@@ -73,12 +79,16 @@ export function ZoneLayout({
 
   const rail = (
     <LeftTabRail
-      activeZone={zone}
-      activeTab={tab}
+      activeZone={effectiveZone}
+      activeTab={effectiveTab}
       onChange={handleChange}
       bottomOpen={bottomOpen}
       onToggleBottom={onToggleBottom}
-      catalog={workbenchSlots?.catalog}
+      catalog={runtimeKind === 'company' ? workbenchSlots?.catalog : undefined}
+      hiddenTabs={runtimeKind === 'app_studio'
+        ? ['kanban', 'memory', 'pipelines', 'files', 'git', 'drive', 'docs', 'tests', 'api', 'snapshots', 'archived']
+        : undefined}
+      showTerminal={runtimeKind === 'company'}
     />
   );
 
@@ -89,23 +99,24 @@ export function ZoneLayout({
         : rail}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {zone === 'work' && (
+        {effectiveZone === 'work' && (
           <WorkZone
             sessionId={sessionId}
             sessionName={sessionName}
-            tab={(isValidTab('work', tab) ? tab : DEFAULT_TAB_FOR_ZONE.work) as WorkTab}
+            tab={(isValidTab('work', effectiveTab) ? effectiveTab : DEFAULT_TAB_FOR_ZONE.work) as WorkTab}
             stream={stream}
             boardMessages={boardMessages}
             composer={composer}
+            readOnly={runtimeKind === 'app_studio'}
           />
         )}
-        {zone === 'build' && (
+        {effectiveZone === 'build' && (
           <BuildZone
             sessionId={sessionId}
             tab={(isValidTab('build', tab) ? tab : DEFAULT_TAB_FOR_ZONE.build) as BuildTab}
           />
         )}
-        {zone === 'data' && (
+        {effectiveZone === 'data' && (
           <DataZone
             sessionId={sessionId}
             tab={(isValidTab('data', tab) ? tab : DEFAULT_TAB_FOR_ZONE.data) as DataTab}

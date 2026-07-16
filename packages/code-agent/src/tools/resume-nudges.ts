@@ -17,11 +17,13 @@ export interface NudgeContext {
   isImplement: boolean;
 }
 
-export type ResumeKind = 'tool_budget' | 'timeout' | 'crash' | 'quality' | 'aborted';
+export type ResumeKind = 'tool_budget' | 'turn_budget' | 'timeout' | 'crash' | 'quality' | 'aborted';
 
 /** Classify the failure into the kind that picks the reason-specific line. */
 export function classifyResumeKind(reason: StopReason, failureNote?: string): ResumeKind {
   if (reason === 'tool_budget') return 'tool_budget';
+  if (reason === 'max_turns') return 'turn_budget';
+  if (reason === 'time_budget') return 'timeout';
   if (reason === 'aborted') return 'aborted';
   const note = (failureNote ?? '').toLowerCase();
   if (note.includes('quality')) return 'quality';
@@ -33,6 +35,8 @@ function reasonLine(kind: ResumeKind, ctx: NudgeContext): string {
   switch (kind) {
     case 'tool_budget':
       return `you used your full tool-call budget (${ctx.toolCallCount} calls)`;
+    case 'turn_budget':
+      return `you reached the explicit turn ceiling`;
     case 'timeout':
       return `you hit a time/stall watchdog (${ctx.failureNote ?? 'no progress for too long'})`;
     case 'quality':
@@ -50,6 +54,8 @@ function specificLine(kind: ResumeKind, ctx: NudgeContext): string {
     case 'tool_budget':
       return `You have a fresh budget of ${ctx.maxToolCalls ?? 'the profile default'} calls. ` +
         `Be economical: batch edits, avoid redundant reads.`;
+    case 'turn_budget':
+      return `Continue from the retained progress and avoid repeating completed exploration.`;
     case 'timeout':
       return `Prefer decisive action over broad exploration. If a command hangs, use a faster or narrower alternative.`;
     case 'quality':

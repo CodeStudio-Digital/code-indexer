@@ -28,6 +28,7 @@ import {
   CodeQualityClassifier,
   PolicyClassifier,
   ToolMisuseClassifier,
+  CombinedQualityClassifier,
   QualityClassifierPipeline,
   type ChatMessage,
 } from '../index.js';
@@ -54,7 +55,7 @@ function teardown(handle: DbHandle): void {
 function seedProviderAndBindings(raw: RawDb): void {
   raw.prepare(
     `INSERT INTO provider_configs (id, name, kind, base_url, api_key, auth_mode, enabled, use_for_agent, use_for_coder, is_default)
-     VALUES ('cf-1', 'Cloudflare', 'cloudflare', 'https://api.cloudflare.com/v1', 'tok', 'api_key', 1, 1, 1, 1)`,
+     VALUES ('cf-1', 'OpenAI test', 'openai', 'https://api.openai.com/v1', 'tok', 'api_key', 1, 1, 1, 1)`,
   ).run();
   const bindings = new PipelineProviderBindingsStore(raw);
   for (const pipelineName of [
@@ -68,7 +69,7 @@ function seedProviderAndBindings(raw: RawDb): void {
       pipeline_name: pipelineName,
       binding_role: 'classifier',
       provider_id: 'cf-1',
-      model_id: '@cf/meta/llama-3.2-3b-instruct',
+      model_id: 'gpt-test',
       scope_type: 'global',
       scope_id: null,
       config: { temperature: 0.0, max_tokens: 256 },
@@ -100,6 +101,105 @@ describe('QualityClassifierPipeline', () => {
   let handle: DbHandle;
   beforeEach(() => { handle = setupDb(); });
   afterEach(() => teardown(handle));
+
+  it('persists one terminal request as four dimensional rows with one assessment id', async () => {
+    seedProviderAndBindings(handle.raw);
+    const resolver = new PipelineProviderResolver(
+      new PipelineProviderBindingsStore(handle.raw),
+      new ProviderStore(handle.raw),
+    );
+    const chatFn = async () => ({
+      content: JSON.stringify({
+        verdict: 'warn',
+        confidence: 0.8,
+        reason: 'one dimension needs review',
+        dimensions: {
+          delivery_relevance: { verdict: 'ok', confidence: 0.9, reason: 'relevant' },
+          delivery_completeness: { verdict: 'warn', confidence: 0.8, reason: 'partial' },
+          evidence_alignment: { verdict: 'ok', confidence: 0.95, reason: 'supported' },
+        },
+      }),
+      latencyMs: 7,
+      tokensIn: 120,
+      tokensOut: 40,
+    });
+    const store = new QualityClassificationStore(handle.raw);
+    const pipeline = new QualityClassifierPipeline({
+      classifiers: [new CombinedQualityClassifier(resolver, {
+        chatFn,
+        singleAttempt: true,
+        retry: { maxRetries: 0 },
+      })],
+      store,
+      maxConcurrency: 1,
+    });
+
+    const result = await pipeline.classify({
+      sessionId: 1,
+      roundMessageId: 81,
+      taskText: 'Implement the change',
+      outputText: 'Implemented and tested.',
+      stopReason: 'completed',
+      changedFiles: ['src/a.ts'],
+      toolSummary: { total: 3, success: 3, error: 0, timeout: 0, refusal: 0, tools: [] },
+      validationSignals: ['vitest run'],
+    });
+    expect(result.verdicts).toHaveLength(4);
+    const rows = store.listRecent({ scope: 'run_final' });
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.assessment_id))).toEqual(new Set([result.assessmentId]));
+    expect(new Set(rows.map((row) => row.classifier_name))).toEqual(new Set([
+      'delivery_overall',
+      'delivery_relevance',
+      'delivery_completeness',
+      'evidence_alignment',
+    ]));
+    expect(rows.every((row) => row.round_message_id === 81 && row.source === 'terminal_llm')).toBe(true);
+    expect(rows.reduce((sum, row) => sum + (row.tokens_in ?? 0), 0)).toBe(120);
+    expect(store.overview()).toMatchObject({
+      completedTasks: 1,
+      assessments: 1,
+      llmRequests: 1,
+      tokensIn: 120,
+      tokensOut: 40,
+      infrastructureFailures: 0,
+    });
+  });
+
+  it('counts parser failure as infrastructure, not delivery quality', async () => {
+    seedProviderAndBindings(handle.raw);
+    const store = new QualityClassificationStore(handle.raw);
+    const resolver = new PipelineProviderResolver(
+      new PipelineProviderBindingsStore(handle.raw),
+      new ProviderStore(handle.raw),
+    );
+    const pipeline = new QualityClassifierPipeline({
+      classifiers: [new CombinedQualityClassifier(resolver, {
+        chatFn: async () => ({ content: 'not-json', latencyMs: 3, tokensIn: 10, tokensOut: 2 }),
+        singleAttempt: true,
+        retry: { maxRetries: 0 },
+      })],
+      store,
+    });
+
+    await pipeline.classify({
+      roundMessageId: 82,
+      taskText: 'task',
+      outputText: 'final',
+      stopReason: 'completed',
+    });
+
+    const rows = store.listRecent({ scope: 'run_final' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ verdict: 'error', system_error: 1, source: 'terminal_llm' });
+    expect(store.verdictDistribution({ scope: 'run_final', excludeSystemErrors: true })).toEqual([]);
+    expect(store.overview()).toMatchObject({
+      completedTasks: 1,
+      assessments: 1,
+      llmRequests: 1,
+      infrastructureFailures: 1,
+    });
+  });
 
   it('runs all 5 classifiers in parallel and aggregates verdicts', async () => {
     seedProviderAndBindings(handle.raw);
@@ -163,12 +263,20 @@ describe('QualityClassifierPipeline', () => {
     const bindings = new PipelineProviderBindingsStore(handle.raw);
     const resolver = new PipelineProviderResolver(bindings, providerStore);
 
+    const store = new QualityClassificationStore(handle.raw);
     const pipeline = new QualityClassifierPipeline({
       classifiers: [new OffTopicClassifier(resolver)],
+      store,
     });
-    const result = await pipeline.classify({ taskText: 't', outputText: 'o' });
+    const result = await pipeline.classify({ taskText: 't', outputText: 'o', roundMessageId: 90 });
     expect(result.verdicts[0].verdict).toBe('error');
     expect(result.verdicts[0].reason).toMatch(/no provider binding/i);
+    expect(store.overview()).toMatchObject({
+      completedTasks: 1,
+      assessments: 1,
+      llmRequests: 0,
+      infrastructureFailures: 1,
+    });
   });
 
   it('one classifier failing does not stop others', async () => {

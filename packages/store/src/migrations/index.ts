@@ -246,6 +246,10 @@ import { semanticLocalQ8Auto230 } from './230_semantic_local_q8_auto.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
+import { qualityHybrid234 } from './234_quality_hybrid.js';
+import { appStudioCompanyRuntime235 } from './235_app_studio_company_runtime.js';
+import { companyAgentRunLifecycleStatuses236 } from './236_company_agent_run_lifecycle_statuses.js';
+import { appStudioV6Reset237 } from './237_app_studio_v6_reset.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -508,6 +512,10 @@ export const MIGRATIONS: Migration[] = [
   structuralLastChecked231,
   removeCodeLlmIndex232,
   removeLegacyVectorLedgers233,
+  qualityHybrid234,
+  appStudioCompanyRuntime235,
+  companyAgentRunLifecycleStatuses236,
+  appStudioV6Reset237,
 ];
 
 /**

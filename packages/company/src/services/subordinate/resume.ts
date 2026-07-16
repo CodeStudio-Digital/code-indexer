@@ -41,6 +41,11 @@ import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/sub
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
+import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
+import {
+  readRoleRuntimePolicy,
+  type RoleToolTier,
+} from '@mcp/company/services/subordinate/role-runtime.js';
 
 export interface ResumeSubordinateDeps {
   ctx: SessionContext;
@@ -122,6 +127,43 @@ async function resumeSubordinateInner(
     );
   }
 
+  // Rehydrate the persisted role contract for every new runner invocation.
+  // A coder session preserves its provider/model (including an explicit
+  // fallback), while tier/prompt/sampling/thinking settings would otherwise
+  // silently disappear after waiting, pause or process restart. App roles fail
+  // closed when their configuration was removed or disabled.
+  const companySession = ctx.companyStore.getCompanySession(ctx.companySessionId);
+  const runtimePolicy = readRoleRuntimePolicy(
+    companySession?.config_json,
+    agentRun.role,
+    ctx.runtimeKind,
+  );
+  const configuredRole = runtimePolicy.roleConfig;
+  if (ctx.runtimeKind === 'app_studio' && !configuredRole) {
+    throw new Error(
+      `Role '${agentRun.role}' is no longer configured for this App Studio team`,
+    );
+  }
+  if (configuredRole?.enabled === false) {
+    throw new Error(`Role '${agentRun.role}' is disabled in role_assignments`);
+  }
+  const configuredTier = configuredRole?.tier;
+  if (
+    configuredTier != null
+    && configuredTier !== 'bootstrap'
+    && configuredTier !== 'navigate'
+    && configuredTier !== 'full'
+  ) {
+    throw new Error(
+      `Role '${agentRun.role}' has invalid tier '${configuredTier}'`,
+    );
+  }
+  const resumeTier: RoleToolTier = configuredTier ?? 'navigate';
+  const resumeRoleOverride = configuredRole
+    ? configuredRole.systemPromptOverride
+    : roleOverride;
+  const resumeThinking = configuredRole ? configuredRole.thinking : thinking;
+
   // Drop any pending plan/question/tasks left over from the previous run. Its
   // `resolve` closure points at the OLD runner handle we are about to replace;
   // a master approval landing before the resumed run re-submits would resolve
@@ -149,6 +191,9 @@ async function resumeSubordinateInner(
   const companyContext: CompanyContext = {
     orchestrator: deps.orchestratorRef as never,
     companySessionId: ctx.companySessionId,
+    runtimeKind: ctx.runtimeKind,
+    appStudioSessionId: ctx.appStudioSessionId ?? undefined,
+    capabilities: ctx.capabilities,
     agentRole: agentRun.role,
     agentRunId: agentRun.id,
     allowedProjectIds: projectIds,
@@ -172,7 +217,7 @@ async function resumeSubordinateInner(
     fetchUserMemoryBlock({ taskText: resumeMessage }),
   ]);
 
-  const subordinateBlock = buildSubordinateCompanyBlock({
+  let subordinateBlock = buildSubordinateCompanyBlock({
     role: agentRun.role,
     projects: [
       {
@@ -201,13 +246,20 @@ async function resumeSubordinateInner(
             ).listSandboxPeers?.(resumeBinding.serviceId ?? resumeLabel) ?? undefined,
         }
       : undefined,
-    overridePrompt: roleOverride,
+    overridePrompt: resumeRoleOverride,
     // Re-inject operational rules on every resume — keeps policy present after
     // plan/question pauses and across compaction (lives in the system prompt).
     operationalRules: readOperationalRules(
       ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
     ),
+    runtimeKind: ctx.capabilities.promptProfile,
   });
+  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
+    subordinateBlock += `\n\n${buildAppStudioSubordinateRuntimeBlock({
+      appSessionId: ctx.appStudioSessionId,
+      role: agentRun.role,
+    })}`;
+  }
 
   deps.board.post('system', agentRun.id, 'message', `Resuming @${agentRun.role} agent...`);
 
@@ -222,12 +274,16 @@ async function resumeSubordinateInner(
       userMessage: resumeMessage,
       attachments,
       maxTurns: 50,
+      profile: resumeTier,
       memoryRetriever: memoryPorts?.memoryRetriever,
       runEndMemory: memoryPorts?.runEndMemory,
       companyContext,
       companyPromptBlock: subordinateBlock,
-      companyRoleOverride: roleOverride,
-      thinking,
+      companyRoleOverride: resumeRoleOverride,
+      roleTemperature: configuredRole?.temperature,
+      thinking: resumeThinking,
+      thinkingBudgetTokens: configuredRole?.thinkingBudgetTokens,
+      reasoningEffort: configuredRole?.reasoningEffort,
       onRunnerReady: (runner) =>
         wireSubordinateInterceptionsForRunner(runner, agentRun.id, agentRun.role, deps.wireDeps),
     } as RunCoderOptions & { companyPromptBlock: string });

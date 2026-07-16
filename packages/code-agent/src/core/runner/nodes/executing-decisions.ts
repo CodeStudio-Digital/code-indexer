@@ -19,6 +19,19 @@ const DEBUG = process.env.CODER_BT_DEBUG === '1';
  * stop with `MaxTurnsReached`.
  */
 export function decideTerminal(ctx: RunContext): BehaviorEvent {
+  // Ephemeral children are free-running by default. A zero/omitted maxTurns
+  // means "until natural completion" and deliberately bypasses the parent's
+  // CODER_MAX_AUTO_CONTINUES batches. When an operator supplies a positive
+  // cap, it is an exact child-only ceiling (no automatic extension).
+  if (ctx.opts.isSubagent) {
+    const subagentMaxTurns = ctx.opts.maxTurns ?? 0;
+    if (subagentMaxTurns <= 0 || ctx.turn < subagentMaxTurns) {
+      return events.turnSucceeded({ hasToolCalls: true });
+    }
+    ctx.stopReason = 'max_turns';
+    return events.maxTurnsReached({ autoContinueLeft: 0 });
+  }
+
   const maxTurns = ctx.opts.maxTurns ?? 50;
   const verdict = checkMaxTurns({
     turn: ctx.turn,
@@ -65,13 +78,26 @@ export function decideTerminal(ctx: RunContext): BehaviorEvent {
 export function runQualityCheck(
   ctx: RunContext,
   assistantText: string,
-  toolResults: Array<{ name: string; content: string; isError: boolean }>,
+  toolResults: Array<{
+    name: string;
+    content: string;
+    isError: boolean;
+    refusalKind?: string;
+    guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
+  }>,
   toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>,
 ): void {
   if (!ctx.bridge?.runQualityCheck) return;
   const enriched = toolResults.map((r) => {
     const tu = toolUses.find((t) => t.name === r.name);
-    return { name: r.name, input: tu?.input ?? {}, content: r.content, isError: r.isError };
+    return {
+      name: r.name,
+      input: tu?.input ?? {},
+      content: r.content,
+      isError: r.isError,
+      refusalKind: r.refusalKind,
+      guardVerdict: r.guardVerdict,
+    };
   });
   try {
     ctx.bridge.runQualityCheck({

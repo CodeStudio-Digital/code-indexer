@@ -19,7 +19,7 @@ interface SessionActionsMenuProps {
   onReconnect: () => void;
   /** Phase H — only a master view passes this. */
   onReestablishMaster?: () => void | Promise<void>;
-  onReset: () => void;
+  onReset?: () => void;
 }
 
 export function SessionActionsMenu({ canReconnect, onReconnect, onReestablishMaster, onReset }: SessionActionsMenuProps) {
@@ -49,10 +49,12 @@ export function SessionActionsMenu({ canReconnect, onReconnect, onReestablishMas
             {t('company.actions.reestablishMaster', 'Reestabelecer Master')}
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={onReset}>
-          <RotateCcw className="h-3.5 w-3.5 mr-2" />
-          {t('company.actions.reset', 'Reset')}
-        </DropdownMenuItem>
+        {onReset && (
+          <DropdownMenuItem onSelect={onReset}>
+            <RotateCcw className="h-3.5 w-3.5 mr-2" />
+            {t('company.actions.reset', 'Reset')}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

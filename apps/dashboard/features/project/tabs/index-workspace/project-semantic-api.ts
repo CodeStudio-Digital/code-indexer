@@ -35,6 +35,79 @@ export interface ProjectSemanticReindexJob {
   updated_at: string;
 }
 
+export interface ProjectUnusedVectorCleanupResult {
+  tables_removed: number;
+  items_removed: number;
+  databases_compacted: number;
+  bytes_reclaimed: number;
+  skipped_referenced: number;
+  failures: Array<{ namespace: string; generation_id: number; error: string }>;
+}
+
+export type ProjectSemanticSearchMode = 'auto' | 'fts' | 'vector' | 'hybrid';
+export type ProjectSemanticSearchType = 'all' | 'files' | 'symbols';
+
+export interface ProjectSemanticSearchInput {
+  query: string;
+  mode: ProjectSemanticSearchMode;
+  type: ProjectSemanticSearchType;
+  limit: number;
+}
+
+export interface ProjectSemanticSearchResultItem {
+  id: number;
+  type: 'file' | 'symbol';
+  score: number;
+  fts_rank: number | null;
+  vector_score: number | null;
+  data: {
+    path?: string;
+    file_path?: string;
+    name?: string;
+    kind?: string;
+    language?: string;
+    line_count?: number;
+    line?: number | null;
+    signature?: string | null;
+    comment?: string | null;
+    parent?: string | null;
+  };
+}
+
+export interface ProjectSemanticSearchDiagnostics {
+  vectorAvailable: boolean;
+  embeddingAvailable: boolean;
+  requestedMode?: ProjectSemanticSearchMode;
+  plannedMode?: 'fts' | 'vector' | 'hybrid';
+  effectiveMode?: 'fts' | 'vector' | 'hybrid';
+  generationUsed?: number;
+  embedder?: string;
+  reranker?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
+  queryVariants?: string[];
+  vectorRawMatches?: number;
+  vectorRehydrated?: number;
+  vectorError?: string;
+  ftsCount?: number;
+  plannerMode?: 'fts' | 'vector' | 'hybrid';
+  plannerReason?: string;
+  recentFilesCount?: number;
+  graphExpansionCount?: number;
+  contentCount?: number;
+  cacheHit?: boolean;
+  totalTimeMs?: number;
+  rerankerApplied?: boolean;
+  rerankerCandidates?: number;
+  rerankerReturned?: number;
+  rerankerError?: string;
+}
+
+export interface ProjectSemanticSearchTestResult {
+  results: ProjectSemanticSearchResultItem[];
+  diagnostics: ProjectSemanticSearchDiagnostics;
+}
+
 export interface ProjectSemanticStatus {
   project_id: number;
   profiles: Array<{
@@ -106,6 +179,40 @@ export async function requestProjectSemanticReindex(
   );
   const body = await response.json() as { job: ProjectSemanticReindexJob };
   return body.job;
+}
+
+export async function cleanupProjectUnusedVectors(
+  projectId: number,
+): Promise<ProjectUnusedVectorCleanupResult> {
+  const response = await expectOk(await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/semantic/vectors/cleanup-unused`,
+    { method: 'POST' },
+  ));
+  const body = await response.json() as { result: ProjectUnusedVectorCleanupResult };
+  return body.result;
+}
+
+/** Runs the same project search used by MCP, agents and Search Everywhere.
+ * Cache is deliberately bypassed so this diagnostic action measures the real
+ * embedding/vector/reranker path on every click. */
+export async function testProjectSemanticSearch(
+  projectId: number,
+  input: ProjectSemanticSearchInput,
+  signal?: AbortSignal,
+): Promise<ProjectSemanticSearchTestResult> {
+  const query = new URLSearchParams({
+    q: input.query,
+    mode: input.mode,
+    type: input.type,
+    limit: String(input.limit),
+    supersessionKey: `semantic-test:p${projectId}`,
+    bypassCache: '1',
+  });
+  const response = await expectOk(await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/search?${query.toString()}`,
+    { signal },
+  ));
+  return response.json() as Promise<ProjectSemanticSearchTestResult>;
 }
 
 export function codeNamespaceStatus(

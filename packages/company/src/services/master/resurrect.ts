@@ -28,6 +28,8 @@ import type {
 } from '@mcp/company/services/ports.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
+import type { MasterRuntimeSnapshot } from '@mcp/company/services/master/start.js';
+import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
 
 /**
  * Hard ceiling on a single resurrect cycle. The cycle spans:
@@ -51,6 +53,7 @@ export interface MasterResurrectStateMutators {
   /** Cached prompt block from the first start/resume. */
   readonly promptBlock: string;
   readonly agentRunId: number | null;
+  readonly runtimeSnapshot: MasterRuntimeSnapshot;
   /** In-flight resurrect, if any. */
   readonly resumingPromise: Promise<void> | null;
   setResumingPromise: (p: Promise<void> | null) => void;
@@ -114,18 +117,27 @@ export async function resurrectMaster(
       return;
     }
 
-    const handle = await runCoder({
-      session: { id: masterSessionId },
-      userMessage: message,
-      attachments,
-      maxTurns: 40,
-      planMode: false,
-      profile: 'full',
-      companyContext: deps.state.companyContext!,
-      companyPromptBlock: deps.state.promptBlock,
-      thinking,
-      onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
-    } as RunCoderOptions & { companyPromptBlock: string });
+    const runtime = deps.state.runtimeSnapshot;
+    const handle = await runWithExplicitMasterFallback(
+      () => runCoder({
+        session: { id: masterSessionId },
+        userMessage: message,
+        attachments,
+        maxTurns: 40,
+        planMode: false,
+        profile: 'full',
+        companyContext: deps.state.companyContext!,
+        companyPromptBlock: deps.state.promptBlock,
+        roleTemperature: runtime.temperature,
+        thinking: thinking ?? runtime.thinking,
+        thinkingBudgetTokens: runtime.thinkingBudgetTokens,
+        reasoningEffort: runtime.reasoningEffort,
+        onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
+      } as RunCoderOptions & { companyPromptBlock: string }),
+      agentRunId,
+      runtime.fallbackModels,
+      { ctx: deps.ctx, board: deps.board },
+    );
 
     deps.state.setEnded(false);
     deps.state.setRunnerExited(false);

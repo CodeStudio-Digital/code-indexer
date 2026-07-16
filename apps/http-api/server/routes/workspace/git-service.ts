@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/shell-port.js';
+import type { GitCommit, GitCommitDetail, GitCommitFileChange, GitPushPreview } from '@mcp/api-bus';
 
 export interface GitFileStatus {
   path: string;
@@ -119,6 +120,152 @@ export async function gitLog(root: string, limit: number): Promise<GitLogEntry[]
   return out;
 }
 
+function parsePushCommits(out: string): GitCommit[] {
+  return out.split('\n').filter(Boolean).map((line) => {
+    const [sha = '', shortSha = '', author = '', date = '', subject = '', parents = '', refs = ''] = line.split('\x1f');
+    return {
+      sha,
+      shortSha,
+      author,
+      date,
+      subject,
+      parents: parents.trim() ? parents.trim().split(/\s+/) : [],
+      refs: refs.split(',').map((item) => item.trim()).filter(Boolean),
+    };
+  });
+}
+
+async function resolveCommit(root: string, sha: string): Promise<string> {
+  if (!sha || sha.startsWith('-')) throw new Error('invalid commit');
+  const result = await runGit(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sha}^{commit}`]);
+  const resolved = result.ok ? result.stdout.trim() : '';
+  if (!resolved) throw new Error('unknown commit');
+  return resolved;
+}
+
+async function commitFiles(root: string, sha: string): Promise<GitCommitFileChange[]> {
+  const [numstat, names] = await Promise.all([
+    runGit(root, ['show', '--format=', '--numstat', '-z', sha]),
+    runGit(root, ['show', '--format=', '--name-status', '-z', sha]),
+  ]);
+  if (!numstat.ok || !names.ok) throw new Error((numstat.stderr || names.stderr || 'failed to inspect commit').trim());
+  const counts = new Map<string, { additions: number; deletions: number }>();
+  const numberRows = numstat.stdout.split('\0');
+  for (let index = 0; index < numberRows.length; index += 1) {
+    const row = numberRows[index];
+    if (!row) continue;
+    const first = row.indexOf('\t');
+    const second = first < 0 ? -1 : row.indexOf('\t', first + 1);
+    if (second < 0) continue;
+    let filePath = row.slice(second + 1);
+    if (!filePath) {
+      index += 1;
+      filePath = numberRows[++index] ?? '';
+    }
+    if (!filePath) continue;
+    const additions = row.slice(0, first);
+    const deletions = row.slice(first + 1, second);
+    counts.set(filePath, {
+      additions: additions === '-' ? 0 : Number(additions) || 0,
+      deletions: deletions === '-' ? 0 : Number(deletions) || 0,
+    });
+  }
+  const rows = names.stdout.split('\0');
+  const files: GitCommitFileChange[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const code = rows[index];
+    if (!code) continue;
+    const prefix = code[0];
+    const state: GitCommitFileChange['state'] = prefix === 'A' ? 'added' : prefix === 'D' ? 'deleted' : prefix === 'R' ? 'renamed' : prefix === 'C' ? 'copied' : 'modified';
+    let oldPath: string | undefined;
+    if (state === 'renamed' || state === 'copied') oldPath = rows[++index] ?? '';
+    const filePath = rows[++index] ?? '';
+    if (!filePath) continue;
+    const stats = counts.get(filePath) ?? { additions: 0, deletions: 0 };
+    files.push({ path: filePath, oldPath, state, ...stats });
+  }
+  return files;
+}
+
+export async function gitPushPreview(root: string): Promise<GitPushPreview> {
+  if (!hasGitDir(root)) throw new Error('not a git repo');
+  const status = await gitStatus(root);
+  const branch = status.branch;
+  if (!branch) throw new Error('detached HEAD — checkout a branch first');
+  const remotesResult = await runGit(root, ['remote']);
+  if (!remotesResult.ok) throw new Error(remotesResult.stderr.trim() || 'failed to list remotes');
+  const remotes = remotesResult.stdout.split('\n').map((item) => item.trim()).filter(Boolean);
+  const upstreamRemote = status.upstream
+    ? [...remotes].sort((a, b) => b.length - a.length).find((name) => status.upstream!.startsWith(`${name}/`))
+    : undefined;
+  const remote = upstreamRemote ?? (remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : undefined);
+  if (!remote) throw new Error('No unambiguous push remote is configured.');
+  const targetBranch = status.upstream && upstreamRemote === remote ? status.upstream.slice(remote.length + 1) : branch;
+  const trackingRef = `refs/remotes/${remote}/${targetBranch}`;
+  const tracking = await runGit(root, ['show-ref', '--verify', '--quiet', trackingRef]);
+  const revisions = tracking.ok
+    ? [`${trackingRef}..refs/heads/${branch}`]
+    : [`refs/heads/${branch}`, '--not', `--remotes=${remote}`];
+  const fmt = '%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%P%x1f%D';
+  const [head, count, log, tags] = await Promise.all([
+    runGit(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]),
+    runGit(root, ['rev-list', '--count', ...revisions]),
+    runGit(root, ['log', `--pretty=format:${fmt}`, '--date=iso-strict', '--decorate=short', '-n501', ...revisions]),
+    runGit(root, ['for-each-ref', '--format=%(refname:short)%09%(objectname:short)%09%(contents:subject)', '--count=501', 'refs/tags']),
+  ]);
+  if (!head.ok || !count.ok || !log.ok || !tags.ok) throw new Error((head.stderr || count.stderr || log.stderr || tags.stderr || 'failed to build push preview').trim());
+  const commitCount = Number(count.stdout.trim()) || 0;
+  const commits = parsePushCommits(log.stdout).slice(0, 500);
+  const parsedTags = tags.stdout.split('\n').filter(Boolean).map((line) => {
+    const [name = '', target = '', subject = ''] = line.split('\t');
+    return { name, target, subject };
+  });
+  return {
+    branch,
+    headSha: head.stdout.trim(),
+    remote,
+    targetBranch,
+    upstream: status.upstream,
+    setUpstream: !status.upstream,
+    commits,
+    commitCount,
+    commitsTruncated: commitCount > commits.length,
+    tags: parsedTags.slice(0, 500),
+    tagCount: parsedTags.length,
+    tagsTruncated: parsedTags.length > 500,
+  };
+}
+
+export async function gitCommitDetail(root: string, sha: string): Promise<GitCommitDetail> {
+  const resolved = await resolveCommit(root, sha);
+  const [meta, body, files] = await Promise.all([
+    runGit(root, ['show', '-s', '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s', '--date=iso-strict', resolved]),
+    runGit(root, ['show', '-s', '--format=%b', resolved]),
+    commitFiles(root, resolved),
+  ]);
+  if (!meta.ok || !body.ok) throw new Error((meta.stderr || body.stderr || 'failed to inspect commit').trim());
+  const [fullSha = '', shortSha = '', author = '', authorEmail = '', date = '', parents = '', subject = ''] = meta.stdout.trim().split('\x1f');
+  return {
+    sha: fullSha,
+    shortSha,
+    author,
+    authorEmail,
+    date,
+    subject,
+    body: body.stdout.replace(/\s+$/, ''),
+    parents: parents.trim() ? parents.trim().split(/\s+/) : [],
+    files,
+  };
+}
+
+export async function gitCommitFileDiff(root: string, sha: string, filePath: string): Promise<{ diff: string; truncated: boolean }> {
+  const resolved = await resolveCommit(root, sha);
+  const result = await runGit(root, ['show', '--no-color', '--format=', resolved, '--', filePath]);
+  if (!result.ok) throw new Error(result.stderr.trim() || 'failed to read commit diff');
+  const diff = result.stdout.length > MAX_DIFF_BYTES ? result.stdout.slice(0, MAX_DIFF_BYTES) : result.stdout;
+  return { diff, truncated: result.stdout.length > MAX_DIFF_BYTES };
+}
+
 export async function gitInit(root: string): Promise<{ ok: boolean; message: string }> {
   if (hasGitDir(root)) return { ok: true, message: 'already a repo' };
   const r = await runGit(root, ['init']);
@@ -223,8 +370,36 @@ export interface GitPushResult extends GitMutationResult {
  * so first-push workflows work without extra UI steps. Returns the
  * combined git output for surfacing in the toast.
  */
-export async function gitPush(root: string): Promise<GitPushResult> {
+export async function gitPush(root: string, options: {
+  remote?: string;
+  branch?: string;
+  targetBranch?: string;
+  expectedHead?: string;
+  setUpstream?: boolean;
+  pushTags?: boolean;
+} = {}): Promise<GitPushResult> {
   if (!hasGitDir(root)) return { ok: false, message: 'not a git repo', setUpstream: false };
+  if (options.remote && options.branch) {
+    if (options.expectedHead) {
+      const actualHead = await runGit(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${options.branch}`]);
+      if (!actualHead.ok || actualHead.stdout.trim() !== options.expectedHead) {
+        return { ok: false, message: 'The branch changed after this push preview was opened. Review it again before pushing.', setUpstream: false };
+      }
+    }
+    const args = ['push'];
+    if (options.setUpstream) args.push('--set-upstream');
+    if (options.pushTags) args.push('--tags');
+    args.push(options.remote);
+    args.push(options.targetBranch && options.targetBranch !== options.branch
+      ? `${options.branch}:${options.targetBranch}`
+      : options.branch);
+    const reviewed = await runGit(root, args);
+    return {
+      ok: reviewed.ok,
+      message: (reviewed.stderr || reviewed.stdout).trim() || (reviewed.ok ? 'pushed' : 'git push failed'),
+      setUpstream: options.setUpstream === true,
+    };
+  }
   // Try the plain `git push` first — git already knows the upstream
   // for branches that have one configured.
   const direct = await runGit(root, ['push']);

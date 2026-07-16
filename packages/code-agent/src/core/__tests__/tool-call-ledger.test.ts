@@ -42,6 +42,66 @@ describe('ToolCallLedger', () => {
     }).outcome).toBe('cancelled');
   });
 
+  it('retains only allowlisted validation labels, not raw shell arguments', () => {
+    const ledger = new ToolCallLedger();
+    const validation = ledger.record({
+      name: 'run_command',
+      args: { command: 'npm run typecheck -- --pretty false' },
+      content: 'ok',
+      isError: false,
+    });
+    const unrelated = ledger.record({
+      name: 'run_command',
+      args: { command: 'deploy --token very-secret-value' },
+      content: 'ok',
+      isError: false,
+    });
+    expect(validation.validationSignal).toBe('npm run typecheck');
+    expect(unrelated.validationSignal).toBeUndefined();
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('very-secret-value');
+  });
+
+  it('refuses only after repeated identical no-progress results', () => {
+    const ledger = new ToolCallLedger();
+    const input = { name: 'search', args: { query: 'same' }, content: 'unchanged', isError: false };
+    for (let i = 0; i < 4; i++) {
+      expect(ledger.checkRepeat({ name: input.name, args: input.args })).toBeNull();
+      ledger.record(input);
+    }
+    expect(ledger.checkRepeat({ name: input.name, args: input.args })).toMatchObject({ count: 4 });
+  });
+
+  it('allows polling, mutations, pagination coverage and genuinely new results', () => {
+    const pollable = new ToolCallLedger();
+    for (let i = 0; i < 8; i++) {
+      pollable.record({ name: 'poll_status', args: { id: 1 }, content: 'pending', isError: false, repeatPolicy: 'pollable' });
+    }
+    expect(pollable.checkRepeat({ name: 'poll_status', args: { id: 1 }, repeatPolicy: 'pollable' })).toBeNull();
+
+    const mutation = new ToolCallLedger();
+    for (let i = 0; i < 8; i++) {
+      mutation.record({ name: 'write_file', args: { path: 'a.ts' }, content: 'ok', isError: false, mutates: true });
+    }
+    expect(mutation.checkRepeat({ name: 'write_file', args: { path: 'a.ts' }, mutates: true })).toBeNull();
+
+    const paginated = new ToolCallLedger();
+    for (let page = 0; page < 8; page++) {
+      paginated.record({
+        name: 'read_file',
+        args: { path: 'a.ts', start_line: page * 20 + 1, end_line: page * 20 + 20 },
+        content: 'same boilerplate',
+        isError: false,
+      });
+    }
+    expect(paginated.checkRepeat({ name: 'read_file', args: { path: 'a.ts', start_line: 161, end_line: 180 } })).toBeNull();
+
+    const changing = new ToolCallLedger();
+    for (let i = 0; i < 8; i++) {
+      changing.record({ name: 'search', args: { query: 'q' }, content: `result-${i}`, isError: false });
+    }
+    expect(changing.checkRepeat({ name: 'search', args: { query: 'q' } })).toBeNull();
+  });
+
   it('holds the shared unsafe lane until the owner explicitly releases it', async () => {
     const ledger = new ToolCallLedger();
     const releaseFirst = await ledger.reserveUnsafe();

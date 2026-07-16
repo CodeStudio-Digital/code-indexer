@@ -92,23 +92,23 @@ export class KanbanService implements IKanbanNotifier {
     cardId: number,
     targetColumn: KanbanColumn,
     fromColumn: KanbanColumn | undefined,
-  ): { blocked: false } | { blocked: true; offendingVerdicts: QualityClassificationRow[] } {
-    if (targetColumn !== 'done') return { blocked: false };
-    if (fromColumn === 'review') return { blocked: false }; // explicit second pass
+  ): { advisory: false } | { advisory: true; offendingVerdicts: QualityClassificationRow[] } {
+    if (targetColumn !== 'done') return { advisory: false };
+    if (fromColumn === 'review') return { advisory: false };
     const store = this.getQualityStore();
-    if (!store) return { blocked: false };
+    if (!store) return { advisory: false };
 
     let agentRunIds: number[] = [];
     try {
       const cardFull = this.ctx.companyStore.getKanbanCardFull(cardId);
-      if (!cardFull) return { blocked: false };
+      if (!cardFull) return { advisory: false };
       agentRunIds = cardFull.agents
         .map((a) => a.agent_run_id)
         .filter((id) => Number.isFinite(id));
     } catch {
-      return { blocked: false };
+      return { advisory: false };
     }
-    if (agentRunIds.length === 0) return { blocked: false };
+    if (agentRunIds.length === 0) return { advisory: false };
 
     let rows: QualityClassificationRow[] = [];
     try {
@@ -117,15 +117,18 @@ export class KanbanService implements IKanbanNotifier {
         limit: 200,
       });
     } catch {
-      return { blocked: false };
+      return { advisory: false };
     }
     const offending = rows.filter(
       (r) =>
+        r.scope === 'run_final' &&
+        r.source === 'terminal_llm' &&
+        r.system_error === 0 &&
         (r.verdict === 'warn' || r.verdict === 'flagged') &&
         (r.confidence ?? 0) >= QUALITY_GATE_MIN_CONFIDENCE,
     );
-    if (offending.length === 0) return { blocked: false };
-    return { blocked: true, offendingVerdicts: offending };
+    if (offending.length === 0) return { advisory: false };
+    return { advisory: true, offendingVerdicts: offending };
   }
 
   /**
@@ -135,7 +138,7 @@ export class KanbanService implements IKanbanNotifier {
    */
   private buildGateComment(verdicts: ReadonlyArray<QualityClassificationRow>): string {
     const lines: string[] = [
-      'Move to `done` redirected to `review` by the quality gate.',
+      'Quality recommends reviewing this delivery; the move to `done` was not blocked.',
       '',
       'Recent quality verdicts on this card\'s agent(s):',
     ];
@@ -149,7 +152,7 @@ export class KanbanService implements IKanbanNotifier {
       lines.push(`- \`${v.classifier_name}\` = **${v.verdict}**${conf}${reason}`);
     }
     lines.push('');
-    lines.push('Review the work, address the concerns, then move from `review` to `done` (the gate skips that transition).');
+    lines.push('This is consultative evidence. Objective dependency and permission gates remain authoritative.');
     return lines.join('\n');
   }
 
@@ -262,21 +265,15 @@ export class KanbanService implements IKanbanNotifier {
       return card;
     }
 
-    // Wire #3 — Quality gate. When destination is `done` and we have
-    // recent warn/flagged verdicts on this card's agents, redirect to
-    // `review` and post an explanatory comment. The master is then in
-    // the driver's seat: review the verdicts, address the concerns,
-    // then promote review→done (the gate skips that transition).
-    let effectiveColumn = column;
-    let gateBlock: ReturnType<typeof this.evaluateQualityGate> = { blocked: false };
+    // Semantic quality is advisory only: keep the requested destination and
+    // attach the evidence as a review recommendation.
+    const effectiveColumn = column;
+    let gateBlock: ReturnType<typeof this.evaluateQualityGate> = { advisory: false };
     try {
       gateBlock = this.evaluateQualityGate(cardId, column, before?.column);
     } catch {
       // Gate evaluation must never break a kanban move.
-      gateBlock = { blocked: false };
-    }
-    if (gateBlock.blocked) {
-      effectiveColumn = 'review';
+      gateBlock = { advisory: false };
     }
 
     const card = this.ctx.companyStore.moveKanbanCard(cardId, effectiveColumn, position);
@@ -285,19 +282,19 @@ export class KanbanService implements IKanbanNotifier {
       fromColumn: before?.column,
       toColumn: effectiveColumn,
       position: card.position,
-      ...(gateBlock.blocked
-        ? { requestedColumn: column, qualityGateBlocked: true, blockingVerdictCount: gateBlock.offendingVerdicts.length }
+      ...(gateBlock.advisory
+        ? { qualityAdvisory: true, advisoryVerdictCount: gateBlock.offendingVerdicts.length }
         : {}),
     });
 
     // Post the gate explanation as a comment AFTER the move so the move
     // and the explanation arrive in order on the SSE channel. Failures
     // here don't roll back the move.
-    if (gateBlock.blocked) {
+    if (gateBlock.advisory) {
       try {
         const comment = this.ctx.companyStore.addKanbanComment(
           cardId,
-          'quality-gate',
+          'quality-advisory',
           null,
           this.buildGateComment(gateBlock.offendingVerdicts),
         );

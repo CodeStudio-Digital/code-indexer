@@ -25,6 +25,8 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import {
   runSubagent,
   runParallelAgents,
+  countSubagentOutcomes,
+  isPartialSubagentReason,
   emptyCollected,
   type SubagentAllowlist,
   type ParallelAgentSpec,
@@ -543,7 +545,7 @@ async function runGroupParallel(
     return {
       task: buildTaskBriefing(t),
       label: `${profile}:${t.id}`,
-      maxTurns: 100,
+      maxTurns: 0,
       profile,
       provider: await providerForProfile(deps, profile),
       reasoningEffort: effortForProfile(deps, profile),
@@ -608,11 +610,14 @@ async function runGroupParallel(
   }
   const { results, totalUsage } = parallelRun;
 
+  const outcomeCounts = countSubagentOutcomes(results);
   ctx.runner?.emit('agents_group_end', {
     groupId,
     totalUsage,
     agentCount: results.length,
-    successCount: results.filter((r) => r.reason === 'completed').length,
+    successCount: outcomeCounts.completedCount,
+    ...outcomeCounts,
+    resumableCount: 0,
   });
 
   const finishedAt = new Date().toISOString();
@@ -620,7 +625,11 @@ async function runGroupParallel(
   for (let i = 0; i < tasks.length; i++) {
     const t = tasks[i];
     const r = results[i];
-    const status: TaskStatus = r.reason === 'completed' ? 'done' : 'failed';
+    const status: TaskStatus = r.reason === 'completed'
+      ? 'done'
+      : isPartialSubagentReason(r.reason)
+        ? 'interrupted'
+        : 'failed';
     const summary = r.finalText || '(no summary)';
     const taskResult = {
       summary,
@@ -732,7 +741,7 @@ async function runOneTask(
           label: task.title,
           allowlist: art.allowlist,
           initialMessages,
-          maxTurns: 100,
+          maxTurns: 0,
           pathScope: art.pathScope,
           pathScopeMode: art.pathScopeMode,
           limits,
@@ -760,7 +769,11 @@ async function runOneTask(
     }
 
     const finishedAt = new Date().toISOString();
-    const status: TaskStatus = raw.reason === 'completed' ? 'done' : 'failed';
+    const status: TaskStatus = raw.reason === 'completed'
+      ? 'done'
+      : isPartialSubagentReason(raw.reason)
+        ? 'interrupted'
+        : 'failed';
     const summary = raw.finalText || '(no summary)';
     const error = status === 'failed' ? summary : undefined;
 
@@ -784,7 +797,7 @@ async function runOneTask(
 
     return {
       result: { status, summary, error, usage: raw.usage, toolCallCount, finishedAt },
-      shouldStop: status === 'done',
+      shouldStop: status === 'done' || status === 'interrupted',
       errorMessage: error,
     };
   });

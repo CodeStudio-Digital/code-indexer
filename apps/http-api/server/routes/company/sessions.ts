@@ -14,9 +14,24 @@ import {
   mergeAutonomyPatch,
   type AutonomyPatch,
 } from '@mcp/company/services/autonomy/autonomy-patch.js';
+import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { companyStore, appStudioStore, db } = deps;
+
+  const linkedAppSessionId = (companySessionId: number): number | null =>
+    appStudioStore.getSessionByCompanySessionId(companySessionId)?.id ?? null;
+  const runtimeEnvelope = (session: { runtime_kind: 'company' | 'app_studio'; id: number }) => {
+    const appSessionId = session.runtime_kind === 'app_studio' ? linkedAppSessionId(session.id) : null;
+    return {
+      app_session_id: appSessionId,
+      capabilities: resolveCompanySessionCapabilities(session.runtime_kind, appSessionId),
+    };
+  };
 
   // Collapses the duplicate / SSE-tick-driven `state-snapshot` polls that pile
   // synchronous DB reads onto the main loop during a multi-agent run. Only the
@@ -74,7 +89,10 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/company/sessions', (c) => {
     const status = c.req.query('status') as 'idle' | 'running' | 'completed' | undefined;
-    return c.json(companyStore.listCompanySessions(status ? { status } : undefined));
+    return c.json(companyStore.listCompanySessions(status ? { status } : undefined).map((session) => ({
+      ...session,
+      ...runtimeEnvelope(session),
+    })));
   });
 
   app.get('/api/company/sessions/:id', (c) => {
@@ -105,6 +123,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
 
     return c.json({
       ...full,
+      ...runtimeEnvelope(full.session),
       projects: enrichedProjects,
     });
   });
@@ -162,6 +181,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
 
     return c.json({
       ...full,
+      ...runtimeEnvelope(full.session),
       projects: enrichedProjects,
       liveOrchestrator,
       masterAlive,
@@ -390,10 +410,14 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'team configuration');
+    }
 
     interface ConfigPatchBody {
       role_assignments?: Array<{
         role: string;
+        enabled?: boolean;
         provider: string;
         model: string;
         tier?: string;
@@ -414,6 +438,8 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
         thinkingBudgetTokens?: number;
         /** Per-role sticky reasoning-effort override (orthogonal to thinking). */
         reasoningEffort?: string;
+        /** Ordered, explicit provider/model fallbacks. Empty means no fallback. */
+        fallbackModels?: Array<{ provider: string; model: string }>;
       }>;
       skills?: Record<string, string[]>;
       allowed_models?: Array<{
@@ -484,24 +510,36 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
 
+    // Normalize once before branching on worker availability. Previously the
+    // live-worker path defaulted a missing tier to `navigate`, while the cold
+    // path persisted the raw payload and failed only after the next restart
+    // when the authoritative role resolver rejected the incomplete role.
+    const normalizedRoleAssignments = body.role_assignments?.map((r) => ({
+      role: r.role,
+      enabled: r.enabled !== false,
+      provider: r.provider,
+      model: r.model,
+      tier: r.tier ?? 'navigate',
+      projectHints: r.projectHints,
+      projectIds: r.projectIds,
+      skills: r.skills,
+      systemPromptOverride: r.systemPromptOverride,
+      temperature: r.temperature,
+      thinking: r.thinking,
+      thinkingBudgetTokens: r.thinkingBudgetTokens,
+      reasoningEffort: r.reasoningEffort,
+      fallbackModels: r.fallbackModels?.flatMap((fallback) => {
+        const provider = fallback.provider?.trim();
+        const model = fallback.model?.trim();
+        return provider && model ? [{ provider, model }] : [];
+      }),
+    }));
+
     const orch = getCompanyOrchestrator(id);
     if (orch) {
       try {
         orch.applyConfigPatch({
-          role_assignments: body.role_assignments?.map((r) => ({
-            role: r.role,
-            provider: r.provider,
-            model: r.model,
-            tier: r.tier ?? 'navigate',
-            projectHints: r.projectHints,
-            projectIds: r.projectIds,
-            skills: r.skills,
-            systemPromptOverride: r.systemPromptOverride,
-            temperature: r.temperature,
-            thinking: r.thinking,
-            thinkingBudgetTokens: r.thinkingBudgetTokens,
-            reasoningEffort: r.reasoningEffort,
-          })),
+          role_assignments: normalizedRoleAssignments,
           skills: body.skills,
           allowed_models: body.allowed_models,
           // Routed through the worker so the merge + `session.config_updated`
@@ -516,7 +554,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
       // to the next `startMaster` call.
       let cfg: Record<string, unknown> = {};
       try { cfg = JSON.parse(session.config_json || '{}'); } catch { cfg = {}; }
-      if (body.role_assignments) cfg.role_assignments = body.role_assignments;
+      if (normalizedRoleAssignments) cfg.role_assignments = normalizedRoleAssignments;
       if (body.skills) cfg.skills = body.skills;
       if (body.allowed_models) cfg.allowed_models = body.allowed_models;
       if (autonomyPatch) cfg.autonomy = mergeAutonomyPatch(cfg.autonomy, autonomyPatch);

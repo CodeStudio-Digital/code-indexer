@@ -47,6 +47,7 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   runSubagent,
   runParallelAgents,
+  countSubagentOutcomes,
   extractLastAssistantText,
   emptyCollected,
   type ParallelAgentSpec,
@@ -118,7 +119,6 @@ function rawString(value: unknown): string | undefined {
 }
 
 function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAgent[]; error: string | null } {
-  const MIN_TURNS = 50;
   const fallbackProfile = MICRO_AGENT_PROFILES.explore;
 
   // Backward-compat path: top-level `task` (singular) → wrap in agents:[{}].
@@ -161,7 +161,7 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
       : `${profile.defaultLabel}-${i + 1}`;
     const max_turns = typeof raw.max_turns === 'number' && Number.isFinite(raw.max_turns)
       ? raw.max_turns
-      : 100;
+      : 0;
     const files = Array.isArray(raw.files)
       ? (raw.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0)
       : undefined;
@@ -170,7 +170,7 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
       type: profile.capability,
       profile,
       label,
-      maxTurns: Math.max(MIN_TURNS, max_turns),
+      maxTurns: Math.max(0, Math.floor(max_turns)),
       files,
     });
   }
@@ -397,13 +397,6 @@ async function runParallelEphemeral(
     },
   );
 
-  ctx.runner?.emit('agents_group_end', {
-    groupId,
-    totalUsage,
-    agentCount: results.length,
-    successCount: results.filter((r) => r.reason === 'completed').length,
-  });
-
   const header = renderParallelHeader(results.length, headInfo, totalUsage, groupId);
   const body = renderParallelBody(results.map((r, i) => ({
     label: r.label,
@@ -423,7 +416,7 @@ async function runParallelEphemeral(
   }
 
   // Retain for resume_agent — spawnId is the groupId so UI rows patch on resume.
-  retainSpawnGroup({
+  const resumableCount = retainSpawnGroup({
     sessionId: parentSessionId,
     spawnId: groupId,
     provider: headInfo.provider,
@@ -432,6 +425,15 @@ async function runParallelEphemeral(
       ...toRetentionAgent(i, agents[i], r),
       toolCallCount: r.toolCallCount,
     })),
+  });
+  const outcomeCounts = countSubagentOutcomes(results);
+  ctx.runner?.emit('agents_group_end', {
+    groupId,
+    totalUsage,
+    agentCount: results.length,
+    successCount: outcomeCounts.completedCount,
+    ...outcomeCounts,
+    resumableCount,
   });
   const failed = countFailed(results);
   const hint = failed > 0 ? renderResumeHint(groupId, failed) : '';
@@ -511,7 +513,10 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
                 description: 'Backward-compatible alias for profile. Prefer profile/tool_profile for named specializations.',
               },
               label: { type: 'string', description: 'Short UI label shown in parallel mode (3-5 words).' },
-              max_turns: { type: 'number', description: 'Max turns for this agent (default 100, min 50).' },
+              max_turns: {
+                type: 'number',
+                description: 'Optional exact turn cap. Omit or use 0 for unlimited (default); set a positive value only when an operator requested a cap.',
+              },
               files: { type: 'array', items: { type: 'string' }, description: 'Implement profile: paths the agent may write to.' },
             },
             required: ['task'],

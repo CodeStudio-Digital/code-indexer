@@ -97,6 +97,10 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
   return cachedPool;
 }
 
+export function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
+  return cachedPool;
+}
+
 /**
  * Wire main-thread doc-corpus deps into the company worker pool. Called by
  * `server.ts` right after `DocHybridSearch` + `DocsResearchBridge` are

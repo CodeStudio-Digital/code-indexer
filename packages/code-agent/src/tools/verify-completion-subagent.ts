@@ -160,7 +160,7 @@ export async function runVerifyCompletionSubagent(
     systemPrompt: VERIFY_SYSTEM_PROMPT,
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,
-    maxTurns: Number(process.env.CODER_GOAL_VERIFY_MAX_TURNS ?? 10),
+    maxTurns: Number(process.env.CODER_GOAL_VERIFY_MAX_TURNS ?? 0),
   });
 
   const parsed = parseVerdictBlock(result.finalText);

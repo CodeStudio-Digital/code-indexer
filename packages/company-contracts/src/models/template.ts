@@ -21,6 +21,11 @@ export interface RoleSkillsConfig {
 
 export type RoleSkills = string[] | RoleSkillsConfig;
 
+export interface RoleFallbackModel {
+  provider: string;
+  model: string;
+}
+
 export interface ResolveRoleSkillsContext {
   /** Builder sandbox stack — set by `getSandboxStackForService` at spawn. */
   stack?: string;
@@ -88,6 +93,8 @@ export interface CompanyRoleConfig {
   provider: string;
   model: string;
   tier: 'bootstrap' | 'navigate' | 'full';
+  /** Disabled roles remain visible/editable but cannot receive new work. */
+  enabled?: boolean;
   systemPromptOverride?: string;
   /** Symbolic labels resolved to real project_ids at session creation. */
   projectHints?: string[];
@@ -123,6 +130,15 @@ export interface CompanyRoleConfig {
    * schema change). Undefined → model default.
    */
   reasoningEffort?: string;
+  /** Enable extended thinking for this role when supported by its provider. */
+  thinking?: boolean;
+  /** Provider-specific extended-thinking budget (currently used by Anthropic). */
+  thinkingBudgetTokens?: number;
+  /**
+   * Ordered, user-authored fallback chain. An empty/absent chain means the
+   * configured provider/model is authoritative and no model fallback is legal.
+   */
+  fallbackModels?: RoleFallbackModel[];
 }
 
 export interface CompanyTemplate {

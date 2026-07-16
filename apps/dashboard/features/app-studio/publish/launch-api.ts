@@ -48,7 +48,7 @@ async function consumeSse(
 }
 
 export async function getCfWhoami(sessionId: number): Promise<CfWhoami> {
-  const r = await fetch(`/api/app-studio/cf/whoami?session_id=${sessionId}`);
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/publish`);
   if (!r.ok) throw new Error(r.statusText);
   return (await r.json()) as CfWhoami;
 }
@@ -58,10 +58,10 @@ export async function streamCfLogin(
   sessionId: number,
   handlers: { onOauthUrl?: (url: string) => void; onLog?: (chunk: string) => void } = {},
 ): Promise<CfWhoami> {
-  const r = await fetch('/api/app-studio/login', {
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/publish/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify({}),
   });
   let result: CfWhoami | null = null;
   let error: string | null = null;
@@ -87,7 +87,7 @@ export async function streamAppLaunch(
   sessionId: number,
   handlers: { onPhase?: (phase: LaunchPhaseId) => void; onLog?: (chunk: string) => void } = {},
 ): Promise<LaunchResult> {
-  const r = await fetch(`/api/app-studio/sessions/${sessionId}/launch`, { method: 'POST' });
+  const r = await fetch(`/api/app-studio/apps/${sessionId}/publish`, { method: 'POST' });
   let result: LaunchResult | null = null;
   let error: string | null = null;
   let authRequired = false;

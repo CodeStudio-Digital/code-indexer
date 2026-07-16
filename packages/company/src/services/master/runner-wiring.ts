@@ -26,6 +26,7 @@ import type {
   IBoardPoster,
   IMetaBusWirer,
 } from '@mcp/company/services/ports.js';
+import { isTransientError } from '@mcp/company/RetryPolicy.js';
 
 export interface MasterRunnerStateMutators {
   /** Existing attention-listener unsubscribe (null on first wire). */
@@ -107,28 +108,69 @@ export interface AttachMasterCompletionDeps {
   board: Pick<IBoardPoster, 'post'>;
   humanInLoop: Pick<HumanInTheLoop, 'cancelPendingMasterPrompts'>;
   state: MasterRunnerStateMutators;
+  /**
+   * Company-owned App fallback hook. It must update runtime provenance before
+   * starting the replacement runner and returns true only when continuation
+   * was successfully attached.
+   */
+  tryExplicitFallback?: (errorDetail: string) => Promise<boolean>;
 }
 
 /**
- * Wrap `handle.done` with the status + board + idle-notify cleanup.
- * Three exit paths (each set `_runnerExited` BEFORE other work so a
- * subordinate notify() arriving in the same microtask routes to
- * `resurrect` instead of pushing into a dead buffer):
- *
- *   - `.then` — status `completed` or `error`, board "Master finished" post.
- *   - `.catch` — status `error`, board "Master error" post.
- *   - `.finally` — set `_ended`, tear down attention listener, cancel
- *     pending master prompts, fire `notifyIdleEnded()`.
+ * Wrap `handle.done` with status + board + idle-notify cleanup. Every exit
+ * sets `_runnerExited` before other work so a subordinate notification cannot
+ * be pushed into a dead buffer. A transient App failure may hand ownership to
+ * an explicitly configured fallback runner; only terminal exits set `_ended`,
+ * tear down attention, cancel prompts and fire `notifyIdleEnded()`.
  */
 export function attachMasterCompletionHandler(
   handle: RunCoderHandle,
   runId: number,
   deps: AttachMasterCompletionDeps,
 ): void {
-  handle.done
-    .then(({ reason, error }) => {
+  const finalizeTerminalExit = (): void => {
+    deps.state.setEnded(true);
+    // Timestamp the exit so the dashboard's session_idle handler can
+    // surface "Master finished at HH:MM" or "Master ended unexpectedly"
+    // without depending on the SSE delivery time (which can lag by
+    // seconds during reconnects).
+    deps.state.setEndedAt(new Date().toISOString());
+    if (deps.state.attentionOff) {
+      try { deps.state.attentionOff(); } catch { /* best-effort */ }
+      deps.state.setAttentionOff(null);
+    }
+    try {
+      deps.humanInLoop.cancelPendingMasterPrompts();
+    } catch { /* best-effort */ }
+    deps.state.notifyIdleEnded();
+  };
+
+  const tryFallback = async (detail: string): Promise<boolean> => {
+    if (!deps.tryExplicitFallback || !isTransientError(detail)) return false;
+    try {
+      return await deps.tryExplicitFallback(detail);
+    } catch (error) {
+      console.warn(
+        `[company s=${deps.ctx.companySessionId}] explicit Master fallback failed:`,
+        error,
+      );
+      return false;
+    }
+  };
+
+  // Use one async owner instead of an unconditional `.finally`: a successful
+  // fallback attaches a replacement runner to the same agent_run and must not
+  // be overwritten to `ended/error` by the runner it replaced.
+  void (async () => {
+    let continuedWithFallback = false;
+    try {
+      const { reason, error } = await handle.done;
       deps.state.setRunnerExited(true);
       const detail = error ? ` — ${error}` : '';
+      if (reason !== 'completed') {
+        continuedWithFallback = await tryFallback(error ?? `${reason}${detail}`);
+        if (continuedWithFallback) return;
+      }
       try {
         deps.ctx.companyStore.updateAgentRunStatus(
           runId,
@@ -139,31 +181,23 @@ export function attachMasterCompletionHandler(
       if (reason !== 'completed') {
         deps.state.setEndedWithError(`${reason}${detail}`);
       }
-      deps.board.post('system', null, 'message', `Master finished: ${reason}${detail}`);
-    })
-    .catch((err: unknown) => {
+      try {
+        deps.board.post('system', null, 'message', `Master finished: ${reason}${detail}`);
+      } catch { /* best-effort */ }
+    } catch (err) {
       deps.state.setRunnerExited(true);
+      const errMessage = err instanceof Error ? err.message : String(err);
+      continuedWithFallback = await tryFallback(errMessage);
+      if (continuedWithFallback) return;
       try {
         deps.ctx.companyStore.updateAgentRunStatus(runId, 'error');
       } catch { /* ignore */ }
-      const errMessage = err instanceof Error ? err.message : String(err);
       deps.state.setEndedWithError(errMessage);
-      deps.board.post('system', null, 'message', `Master error: ${errMessage}`);
-    })
-    .finally(() => {
-      deps.state.setEnded(true);
-      // Timestamp the exit so the dashboard's session_idle handler can
-      // surface "Master finished at HH:MM" or "Master ended unexpectedly"
-      // without depending on the SSE delivery time (which can lag by
-      // seconds during reconnects).
-      deps.state.setEndedAt(new Date().toISOString());
-      if (deps.state.attentionOff) {
-        try { deps.state.attentionOff(); } catch { /* best-effort */ }
-        deps.state.setAttentionOff(null);
-      }
       try {
-        deps.humanInLoop.cancelPendingMasterPrompts();
+        deps.board.post('system', null, 'message', `Master error: ${errMessage}`);
       } catch { /* best-effort */ }
-      deps.state.notifyIdleEnded();
-    });
+    } finally {
+      if (!continuedWithFallback) finalizeTerminalExit();
+    }
+  })();
 }

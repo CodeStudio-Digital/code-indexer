@@ -5,6 +5,10 @@ import {
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 /**
  * Per-agent (subordinate) control: pause, resume, delete. The session-wide
@@ -25,6 +29,9 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
    */
   app.post('/api/company/sessions/:id/agents/:agentRunId/pause', async (c) => {
     const id = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'agent pause');
+    }
     const agentRunId = parseIdParam(c, 'agentRunId');
     const run = companyStore.getAgentRun(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');
@@ -45,6 +52,9 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
    */
   app.post('/api/company/sessions/:id/agents/:agentRunId/resume', async (c) => {
     const id = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'agent resume');
+    }
     const agentRunId = parseIdParam(c, 'agentRunId');
     const run = companyStore.getAgentRun(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');
@@ -69,6 +79,9 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
    */
   app.delete('/api/company/sessions/:id/agents/:agentRunId', async (c) => {
     const id = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, id)) {
+      return appOwnedControlPlaneConflict(c, 'agent deletion');
+    }
     const agentRunId = parseIdParam(c, 'agentRunId');
     const run = companyStore.getAgentRun(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');

@@ -3,6 +3,10 @@ import type { ServerDeps } from '../../deps.js';
 import { activeOrchestrators } from './stream.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import type { InboxStatus } from '@mcp/company/types.js';
+import {
+  appOwnedControlPlaneConflict,
+  isAppOwnedCompanySession,
+} from './runtime-capabilities.js';
 
 /**
  * HTTP routes for the agent inbox.
@@ -35,6 +39,9 @@ export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/company/sessions/:id/inbox/:msgId/cancel', async (c) => {
     const sessionId = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, sessionId)) {
+      return appOwnedControlPlaneConflict(c, 'inbox cancellation');
+    }
     const msgId = parseIdParam(c, 'msgId');
     const body = await parseJsonBody<{ reason?: string }>(c);
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -52,6 +59,9 @@ export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/inbox/:msgId/respond', async (c) => {
     const sessionId = parseIdParam(c);
+    if (isAppOwnedCompanySession(companyStore, sessionId)) {
+      return appOwnedControlPlaneConflict(c, 'inbox operator response');
+    }
     const msgId = parseIdParam(c, 'msgId');
     const body = await parseJsonBody<{ answer?: string }>(c);
     const answer = String(body.answer ?? '').trim();

@@ -40,6 +40,7 @@ import {
   resolveAutonomy,
 } from '@mcp/company/services/autonomy/autonomy-config.js';
 import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
+import type { RoleDispatchSource } from '@mcp/company/services/subordinate/role-runtime.js';
 import { selectDispatchTargets, type SchedulerCard } from './dispatch-core.js';
 import { dispatchCard } from './dispatch-card.js';
 import { getGlobalCompanyRecommend } from './recommend-shim.js';
@@ -53,6 +54,7 @@ export interface SchedulerSpawn {
     role: string;
     task: string;
     projectId?: number;
+    dispatchSource?: RoleDispatchSource;
   }): Promise<{ agentRunId: number; coderSessionId: number }>;
 }
 

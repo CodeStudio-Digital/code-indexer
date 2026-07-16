@@ -6,6 +6,7 @@ import { Laptop } from 'lucide-react';
 import type { CloudSessionInfo } from '@mcp/api-bus';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
+import { confirm } from '../lib/confirm.js';
 import { Alert, Badge, Button, Card, CardContent, Spinner } from '../lib/ui.js';
 
 export function DevicesPage() {
@@ -28,7 +29,15 @@ export function DevicesPage() {
   }, [load]);
 
   const revokeAll = async () => {
-    if (!confirm('Sign out of every device, including this one?')) return;
+    if (
+      !(await confirm({
+        title: 'Sign out everywhere?',
+        description: 'This signs out every device, including the one you are using right now.',
+        confirmLabel: 'Sign out everywhere',
+        tone: 'destructive',
+      }))
+    )
+      return;
     setBusy(true);
     try {
       await signOut(true); // logout-all → clears local + redirects via RequireAuth

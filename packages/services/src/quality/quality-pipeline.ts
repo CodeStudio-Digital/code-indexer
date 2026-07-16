@@ -12,6 +12,7 @@
  * `{ verdict: 'error', reason: ... }` so the pipeline gets a row instead
  * of an exception).
  */
+import { randomUUID } from 'node:crypto';
 import type { TelemetryEvent, TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
   durationToBucket,
@@ -67,6 +68,7 @@ export class QualityClassifierPipeline {
   /** Run all classifiers in parallel. Never throws. */
   async classify(output: AgentOutputForClassification): Promise<QualityResult> {
     const started = performance.now();
+    const assessmentId = randomUUID();
     const settled = await mapWithConcurrency(
       this.opts.classifiers,
       this.opts.maxConcurrency ?? DEFAULT_CLASSIFIER_CONCURRENCY,
@@ -80,7 +82,7 @@ export class QualityClassifierPipeline {
         })),
     );
 
-    const verdicts: ClassificationVerdict[] = settled.map((r, i): ClassificationVerdict => {
+    const baseVerdicts: ClassificationVerdict[] = settled.map((r, i): ClassificationVerdict => {
       if (r.status === 'fulfilled') return r.value;
       const c = this.opts.classifiers[i];
       return {
@@ -90,6 +92,24 @@ export class QualityClassifierPipeline {
         reason: `pipeline rejection: ${(r.reason as Error)?.message ?? 'unknown'}`,
         latencyMs: 0,
       };
+    });
+    const verdicts: ClassificationVerdict[] = baseVerdicts.flatMap((verdict) => {
+      const dimensions = verdict.dimensions ?? [];
+      const overall = { ...verdict, dimensions: undefined };
+      return [
+        overall,
+        ...dimensions.map((dimension) => ({
+          ...dimension,
+          latencyMs: verdict.latencyMs,
+          providerId: verdict.providerId,
+          modelId: verdict.modelId,
+          // Request-level usage belongs on the overall row only so KPI sums
+          // do not multiply tokens by the four dimensional rows.
+          tokensIn: undefined,
+          tokensOut: undefined,
+          providerRequests: undefined,
+        })),
+      ];
     });
 
     // Optional persistence — one row per classifier verdict.
@@ -104,6 +124,18 @@ export class QualityClassifierPipeline {
           is_subagent: output.isSubagent === true,
           subagent_profile: output.subagentProfile ?? null,
           message_id: output.messageId ?? null,
+          assessment_id: assessmentId,
+          round_message_id: output.roundMessageId ?? null,
+          scope: 'run_final',
+          source: 'terminal_llm',
+          action_taken: v.systemError ? 'none' : v.verdict === 'ok' ? 'none' : 'advisory',
+          evidence: {
+            stopReason: output.stopReason ?? null,
+            changedFiles: output.changedFiles ?? [],
+            toolSummary: output.toolSummary ?? null,
+            guardActions: output.guardActions ?? [],
+            validationSignals: output.validationSignals ?? [],
+          },
           classifier_name: v.classifierName,
           verdict: v.verdict,
           // Mig 202 — persiste a separação infra-vs-conteúdo que a telemetria
@@ -114,6 +146,9 @@ export class QualityClassifierPipeline {
           provider_id: v.providerId ?? null,
           model_id: v.modelId ?? null,
           latency_ms: v.latencyMs,
+          tokens_in: v.tokensIn ?? null,
+          tokens_out: v.tokensOut ?? null,
+          provider_requests: v.providerRequests ?? 0,
           raw_response: v.raw,
         };
         try { this.opts.store.insert(row); } catch { /* never throw from persistence */ }
@@ -147,6 +182,6 @@ export class QualityClassifierPipeline {
       try { this.opts.telemetry.emit(event); } catch { /* never throw */ }
     }
 
-    return { verdicts, worstVerdict: worstOf(verdicts), durationMs };
+    return { verdicts, worstVerdict: worstOf(verdicts), durationMs, assessmentId };
   }
 }

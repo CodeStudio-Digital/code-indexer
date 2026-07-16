@@ -6,21 +6,17 @@
  * gravado pelo submit_tasks but read by nobody. PR-E grows this file
  * with a real token/$ tracker + ask_user interactive gate.
  *
- * Defaults are conservative — generous enough not to false-trip on
- * legitimate work, tight enough to catch runaway subagents:
- *
- *   investigate → 40 tool calls /  10 min  (cheap exploration)
- *   implement   → 80 tool calls /  20 min  (code edits, tests)
- *   verify      → 30 tool calls /  15 min  (run tests, read results)
+ * Defaults are unlimited (`0`) so progressing subagents run to natural
+ * completion. Positive operator overrides remain available; liveness is
+ * enforced separately by stall/provider/loop/cancellation guards.
  *
  * Every limit is overridable per-kind via env:
  *
  *   CODER_TASK_<KIND>_MAX_TOOLS / CODER_TASK_<KIND>_TIMEOUT_MS
  *   CODER_TASK_STALL_MS (shared across kinds — single threshold)
  *
- * The complexity multiplier (`small`=0.5x, `medium`=1x, `large`=2x) is
- * applied AFTER env overrides so an operator who explicitly raised
- * MAX_TOOLS for 'implement' still gets the 2x bump on a large task.
+ * The complexity multiplier (`small`=0.5x, `medium`=1x, `large`=2x) applies
+ * only to positive overrides. Zero remains unlimited at every complexity.
  */
 import type { CoderTask, TaskKind } from '@mcp/code-agent/sessions/types.js';
 import type { TaskLimit } from './task-run-types.js';
@@ -29,9 +25,9 @@ import { taskKind } from './task-run-types.js';
 // ─── Per-kind defaults ──────────────────────────────────────────
 
 export const DEFAULT_LIMITS: Record<TaskKind, { maxToolCalls: number; timeoutMs: number }> = {
-  investigate: { maxToolCalls: 40, timeoutMs: 10 * 60_000 },
-  implement: { maxToolCalls: 80, timeoutMs: 20 * 60_000 },
-  verify: { maxToolCalls: 30, timeoutMs: 15 * 60_000 },
+  investigate: { maxToolCalls: 0, timeoutMs: 0 },
+  implement: { maxToolCalls: 0, timeoutMs: 0 },
+  verify: { maxToolCalls: 0, timeoutMs: 0 },
 };
 
 // ─── Complexity multipliers (Bug C) ─────────────────────────────
@@ -45,9 +41,9 @@ const COMPLEXITY_MULTIPLIER: Record<NonNullable<CoderTask['estimated_complexity'
 /**
  * Apply the `estimated_complexity` multiplier to a baseline `TaskLimit`.
  *
- * - `small`  → 0.5x maxToolCalls + 0.5x timeoutMs (e.g. rename, one-line tweak)
+ * - `small`  → 0.5x positive maxToolCalls + positive timeoutMs (e.g. rename, one-line tweak)
  * - `medium` → 1x (defaults; declared baseline)
- * - `large`  → 2x (multi-file refactor, end-to-end feature)
+ * - `large`  → 2x positive limits (multi-file refactor, end-to-end feature)
  *
  * `stallMs` is NOT scaled — a single stall threshold is correct
  * regardless of total work (a paused subagent is a paused subagent).
@@ -63,16 +59,23 @@ export function applyComplexityToLimits(
   if (multiplier === 1 || multiplier == null) return base;
   return {
     ...base,
-    ...(base.maxToolCalls != null
+    ...(base.maxToolCalls != null && base.maxToolCalls > 0
       ? { maxToolCalls: Math.max(1, Math.floor(base.maxToolCalls * multiplier)) }
       : {}),
-    ...(base.timeoutMs != null
+    ...(base.timeoutMs != null && base.timeoutMs > 0
       ? { timeoutMs: Math.max(1_000, Math.floor(base.timeoutMs * multiplier)) }
       : {}),
   };
 }
 
 // ─── Env tuning ─────────────────────────────────────────────────
+
+function readNonNegativeIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -98,8 +101,8 @@ export function resolveTaskLimit(task: CoderTask): TaskLimit {
   const kind = taskKind(task);
   const defaults = DEFAULT_LIMITS[kind];
   const base: TaskLimit = {
-    maxToolCalls: readPositiveIntEnv(envKeyForKind(kind, 'MAX_TOOLS'), defaults.maxToolCalls),
-    timeoutMs: readPositiveIntEnv(envKeyForKind(kind, 'TIMEOUT_MS'), defaults.timeoutMs),
+    maxToolCalls: readNonNegativeIntEnv(envKeyForKind(kind, 'MAX_TOOLS'), defaults.maxToolCalls),
+    timeoutMs: readNonNegativeIntEnv(envKeyForKind(kind, 'TIMEOUT_MS'), defaults.timeoutMs),
     stallMs: readPositiveIntEnv('CODER_TASK_STALL_MS', 120_000),
   };
   return applyComplexityToLimits(task.estimated_complexity, base);

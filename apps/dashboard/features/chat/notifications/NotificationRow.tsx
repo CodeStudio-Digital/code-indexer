@@ -8,6 +8,7 @@
  * tool-loop → `LoopBody`; run/quality → inline bodies here.
  */
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   Bot,
@@ -47,8 +48,6 @@ function iconFor(n: SessionNotification): LucideIcon {
       return AlertTriangle;
     case 'background-agents-done':
       return n.severity === 'warning' ? AlertTriangle : Bot;
-    case 'agent-failed':
-      return AlertTriangle;
     default: // tool-loop
       return n.severity === 'info' ? RotateCcw : AlertTriangle;
   }
@@ -98,6 +97,7 @@ export function NotificationRow({ sessionId, notification, mode }: NotificationR
 }
 
 function NotificationBody({ notification }: { notification: SessionNotification }) {
+  const { t } = useTranslation('chat');
   const p = notification.payload;
   switch (p.kind) {
     case 'tool-loop':
@@ -148,25 +148,28 @@ function NotificationBody({ notification }: { notification: SessionNotification 
       return (
         <>
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">Background agents finished</span>
+            <span className="font-semibold">{t('notifications.background.title')}</span>
             <span className="ml-auto text-[10px] uppercase opacity-70">
-              {p.successCount < p.agentCount ? `${p.agentCount - p.successCount} failed` : 'done'}
+              {p.failedCount > 0
+                ? t('notifications.background.statusFailed', { count: p.failedCount })
+                : p.partialCount > 0
+                  ? t('notifications.background.statusPartial', { count: p.partialCount })
+                  : t('notifications.background.statusDone')}
             </span>
           </div>
           <p className="mt-0.5 leading-snug">
-            <span className="font-mono">{p.jobId}</span> — {p.successCount}/{p.agentCount} completed. Ask the agent to collect the results.
-          </p>
-        </>
-      );
-    case 'agent-failed':
-      return (
-        <>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">Subagent failed</span>
-            <span className="ml-auto text-[10px] uppercase opacity-70">{p.reason}</span>
-          </div>
-          <p className="mt-0.5 leading-snug">
-            <span className="font-mono">{p.label}</span> stopped — the agent can retry it with resume_agent.
+            <span className="font-mono">{p.jobId}</span> — {t('notifications.background.summary', {
+              completed: p.completedCount,
+              partial: p.partialCount,
+              failed: p.failedCount,
+            })}{' '}
+            {t('notifications.background.collectWith')}{' '}
+            <span className="font-mono">{`collect_agents({job_id:"${p.jobId}"})`}</span>.
+            {p.resumableCount > 0 && (
+              <> {t('notifications.background.resumeWith', { count: p.resumableCount })}{' '}
+                <span className="font-mono">{`resume_agent({spawn_id:"${p.groupId}"})`}</span>.
+              </>
+            )}
           </p>
         </>
       );

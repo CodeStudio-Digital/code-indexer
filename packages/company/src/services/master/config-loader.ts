@@ -4,10 +4,9 @@
  *
  *   - `allowedModels`: curated (provider, model) pool the master may
  *     spawn subordinates with. Filters out malformed entries.
- *   - `roleConfigs`: persisted role assignments, merged with the
- *     in-memory list. Existing in-memory roles win — DB-only roles are
- *     appended so a partial `opts.roleConfigs` doesn't drop template
- *     entries.
+ *   - `roleConfigs`: persisted role assignments are authoritative when the
+ *     field exists. The in-memory list is only a compatibility fallback for
+ *     legacy rows that do not carry `role_assignments` yet.
  *
  * Pure parse function. The class method `MasterLifecycle.loadConfigFromDb`
  * delegates here, then assigns the returned values to its private state.
@@ -23,9 +22,8 @@ export interface ParsedMasterConfig {
 }
 
 /**
- * Merge the in-memory `currentRoleConfigs` with whatever the persisted
- * `config_json` carries. Existing roles win; DB-only roles are appended.
- * Returns the (possibly empty) parse result; never throws.
+ * Resolve the persisted role roster. Returns the (possibly empty) parse
+ * result; never throws.
  */
 export function parseMasterConfigFromDb(
   configJson: string | null | undefined,
@@ -33,7 +31,7 @@ export function parseMasterConfigFromDb(
   sessionIdForLog: number | string,
 ): ParsedMasterConfig {
   const allowedModels: AllowedModel[] = [];
-  const roleConfigs: RoleConfig[] = [...currentRoleConfigs];
+  let roleConfigs: RoleConfig[] = [...currentRoleConfigs];
 
   if (!configJson) return { allowedModels, roleConfigs };
 
@@ -49,10 +47,11 @@ export function parseMasterConfigFromDb(
         }
       }
     }
-    if (Array.isArray(cfg.role_assignments) && cfg.role_assignments.length > 0) {
-      const seen = new Set(roleConfigs.map((r) => r.role));
+    if (Array.isArray(cfg.role_assignments)) {
+      roleConfigs = [];
+      const seen = new Set<string>();
       for (const r of cfg.role_assignments) {
-        if (r && typeof r.role === 'string' && !seen.has(r.role)) {
+        if (r && typeof r.role === 'string' && r.role.trim() && !seen.has(r.role)) {
           roleConfigs.push(r);
           seen.add(r.role);
         }

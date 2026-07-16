@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
+import { confirm as confirmDialog, toast } from '../../components/ui/prompt-dialog.js';
 import { Progress } from '../../components/ui/progress.js';
 import {
   Select,
@@ -683,8 +684,14 @@ function ProfileDialog({ profile, providers, onClose, onSaved }: ProfileDialogPr
     (target) => target.kind === 'onnx' && target.dtype === 'fp32',
   );
 
-  function confirmHeavyFp32(): boolean {
-    return !usesHeavyFp32 || window.confirm(t('semantic.actions.fp32Confirm'));
+  function confirmHeavyFp32(): Promise<boolean> {
+    if (!usesHeavyFp32) return Promise.resolve(true);
+    return confirmDialog({
+      title: t('semantic.form.fp32Warning'),
+      description: t('semantic.actions.fp32Confirm'),
+      confirmLabel: t('common:actions.confirm'),
+      tone: 'destructive',
+    });
   }
 
   function changeEmbedding(target: SemanticTarget) {
@@ -698,7 +705,7 @@ function ProfileDialog({ profile, providers, onClose, onSaved }: ProfileDialogPr
   }
 
   async function runProbe() {
-    if (!confirmHeavyFp32()) return;
+    if (!(await confirmHeavyFp32())) return;
     setProbe({ status: 'testing' });
     setSaveError(null);
     try {
@@ -1474,7 +1481,14 @@ export function SemanticIndexingPanel() {
   );
 
   async function startReindex(purpose: SemanticProfilePurpose) {
-    if (!window.confirm(t('semantic.actions.reindexConfirm', { purpose: t(`semantic.purpose.${purpose}.title`) }))) {
+    if (!(await confirmDialog({
+      title: t('semantic.actions.reindex'),
+      description: t('semantic.actions.reindexConfirm', {
+        purpose: t(`semantic.purpose.${purpose}.title`),
+      }),
+      confirmLabel: t('semantic.actions.reindex'),
+      tone: 'destructive',
+    }))) {
       return;
     }
     setReindexing(purpose);
@@ -1490,7 +1504,12 @@ export function SemanticIndexingPanel() {
   }
 
   async function startProjectReindex(project: ProjectSemanticStatusResult['project']) {
-    if (!window.confirm(t('semantic.actions.reindexProjectConfirm', { project: project.name }))) {
+    if (!(await confirmDialog({
+      title: t('semantic.actions.reindexProject'),
+      description: t('semantic.actions.reindexProjectConfirm', { project: project.name }),
+      confirmLabel: t('semantic.actions.reindexProject'),
+      tone: 'destructive',
+    }))) {
       return;
     }
     setReindexingProjectId(project.id);
@@ -1506,16 +1525,39 @@ export function SemanticIndexingPanel() {
   }
 
   async function cleanupUnusedVectors() {
-    if (!window.confirm(t('semantic.actions.cleanupUnusedConfirm'))) return;
+    if (!(await confirmDialog({
+      title: t('semantic.actions.cleanupUnused'),
+      description: t('semantic.actions.cleanupUnusedConfirm'),
+      confirmLabel: t('semantic.actions.cleanupUnused'),
+      tone: 'destructive',
+    }))) return;
     setCleaningUnused(true);
     setCleanupResult(null);
     setError(null);
     try {
       const result = await cleanupUnusedSemanticVectors();
       setCleanupResult(result);
+      const description = t('semantic.cleanup.resultDescription', {
+        tables: result.tables_removed,
+        items: result.items_removed,
+        databases: result.databases_compacted,
+        bytes: formatBytes(result.bytes_reclaimed),
+        skipped: result.skipped_referenced,
+      });
+      if (result.failures.length > 0) {
+        toast.warning(t('semantic.cleanup.resultTitle'), {
+          description: `${description} ${t('semantic.cleanup.failureCount', {
+            count: result.failures.length,
+          })}`,
+        });
+      } else {
+        toast.success(t('semantic.cleanup.resultTitle'), { description });
+      }
       await load(false);
     } catch (cleanupError) {
-      setError(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+      const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      setError(message);
+      toast.error(t('semantic.loadError'), { description: message });
     } finally {
       setCleaningUnused(false);
     }

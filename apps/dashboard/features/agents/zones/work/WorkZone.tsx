@@ -29,6 +29,8 @@ interface WorkZoneProps {
    * the session state.
    */
   composer?: React.ReactNode;
+  /** App-owned teams are inspected here; interaction belongs to App Studio. */
+  readOnly?: boolean;
 }
 
 export function WorkZone({
@@ -38,6 +40,7 @@ export function WorkZone({
   stream,
   boardMessages,
   composer,
+  readOnly = false,
 }: WorkZoneProps) {
   if (tab === 'board') {
     return (
@@ -46,8 +49,12 @@ export function WorkZone({
           <BoardPanel
             messages={boardMessages}
             masterPrompts={Array.from(stream.masterPrompts.values())}
-            onAnswerQuestion={(promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
-            onRespondPlan={(promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
+            onAnswerQuestion={readOnly
+              ? undefined
+              : (promptId, answer) => stream.respondToMasterQuestion(promptId, answer)}
+            onRespondPlan={readOnly
+              ? undefined
+              : (promptId, approved, fb) => stream.respondToMasterPlan(promptId, approved, fb)}
             sessionId={sessionId}
             sessionName={sessionName}
           />

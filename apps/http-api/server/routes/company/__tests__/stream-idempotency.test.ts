@@ -42,15 +42,21 @@ import type { ServerDeps } from '../../../deps.js';
 function makeOrch() {
   return {
     metaBus: createBus(new AbortController()),
-    pipelineRecoverRunning: async () => {},
+    pipelineRecoverRunning: vi.fn(async () => {}),
     sendMessageToMaster: vi.fn(),
   };
 }
 
-function setup() {
+function setup(sessionOverrides: Record<string, unknown> = {}) {
   const deps = {
     companyStore: {
-      getCompanySession: (id: number) => ({ id, config_json: '{}', status: 'idle' }),
+      getCompanySession: (id: number) => ({
+        id,
+        config_json: '{}',
+        status: 'idle',
+        runtime_kind: 'company',
+        ...sessionOverrides,
+      }),
       listAgentRuns: () => [],
       setLastUserMessage: () => {},
       updateCompanySessionStatus: () => {},
@@ -108,6 +114,11 @@ describe('company POST /start idempotency', () => {
     const r1 = await h.post('/api/company/sessions/1/start', { user_message: 'go', client_msg_id: 'S1' });
     expect(r1.status).toBe(200);
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
+    expect(H.resolveAndRunMaster).toHaveBeenCalledWith(
+      expect.anything(),
+      false,
+      expect.objectContaining({ provider: 'anthropic', model: 'claude-sonnet-4-6' }),
+    );
 
     // Orchestrator now exists → without dedup this retry would 409.
     const r2 = await h.post(
@@ -118,6 +129,41 @@ describe('company POST /start idempotency', () => {
     expect(r2.status).toBe(200);
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1); // no second master start
 
+    markEnded(H.orch!.metaBus as CoderRunBus, 'done', {});
+  });
+
+  it('fails closed before spawn when an App Master runtime is incomplete', async () => {
+    H.onSpawn = makeOrch;
+    const h = setup({ runtime_kind: 'app_studio', config_json: '{}' });
+
+    const response = await h.post('/api/company/sessions/1/start', { user_message: 'go' });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'MASTER_RUNTIME_INVALID' });
+    expect(H.orch).toBeNull();
+    expect(H.resolveAndRunMaster).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured App Master and skips generic pipeline recovery', async () => {
+    H.onSpawn = makeOrch;
+    const h = setup({
+      runtime_kind: 'app_studio',
+      config_json: JSON.stringify({
+        master_provider: 'openai-chatgpt',
+        master_model: 'gpt-5.6-terra',
+      }),
+    });
+
+    const response = await h.post('/api/company/sessions/1/start', { user_message: 'go' });
+    expect(response.status).toBe(200);
+    expect(H.resolveAndRunMaster).toHaveBeenCalledWith(
+      expect.anything(),
+      false,
+      expect.objectContaining({
+        provider: 'openai-chatgpt',
+        model: 'gpt-5.6-terra',
+      }),
+    );
+    expect(H.orch!.pipelineRecoverRunning).not.toHaveBeenCalled();
     markEnded(H.orch!.metaBus as CoderRunBus, 'done', {});
   });
 

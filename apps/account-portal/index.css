@@ -108,3 +108,16 @@ body {
 code, pre, kbd, samp {
   font-family: var(--font-mono);
 }
+
+/* Dialog entrance — the portal has no tailwindcss-animate plugin, so the
+   confirm overlay/panel use these small keyframes instead. */
+@keyframes portal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes portal-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.portal-fade-in { animation: portal-fade-in 120ms ease-out; }
+.portal-pop-in { animation: portal-pop-in 140ms ease-out; }

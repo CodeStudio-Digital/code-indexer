@@ -15,6 +15,28 @@ function make() {
   return { updater: new AgentStatusUpdater(ctx, bus), updateAgentRunStatus, publish };
 }
 
+function makeApp() {
+  const updateAgentRunStatus = vi.fn();
+  const publish = vi.fn();
+  const getAgentRun = vi.fn(() => ({
+    id: 7,
+    company_session_id: 90,
+    configured_provider: 'openai-chatgpt',
+    configured_model: 'gpt-5.6-sol',
+    provider: 'openai-chatgpt',
+    model: 'gpt-5.6-sol',
+    dispatch_source: 'app_studio',
+    fallback_reason: null,
+  }));
+  const ctx = {
+    runtimeKind: 'app_studio',
+    companySessionId: 90,
+    companyStore: { updateAgentRunStatus, getAgentRun },
+  } as never;
+  const bus = { bus: null, publish, markEnded: vi.fn() } as never;
+  return { updater: new AgentStatusUpdater(ctx, bus), publish };
+}
+
 describe('AgentStatusUpdater.publishStatus', () => {
   it('writes status to the store and publishes agent_status with coderSessionId', () => {
     const { updater, updateAgentRunStatus, publish } = make();
@@ -41,5 +63,21 @@ describe('AgentStatusUpdater.publishStatus', () => {
       coderSessionId: undefined,
     });
     expect(post).toHaveBeenCalledWith('backend', 7, 'message', expect.stringContaining('waiting'));
+  });
+
+  it('adds configured/effective model provenance for App-owned runs', () => {
+    const { updater, publish } = makeApp();
+    updater.publishStatus(7, 'backend', 'running', { coderSessionId: 42 });
+
+    expect(publish).toHaveBeenCalledWith('agent_status', expect.objectContaining({
+      agentRunId: 7,
+      role: 'backend',
+      configuredProvider: 'openai-chatgpt',
+      configuredModel: 'gpt-5.6-sol',
+      effectiveProvider: 'openai-chatgpt',
+      effectiveModel: 'gpt-5.6-sol',
+      dispatchSource: 'app_studio',
+      fallbackReason: null,
+    }));
   });
 });

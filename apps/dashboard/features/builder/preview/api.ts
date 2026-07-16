@@ -1,3 +1,5 @@
+import type { GitCommitDetail, GitPushPreview } from '@mcp/api-bus';
+
 export interface TreeEntry {
   name: string;
   type: 'file' | 'dir';
@@ -102,6 +104,12 @@ export const workspaceApi = {
   },
   gitLog: (sid: number, pid: number, limit = 30) =>
     getJson<{ entries: GitLogEntry[] }>(`${base(sid, pid)}/git/log?limit=${limit}`),
+  gitPushPreview: (sid: number, pid: number) =>
+    getJson<GitPushPreview>(`${base(sid, pid)}/git/push-preview`),
+  gitCommitDetail: (sid: number, pid: number, sha: string) =>
+    getJson<GitCommitDetail>(`${base(sid, pid)}/git/commit-detail?sha=${encodeURIComponent(sha)}`),
+  gitCommitFileDiff: (sid: number, pid: number, sha: string, path: string) =>
+    getJson<GitDiffResponse>(`${base(sid, pid)}/git/commit-file-diff?sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(path)}`),
   gitInit: (sid: number, pid: number) =>
     postJson<{ ok: boolean; status: GitStatusResponse }>(`${base(sid, pid)}/git/init`),
   gitAdd: (sid: number, pid: number, paths: string[]) =>
@@ -115,9 +123,10 @@ export const workspaceApi = {
       `${base(sid, pid)}/git/commit`,
       { message },
     ),
-  gitPush: (sid: number, pid: number) =>
+  gitPush: (sid: number, pid: number, options?: { remote?: string; branch?: string; targetBranch?: string; expectedHead?: string; setUpstream?: boolean; pushTags?: boolean }) =>
     postJson<{ ok: boolean; message: string; setUpstream: boolean; status: GitStatusResponse }>(
       `${base(sid, pid)}/git/push`,
+      options,
     ),
   suggestCommitMessage: (sid: number, pid: number) =>
     postJson<{ message: string }>(`${base(sid, pid)}/git/suggest-commit-message`),

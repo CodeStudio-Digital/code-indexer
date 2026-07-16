@@ -45,22 +45,31 @@ export class PlanningNode implements BehaviorNode {
     // it a clean slate.
     resetFailureStreaks(ctx.failureStreaks);
     ctx.noProgressTracker.clear();
+    ctx.opts.toolContext.toolCallLedger?.resetNoProgress();
 
     if (loopEvent) {
       ctx.transition = guardToTransition(loopEvent.guard);
-      // One-shot by construction: Planning executes once per ToolLoopDetected.
-      // Deterministic marker → prefix-cache safe (message stream content).
-      ctx.messages.push({
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: buildLoopGuardReflectionMarker({
-            guard: loopEvent.guard,
-            toolName: loopEvent.toolName,
-            count: loopEvent.count,
-          }),
-        }],
-      });
+      const nudgeKey = `${loopEvent.guard}:${loopEvent.toolName ?? '*'}`;
+      const lastNudgeTurn = ctx.lastStrategyNudgeTurnByKey.get(nudgeKey);
+      if (lastNudgeTurn == null || ctx.turn - lastNudgeTurn >= 5) {
+        ctx.lastStrategyNudgeTurnByKey.set(nudgeKey, ctx.turn);
+        ctx.messages.push({
+          role: 'user',
+          content: [{
+            type: 'text',
+            text: buildLoopGuardReflectionMarker({
+              guard: loopEvent.guard,
+              toolName: loopEvent.toolName,
+              count: loopEvent.count,
+            }),
+          }],
+        });
+        ctx.bridge?.recordStrategyNudge?.({
+          guard: loopEvent.guard,
+          toolName: loopEvent.toolName,
+          count: loopEvent.count,
+        });
+      }
     }
 
     return events.turnSucceeded({ hasToolCalls: false });

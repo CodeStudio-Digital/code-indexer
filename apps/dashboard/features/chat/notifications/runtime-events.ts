@@ -9,45 +9,42 @@ interface RuntimeEvent {
   data: unknown;
 }
 
-const backgroundGroups = new Set<string>();
-
 /** Feed the per-session notification center from the app-wide stream. */
 export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
   const data = asRecord(source.data);
   const options = { sourceKey: `runtime:${source.ts}:${source.id}`, receivedAt: source.ts };
 
   if (source.event === 'agents_group_start') {
-    if (data.background === true && typeof data.groupId === 'string') {
-      backgroundGroups.add(groupKey(source.sessionId, data.groupId));
-    }
     return;
   }
 
   if (source.event === 'agent_progress') {
-    const groupId = readString(data, 'groupId');
-    const event = readString(data, 'event');
-    if (!groupId || !event || !['error', 'timed_out'].includes(event)) return;
-    if (!backgroundGroups.has(groupKey(source.sessionId, groupId))) return;
-    pushNotification(source.sessionId, {
-      kind: 'agent-failed',
-      groupId,
-      agentIndex: readNumber(data, 'agentIndex') ?? 0,
-      label: readString(data, 'label') ?? `Agent ${readNumber(data, 'agentIndex') ?? 0}`,
-      reason: event,
-    }, options);
+    // Background agents can emit a terminal progress event before their
+    // transcripts are retained. Notify only on agents_group_end, after the
+    // group is collectable/resumable, to avoid premature retry guidance and
+    // one warning per child.
     return;
   }
 
   if (source.event === 'agents_group_end') {
     const groupId = readString(data, 'groupId');
     const jobId = readString(data, 'jobId');
-    if (groupId) backgroundGroups.delete(groupKey(source.sessionId, groupId));
-    if (!jobId) return;
+    if (!jobId || !groupId) return;
+    const agentCount = readNumber(data, 'agentCount') ?? 0;
+    const completedCount = readNumber(data, 'completedCount') ?? readNumber(data, 'successCount') ?? 0;
+    const partialCount = readNumber(data, 'partialCount') ?? 0;
+    const failedCount = readNumber(data, 'failedCount')
+      ?? Math.max(0, agentCount - completedCount - partialCount);
     pushNotification(source.sessionId, {
       kind: 'background-agents-done',
       jobId,
-      agentCount: readNumber(data, 'agentCount') ?? 0,
-      successCount: readNumber(data, 'successCount') ?? 0,
+      groupId,
+      agentCount,
+      successCount: completedCount,
+      completedCount,
+      partialCount,
+      failedCount,
+      resumableCount: readNumber(data, 'resumableCount') ?? 0,
     }, options);
     return;
   }
@@ -90,11 +87,7 @@ export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
 }
 
 export function resetRuntimeNotificationStateForTests(): void {
-  backgroundGroups.clear();
-}
-
-function groupKey(sessionId: number, groupId: string): string {
-  return `${sessionId}:${groupId}`;
+  // Kept for the existing test API; notification processing is now stateless.
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

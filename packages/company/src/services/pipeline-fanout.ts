@@ -136,7 +136,13 @@ export class FanOutRunner {
     });
     let spawn: { agentRunId: number; coderSessionId: number };
     try {
-      spawn = await this.d.subordinates.spawn({ role: branch.role, task: renderedTask, projectId: branch.projectId, skills: node.extraSkills });
+      spawn = await this.d.subordinates.spawn({
+        role: branch.role,
+        task: renderedTask,
+        dispatchSource: 'fanout',
+        projectId: branch.projectId,
+        skills: node.extraSkills,
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.d.ctx.companyStore.updatePipelineNodeExecution(row.id, { status: 'failed', finishedAt: nowIso(), errorMessage: msg });

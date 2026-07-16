@@ -391,7 +391,7 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
     systemPrompt,
     allowlist: REVIEW_PROBE_ALLOWLIST,
     initialMessages,
-    maxTurns: Number(process.env.CODER_REVIEW_MAX_TURNS ?? 15),
+    maxTurns: Number(process.env.CODER_REVIEW_MAX_TURNS ?? 0),
   });
 
   const parsed = parseReviewBlock(result.finalText);

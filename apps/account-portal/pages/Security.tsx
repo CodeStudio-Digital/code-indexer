@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Download, ShieldCheck } from 'lucide-react';
 import { api, ApiError } from '../lib/api.js';
 import { useAuth } from '../lib/auth.js';
+import { confirm } from '../lib/confirm.js';
 import {
   Alert,
   Badge,
@@ -408,7 +409,15 @@ function DangerZoneCard() {
   const [error, setError] = useState<string | null>(null);
 
   const remove = async () => {
-    if (!confirm('Permanently delete your account? This cannot be undone.')) return;
+    if (
+      !(await confirm({
+        title: 'Permanently delete your account?',
+        description: 'This cannot be undone.',
+        confirmLabel: 'Delete account',
+        tone: 'destructive',
+      }))
+    )
+      return;
     setBusy(true);
     setError(null);
     try {

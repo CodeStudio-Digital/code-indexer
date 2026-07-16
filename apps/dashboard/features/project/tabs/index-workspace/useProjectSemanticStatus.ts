@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  cleanupProjectUnusedVectors,
   fetchProjectSemanticStatus,
   requestProjectSemanticReindex,
   semanticWorkIsActive,
   type ProjectSemanticStatus,
+  type ProjectUnusedVectorCleanupResult,
 } from './project-semantic-api.js';
 
 export interface ProjectSemanticState {
   status: ProjectSemanticStatus | null;
   loading: boolean;
   requesting: boolean;
+  cleaning: boolean;
+  cleanupResult: ProjectUnusedVectorCleanupResult | null;
   error: string | null;
   refresh: () => Promise<void>;
   reindex: () => Promise<void>;
+  cleanupUnused: () => Promise<ProjectUnusedVectorCleanupResult>;
 }
 
 /**
@@ -26,6 +31,8 @@ export function useProjectSemanticStatus(projectId: number): ProjectSemanticStat
   const [status, setStatus] = useState<ProjectSemanticStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [requesting, setRequesting] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<ProjectUnusedVectorCleanupResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -46,6 +53,8 @@ export function useProjectSemanticStatus(projectId: number): ProjectSemanticStat
     setStatus(null);
     setLoading(true);
     setRequesting(false);
+    setCleaning(false);
+    setCleanupResult(null);
     setError(null);
     void refresh();
   }, [projectId, refresh]);
@@ -80,5 +89,37 @@ export function useProjectSemanticStatus(projectId: number): ProjectSemanticStat
     }
   }, [projectId, refresh, requesting, status]);
 
-  return { status, loading, requesting, error, refresh, reindex };
+  const cleanupUnused = useCallback(async () => {
+    if (requesting || cleaning || semanticWorkIsActive(status)) {
+      throw new Error('semantic indexing is currently active');
+    }
+    setCleaning(true);
+    setCleanupResult(null);
+    setError(null);
+    try {
+      const result = await cleanupProjectUnusedVectors(projectId);
+      if (projectIdRef.current !== projectId) return result;
+      setCleanupResult(result);
+      await refresh();
+      return result;
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      if (projectIdRef.current === projectId) setError(error.message);
+      throw error;
+    } finally {
+      if (projectIdRef.current === projectId) setCleaning(false);
+    }
+  }, [cleaning, projectId, refresh, requesting, status]);
+
+  return {
+    status,
+    loading,
+    requesting,
+    cleaning,
+    cleanupResult,
+    error,
+    refresh,
+    reindex,
+    cleanupUnused,
+  };
 }

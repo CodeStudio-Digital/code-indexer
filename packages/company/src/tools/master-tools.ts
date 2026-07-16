@@ -154,55 +154,28 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           }
         }
 
-        // Template enforcement: when the role has an entry in the
-        // session template, the configured provider/model/tier/skills
-        // are LOCKED — the master's own arguments for those fields are
-        // discarded. The template is a commitment from the operator,
-        // not a suggestion. Roles with no template entry fall through
-        // to master-provided values or pool defaults.
-        const defaults = orchestrator.getRoleDefaults(role);
-        const templateLocked = defaults !== null;
         const argProvider = args.provider as string | undefined;
         const argModel = args.model as string | undefined;
         const argTier = args.tier as 'bootstrap' | 'navigate' | 'full' | undefined;
         const argSkills = args.skills as string[] | undefined;
-
-        if (templateLocked && (argProvider || argModel || argTier || argSkills)) {
-          console.warn(
-            `[company] Template-locked role '${role}': ignoring master-provided ` +
-              `provider=${argProvider ?? '∅'} model=${argModel ?? '∅'} ` +
-              `tier=${argTier ?? '∅'} skills=${argSkills ? argSkills.join(',') : '∅'}`,
-          );
-        }
         const forwardAtts = args.forward_user_attachments as boolean | undefined;
         const attachments = forwardAtts
           ? [...orchestrator.getMasterLastUserAttachments()]
           : undefined;
-
-        // Phase E: when the role template enables `thinking`, it
-        // wins by default — the master's `thinking` argument can
-        // still override on a per-spawn basis (e.g. for a routine
-        // task that doesn't need deep reasoning).
         const argThinking = args.thinking as boolean | undefined;
-        const effectiveThinking = argThinking ?? defaults?.thinking;
 
         const result = await orchestrator.spawnSubordinate({
           role,
           task,
+          dispatchSource: 'company',
           projectId: args.project_id as number | undefined,
-          provider: templateLocked ? defaults!.provider : argProvider,
-          model: templateLocked ? defaults!.model : argModel,
-          tier: templateLocked
-            ? (defaults!.tier as 'bootstrap' | 'navigate' | 'full' | undefined)
-            : argTier,
-          skills: templateLocked ? defaults!.skills : argSkills,
+          provider: argProvider,
+          model: argModel,
+          tier: argTier,
+          skills: argSkills,
           wait: args.wait as boolean | undefined,
-          roleOverride: defaults?.systemPromptOverride,
-          temperature: defaults?.temperature,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
-          thinking: effectiveThinking,
-          thinkingBudgetTokens: defaults?.thinkingBudgetTokens,
-          reasoningEffort: defaults?.reasoningEffort,
+          thinking: argThinking,
         });
 
         // Auto-assign agent to Kanban card and move to in_progress

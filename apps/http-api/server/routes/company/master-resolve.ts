@@ -26,19 +26,27 @@ export async function resolveAndRunMaster(
     roleConfigs: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
     attachments: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
     thinking?: boolean;
+    thinkingBudgetTokens?: number;
+    temperature?: number;
     /** Sticky master reasoning-effort override (config_json
      *  `master_reasoning_effort`). Orthogonal to thinking. */
     reasoningEffort?: string;
+    fallbackModels?: Parameters<CompanyOrchestrator['startMaster']>[0]['fallbackModels'];
   },
 ): Promise<void> {
   if (masterExists) {
     await orchestrator.resumeExistingMaster({
       userMessage: opts.userMessage,
+      provider: opts.provider,
+      model: opts.model,
       maxTurns: opts.maxTurns,
       roleConfigs: opts.roleConfigs,
       attachments: opts.attachments,
       thinking: opts.thinking,
+      thinkingBudgetTokens: opts.thinkingBudgetTokens,
+      temperature: opts.temperature,
       reasoningEffort: opts.reasoningEffort,
+      fallbackModels: opts.fallbackModels,
     });
     return;
   }
@@ -50,6 +58,9 @@ export async function resolveAndRunMaster(
     roleConfigs: opts.roleConfigs,
     attachments: opts.attachments,
     thinking: opts.thinking,
+    thinkingBudgetTokens: opts.thinkingBudgetTokens,
+    temperature: opts.temperature,
     reasoningEffort: opts.reasoningEffort,
+    fallbackModels: opts.fallbackModels,
   });
 }

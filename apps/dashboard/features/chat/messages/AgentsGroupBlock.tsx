@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, ChevronDown, ChevronRight, Loader2, Maximize2, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, ChevronDown, ChevronRight, Loader2, Maximize2, X } from 'lucide-react';
 import type { AgentsGroup, ParallelAgent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
@@ -162,12 +162,16 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
   const StatusIcon =
     agent.status === 'running' || agent.status === 'pending'
       ? Loader2
+      : agent.status === 'partial'
+        ? AlertTriangle
       : agent.status === 'error' || agent.status === 'timed_out' || agent.status === 'aborted'
         ? X
         : Check;
   const statusColor =
     agent.status === 'error' || agent.status === 'timed_out' || agent.status === 'aborted'
       ? 'text-destructive bg-destructive/10'
+      : agent.status === 'partial'
+        ? 'text-warning bg-warning/10'
       : agent.status === 'running' || agent.status === 'pending'
         ? 'text-warning bg-warning/10'
         : 'text-success bg-success/10';
@@ -177,6 +181,7 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
   // rows stay non-clickable; they show their progress via AgentActivityLine.
   const isFinished =
     agent.status === 'completed' ||
+    agent.status === 'partial' ||
     agent.status === 'error' ||
     agent.status === 'timed_out' ||
     agent.status === 'aborted';

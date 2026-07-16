@@ -1,5 +1,9 @@
 import type { Database as DB } from 'better-sqlite3';
-import type { AgentRunStatus, CompanyAgentRun } from '@mcp/company/types.js';
+import type {
+  AgentRunStatus,
+  CompanyAgentDispatchSource,
+  CompanyAgentRun,
+} from '@mcp/company/types.js';
 
 export interface CreateAgentRunInput {
   company_session_id: number;
@@ -8,12 +12,20 @@ export interface CreateAgentRunInput {
   project_ids: number[];
   provider: string;
   model: string;
+  configured_provider?: string;
+  configured_model?: string;
+  dispatch_source?: CompanyAgentDispatchSource;
+  fallback_reason?: string | null;
 }
 
 export function create(db: DB, input: CreateAgentRunInput): CompanyAgentRun {
   const stmt = db.prepare(`
-    INSERT INTO company_agent_runs (company_session_id, role, coder_session_id, project_ids_json, provider, model)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO company_agent_runs (
+      company_session_id, role, coder_session_id, project_ids_json,
+      provider, model, configured_provider, configured_model,
+      dispatch_source, fallback_reason
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const r = stmt.run(
     input.company_session_id,
@@ -22,8 +34,37 @@ export function create(db: DB, input: CreateAgentRunInput): CompanyAgentRun {
     JSON.stringify(input.project_ids),
     input.provider,
     input.model,
+    input.configured_provider ?? input.provider,
+    input.configured_model ?? input.model,
+    input.dispatch_source ?? 'company',
+    input.fallback_reason ?? null,
   );
   return get(db, Number(r.lastInsertRowid))!;
+}
+
+/**
+ * Serialize adoption of one durable coder session into an active Company
+ * role. This avoids duplicate Master rows when two App facade reads race to
+ * repair the same team from different server workers.
+ */
+export function getOrCreate(
+  db: DB,
+  input: CreateAgentRunInput,
+): { run: CompanyAgentRun; created: boolean } {
+  const transact = db.transaction(() => {
+    const existing = db.prepare(`
+      SELECT * FROM company_agent_runs
+      WHERE company_session_id = ?
+        AND role = ?
+        AND coder_session_id = ?
+        AND archive_id IS NULL
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(input.company_session_id, input.role, input.coder_session_id) as CompanyAgentRun | undefined;
+    if (existing) return { run: existing, created: false };
+    return { run: create(db, input), created: true };
+  });
+  return transact.immediate();
 }
 
 export function get(db: DB, id: number): CompanyAgentRun | null {
@@ -73,10 +114,55 @@ export function listArchived(db: DB, archiveId: number): CompanyAgentRun[] {
     .all(archiveId) as CompanyAgentRun[];
 }
 
-export function updateProvider(db: DB, id: number, provider: string, model: string): void {
+export function updateProvider(
+  db: DB,
+  id: number,
+  provider: string,
+  model: string,
+  fallbackReason?: string | null,
+): void {
   db.prepare(`
-    UPDATE company_agent_runs SET provider = ?, model = ?, updated_at = datetime('now') WHERE id = ?
-  `).run(provider, model, id);
+    UPDATE company_agent_runs
+    SET provider = ?, model = ?, fallback_reason = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(provider, model, fallbackReason ?? null, id);
+}
+
+/**
+ * Replace the complete persisted runtime snapshot for a dormant/adopted run.
+ *
+ * App Studio uses this only while rotating a Master conversation, before the
+ * coder session is resumed. Keeping configured/effective/source in one write
+ * prevents a historical coder session from retaining a stale (for example,
+ * global mini) model while the Company row claims the App-configured model.
+ */
+export function updateRuntimeSnapshot(
+  db: DB,
+  id: number,
+  input: {
+    configuredProvider: string;
+    configuredModel: string;
+    effectiveProvider: string;
+    effectiveModel: string;
+    dispatchSource: CompanyAgentDispatchSource;
+    fallbackReason?: string | null;
+  },
+): void {
+  db.prepare(`
+    UPDATE company_agent_runs
+    SET configured_provider = ?, configured_model = ?,
+        provider = ?, model = ?, dispatch_source = ?, fallback_reason = ?,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    input.configuredProvider,
+    input.configuredModel,
+    input.effectiveProvider,
+    input.effectiveModel,
+    input.dispatchSource,
+    input.fallbackReason ?? null,
+    id,
+  );
 }
 
 export function updateStatus(db: DB, id: number, status: AgentRunStatus, statusMessage?: string): void {

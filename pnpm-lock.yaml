@@ -625,6 +625,9 @@ importers:
 
   packages/store:
     dependencies:
+      '@mcp/app-studio':
+        specifier: workspace:*
+        version: link:../app-studio
       '@mcp/shared':
         specifier: workspace:*
         version: link:../shared

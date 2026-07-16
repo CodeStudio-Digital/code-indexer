@@ -21,6 +21,7 @@ import {
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
+import { buildAppStudioMasterRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 
 interface MasterOrchestratorHooks {
   provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<SandboxBinding | null>;
@@ -32,6 +33,17 @@ export interface MasterPromptInputs {
   promptBlock: string;
   sandboxBinding: SandboxBinding | null;
   configuredStack: string | null;
+}
+
+/** Append the Master role's own persisted instructions to its system block. */
+export function appendMasterRoleInstructions(
+  promptBlock: string,
+  override: string | null | undefined,
+): string {
+  const normalized = override?.trim().slice(0, 12_000);
+  return normalized
+    ? `${promptBlock}\n\n## MASTER ROLE INSTRUCTIONS\n\n${normalized}`
+    : promptBlock;
 }
 
 /**
@@ -75,7 +87,7 @@ export async function buildMasterPromptInputs(
   orchestratorRef: unknown,
   signal?: AbortSignal,
   /** Extra flags threaded into the prompt without touching the legacy positional signature. */
-  flags: { sddMode?: boolean } = {},
+  flags: { sddMode?: boolean; masterSystemPromptOverride?: string } = {},
 ): Promise<MasterPromptInputs> {
   const orchestrator = orchestratorRef as MasterOrchestratorHooks;
   const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
@@ -93,6 +105,9 @@ export async function buildMasterPromptInputs(
   const companyContext: CompanyContext = {
     orchestrator: orchestratorRef as never,
     companySessionId: ctx.companySessionId,
+    runtimeKind: ctx.runtimeKind,
+    appStudioSessionId: ctx.appStudioSessionId ?? undefined,
+    capabilities: ctx.capabilities,
     agentRole: 'master',
     agentRunId,
     allowedProjectIds: ctx.projects.map((p) => p.project_id),
@@ -110,7 +125,7 @@ export async function buildMasterPromptInputs(
     };
   });
 
-  const promptBlock = buildMasterCompanyBlock({
+  let promptBlock = buildMasterCompanyBlock({
     roster: buildPromptRoster(roleConfigs, configuredStack),
     projects: projectInfos,
     // Curated pool — when non-empty, the master prompt gains a strict
@@ -123,7 +138,17 @@ export async function buildMasterPromptInputs(
     operationalRules: readOperationalRules(
       ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
     ),
+    runtimeKind: ctx.capabilities.promptProfile,
   });
+
+  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
+    promptBlock += `\n\n${buildAppStudioMasterRuntimeBlock(ctx.appStudioSessionId)}`;
+  }
+
+  promptBlock = appendMasterRoleInstructions(
+    promptBlock,
+    flags.masterSystemPromptOverride,
+  );
 
   return { companyContext, promptBlock, sandboxBinding, configuredStack };
 }

@@ -166,6 +166,36 @@ describe('LocalVectorRouter', () => {
     }
   });
 
+  it('drops and compacts an old project generation without touching the active table', async () => {
+    const root = freshDir();
+    const router = new LocalVectorRouter({ resolveProject: (id) => ({ id, rootPath: root }) });
+    try {
+      await router.upsert('code:p1', 3, Array.from({ length: 128 }, (_, index) => ({
+        id: `old-${index}`,
+        values: [1, 0, 0, 0],
+        metadata: { type: 'symbol_body', ref_id: String(index) },
+      })));
+      await router.upsert('code:p1', 4, [{
+        id: 'active',
+        values: [1, 0, 0, 0],
+        metadata: { type: 'symbol', ref_id: 'active' },
+      }]);
+
+      await expect(router.hasGeneration('code:p1', 3)).resolves.toBe(true);
+      await expect(router.hasGeneration('code:p1', 4)).resolves.toBe(true);
+
+      await router.dropGeneration('code:p1', 3);
+      await expect(router.hasGeneration('code:p1', 3)).resolves.toBe(false);
+      await expect(router.hasGeneration('code:p1', 4)).resolves.toBe(true);
+
+      const compacted = await router.compactGenerationDatabase('code:p1', 3);
+      expect(compacted.after_bytes).toBeLessThanOrEqual(compacted.before_bytes);
+      await expect(router.listIds('code:p1', 4)).resolves.toEqual(['active']);
+    } finally {
+      await router.drainAndClose();
+    }
+  });
+
   it('uses the stable per-id fallback and evicts LRU/idle physical handles', () => {
     const dataDir = freshDir();
     let now = 0;

@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type CompanyCatalogView = 'sessions' | 'templates';
 
 export interface CompanyCatalogRail {
@@ -6,6 +8,7 @@ export interface CompanyCatalogRail {
   sessionCount?: number;
   templateCount?: number;
   onToggle: (view: CompanyCatalogView) => void;
+  onOpenChange: (open: boolean) => void;
 }
 
 /**
@@ -16,4 +19,6 @@ export interface CompanyCatalogRail {
 export interface CompanySessionWorkbenchSlots {
   leftRailHost: HTMLElement | null;
   catalog: CompanyCatalogRail;
+  /** Catalog surface rendered as the session workbench's left dock. */
+  catalogPanel: ReactNode;
 }

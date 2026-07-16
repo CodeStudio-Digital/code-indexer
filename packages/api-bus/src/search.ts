@@ -18,6 +18,8 @@ export interface SearchRequestOptions {
   limit?: number;
   /** Stable latest-wins identity for an interactive search surface. */
   supersessionKey?: string;
+  /** Diagnostic runs may bypass the normal short-lived semantic query cache. */
+  bypassCache?: boolean;
 }
 
 export interface SearchResult {
@@ -47,6 +49,24 @@ export interface SearchDiagnostics {
   reranker?: string;
   fallback?: boolean;
   fallbackReason?: string;
+  vectorAvailable?: boolean;
+  embeddingAvailable?: boolean;
+  queryVariants?: string[];
+  vectorRawMatches?: number;
+  vectorRehydrated?: number;
+  vectorError?: string;
+  ftsCount?: number;
+  plannerMode?: 'fts' | 'vector' | 'hybrid';
+  plannerReason?: string;
+  recentFilesCount?: number;
+  graphExpansionCount?: number;
+  contentCount?: number;
+  cacheHit?: boolean;
+  totalTimeMs?: number;
+  rerankerApplied?: boolean;
+  rerankerCandidates?: number;
+  rerankerReturned?: number;
+  rerankerError?: string;
 }
 
 export interface SymbolHit {

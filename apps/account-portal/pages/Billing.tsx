@@ -22,6 +22,8 @@ const FEATURE_LABEL: Record<keyof Entitlements['features'], string> = {
   sso: 'SSO/SCIM',
   auditExport: 'Audit export',
   prioritySupport: 'Priority support',
+  sshVault: 'SSH secrets vault',
+  teamSshVault: 'Team SSH vault',
 };
 const FEATURE_ORDER: (keyof Entitlements['features'])[] = [
   'sharing',
@@ -34,6 +36,8 @@ const FEATURE_ORDER: (keyof Entitlements['features'])[] = [
   'sso',
   'auditExport',
   'prioritySupport',
+  'sshVault',
+  'teamSshVault',
 ];
 
 const LIMIT_LABEL: Record<keyof Entitlements['limits'], string> = {

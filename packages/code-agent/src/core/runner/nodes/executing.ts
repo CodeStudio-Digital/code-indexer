@@ -880,6 +880,7 @@ export class ExecutingNode implements BehaviorNode {
           dupCalls: ctx.dupCalls,
           failureStreaks: ctx.failureStreaks,
           noProgressTracker: ctx.noProgressTracker,
+          toolCallLedger: ctx.opts.toolContext.toolCallLedger,
           turn: ctx.turn,
           parentToolUseId,
           onNestedCall: (e) => ctx.emit('nested_tool_call', e),

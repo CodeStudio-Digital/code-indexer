@@ -63,6 +63,7 @@ interface PoolEntry {
    * abandoned session is still reclaimed eventually.
    */
   awaitingHumanSince: number | null;
+  qualityEnabled: boolean;
   /** Aggregated subscription cleanup. */
   detachBusMirror: () => void;
 }
@@ -251,6 +252,52 @@ export class WorkerOrchestratorPool {
     return Promise.all(jobs);
   }
 
+  qualitySnapshot(): Array<{ sessionId: number; enabled: boolean }> {
+    return [...this.entries.entries()].map(([sessionId, entry]) => ({
+      sessionId,
+      enabled: entry.qualityEnabled,
+    }));
+  }
+
+  async refreshQualityStatus(timeoutMs = 2_000): Promise<Array<{ sessionId: number; enabled: boolean }>> {
+    await Promise.all([...this.entries.values()].map(async (entry) => {
+      try {
+        const status = await entry.host.requireBridge().request<{ enabled: boolean }>(
+          'quality.status',
+          {},
+          { timeoutMs },
+        );
+        entry.qualityEnabled = status.enabled === true;
+      } catch {
+        entry.qualityEnabled = false;
+      }
+    }));
+    return this.qualitySnapshot();
+  }
+
+  async setQualityEnabled(enabled: boolean, timeoutMs = 5_000): Promise<{
+    total: number;
+    acknowledged: number;
+    failed: number;
+  }> {
+    const entries = [...this.entries.values()];
+    let acknowledged = 0;
+    await Promise.all(entries.map(async (entry) => {
+      try {
+        const ack = await entry.host.requireBridge().request<{ enabled: boolean }>(
+          'quality.setEnabled',
+          { enabled },
+          { timeoutMs },
+        );
+        if (ack.enabled === enabled) {
+          entry.qualityEnabled = enabled;
+          acknowledged += 1;
+        }
+      } catch { /* reflected in failed */ }
+    }));
+    return { total: entries.length, acknowledged, failed: entries.length - acknowledged };
+  }
+
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
   async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
     const entry = this.entries.get(sessionId);
@@ -351,6 +398,13 @@ export class WorkerOrchestratorPool {
     // (the bus itself is created at the top of spawn so `onCrash` can end it)
     const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
+    let effectiveQualityEnabled = false;
+    try {
+      const status = await bridge.request<{ enabled: boolean }>('quality.status', {}, { timeoutMs: 5_000 });
+      effectiveQualityEnabled = status.enabled === true;
+    } catch {
+      // Keep false: status must reflect an ACK, never the desired spawn input.
+    }
 
     // ─── Doc-corpus RPC bridges from worker → main ───────────────
     // The company-worker boot installs `DocSearchBackend` /
@@ -567,6 +621,7 @@ export class WorkerOrchestratorPool {
       bus,
       lastTouchedAt: Date.now(),
       awaitingHumanSince: null,
+      qualityEnabled: effectiveQualityEnabled,
       detachBusMirror,
     };
   }

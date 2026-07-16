@@ -10,14 +10,24 @@ export interface QualityRow {
   company_session_id: number | null;
   agent_run_id: number | null;
   message_id: string | null;
+  assessment_id: string | null;
+  round_message_id: number | null;
+  scope: 'run_final' | 'runtime' | 'legacy_turn';
+  source: 'terminal_llm' | 'deterministic_guard' | 'legacy_llm';
+  action_taken: 'none' | 'advisory' | 'tool_call_refused' | 'strategy_nudge';
+  evidence_json: string | null;
   classifier_name: string;
   verdict: QualityVerdict;
+  system_error: 0 | 1;
   confidence: number | null;
   reason: string | null;
   provider_id: string | null;
   model_id: string | null;
   latency_ms: number | null;
   cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  provider_requests: number;
   created_at: string;
 }
 
@@ -45,6 +55,30 @@ export interface CounterfactualStats {
   withOutcome: number;
   pendingOutcome: number;
   perVariant: Array<{ pipeline_name: string; shadow_variant: string; count: number; with_outcome: number }>;
+}
+
+export interface QualityStatus {
+  enabled: boolean;
+  desiredEnabled: boolean;
+  mode: 'hybrid';
+  target: 'completed_round';
+  workers: {
+    total: number;
+    acknowledged: number;
+    failed: number;
+    states: Array<{ sessionId: number; enabled: boolean; kind: 'coder' | 'company' }>;
+  };
+}
+
+export interface QualityOverview {
+  completedTasks: number;
+  assessments: number;
+  llmRequests: number;
+  tokensIn: number;
+  tokensOut: number;
+  averageLatencyMs: number;
+  infrastructureFailures: number;
+  runtimeIncidents: number;
 }
 
 export async function fetchQualityDistribution(opts: {
@@ -92,22 +126,42 @@ export async function clearAllQuality(): Promise<{ deleted: number }> {
   return (await r.json()) as { deleted: number };
 }
 
-/** Read whether the per-turn quality classifiers are currently running. */
-export async function fetchQualityEnabled(): Promise<boolean> {
+/** Read effective hybrid Quality state, including active-worker ACKs. */
+export async function fetchQualityEnabled(): Promise<QualityStatus> {
   const r = await fetch('/api/admin/quality/enabled');
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return ((await r.json()) as { enabled: boolean }).enabled;
+  return (await r.json()) as QualityStatus;
 }
 
-/** Turn the per-turn quality classifiers on/off at runtime (no restart). */
-export async function setQualityEnabled(enabled: boolean): Promise<boolean> {
+/** Toggle terminal delivery assessment at runtime (no restart). */
+export async function setQualityEnabled(enabled: boolean): Promise<QualityStatus> {
   const r = await fetch('/api/admin/quality/enabled', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return ((await r.json()) as { enabled: boolean }).enabled;
+  return (await r.json()) as QualityStatus;
+}
+
+export async function fetchQualityOverview(since?: string): Promise<QualityOverview> {
+  const p = new URLSearchParams();
+  if (since) p.set('since', since);
+  const r = await fetch(`/api/admin/quality/overview?${p.toString()}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as QualityOverview;
+}
+
+export async function fetchQualityScopedRows(
+  scope: 'delivery' | 'runtime' | 'legacy',
+  opts: { since?: string; limit?: number } = {},
+): Promise<{ rows: QualityRow[]; distribution?: VerdictDistribution[] }> {
+  const p = new URLSearchParams();
+  if (opts.since) p.set('since', opts.since);
+  if (opts.limit) p.set('limit', String(opts.limit));
+  const r = await fetch(`/api/admin/quality/${scope}?${p.toString()}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as { rows: QualityRow[]; distribution?: VerdictDistribution[] };
 }
 
 export async function fetchCounterfactuals(opts: {

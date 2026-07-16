@@ -27,7 +27,9 @@ interface SessionHeaderProps {
    */
   recoveredAt?: string | null;
   recoveredReason?: string | null;
-  onResetClick: () => void;
+  onResetClick?: () => void;
+  /** App-owned teams use per-card controls in App Studio, never Company abort-all. */
+  allowAbort?: boolean;
   /**
    * Phase H — when set, the overflow menu shows a "Reestabelecer Master"
    * item that spawns the master-recovery agent. Provided by the parent
@@ -53,6 +55,7 @@ export function SessionHeader({
   recoveredAt,
   recoveredReason,
   onResetClick,
+  allowAbort = true,
   onReestablishMasterClick,
 }: SessionHeaderProps) {
   const { t } = useTranslation('agents');
@@ -96,7 +99,7 @@ export function SessionHeader({
         </Badge>
       )}
       <div className="ml-auto flex items-center gap-1 shrink-0">
-        {stream.connected && (
+        {allowAbort && stream.connected && (
           <Button
             variant="ghost"
             size="sm"

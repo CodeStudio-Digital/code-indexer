@@ -193,14 +193,26 @@ const CATALOG_SEED: CatalogSeed[] = [
   },
 
   // ─── Quality classifiers (Phase 6) ───────────────────────────────────────
-  // All 5 are wired. They run in parallel (`PlanMaster` pattern) after
-  // each turn when MCP_PIPELINES_QUALITY_CLASSIFIERS=1. The recommended
-  // default below is the Cloudflare Llama 3.2 3B; operators commonly
-  // swap to OpenAI gpt-4o-mini / Gemini Flash via the admin panel.
+  // Hybrid quality: one consultative terminal delivery assessment. The five
+  // older entries remain visible below as historical configuration only.
+  {
+    pipelineName: 'quality_delivery',
+    bindingRole: 'classifier',
+    description: 'One terminal assessment of delivery relevance, completeness, and evidence alignment.',
+    recommendedDefault: {
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.2-3b-instruct',
+      config: { temperature: 0.000001, max_tokens: 384 },
+    },
+    introducedInPhase: 'quality-hybrid',
+  },
+  // Historical bindings retained for rollback/audit; no active runtime path
+  // instantiates these classifiers anymore.
   {
     pipelineName: 'quality_off_topic',
     bindingRole: 'classifier',
-    description: 'Classifies whether an agent output stays within the task scope.',
+    description: 'Historical binding only; not called by the hybrid Quality runtime.',
+    setupEligible: false,
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.2-3b-instruct',
@@ -211,7 +223,8 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'quality_completeness',
     bindingRole: 'classifier',
-    description: 'Classifies whether the task was actually completed.',
+    description: 'Historical binding only; used once as migration fallback for quality_delivery.',
+    setupEligible: false,
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.2-3b-instruct',
@@ -222,7 +235,8 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'quality_code',
     bindingRole: 'classifier',
-    description: 'Detects code smells (TODO without impl, console.log, magic numbers).',
+    description: 'Historical binding only; code review now uses Round Review artifacts.',
+    setupEligible: false,
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.2-3b-instruct',
@@ -233,7 +247,8 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'quality_policy',
     bindingRole: 'classifier',
-    description: 'Detects policy violations (destructive tools without confirm, secrets in code).',
+    description: 'Historical binding only; active safety is enforced before dispatch.',
+    setupEligible: false,
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.2-3b-instruct',
@@ -244,7 +259,8 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'quality_tool_misuse',
     bindingRole: 'classifier',
-    description: 'Detects tool-call loops and obviously wrong tool selection.',
+    description: 'Historical binding only; ToolCallLedger and deterministic guards are active.',
+    setupEligible: false,
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.2-3b-instruct',
