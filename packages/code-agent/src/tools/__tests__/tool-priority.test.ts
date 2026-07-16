@@ -187,6 +187,29 @@ describe('buildTools — pinned tools', () => {
   });
 });
 
+describe('buildTools — plugin runtime tiers', () => {
+  it('keeps plugin tools out of bootstrap until their own tier is active', () => {
+    const pluginTool = named('plugin__cloudflare__cf_deploy');
+    const registry = { list: () => [named('mcp__read_file'), pluginTool] } as unknown as ToolRegistry;
+    const tierMap = new Map<string, ToolTier>([
+      [pluginTool.name, 'plugin:cloudflare'],
+    ]);
+    const base = {
+      registry,
+      externalToolTiers: tierMap,
+      toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
+      provider: { name: 'zai', model: 'claude-opus-4-7' } as unknown as ChatProvider,
+    };
+
+    expect(buildTools({ ...base, activeTiers: new Set<ToolTier>(['bootstrap']) }).tools.map((t) => t.name))
+      .toEqual(['mcp__read_file']);
+    expect(buildTools({
+      ...base,
+      activeTiers: new Set<ToolTier>(['bootstrap', 'plugin:cloudflare']),
+    }).tools.map((t) => t.name)).toEqual(['mcp__read_file', 'plugin__cloudflare__cf_deploy']);
+  });
+});
+
 describe('buildTools — session tool cap (task preflight)', () => {
   it('caps a large-catalog model at the session cap and reports it in capInfo', () => {
     const res = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 40 });

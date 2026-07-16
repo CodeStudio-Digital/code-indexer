@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  cleanupUnusedSemanticVectors,
   fetchSemanticGenerations,
   probeSemanticTarget,
   reindexProjectSemanticCode,
@@ -27,6 +28,27 @@ describe('semantic admin API', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'rebuild' }),
+    });
+  });
+
+  it('requests explicit cleanup of unused vector generations', async () => {
+    const result = {
+      tables_removed: 1,
+      items_removed: 40,
+      databases_compacted: 1,
+      bytes_reclaimed: 8192,
+      skipped_referenced: 2,
+      failures: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, result }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(cleanupUnusedSemanticVectors()).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/semantic/vectors/cleanup-unused', {
+      method: 'POST',
     });
   });
 

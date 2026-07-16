@@ -131,7 +131,7 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
       {actionError && (
         <div className="text-[10px] text-red-500 break-all" role="alert">{actionError}</div>
       )}
-      <div className="space-y-1 max-h-56 overflow-y-auto">
+      <div className="space-y-1">
         {live.map((r) => <Row key={r.id} r={r} />)}
       </div>
       {archived.length > 0 && (
@@ -140,7 +140,7 @@ export function AgentMemoryList({ projectId }: { projectId: number }) {
             <ChevronRight className="h-3 w-3" />
             {t('memory.list.archived', { count: archived.length })}
           </summary>
-          <div className="space-y-1 mt-1 max-h-40 overflow-y-auto">
+          <div className="space-y-1 mt-1">
             {archived.map((r) => <Row key={r.id} r={r} isArchived />)}
           </div>
         </details>

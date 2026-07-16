@@ -93,6 +93,7 @@ export default function Admin() {
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
+    setSubagentEffort,
     setFallback,
   } = useAdminProviders();
 
@@ -343,6 +344,7 @@ export default function Admin() {
                 onBackfillContextWindows={backfillContextWindows}
                 onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
+                onSetSubagentEffort={setSubagentEffort}
               />
             </div>
           )}

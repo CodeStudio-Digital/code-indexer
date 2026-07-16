@@ -252,6 +252,14 @@ function createHarness() {
     purpose,
     generation_id: 41,
   }));
+  const cleanupUnusedVectors = vi.fn(async () => ({
+    tables_removed: 2,
+    items_removed: 120,
+    databases_compacted: 1,
+    bytes_reclaimed: 4096,
+    skipped_referenced: 1,
+    failures: [],
+  }));
   const namespaceStatus = vi.fn((namespace: string) => ({
     namespace,
     purpose: 'knowledge' as const,
@@ -283,12 +291,21 @@ function createHarness() {
   const app = semanticRouter(providers, {
     store: store as unknown as SemanticStore,
     reindex,
+    cleanupUnusedVectors,
     namespaceStatus,
     probeEmbeddingTarget: (target) => probeMocks.embedding(target, providers),
     probeRerankerTarget: (target) => probeMocks.reranker(target, providers),
     rerankerDiagnostics,
   });
-  return { app, store, providers, reindex, namespaceStatus, rerankerDiagnostics };
+  return {
+    app,
+    store,
+    providers,
+    reindex,
+    cleanupUnusedVectors,
+    namespaceStatus,
+    rerankerDiagnostics,
+  };
 }
 
 describe('semantic admin profiles', () => {
@@ -779,6 +796,20 @@ describe('semantic generations and reindexing', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('runs unused-vector cleanup only after an explicit admin request', async () => {
+    const { app, cleanupUnusedVectors } = createHarness();
+
+    expect(cleanupUnusedVectors).not.toHaveBeenCalled();
+    const response = await app.request('/semantic/vectors/cleanup-unused', { method: 'POST' });
+
+    expect(response.status).toBe(200);
+    expect(cleanupUnusedVectors).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      result: { tables_removed: 2, items_removed: 120, bytes_reclaimed: 4096 },
+    });
   });
 
   it('returns generation and namespace progress together', async () => {

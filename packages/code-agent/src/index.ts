@@ -153,6 +153,10 @@ import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-to
 import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
 import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
+import {
+  collectRuntimeToolTiers,
+  mergeRuntimeTierSummaries,
+} from '@mcp/code-agent/tools/runtime-tool-tiers.js';
 import { createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
@@ -438,6 +442,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
+  // Mutable by design: code_exec/find_tools capture this map before external
+  // MCP and plugin tools are registered, then observe the completed catalog
+  // at invocation time.
+  const runtimeToolTiers = new Map<string, ToolTier>();
   const registerCompanyTools = (tools: readonly CoderTool[]): void => {
     registry.registerAll(withCompanyToolsMetadata(tools));
   };
@@ -603,7 +611,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // closes over a registry that already includes fs/git/web/lsp/glob/etc.
   // The proxy itself is rebuilt per invocation (`registry.list()` at call
   // time), so MCP/company tools added later are also picked up.
-  registry.register(buildCodeExecTool(registry));
+  registry.register(buildCodeExecTool(registry, runtimeToolTiers));
   registry.registerAll(worktreeTools);
 
   // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
@@ -691,7 +699,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // to a local `McpServerManager` for CLI / test usage where there's no pool.
   const mcpServerManager: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager =
     opts.externalMcpManager ?? new McpServerManager(opts.mcpBearerResolver ?? null);
-  let externalToolTiers: ReadonlyMap<string, import('@mcp/code-agent/tools/tiers.js').ToolTier> | undefined;
   // Subordinate-only override: turns each connected MCP server into its own
   // expandable custom tier (named by server id) so the agent sees the pack
   // in the system prompt and unlocks it on demand via expand_toolset, instead
@@ -706,7 +713,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       const { tools: extTools, tierMap } = await mcpServerManager.listAllTools();
       if (extTools.length > 0) {
         registry.registerAll(extTools);
-        externalToolTiers = tierMap;
+        for (const [name, tier] of tierMap) runtimeToolTiers.set(name, tier);
         // Cache discovered tools in DB so admin/session panels see them instantly
         for (const srv of enabledServers) {
           const prefix = `ext_${srv.id}__`;
@@ -729,7 +736,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             for (const n of srvToolNames) subTierMap.set(n, srv.id);
             subordinateTierSummary.set(srv.id, { displayName: srv.name, toolCount: srvToolNames.length });
           }
-          externalToolTiers = subTierMap;
+          for (const [name, tier] of subTierMap) runtimeToolTiers.set(name, tier);
           if (subordinateTierSummary.size > 0) {
             console.log(
               `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
@@ -746,24 +753,31 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Plugin tools — contributed by installed plugins, with worker-backed
   // handlers synthesized by the http-api layer (@mcp/plugin-host
-  // buildPluginTools). Registered at the tail like external MCP tools, so
-  // they're trimmed first under the model tool cap. Dormant in CLI/tests.
+  // buildPluginTools). Each plugin declares its own opt-in runtime tier, so
+  // none of these tools leak through getToolTier's bootstrap fallback.
+  let pluginTierSummary = new Map<string, { displayName: string; toolCount: number }>();
   if (opts.pluginTools?.length) {
     registry.registerAll(opts.pluginTools);
+    const pluginTiers = collectRuntimeToolTiers(opts.pluginTools);
+    for (const [name, tier] of pluginTiers.tierMap) runtimeToolTiers.set(name, tier);
+    pluginTierSummary = pluginTiers.summary;
   }
 
-  // expand_toolset — registered AFTER external servers so the tier enum
-  // includes any custom tiers (e.g., "cloudflare", "github") from connected servers.
+  // expand_toolset — registered AFTER external servers and plugins so its tier
+  // enum includes every custom runtime group.
   // For subordinates, every enabled MCP server is exposed as its own opt-in tier
   // (regardless of admin's `default_tier`) so the master/session-free behavior
   // (which respects the configured tier) is preserved.
-  const customTierSummary = subordinateTierSummary ?? mcpServerManager.getCustomTierSummary();
+  const customTierSummary = mergeRuntimeTierSummaries(
+    subordinateTierSummary ?? mcpServerManager.getCustomTierSummary(),
+    pluginTierSummary,
+  );
   registry.registerAll(buildExpandTools(customTierSummary.size > 0 ? customTierSummary : undefined));
 
   // find_tools — Camada 3 lazy discovery. Always registered (cheap, read-only,
   // no tier promotion). Belongs in bootstrap so it's visible before the agent
   // has unlocked anything else. Implementation lives in find-tools.ts.
-  registry.registerAll([buildFindToolsTool(registry)]);
+  registry.registerAll([buildFindToolsTool(registry, runtimeToolTiers)]);
 
   // request_review — Camada 4 reviewer subagent. Registered with a placeholder
   // tool snapshot; the runner snapshots the registry AFTER all tools are
@@ -1867,7 +1881,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const initialPinnedTools = [
     ...new Set([
       ...(persistedToolset?.pins ?? []),
-      ...historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, externalToolTiers))),
+      ...historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, runtimeToolTiers))),
       // Preflight pins — already validated against the catalog by the host
       // service; pins traverse the tier filter and survive the tool cap.
       ...(preflightSeed?.pinTools ?? []),
@@ -2366,7 +2380,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentDecisionAskBeforeSwitch: opts.agentDecisionAskBeforeSwitch,
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
-    externalToolTiers,
+    externalToolTiers: runtimeToolTiers,
     fallbackChain,
     createProvider: createProviderForFallback,
     verifyGoalCompletion,

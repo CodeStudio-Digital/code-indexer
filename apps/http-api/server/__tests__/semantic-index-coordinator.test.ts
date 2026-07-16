@@ -412,6 +412,17 @@ function makeHarness(options: {
     listJobs: vi.fn((filter?: { namespace?: string; status?: string }) => Array.from(jobs.values())
       .filter((row) => (!filter?.namespace || row.namespace === filter.namespace)
         && (!filter?.status || row.status === filter.status))),
+    listGenerationNamespaces: vi.fn((generationId: number) => [...new Set([
+      ...Array.from(jobs.values())
+        .filter((row) => row.generation_id === generationId)
+        .map((row) => row.namespace),
+      ...Array.from(namespaces.values())
+        .filter((row) => row.active_generation_id === generationId
+          || row.building_generation_id === generationId)
+        .map((row) => row.namespace),
+      ...Object.keys(options.semanticItems ?? {})
+        .filter((namespace) => (options.semanticItems?.[namespace] ?? []).length > 0),
+    ])]),
     retireUnreferencedGenerations: vi.fn((purpose?: 'code' | 'knowledge') => {
       const referenced = new Set(Array.from(namespaces.values()).flatMap((row) => [
         row.active_generation_id,
@@ -518,6 +529,8 @@ function makeHarness(options: {
       ]) store.deleteNamespace(namespace);
     }),
     dropGeneration: vi.fn(async () => undefined),
+    hasGeneration: vi.fn(async () => true),
+    compactGenerationDatabase: vi.fn(async () => ({ before_bytes: 10_000, after_bytes: 4_000 })),
     listIds: vi.fn(async (namespace: string, generationId: number) => {
       if (options.physicalIds?.[namespace]) return options.physicalIds[namespace];
       return store.listItems({ generation_id: generationId, namespace })
@@ -1729,6 +1742,51 @@ describe('SemanticIndexCoordinator code generations', () => {
       building_generation_id: null,
     });
     expect(h.generations.filter((row) => row.status === 'ready').map((row) => row.id)).toEqual([3]);
+  });
+
+  it('explicitly removes and compacts only obsolete physical generation tables', async () => {
+    const generation = (id: number, status: Generation['status']): Generation => ({
+      id,
+      purpose: 'code',
+      fingerprint: `model-${id}`,
+      embedding_target: { kind: 'onnx', model: `model-${id}` },
+      dimension: 3,
+      status,
+      expected_items: 1,
+      indexed_items: status === 'ready' ? 1 : 0,
+      failed_items: 0,
+      error: null,
+    });
+    const h = makeHarness({
+      existingGenerations: [generation(2, 'retired'), generation(3, 'ready')],
+      namespaceStates: [{
+        namespace: 'code:p1', purpose: 'code', active_generation_id: 3,
+        building_generation_id: null, expected_items: 1, indexed_items: 1,
+        failed_items: 0, delta_items: 0, last_error: null,
+      }],
+    });
+    const historical = h.store.createJob({
+      generation_id: 2,
+      namespace: 'code:p1',
+      kind: 'backfill',
+      expected_items: 1,
+    });
+    h.store.updateJob(historical.id, { status: 'completed' });
+    h.store.deleteItemsForNamespaceGeneration.mockReturnValueOnce(12);
+
+    const result = await h.coordinator.cleanupUnusedVectors();
+
+    expect(h.vectorStore.dropGeneration).toHaveBeenCalledWith('code:p1', 2);
+    expect(h.vectorStore.dropGeneration).not.toHaveBeenCalledWith('code:p1', 3);
+    expect(h.vectorStore.compactGenerationDatabase).toHaveBeenCalledWith('code:p1', 2);
+    expect(result).toMatchObject({
+      tables_removed: 1,
+      items_removed: 12,
+      databases_compacted: 1,
+      bytes_reclaimed: 6_000,
+      skipped_referenced: 1,
+      failures: [],
+    });
   });
 
   it('does not allocate another generation while an abandoned DROP keeps failing', async () => {

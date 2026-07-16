@@ -21,11 +21,13 @@ const PROFILES: Array<{ id: string; labelKey: string }> = [
 function readEntry(extra: Record<string, unknown> | undefined, id: string) {
   const profiles = extra?.subagent_profiles;
   const e = profiles && typeof profiles === 'object'
-    ? (profiles as Record<string, { provider_id?: string; model?: string }>)[id]
+    ? (profiles as Record<string, { provider_id?: string; model?: string; effort?: string }>)[id]
     : undefined;
+  const s = (v: unknown) => (typeof v === 'string' && v ? v : null);
   return {
-    providerId: typeof e?.provider_id === 'string' && e.provider_id ? e.provider_id : null,
-    modelId: typeof e?.model === 'string' && e.model ? e.model : null,
+    providerId: s(e?.provider_id),
+    modelId: s(e?.model),
+    effort: s(e?.effort),
   };
 }
 
@@ -42,6 +44,11 @@ interface SubagentProfilesPanelProps {
     subProviderId: string | null,
     modelId: string | null,
   ) => void;
+  onSetProfileEffort: (
+    providerId: string,
+    profileId: string,
+    effort: string | null,
+  ) => void;
 }
 
 export function SubagentProfilesPanel({
@@ -51,6 +58,7 @@ export function SubagentProfilesPanel({
   providerModelsById,
   onLoadProviderModels,
   onSetProfileTarget,
+  onSetProfileEffort,
 }: SubagentProfilesPanelProps) {
   const { t } = useTranslation(['admin']);
   const [open, setOpen] = useState(false);
@@ -97,12 +105,17 @@ export function SubagentProfilesPanel({
                   onChange={(providerId, modelId) =>
                     onSetProfileTarget(p.id, prof.id, providerId, modelId)
                   }
+                  effort={cur.effort}
+                  onEffortChange={(effort) => onSetProfileEffort(p.id, prof.id, effort)}
                   providerLabel={t('admin:provider.subagentProvider')}
                   modelLabel={t('admin:provider.subagentModel')}
+                  effortLabel={t('admin:provider.subagentEffort')}
                   providerEmptyLabel={t('admin:provider.subagentProfiles.useDefault')}
                   modelEmptyLabel={t('admin:provider.subagentProfiles.useDefault')}
+                  effortEmptyLabel={t('admin:provider.subagentProfiles.useDefault')}
                   providerAriaLabel={`${prof.id} subagent provider`}
                   modelAriaLabel={`${prof.id} subagent model`}
+                  effortAriaLabel={`${prof.id} subagent effort`}
                 />
               </div>
             );

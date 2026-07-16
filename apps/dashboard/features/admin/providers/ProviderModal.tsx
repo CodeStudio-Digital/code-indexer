@@ -53,6 +53,11 @@ export interface ProviderModalProps {
     modelId: string | null,
     profile?: string,
   ) => void;
+  onSetSubagentEffort: (
+    providerId: string,
+    effort: string | null,
+    profile?: string,
+  ) => void;
 }
 
 export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps) {

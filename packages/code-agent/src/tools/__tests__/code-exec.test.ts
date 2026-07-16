@@ -969,6 +969,24 @@ describe('code_exec tier-agnostic discovery (list_tools / tool_schema)', () => {
     expect(res.content).toContain('"name":"read_file"');
   });
 
+  it('list_tools() reports a runtime plugin tier instead of bootstrap fallback', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('plugin__cloudflare__deploy_worker'));
+    const codeExec = buildCodeExecTool(
+      registry,
+      new Map([['plugin__cloudflare__deploy_worker', 'plugin:cloudflare']]),
+    );
+
+    const res = await codeExec.handler(
+      { code: `return JSON.stringify(list_tools());` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('"name":"plugin__cloudflare__deploy_worker"');
+    expect(res.content).toContain('"tier":"plugin:cloudflare"');
+  });
+
   it('calls a non-bootstrap-tier tool WITHOUT expand_toolset', async () => {
     const registry = new ToolRegistry();
     registry.register(navTool());

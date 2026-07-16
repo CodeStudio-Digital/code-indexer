@@ -120,6 +120,15 @@ export interface SemanticJobView {
   updated_at: string;
 }
 
+export interface SemanticUnusedVectorCleanupResult {
+  tables_removed: number;
+  items_removed: number;
+  databases_compacted: number;
+  bytes_reclaimed: number;
+  skipped_referenced: number;
+  failures: Array<{ namespace: string; generation_id: number; error: string }>;
+}
+
 /** Durable `pending` rows may be waiting for an explicit post-restart wake-up.
  * Only `running` proves that a dispatcher/worker currently owns the job. */
 export function semanticJobIsExecuting(job: SemanticJobView | null | undefined): boolean {
@@ -309,6 +318,14 @@ export async function reindexSemanticProfile(purpose: SemanticProfilePurpose): P
       method: 'POST',
     }),
   );
+}
+
+export async function cleanupUnusedSemanticVectors(): Promise<SemanticUnusedVectorCleanupResult> {
+  const response = await expectOk(await fetch('/api/admin/semantic/vectors/cleanup-unused', {
+    method: 'POST',
+  }));
+  const body = await response.json() as { result: SemanticUnusedVectorCleanupResult };
+  return body.result;
 }
 
 /**

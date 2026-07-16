@@ -29,6 +29,8 @@ describe('createSubagentProviderResolver', () => {
       sessionModel: 'gpt',
       defaultTarget: null,
       profileTargets,
+      defaultEffort: null,
+      profileEfforts: new Map(),
       createProvider,
     });
 
@@ -52,6 +54,8 @@ describe('createSubagentProviderResolver', () => {
       profileTargets: new Map<MicroAgentProfileId, SubagentTarget | null>([
         ['implement', { providerId: 'openai', modelId: null }],
       ]),
+      defaultEffort: null,
+      profileEfforts: new Map(),
       createProvider: async (id, model) => fakeProvider(id, model),
     });
     expect(await resolver.forProfile('implement')).toBeUndefined();
@@ -63,9 +67,45 @@ describe('createSubagentProviderResolver', () => {
       sessionModel: 'gpt',
       defaultTarget: { providerId: 'anthropic', modelId: 'sonnet' },
       profileTargets: new Map(),
+      defaultEffort: null,
+      profileEfforts: new Map(),
       createProvider: async (id, model) => fakeProvider(id, model),
     });
     expect((await resolver.forProfile(undefined))?.model).toBe('sonnet');
     expect((await resolver.forProfile('nonexistent'))?.model).toBe('sonnet');
+  });
+
+  it('resolves per-profile effort; unset profile uses the default, null entry inherits parent', () => {
+    // profileEfforts values are already default-merged by the store, so a null
+    // entry means "no effort anywhere" (inherit parent), NOT "use default".
+    const resolver = createSubagentProviderResolver({
+      sessionProvider: 'openai',
+      sessionModel: 'gpt',
+      defaultTarget: null,
+      profileTargets: new Map(),
+      defaultEffort: 'medium',
+      profileEfforts: new Map<MicroAgentProfileId, string | null>([
+        ['implement', 'xhigh'],
+        ['explore', null],
+      ]),
+      createProvider: async (id, model) => fakeProvider(id, model),
+    });
+    expect(resolver.effortFor('implement')).toBe('xhigh');   // explicit override
+    expect(resolver.effortFor('explore')).toBeUndefined();   // null merged → inherit parent
+    expect(resolver.effortFor('verify')).toBe('medium');     // unset profile → default
+    expect(resolver.effortFor(undefined)).toBe('medium');    // no profile → default
+  });
+
+  it('returns undefined effort when neither profile nor default is set', () => {
+    const resolver = createSubagentProviderResolver({
+      sessionProvider: 'openai',
+      sessionModel: 'gpt',
+      defaultTarget: null,
+      profileTargets: new Map(),
+      defaultEffort: null,
+      profileEfforts: new Map(),
+      createProvider: async (id, model) => fakeProvider(id, model),
+    });
+    expect(resolver.effortFor('implement')).toBeUndefined();
   });
 });

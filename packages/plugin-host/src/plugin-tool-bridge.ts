@@ -25,6 +25,11 @@ export type PluginToolInvoker = (
   ctx: PluginInvokeContext,
 ) => Promise<{ content: string; isError?: boolean }>;
 
+/** Stable, collision-resistant tier id used by `expand_toolset`. */
+export function pluginToolTierId(namespace: string): string {
+  return `plugin:${namespace}`;
+}
+
 function toJsonSchema(p: Record<string, unknown> | undefined): JsonSchema {
   if (p && p.type === 'object' && typeof p.properties === 'object' && p.properties !== null) {
     return p as unknown as JsonSchema;
@@ -45,6 +50,10 @@ export function buildPluginTools(
         description: decl.description,
         parameters: toJsonSchema(decl.parameters),
         source: 'mcp_external',
+        runtimeTier: {
+          id: pluginToolTierId(plugin.namespace),
+          displayName: `plugin ${plugin.namespace}`,
+        },
         mutates,
         parallelSafe: !mutates,
         riskLevel: decl.riskLevel ?? (mutates ? 'write' : 'read'),

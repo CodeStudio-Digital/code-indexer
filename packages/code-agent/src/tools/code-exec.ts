@@ -34,6 +34,7 @@ import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
+import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { buildChangeSandboxApi } from '@mcp/code-agent/tools/code-exec-change.js';
@@ -267,7 +268,10 @@ function isNestedRefusal(value: unknown): value is NestedRefusalError {
   return candidate.code === 'TOOL_CALL_REFUSED' && !!candidate.guardVerdict;
 }
 
-export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
+export function buildCodeExecTool(
+  registry: ToolRegistry,
+  tierOverrides?: ReadonlyMap<string, ToolTier>,
+): CoderTool {
   return {
     name: 'code_exec',
     description: maybeTerse(CODE_EXEC_DESC),
@@ -845,7 +849,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
       const listTools = (): Array<{ name: string; tier: string; params: string; description: string }> =>
         safe.map((t) => ({
           name: t.name,
-          tier: getToolTier(t.name),
+          tier: getToolTier(t.name, tierOverrides),
           params: paramSummary(t.parameters),
           description: (t.description ?? '').split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '',
         }));
@@ -863,7 +867,7 @@ export function buildCodeExecTool(registry: ToolRegistry): CoderTool {
           const callableInsideCodeExec = exposedNameSet.has(t.name);
           return {
             name: t.name,
-            tier: getToolTier(t.name),
+            tier: getToolTier(t.name, tierOverrides),
             params: paramSummary(t.parameters),
             schema: t.parameters ?? null,
             callableInsideCodeExec,

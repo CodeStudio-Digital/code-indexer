@@ -20,6 +20,17 @@ export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
 export type ToolRepeatPolicy = 'stable' | 'volatile' | 'pollable' | 'mutating';
 export type ToolExecutionClass = 'read' | 'write' | 'execute' | 'control';
 
+/**
+ * Runtime-only progressive-disclosure metadata for tools contributed by a
+ * dynamic provider (for example an installed plugin). The runner aggregates
+ * these declarations into its tier map and `expand_toolset` catalog; this
+ * metadata is never serialized into the provider-facing tool definition.
+ */
+export interface RuntimeToolTierMetadata {
+  id: string;
+  displayName: string;
+}
+
 /** Structured outcome from an invocation/no-progress guard. */
 export type GuardAction = 'allow' | 'reuse' | 'warn' | 'block' | 'shadow';
 
@@ -51,6 +62,8 @@ export interface CoderTool {
   parameters: JsonSchema;
   /** Tool source — used by the UI for rendering and by the registry for filtering. */
   source: 'native' | 'mcp' | 'mcp_external';
+  /** Optional opt-in tier declared by a dynamic tool contributor. */
+  runtimeTier?: RuntimeToolTierMetadata;
   handler: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
   /**
    * Whether the tool changes any state outside its own response: filesystem

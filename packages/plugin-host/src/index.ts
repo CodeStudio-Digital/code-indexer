@@ -20,7 +20,7 @@ export {
   setPluginPermissionsGranted,
 } from './registry.js';
 export type { InstalledPlugin } from './registry.js';
-export { buildPluginTools } from './plugin-tool-bridge.js';
+export { buildPluginTools, pluginToolTierId } from './plugin-tool-bridge.js';
 export type { EnabledPlugin, PluginToolInvoker, PluginInvokeContext } from './plugin-tool-bridge.js';
 export { listEnabledPluginRuntime } from './enabled.js';
 export type { EnabledPluginRuntime, PluginBundleRef } from './enabled.js';

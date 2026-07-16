@@ -556,8 +556,9 @@ export function profileToTiers(profile: CoderProfile): Set<ToolTier> {
  * the input order so alphabetical sorting done upstream (mcp-bridge) is
  * retained — important for prefix-cache stability.
  *
- * `tierOverrides` is an optional runtime map for external MCP tools whose
- * tier is configured per-server in the DB (not in the static Sets above).
+ * `tierOverrides` is an optional runtime map for tools whose tier is resolved
+ * dynamically (external MCP servers and installed plugins), rather than from
+ * the static Sets above.
  */
 export function filterByTiers<T extends { name: string }>(
   tools: readonly T[],
@@ -577,7 +578,7 @@ export function filterByTiers<T extends { name: string }>(
  *  - else → 'bootstrap'
  *
  * `tierOverrides` is the same runtime map the runner already passes down for
- * external MCP tools, so custom-tiered tools count toward the right ceiling.
+ * dynamic tools, so custom-tiered tools count toward the right ceiling.
  */
 export function inferProfileFromHistory(
   toolNames: Iterable<string>,

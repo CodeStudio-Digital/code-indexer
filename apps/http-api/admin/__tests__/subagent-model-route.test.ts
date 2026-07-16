@@ -6,12 +6,16 @@ import { modelsRouter } from '../models.routes.js';
 function fakeStore() {
   const setSubagentTarget = vi.fn();
   const setSubagentProfileTarget = vi.fn();
+  const setSubagentEffort = vi.fn();
+  const setSubagentProfileEffort = vi.fn();
   const store = {
     getProvider: (id: string) => ({ id, enabled: true, use_for_coder: true }),
     setSubagentTarget,
     setSubagentProfileTarget,
+    setSubagentEffort,
+    setSubagentProfileEffort,
   } as unknown as ProviderStore;
-  return { store, setSubagentTarget, setSubagentProfileTarget };
+  return { store, setSubagentTarget, setSubagentProfileTarget, setSubagentEffort, setSubagentProfileEffort };
 }
 
 function patch(app: ReturnType<typeof modelsRouter>, id: string, body: unknown) {
@@ -54,5 +58,20 @@ describe('PATCH /providers/:id/subagent-model', () => {
     expect(res.status).toBe(200);
     expect(setSubagentTarget).toHaveBeenCalledWith('openai', 'anthropic', 'sonnet');
     expect(setSubagentProfileTarget).not.toHaveBeenCalled();
+  });
+
+  it('routes a per-profile effort update to setSubagentProfileEffort', async () => {
+    const { store, setSubagentProfileEffort, setSubagentProfileTarget } = fakeStore();
+    const res = await patch(modelsRouter(store), 'openai', { profile: 'implement', effort: 'xhigh' });
+    expect(res.status).toBe(200);
+    expect(setSubagentProfileEffort).toHaveBeenCalledWith('openai', 'implement', 'xhigh');
+    expect(setSubagentProfileTarget).not.toHaveBeenCalled();
+  });
+
+  it('routes a default effort update (including clear) to setSubagentEffort', async () => {
+    const { store, setSubagentEffort } = fakeStore();
+    const res = await patch(modelsRouter(store), 'openai', { effort: null });
+    expect(res.status).toBe(200);
+    expect(setSubagentEffort).toHaveBeenCalledWith('openai', null);
   });
 });

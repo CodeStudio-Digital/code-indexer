@@ -42,6 +42,11 @@ interface ProviderCardProps {
     modelId: string | null,
     profile?: string,
   ) => void;
+  onSetSubagentEffort: (
+    providerId: string,
+    effort: string | null,
+    profile?: string,
+  ) => void;
 }
 
 export function ProviderCard({
@@ -68,6 +73,7 @@ export function ProviderCard({
   onBackfillContextWindows,
   onSetFallback,
   onSetSubagentTarget,
+  onSetSubagentEffort,
 }: ProviderCardProps) {
   const { t } = useTranslation(['admin', 'common']);
   const selectedSubagentProviderId = readSubagentProviderId(p.extra?.subagent_provider_id);

@@ -205,6 +205,29 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
     expect(output).not.toContain('[hidden');
   });
 
+  it('reports a plugin tool in its own opt-in tier', async () => {
+    const registry = new ToolRegistry();
+    registry.register(tool('plugin__cloudflare__deploy_worker', 'Deploy a Cloudflare Worker.', {
+      source: 'mcp_external',
+    }));
+    const found = buildFindToolsTool(
+      registry,
+      new Map([['plugin__cloudflare__deploy_worker', 'plugin:cloudflare']]),
+    );
+    const result = await found.handler(
+      { query: 'deploy worker' },
+      {
+        cwd: '/tmp',
+        projectName: 'test',
+        runner: { activeTiers: new Set(['bootstrap']) },
+      } as never,
+    );
+    const output = typeof result.content === 'string' ? result.content : '';
+
+    expect(output).toContain('tier=plugin:cloudflare');
+    expect(output).toContain("expand_toolset('plugin:cloudflare')");
+  });
+
   it('empty query errors out cleanly', async () => {
     const found = buildFindToolsTool(buildRegistry());
     const result = await found.handler({ query: '' }, { cwd: '/tmp', projectName: 'test' } as never);

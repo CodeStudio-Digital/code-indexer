@@ -26,6 +26,10 @@ describe('buildPluginTools', () => {
 
     const echo = tools[0];
     expect(echo.source).toBe('mcp_external');
+    expect(echo.runtimeTier).toEqual({
+      id: 'plugin:hello-plugin',
+      displayName: 'plugin hello-plugin',
+    });
     expect(echo.mutates).toBe(false);
     expect(echo.parallelSafe).toBe(true);
     expect(echo.riskLevel).toBe('read');

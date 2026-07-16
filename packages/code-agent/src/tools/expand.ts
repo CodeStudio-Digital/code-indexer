@@ -11,9 +11,9 @@ import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
  * to unlock the corresponding tier. The runner then rebuilds its tools array
  * on the NEXT turn with the expanded set.
  *
- * Custom tiers (from external MCP servers) can also be unlocked on-demand.
- * The tool's `tier` enum is dynamically generated to include both core tiers
- * (navigate, admin) and any custom tiers from connected servers.
+ * Custom tiers (from external MCP servers and installed plugins) can also be
+ * unlocked on-demand. The tool's `tier` enum is dynamically generated to
+ * include both core tiers and every runtime tool group.
  */
 
 export interface CustomTierInfo {
@@ -23,7 +23,7 @@ export interface CustomTierInfo {
 
 /**
  * Build the expand_toolset tool with a dynamic tier enum that includes
- * both the core tiers and any custom tiers from external MCP servers.
+ * both the core tiers and any custom tiers from dynamic tool contributors.
  *
  * When no custom tiers exist, this produces the exact same tool as the
  * previous static export — zero behavioral change.

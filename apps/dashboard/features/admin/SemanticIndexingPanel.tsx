@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Save,
   Sparkles,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert.js';
@@ -46,6 +47,7 @@ import { Switch } from '../../components/ui/switch.js';
 import { fetchProviders } from './api.js';
 import type { AdminProvider } from './types.js';
 import {
+  cleanupUnusedSemanticVectors,
   fetchSemanticGenerations,
   fetchSemanticModels,
   fetchSemanticProfiles,
@@ -67,6 +69,7 @@ import {
   type SemanticProfileView,
   type SemanticTarget,
   type SemanticTargetKind,
+  type SemanticUnusedVectorCleanupResult,
 } from './semantic-api.js';
 import {
   summarizeProjectSemanticScopes,
@@ -1417,6 +1420,8 @@ export function SemanticIndexingPanel() {
   const [reindexingProjectId, setReindexingProjectId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cleaningUnused, setCleaningUnused] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<SemanticUnusedVectorCleanupResult | null>(null);
 
   const load = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -1500,6 +1505,22 @@ export function SemanticIndexingPanel() {
     }
   }
 
+  async function cleanupUnusedVectors() {
+    if (!window.confirm(t('semantic.actions.cleanupUnusedConfirm'))) return;
+    setCleaningUnused(true);
+    setCleanupResult(null);
+    setError(null);
+    try {
+      const result = await cleanupUnusedSemanticVectors();
+      setCleanupResult(result);
+      await load(false);
+    } catch (cleanupError) {
+      setError(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+    } finally {
+      setCleaningUnused(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4">
@@ -1512,14 +1533,29 @@ export function SemanticIndexingPanel() {
             {t('semantic.description')}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-          {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          {t('semantic.actions.refresh')}
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void cleanupUnusedVectors()}
+            disabled={cleaningUnused || loading || reindexing !== null || jobs.some(isExecutingSemanticJob)}
+          >
+            {cleaningUnused ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="mr-2 h-4 w-4" />
+            )}
+            {t('semantic.actions.cleanupUnused')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading || cleaningUnused}>
+            {loading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            {t('semantic.actions.refresh')}
+          </Button>
+        </div>
       </div>
 
       <Alert variant="info">
@@ -1539,6 +1575,25 @@ export function SemanticIndexingPanel() {
           <AlertCircle />
           <AlertTitle>{t('semantic.loadError')}</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {cleanupResult && (
+        <Alert variant={cleanupResult.failures.length > 0 ? 'warning' : 'success'}>
+          <HardDrive />
+          <AlertTitle>{t('semantic.cleanup.resultTitle')}</AlertTitle>
+          <AlertDescription>
+            {t('semantic.cleanup.resultDescription', {
+              tables: cleanupResult.tables_removed,
+              items: cleanupResult.items_removed,
+              databases: cleanupResult.databases_compacted,
+              bytes: formatBytes(cleanupResult.bytes_reclaimed),
+              skipped: cleanupResult.skipped_referenced,
+            })}
+            {cleanupResult.failures.length > 0
+              ? ` ${t('semantic.cleanup.failureCount', { count: cleanupResult.failures.length })}`
+              : ''}
+          </AlertDescription>
         </Alert>
       )}
 

@@ -159,4 +159,43 @@ describe('ProviderStore subagent target', () => {
       modelId: 'kimi-k2.6',
     });
   });
+
+  // ─── Reasoning effort ────────────────────────────────────────────
+
+  it('stores and clears the default subagent effort', () => {
+    store.setSubagentEffort('openai', 'high');
+    expect(store.getSubagentEffort('openai')).toBe('high');
+    store.setSubagentEffort('openai', null);
+    expect(store.getSubagentEffort('openai')).toBeNull();
+  });
+
+  it('per-profile effort overrides the default; unset inherits it', () => {
+    store.setSubagentEffort('openai', 'medium');
+    store.setSubagentProfileEffort('openai', 'implement', 'xhigh');
+    expect(store.getSubagentProfileEffort('openai', 'implement')).toBe('xhigh');
+    expect(store.getSubagentProfileEffort('openai', 'explore')).toBe('medium');
+  });
+
+  it('effort and provider/model coexist on one profile entry without clobbering', () => {
+    store.setSubagentProfileTarget('openai', 'implement', 'kimi-code', 'kimi-k2.6');
+    store.setSubagentProfileEffort('openai', 'implement', 'high');
+    expect(store.getSubagentProfileTarget('openai', 'implement')).toEqual({
+      providerId: 'kimi-code',
+      modelId: 'kimi-k2.6',
+    });
+    expect(store.getSubagentProfileEffort('openai', 'implement')).toBe('high');
+    // Re-setting the target must preserve the effort override.
+    store.setSubagentProfileTarget('openai', 'implement', 'openai', 'gpt-4.1');
+    expect(store.getSubagentProfileEffort('openai', 'implement')).toBe('high');
+  });
+
+  it('clearing a profile effort strips the entry when nothing else remains', () => {
+    store.setSubagentProfileEffort('openai', 'review', 'low');
+    expect(store.getProvider('openai')!.extra.subagent_profiles).toMatchObject({
+      review: { effort: 'low' },
+    });
+    store.setSubagentProfileEffort('openai', 'review', null);
+    expect(store.getSubagentProfileEffort('openai', 'review')).toBeNull();
+    expect(store.getProvider('openai')!.extra.subagent_profiles).toBeUndefined();
+  });
 });
