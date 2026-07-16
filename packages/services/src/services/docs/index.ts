@@ -11,12 +11,14 @@ export {
   IndexDocumentationUseCase,
   normalizeSeedUrl,
 } from './index-doc-use-case.js';
+export { buildEmbeddingText, hashEmbeddingInput } from './index-doc-use-case/utils.js';
 export type {
   IndexDocUseCaseDeps,
   IndexPdfInput,
   IndexUrlInput,
   IndexFolderInput,
   IndexDocStreamCallbacks,
+  DocumentationSemanticHooks,
 } from './index-doc-use-case.js';
 
 export {
@@ -75,11 +77,6 @@ export type {
 export { CrossEncoderReranker } from './cross-encoder-reranker.js';
 
 export { AutoDiscoveryService, _resetAutoDiscoveryThrottle } from './auto-discovery.js';
-export {
-  makeAutoDiscoveryIndexListener,
-  composeFilesUpdatedListeners,
-} from './discovery-listener.js';
-export type { AutoDiscoveryListenerOpts } from './discovery-listener.js';
 export type {
   AutoDiscoveryServiceOpts,
   DepManifest,

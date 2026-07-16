@@ -34,12 +34,9 @@ export const INDEX_TABLES: ManifestEntry[] = [
   { table: 'symbols', cls: 'INDEX' },
   { table: 'symbol_references', cls: 'INDEX' },
   { table: 'symbol_relations', cls: 'INDEX' },
-  { table: 'file_concepts', cls: 'INDEX' },
   { table: 'file_dependencies', cls: 'INDEX' },
-  { table: 'file_snapshots', cls: 'INDEX' },
   // NOTE: `runs` + `costs` stay CENTRAL (telemetry/stats — faithful platform
   // usage stats). Intentionally NOT in the per-project manifest. See plan §4.
-  { table: 'vector_ids', cls: 'INDEX' },
   { table: 'embedding_lsh_buckets', cls: 'INDEX' },
   { table: 'embedding_simhash_signatures', cls: 'INDEX' },
   { table: 'webhooks', cls: 'INDEX' },

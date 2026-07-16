@@ -8,13 +8,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const openAIChatCalls: Array<Record<string, unknown>> = [];
-const openAIIndexerCalls: Array<{
-  apiKey?: string;
-  model?: string;
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-  summaryModel?: string;
-}> = [];
 
 vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   OpenAIChatProvider: vi.fn().mockImplementation(function (
@@ -23,20 +16,6 @@ vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   ) {
     openAIChatCalls.push(opts);
     Object.assign(this, opts, { name: opts.name ?? 'openai' });
-  }),
-}));
-
-vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({
-  OpenAIProvider: vi.fn().mockImplementation(function (
-    this: Record<string, unknown>,
-    apiKey?: string,
-    model?: string,
-    baseURL?: string,
-    defaultHeaders?: Record<string, string>,
-    summaryModel?: string,
-  ) {
-    openAIIndexerCalls.push({ apiKey, model, baseURL, defaultHeaders, summaryModel });
-    Object.assign(this, { apiKey, model, baseURL, defaultHeaders, summaryModel });
   }),
 }));
 
@@ -49,7 +28,6 @@ const openrouter = buildProviderDefinition(openrouterSpec);
 
 beforeEach(() => {
   openAIChatCalls.length = 0;
-  openAIIndexerCalls.length = 0;
   delete process.env.OPENROUTER_HTTP_REFERER;
   delete process.env.OPENROUTER_SITE_URL;
   delete process.env.OPENROUTER_APP_TITLE;
@@ -64,17 +42,24 @@ describe('openrouter provider definition', () => {
     expect(openrouter.defaultModels).toContain('~openai/gpt-latest');
   });
 
-  it('is registered as coder and indexer capable', async () => {
-    const { getDefinition, listCoderKinds, listIndexerKinds } = await import(
+  it('is registered as coder capable', async () => {
+    const { getDefinition, listCoderKinds } = await import(
       '@mcp/services/providers/registry.js'
     );
     expect(getDefinition('openrouter')).toBeDefined();
     expect(listCoderKinds()).toContain('openrouter');
-    expect(listIndexerKinds()).toContain('openrouter');
   });
 });
 
 describe('openrouter.createCoder', () => {
+  it('sends the MegaBrain attribution headers by default', () => {
+    openrouter.createCoder!({ apiKey: 'or-test' }, 'openai/gpt-4o-mini');
+    expect(openAIChatCalls[0].defaultHeaders).toEqual({
+      'HTTP-Referer': 'https://codestudio.digital',
+      'X-OpenRouter-Title': 'MegaBrain',
+    });
+  });
+
   it('uses the OpenRouter base URL and forwards attribution headers', () => {
     const creds: ResolvedCreds = {
       apiKey: 'or-test',
@@ -98,23 +83,6 @@ describe('openrouter.createCoder', () => {
   it('picks the documented latest alias as the default model', () => {
     openrouter.createCoder!({ apiKey: 'or-test' }, undefined);
     expect(openAIChatCalls[0].model).toBe('~openai/gpt-latest');
-  });
-});
-
-describe('openrouter.createIndexer', () => {
-  it('does not force an OpenAI summary model unless configured', () => {
-    openrouter.createIndexer!({ apiKey: 'or-test' }, 'google/gemini-2.5-pro');
-    expect(openAIIndexerCalls[0].baseURL).toBe('https://openrouter.ai/api/v1');
-    expect(openAIIndexerCalls[0].model).toBe('google/gemini-2.5-pro');
-    expect(openAIIndexerCalls[0].summaryModel).toBeUndefined();
-  });
-
-  it('honors extra.summary_model for summary-only analysis', () => {
-    openrouter.createIndexer!(
-      { apiKey: 'or-test', extra: { summary_model: 'openai/gpt-4o-mini' } },
-      'google/gemini-2.5-pro',
-    );
-    expect(openAIIndexerCalls[0].summaryModel).toBe('openai/gpt-4o-mini');
   });
 });
 

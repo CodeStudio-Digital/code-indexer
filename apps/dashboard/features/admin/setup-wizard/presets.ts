@@ -51,8 +51,6 @@ export const PRESETS: Preset[] = [
     optionalOn: [],
     buckets: {
       text_llm:   { providerKind: 'cloudflare', modelHint: '@cf/meta/llama-3.1-8b-instruct' },
-      embeddings: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-m3' },
-      reranking:  { providerKind: 'cloudflare', modelHint: '@cf/meta/llama-3.1-8b-instruct' },
     },
   },
   {
@@ -60,8 +58,6 @@ export const PRESETS: Preset[] = [
     optionalOn: ['vision'],
     buckets: {
       text_llm:     { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
-      embeddings:   { providerKind: 'cloudflare',  modelHint: '@cf/baai/bge-m3' },
-      reranking:    { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
       autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },
@@ -72,8 +68,6 @@ export const PRESETS: Preset[] = [
     optionalOn: ['vision', 'voice', 'autocomplete'],
     buckets: {
       text_llm:     { providerKind: 'anthropic',  modelHint: 'claude-sonnet-4' },
-      embeddings:   { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-m3' },
-      reranking:    { providerKind: 'anthropic',  modelHint: 'claude-sonnet-4' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
       autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },

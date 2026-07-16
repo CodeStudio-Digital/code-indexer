@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronRight, History, Loader2, MessagesSquare, Plus } from 
 import { Button } from '../../components/ui/button.js';
 import { TooltipProvider } from '../../components/ui/tooltip.js';
 import { MessageList } from '../chat/messages/MessageList.js';
+import { ApprovalBanner } from '../chat/ApprovalBanner.js';
 import { Composer } from '../chat/composer/Composer.js';
 import { QueuedMessages } from '../chat/composer/QueuedMessages.js';
 import { SessionPickerDropdown } from '../project/editor-chat/SessionPickerDropdown.js';
@@ -154,6 +155,10 @@ export function AppStudioChatRail({
           </div>
         ) : (
           <>
+            <ApprovalBanner
+              approvals={session.pendingApprovals}
+              onRespond={session.respondToToolApproval}
+            />
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <MessageList
                 sessionData={session.sessionData}

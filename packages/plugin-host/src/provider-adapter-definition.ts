@@ -4,7 +4,6 @@ import type {
   ChatRequest,
   ChatDelta,
   CreateCoderOpts,
-  LLMProvider,
   ProviderAuthHandlers,
   ProviderDefinition,
   ProviderRuntimeAdapter,
@@ -104,49 +103,6 @@ class PluginChatProvider implements ChatProvider {
   }
 }
 
-class PluginIndexerProvider implements LLMProvider {
-  readonly name: string;
-  readonly model: string;
-  readonly summaryModel?: string;
-
-  constructor(
-    private readonly ref: ProviderAdapterRuntimeRef,
-    private readonly kind: string,
-    private readonly creds: ResolvedCreds,
-    model: string,
-    summaryModel?: string,
-  ) {
-    this.name = kind;
-    this.model = model;
-    this.summaryModel = summaryModel;
-  }
-
-  private async client(): Promise<LLMProvider> {
-    const adapter = await loadAdapter(this.ref, this.kind);
-    if (!adapter.createIndexer) throw new Error(`Provider '${this.kind}' does not support the indexer`);
-    return adapter.createIndexer({
-      kind: this.kind,
-      creds: this.creds,
-      model: this.model,
-    });
-  }
-
-  async analyzeFile(filePath: string, content: string) {
-    return (await this.client()).analyzeFile(filePath, content);
-  }
-
-  async analyzeSummary(
-    filePath: string,
-    content: string,
-    symbols: Array<{ name: string; kind: string; signature: string; line?: number | null; end_line?: number }>,
-  ) {
-    const client = await this.client();
-    return client.analyzeSummary
-      ? client.analyzeSummary(filePath, content, symbols)
-      : client.analyzeFile(filePath, content);
-  }
-}
-
 function buildAuthHandlers(ref: ProviderAdapterRuntimeRef, kind: string): ProviderAuthHandlers {
   return {
     async start(ctx, input) {
@@ -218,9 +174,6 @@ export function buildProviderPluginDefinition(
     async testConnection({ config, creds }) {
       const adapter = await loadAdapter(ref, spec.kind);
       if (adapter.testConnection) await adapter.testConnection({ config, creds });
-    },
-    createIndexer(creds, model) {
-      return new PluginIndexerProvider(ref, spec.kind, creds, model ?? defaultModel);
     },
     createCoder(creds, model, opts) {
       return new PluginChatProvider(ref, spec.kind, creds, model ?? defaultModel, opts);

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { DocStore } from '@mcp/store/doc-store.js';
+import { SemanticStore } from '@mcp/store/semantic-store.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorMatch, VectorRecord } from '@mcp/shared/types.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
@@ -32,6 +33,7 @@ describe('incremental folder ingestion', () => {
   let store: DocStore;
   let indexer: IndexDocumentationUseCase;
   let embed: ReturnType<typeof createEmbedMock>;
+  let deleteByIds: ReturnType<typeof vi.fn<(ids: string[], namespace?: string) => Promise<number>>>;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mcp-doc-incremental-'));
@@ -46,10 +48,34 @@ describe('incremental folder ingestion', () => {
       fingerprint: () => 'fake:bge-m3:v1',
       maxConcurrency: () => 2,
     };
+    const semanticStore = new SemanticStore(db.raw());
+    const generation = semanticStore.createGeneration({
+      purpose: 'knowledge',
+      fingerprint: 'fake:bge-m3:v1',
+      embedding_target: { kind: 'disabled' },
+      dimension: 3,
+    });
+    deleteByIds = vi.fn<(ids: string[], namespace?: string) => Promise<number>>().mockResolvedValue(0);
     const vectorStore: VectorStore = {
-      upsert: vi.fn(async (records: VectorRecord[]) => records.length),
+      upsert: vi.fn(async (records: VectorRecord[], namespace?: string) => {
+        if (!namespace) throw new Error('namespace required');
+        for (const record of records) {
+          semanticStore.upsertItem({
+            generation_id: generation.id,
+            namespace,
+            item_key: record.id,
+            source_hash: String(record.metadata?.embedding_hash ?? ''),
+            vector_id: record.id,
+            chunk_index: 0,
+            status: 'indexed',
+            attempts: 1,
+            error: null,
+          });
+        }
+        return records.length;
+      }),
       search: vi.fn<() => Promise<VectorMatch[]>>().mockResolvedValue([]),
-      deleteByIds: vi.fn(async () => 0),
+      deleteByIds,
       isAvailable: vi.fn(async () => true),
     };
     const resolver = { resolveOrNull: vi.fn(async () => null) } as unknown as PipelineProviderResolver;
@@ -64,7 +90,7 @@ describe('incremental folder ingestion', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('preserves ids, skips unchanged files, re-embeds changes and tombstones removals', async () => {
+  it('preserves ids, skips unchanged files, re-embeds changes and locally removes stale vectors', async () => {
     const a = join(docsDir, 'Rigidbody.AddForce.html');
     const b = join(docsDir, 'Transform.Translate.html');
     writeFileSync(a, unityPage('Rigidbody.AddForce', 'Adds force to a rigidbody.'));
@@ -102,10 +128,12 @@ describe('incremental folder ingestion', () => {
     }
     expect(embed.mock.calls.length).toBeGreaterThan(callsAfterFirst);
 
+    deleteByIds.mockClear();
     unlinkSync(b);
     await indexer.indexFolder({ collectionId: collection.id, rootPath: docsDir });
     expect(store.listChunksBySource(source.id).every((chunk) => !chunk.source_uri?.includes('Transform.Translate'))).toBe(true);
-    expect(store.countPendingTombstones()).toBeGreaterThan(0);
+    expect(deleteByIds).toHaveBeenCalled();
+    expect(deleteByIds.mock.calls.every((call) => call[1] === `docs:c${collection.id}`)).toBe(true);
   });
 
   it('publishes a searchable paused_limit run and resumes without repeating confirmed items', async () => {

@@ -38,6 +38,8 @@ export interface ContextRelevanceQuery extends PipelineQuery {
   taskText: string;
   /** Pre-computed task embedding (set by QueryHydrator). */
   taskEmbedding?: Float32Array;
+  /** Vector-space identity pinned together with taskEmbedding. */
+  embeddingFingerprint?: string;
   /** Total token budget available for retained messages. */
   tokenBudget: number;
   /** How many turns at the tail of the conversation are non-droppable. */

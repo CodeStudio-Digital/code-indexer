@@ -13,8 +13,10 @@ import type {
   SelectResult,
 } from '@mcp/candidate-pipeline';
 import {
+  assertEmbeddingFingerprint,
   cosineSimilarity,
   recencyDecay,
+  resolveEmbeddingFingerprint,
   weightedSum,
 } from '@mcp/candidate-pipeline';
 import { detectDecisionMarker, detectInfoDensity, toCandidate } from './helpers.js';
@@ -29,6 +31,7 @@ import {
 
 export interface EmbeddingFn {
   (text: string): Promise<Float32Array>;
+  readonly fingerprint?: () => string;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -39,13 +42,17 @@ export class TaskEmbeddingHydrator implements QueryHydrator<ContextRelevanceQuer
   readonly name = 'task_embedding';
   constructor(private embed: EmbeddingFn) {}
   enable(query: ContextRelevanceQuery): boolean {
-    return query.taskText.trim().length > 0 && !query.taskEmbedding;
+    return query.taskText.trim().length > 0 && (!query.taskEmbedding || !query.embeddingFingerprint);
   }
   async hydrate(query: ContextRelevanceQuery): Promise<Partial<ContextRelevanceQuery>> {
-    return { taskEmbedding: await this.embed(query.taskText) };
+    const embeddingFingerprint = resolveEmbeddingFingerprint(this.embed);
+    const taskEmbedding = await this.embed(query.taskText);
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+    return { taskEmbedding, embeddingFingerprint };
   }
   update(query: ContextRelevanceQuery, partial: Partial<ContextRelevanceQuery>): void {
     if (partial.taskEmbedding) query.taskEmbedding = partial.taskEmbedding;
+    if (partial.embeddingFingerprint) query.embeddingFingerprint = partial.embeddingFingerprint;
   }
 }
 
@@ -67,8 +74,8 @@ export class SessionMessagesSource implements Source<ContextRelevanceQuery, Mess
 // ────────────────────────────────────────────────────────────────────────
 
 export interface MessageEmbeddingStore {
-  get(messageId: string): Float32Array | undefined;
-  set(messageId: string, embedding: Float32Array): void;
+  get(messageId: string, embeddingFingerprint: string): Float32Array | undefined;
+  set(messageId: string, embeddingFingerprint: string, embedding: Float32Array): void;
 }
 
 export class MessageEmbeddingHydrator implements Hydrator<ContextRelevanceQuery, MessageCandidate> {
@@ -79,18 +86,21 @@ export class MessageEmbeddingHydrator implements Hydrator<ContextRelevanceQuery,
   ) {}
   enable(): boolean { return true; }
   async hydrate(
-    _query: ContextRelevanceQuery,
+    query: ContextRelevanceQuery,
     candidates: readonly MessageCandidate[],
   ): Promise<CandidateResult<MessageCandidate>[]> {
+    const embeddingFingerprint = query.embeddingFingerprint ?? resolveEmbeddingFingerprint(this.embed);
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
     return Promise.all(
       candidates.map(async (c): Promise<CandidateResult<MessageCandidate>> => {
-        const cached = this.store.get(c.message.id);
+        const cached = this.store.get(c.message.id, embeddingFingerprint);
         if (cached) {
           return { ok: true, candidate: { ...c, embedding: cached } };
         }
         try {
           const embedding = await this.embed(c.message.text);
-          this.store.set(c.message.id, embedding);
+          assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+          this.store.set(c.message.id, embeddingFingerprint, embedding);
           return { ok: true, candidate: { ...c, embedding } };
         } catch (e) {
           return { ok: false, candidateId: c.candidateId, error: (e as Error).message };

@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { VectorItemState } from '@mcp/store/vectors.js';
 import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
 
 export interface CandidateSymbol {
+  /** Exact structural identity. Production callers should always provide it. */
+  id?: number;
+  stable_id?: string | null;
   name: string;
   kind: string;
   signature?: string | null;
   comment?: string | null;
   line?: number | null;
+  end_line?: number | null;
   parent?: string | null;
 }
 
@@ -15,8 +20,6 @@ export interface CandidateFile {
   path: string;
   fileId: number;
   language: string;
-  summary: string;
-  concepts: string[];
   symbols: CandidateSymbol[];
   content: string;
 }
@@ -27,6 +30,12 @@ export interface EmbeddingCandidate {
   filePath: string;
   metadata: Record<string, string>;
   hash: string;
+  /** Fingerprint used when `hash` was selected. A namespace rollout may
+   * change between candidate selection and embedding; the executor then uses
+   * `hashForFingerprint` to keep semantic_items aligned with the model that
+   * actually produced the vector. */
+  embeddingFingerprint?: string;
+  hashForFingerprint?: (fingerprint: string) => string;
   /**
    * Persists the candidate's hash. MUST stay synchronous — the executor
    * runs the whole chunk's commits inside ONE better-sqlite3 transaction.
@@ -43,9 +52,81 @@ export interface EmbeddingCandidate {
    * Vector ids made stale by this candidate (a body that shrank from N to
    * M windows leaves ids M..N-1 behind — invisible to the orphan check
    * because the file still exists). The executor deletes them after a
-   * successful upsert; failures fall into the tombstone queue.
+   * successful upsert; failures remain retryable in `semantic_items`.
    */
   supersededIds?: string[];
+}
+
+function itemsByKey(items: readonly VectorItemState[]): Map<string, VectorItemState[]> {
+  const out = new Map<string, VectorItemState[]>();
+  for (const item of items) {
+    const rows = out.get(item.itemKey) ?? [];
+    rows.push(item);
+    out.set(item.itemKey, rows);
+  }
+  return out;
+}
+
+/** A semantic item is current only when every expected chunk is indexed under
+ * the exact source hash. Failed, partial, duplicated and superseded chunks all
+ * force another idempotent upsert. */
+function hasCurrentItems(
+  byKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  key: string,
+  hash: string,
+  expectedChunks = 1,
+  expectedVectorIds?: readonly string[],
+): boolean {
+  const rows = byKey.get(key) ?? [];
+  if (rows.length !== expectedChunks) return false;
+  const chunks = new Set<number>();
+  for (const row of rows) {
+    if (row.status !== 'indexed' || !row.vectorId || row.sourceHash !== hash) return false;
+    if (expectedVectorIds && row.vectorId !== expectedVectorIds[row.chunkIndex]) return false;
+    chunks.add(row.chunkIndex);
+  }
+  return chunks.size === expectedChunks
+    && Array.from({ length: expectedChunks }, (_, index) => index).every((index) => chunks.has(index));
+}
+
+/** Keys needed to decide whether a wave is already current. Kept separate so
+ * worker RPC reads only the relevant semantic_items rows. */
+export function semanticItemKeysForCandidateFiles(
+  db: CodeIndexDB,
+  projectId: number,
+  files: readonly CandidateFile[],
+): string[] {
+  const keys = new Set<string>();
+  for (const file of files) {
+    keys.add(`file:${file.fileId}`);
+    for (const symbol of db.getSymbolsByFile(projectId, file.path)) {
+      keys.add(`symbol:${symbol.id}`);
+      keys.add(`symbol_body:${symbol.id}`);
+      keys.add(`symbol_group:${symbol.id}`);
+    }
+  }
+  return [...keys];
+}
+
+/** Resolve every logical code item owned by structural file rows before those
+ * rows are deleted. This replaces the legacy file_path lookup in vector_ids. */
+export function semanticItemKeysForIndexedPaths(
+  db: CodeIndexDB,
+  projectId: number,
+  paths: readonly string[],
+): string[] {
+  const keys = new Set<string>();
+  for (const path of paths) {
+    const file = db.getFile(projectId, path);
+    if (!file) continue;
+    keys.add(`file:${file.id}`);
+    for (const symbol of db.getSymbolsByFile(projectId, path)) {
+      keys.add(`symbol:${symbol.id}`);
+      keys.add(`symbol_body:${symbol.id}`);
+      keys.add(`symbol_group:${symbol.id}`);
+    }
+  }
+  return [...keys];
 }
 
 interface SkippedSymbolGroup {
@@ -65,36 +146,25 @@ const SIBLING_GAP = 3;
 const GROUP_MIN_LINES = 3;
 
 /**
- * Build embedding candidates from a list of files with their analysis data
- * and content. Shared by `processEmbeddings` (after LLM analysis) and
- * `retryEmbeddings` (standalone, reading from DB + disk).
+ * Build embedding candidates directly from structural facts and source
+ * content. Shared by generation backfills and watcher/editor deltas.
  *
- * Skips files whose stored hash matches the recomputed text — incremental
- * re-index only re-embeds what changed.
+ * Skips files whose semantic_items hash matches the recomputed text — an
+ * incremental run only re-embeds what changed in its target generation.
  */
 export function buildEmbeddingCandidates(
   db: CodeIndexDB,
   project: { id: number; name: string },
   files: CandidateFile[],
+  currentItems: readonly VectorItemState[] = [],
+  embeddingFingerprint = 'embedding:unknown',
 ): EmbeddingCandidate[] {
   const candidates: EmbeddingCandidate[] = [];
-
-  const fileIds = files.map((f) => f.fileId);
-  const fileHashMap = db.getFileEmbeddingHashes(fileIds, project.id);
-
-  const allSymbolIds: number[] = [];
-  const symIdMapByFile = new Map<string, Map<string, number>>();
-  for (const file of files) {
-    const dbSymbols = db.getSymbolsByFile(project.id, file.path);
-    const map = new Map(dbSymbols.map((s) => [`${s.kind}:${s.name}`, s.id]));
-    symIdMapByFile.set(file.path, map);
-    for (const s of dbSymbols) allSymbolIds.push(s.id);
-  }
-  const symHashMap = db.getSymbolEmbeddingHashes(allSymbolIds, project.id);
+  const currentByKey = itemsByKey(currentItems);
 
   for (const file of files) {
-    appendFileCandidate(candidates, db, project, file, fileHashMap);
-    appendSymbolCandidates(candidates, db, project, file, symIdMapByFile, symHashMap);
+    appendFileCandidate(candidates, project, file, currentByKey, embeddingFingerprint);
+    appendSymbolCandidates(candidates, db, project, file, currentByKey, embeddingFingerprint);
   }
 
   return candidates;
@@ -102,31 +172,41 @@ export function buildEmbeddingCandidates(
 
 function appendFileCandidate(
   candidates: EmbeddingCandidate[],
-  db: CodeIndexDB,
   project: { id: number; name: string },
   file: CandidateFile,
-  fileHashMap: Map<number, string | null>,
+  currentByKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  embeddingFingerprint: string,
 ): void {
+  const skeleton = file.symbols
+    .slice(0, 48)
+    .map((symbol) => [
+      `${symbol.kind} ${symbol.name}`,
+      symbol.signature?.trim(),
+      symbol.comment?.trim(),
+    ].filter(Boolean).join(' — '))
+    .join('\n');
+  const sourcePreview = file.content.trim().slice(0, 1_600);
   const fileText = [
     `File: ${file.path}`,
     `Language: ${file.language}`,
-    `Summary: ${file.summary}`,
-    `Concepts: ${file.concepts.join(', ')}`,
-    `Symbols: ${file.symbols.map((s) => s.name).join(', ')}`,
-  ].join('\n').slice(0, 1000);
+    skeleton ? `Structural skeleton:\n${skeleton}` : '',
+    sourcePreview ? `Source preview:\n${sourcePreview}` : '',
+  ].filter(Boolean).join('\n').slice(0, 4_000);
 
-  const fileHash = createHash('md5').update(fileText).digest('hex');
+  const fileHash = createHash('md5').update(`${embeddingFingerprint}\n${fileText}`).digest('hex');
   const fileVecId = 'f_' + createHash('md5').update(`${project.id}:${file.path}`).digest('hex').slice(0, 24);
-  const storedFileHash = fileHashMap.get(file.fileId) ?? null;
 
-  if (storedFileHash !== fileHash) {
+  if (!hasCurrentItems(currentByKey, `file:${file.fileId}`, fileHash, 1, [fileVecId])) {
     candidates.push({
       text: fileText,
       id: fileVecId,
       filePath: file.path,
       metadata: { project_name: project.name, type: 'file', ref_id: String(file.fileId) },
       hash: fileHash,
-      onCommit: () => db.setFileEmbeddingHash(file.fileId, fileHash, project.id),
+      embeddingFingerprint,
+      hashForFingerprint: (fingerprint) =>
+        createHash('md5').update(`${fingerprint}\n${fileText}`).digest('hex'),
+      onCommit: () => { /* semantic_items is committed by the vector worker */ },
     });
   }
 }
@@ -136,35 +216,58 @@ function appendSymbolCandidates(
   db: CodeIndexDB,
   project: { id: number; name: string },
   file: CandidateFile,
-  symIdMapByFile: Map<string, Map<string, number>>,
-  symHashMap: Map<number, { sig: string | null; body: string | null }>,
+  currentByKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  embeddingFingerprint: string,
 ): void {
-  const symIdMap = symIdMapByFile.get(file.path) ?? new Map<string, number>();
+  const dbSymbols = db.getSymbolsByFile(project.id, file.path);
+  const usedDbIds = new Set<number>();
 
   const sortedSymbols = [...file.symbols]
     .filter((s) => ['class', 'function', 'interface', 'method'].includes(s.kind))
     .sort((a, b) => (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER));
+  const nameCounts = new Map<string, number>();
+  for (const symbol of sortedSymbols) nameCounts.set(symbol.name, (nameCounts.get(symbol.name) ?? 0) + 1);
+  const duplicateNames = new Set(
+    [...nameCounts.entries()].filter(([, count]) => count > 1).map(([name]) => name),
+  );
 
   const fileLines = file.content.split(/\r?\n/);
   const skippedSymbols: SkippedSymbolGroup[] = [];
 
   const globalContext = [
     `File: ${file.path}`,
-    file.summary ? `Summary: ${file.summary}` : '',
-    file.concepts.length ? `Concepts: ${file.concepts.join(', ')}` : '',
-  ].filter(Boolean).join(' | ');
+    `Language: ${file.language}`,
+    file.symbols.length
+      ? `Skeleton: ${file.symbols.slice(0, 32).map((symbol) => [
+          `${symbol.kind} ${symbol.name}`,
+          symbol.signature?.trim(),
+          symbol.comment?.trim(),
+        ].filter(Boolean).join(' — ')).join(' | ')}`
+      : '',
+  ].filter(Boolean).join(' | ').slice(0, 1_600);
 
   for (let i = 0; i < sortedSymbols.length; i++) {
     const sym = sortedSymbols[i];
-    const symDbId = symIdMap.get(`${sym.kind}:${sym.name}`);
+    const symDbId = resolveSymbolDbId(sym, dbSymbols, usedDbIds);
     if (!symDbId) continue;
+    const vectorIdentity = duplicateNames.has(sym.name) ? `${sym.name}:${symDbId}` : sym.name;
 
-    appendSigCandidate(candidates, db, project, file.path, sym, symDbId, globalContext, symHashMap);
+    appendSigCandidate(
+      candidates,
+      project,
+      file.path,
+      sym,
+      symDbId,
+      vectorIdentity,
+      globalContext,
+      currentByKey,
+      embeddingFingerprint,
+    );
 
     if (sym.line === null || sym.line === undefined) continue;
 
     const lineStart = Math.max(0, sym.line - 1);
-    const symEndLine = (sym as { end_line?: number }).end_line;
+    const symEndLine = sym.end_line;
     let lineEnd: number;
     if (symEndLine) {
       lineEnd = Math.min(fileLines.length, symEndLine);
@@ -179,24 +282,83 @@ function appendSymbolCandidates(
       continue;
     }
 
-    appendBodyCandidate(candidates, db, project, file.path, sym, symDbId, globalContext, fileLines, lineStart, lineEnd, symHashMap);
+    appendBodyCandidate(
+      candidates,
+      project,
+      file.path,
+      sym,
+      symDbId,
+      vectorIdentity,
+      globalContext,
+      fileLines,
+      lineStart,
+      lineEnd,
+      currentByKey,
+      embeddingFingerprint,
+    );
   }
 
   // cAST Sibling Merging — group small adjacent siblings into one body chunk.
   if (skippedSymbols.length > 0) {
-    mergeSiblings(candidates, db, project, file.path, skippedSymbols, fileLines, globalContext, symHashMap);
+    mergeSiblings(
+      candidates,
+      project,
+      file.path,
+      skippedSymbols,
+      duplicateNames,
+      fileLines,
+      globalContext,
+      currentByKey,
+      embeddingFingerprint,
+    );
   }
+}
+
+/** Candidate symbols normally come directly from the structural rows. The
+ * scored fallback keeps older callers/tests deterministic without ever
+ * collapsing two homonyms onto the same database id. */
+function resolveSymbolDbId(
+  symbol: CandidateSymbol,
+  dbSymbols: ReturnType<CodeIndexDB['getSymbolsByFile']>,
+  usedDbIds: Set<number>,
+): number | undefined {
+  if (symbol.id !== undefined) {
+    const exact = dbSymbols.find((candidate) => candidate.id === symbol.id);
+    if (exact) {
+      usedDbIds.add(exact.id);
+      return exact.id;
+    }
+  }
+
+  const available = dbSymbols.filter((candidate) =>
+    !usedDbIds.has(candidate.id)
+    && candidate.kind === symbol.kind
+    && candidate.name === symbol.name,
+  );
+  const exactStable = symbol.stable_id
+    ? available.find((candidate) => candidate.stable_id === symbol.stable_id)
+    : undefined;
+  const exactLocation = available.find((candidate) =>
+    candidate.line === (symbol.line ?? null)
+    && candidate.end_line === (symbol.end_line ?? null)
+    && candidate.signature === (symbol.signature ?? ''),
+  );
+  const exactLine = available.find((candidate) => candidate.line === (symbol.line ?? null));
+  const resolved = exactStable ?? exactLocation ?? exactLine ?? available[0];
+  if (resolved) usedDbIds.add(resolved.id);
+  return resolved?.id;
 }
 
 function appendSigCandidate(
   candidates: EmbeddingCandidate[],
-  db: CodeIndexDB,
   project: { id: number; name: string },
   filePath: string,
   sym: CandidateSymbol,
   symDbId: number,
+  vectorIdentity: string,
   globalContext: string,
-  symHashMap: Map<number, { sig: string | null; body: string | null }>,
+  currentByKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  embeddingFingerprint: string,
 ): void {
   const sigText = [
     `[Context: ${globalContext}]`,
@@ -205,34 +367,43 @@ function appendSigCandidate(
     sym.comment ? `Description: ${sym.comment}` : '',
   ].filter(Boolean).join('\n').slice(0, 1000);
 
-  const sigHash = createHash('md5').update(sigText).digest('hex');
-  const symVecId = 's_' + createHash('md5').update(`${project.id}:${filePath}:${sym.name}`).digest('hex').slice(0, 24);
-  const storedSigHash = symHashMap.get(symDbId)?.sig ?? null;
+  const sigHash = createHash('md5').update(`${embeddingFingerprint}\n${sigText}`).digest('hex');
+  const symVecId = 's_' + createHash('md5').update(`${project.id}:${filePath}:${vectorIdentity}`).digest('hex').slice(0, 24);
+  const legacySymVecId = vectorIdentity === sym.name
+    ? undefined
+    : 's_' + createHash('md5')
+      .update(`${project.id}:${filePath}:${sym.name}`)
+      .digest('hex').slice(0, 24);
 
-  if (storedSigHash !== sigHash) {
+  if (!hasCurrentItems(currentByKey, `symbol:${symDbId}`, sigHash, 1, [symVecId])) {
     candidates.push({
       text: sigText,
       id: symVecId,
       filePath,
       metadata: { project_name: project.name, type: 'symbol', ref_id: String(symDbId) },
       hash: sigHash,
-      onCommit: () => db.setSymbolEmbeddingHash(symDbId, sigHash, 'sig', project.id),
+      embeddingFingerprint,
+      hashForFingerprint: (fingerprint) =>
+        createHash('md5').update(`${fingerprint}\n${sigText}`).digest('hex'),
+      ...(legacySymVecId ? { supersededIds: [legacySymVecId] } : {}),
+      onCommit: () => { /* semantic_items is committed by the vector worker */ },
     });
   }
 }
 
 function appendBodyCandidate(
   candidates: EmbeddingCandidate[],
-  db: CodeIndexDB,
   project: { id: number; name: string },
   filePath: string,
   sym: CandidateSymbol,
   symDbId: number,
+  vectorIdentity: string,
   globalContext: string,
   fileLines: string[],
   lineStart: number,
   lineEnd: number,
-  symHashMap: Map<number, { sig: string | null; body: string | null }>,
+  currentByKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  embeddingFingerprint: string,
 ): void {
   const fullBody = fileLines.slice(lineStart, lineEnd).join('\n');
   const windows = slidingWindows(fullBody, {
@@ -249,9 +420,9 @@ function appendBodyCandidate(
 
   // One combined hash gates the whole body: any window change re-emits all
   // windows. It lives in the symbol's single body-hash slot.
-  const combinedHash = createHash('md5').update(chunkTexts.join(' ')).digest('hex');
-  const storedBodyHash = symHashMap.get(symDbId)?.body ?? null;
-  if (storedBodyHash === combinedHash) return;
+  const combinedHash = createHash('md5')
+    .update(`${embeddingFingerprint}\n${chunkTexts.join('\0')}`)
+    .digest('hex');
 
   // Only the LAST window carries the real hash commit (others are no-ops).
   // Candidates are pushed contiguously and batch slicers keep a groupKey
@@ -265,15 +436,31 @@ function appendBodyCandidate(
     // Chunk 0 keeps the historical id (no suffix) so it overwrites the old
     // single vector in place — no mass re-orphaning on the first reindex.
     const idSeed = i === 0
-      ? `${project.id}:${filePath}:${sym.name}:body`
-      : `${project.id}:${filePath}:${sym.name}:body:${i}`;
+      ? `${project.id}:${filePath}:${vectorIdentity}:body`
+      : `${project.id}:${filePath}:${vectorIdentity}:body:${i}`;
     return 'sb_' + createHash('md5').update(idSeed).digest('hex').slice(0, 23);
   };
+  const expectedVectorIds = chunkTexts.map((_, index) => bodyChunkId(index));
+  if (hasCurrentItems(
+    currentByKey,
+    `symbol_body:${symDbId}`,
+    combinedHash,
+    chunkTexts.length,
+    expectedVectorIds,
+  )) return;
   // Ids of windows this body USED to have but no longer does (deterministic
   // up to the configured max). Carried on the last chunk so the executor
   // cleans them after the new windows landed.
   const supersededIds: string[] = [];
   for (let j = chunkTexts.length; j < MAX_BODY_CHUNKS; j++) supersededIds.push(bodyChunkId(j));
+  if (vectorIdentity !== sym.name) {
+    for (let j = 0; j < MAX_BODY_CHUNKS; j++) {
+      const legacySeed = j === 0
+        ? `${project.id}:${filePath}:${sym.name}:body`
+        : `${project.id}:${filePath}:${sym.name}:body:${j}`;
+      supersededIds.push('sb_' + createHash('md5').update(legacySeed).digest('hex').slice(0, 23));
+    }
+  }
 
   chunkTexts.forEach((text, i) => {
     const isLast = i === chunkTexts.length - 1;
@@ -288,10 +475,14 @@ function appendBodyCandidate(
         chunk_index: String(i),
       },
       hash: combinedHash,
+      embeddingFingerprint,
+      hashForFingerprint: (fingerprint) => createHash('md5')
+        .update(`${fingerprint}\n${chunkTexts.join('\0')}`)
+        .digest('hex'),
       groupKey,
       ...(isLast && supersededIds.length > 0 ? { supersededIds } : {}),
       onCommit: isLast
-        ? () => db.setSymbolEmbeddingHash(symDbId, combinedHash, 'body', project.id)
+        ? () => { /* semantic_items is committed by the vector worker */ }
         : () => { /* committed by the last window of the group */ },
     });
   });
@@ -299,13 +490,14 @@ function appendBodyCandidate(
 
 function mergeSiblings(
   candidates: EmbeddingCandidate[],
-  db: CodeIndexDB,
   project: { id: number; name: string },
   filePath: string,
   skippedSymbols: SkippedSymbolGroup[],
+  duplicateNames: ReadonlySet<string>,
   fileLines: string[],
   globalContext: string,
-  symHashMap: Map<number, { sig: string | null; body: string | null }>,
+  currentByKey: ReadonlyMap<string, readonly VectorItemState[]>,
+  embeddingFingerprint: string,
 ): void {
   skippedSymbols.sort((a, b) => a.lineStart - b.lineStart);
   let currentGroup: SkippedSymbolGroup[] = [];
@@ -323,13 +515,19 @@ function mergeSiblings(
       return `method ${item.sym.name}: ${item.sym.signature ?? '()'}\n---\n${slice}`;
     });
     const bodyText = `[Context: ${globalContext}]\n[group] File: ${filePath} (parent: ${first.sym.parent ?? 'None'})\n\n${bodyParts.join('\n\n')}`;
-    const bodyHash = createHash('md5').update(bodyText).digest('hex');
+    const bodyHash = createHash('md5').update(`${embeddingFingerprint}\n${bodyText}`).digest('hex');
+    const legacySeed = `${project.id}:${filePath}:${first.sym.name}:${last.sym.name}`;
+    const groupIdentity = duplicateNames.has(first.sym.name) || duplicateNames.has(last.sym.name)
+      ? `${legacySeed}:${first.symDbId}:${last.symDbId}`
+      : legacySeed;
     const sgVecId = 'sg_' + createHash('md5')
-      .update(`${project.id}:${filePath}:${first.sym.name}:${last.sym.name}`)
+      .update(groupIdentity)
       .digest('hex').slice(0, 22);
     const anchorSymDbId = first.symDbId;
-    const storedBodyHash = symHashMap.get(anchorSymDbId)?.body ?? null;
-    if (storedBodyHash === bodyHash) return;
+    if (hasCurrentItems(currentByKey, `symbol_group:${anchorSymDbId}`, bodyHash, 1, [sgVecId])) return;
+    const legacySgVecId = groupIdentity === legacySeed
+      ? undefined
+      : 'sg_' + createHash('md5').update(legacySeed).digest('hex').slice(0, 22);
 
     candidates.push({
       text: bodyText.slice(0, MAX_BODY_CHARS),
@@ -337,7 +535,11 @@ function mergeSiblings(
       filePath,
       metadata: { project_name: project.name, type: 'symbol_group', ref_id: String(anchorSymDbId) },
       hash: bodyHash,
-      onCommit: () => db.setSymbolEmbeddingHash(anchorSymDbId, bodyHash, 'body', project.id),
+      embeddingFingerprint,
+      hashForFingerprint: (fingerprint) =>
+        createHash('md5').update(`${fingerprint}\n${bodyText}`).digest('hex'),
+      ...(legacySgVecId ? { supersededIds: [legacySgVecId] } : {}),
+      onCommit: () => { /* semantic_items is committed by the vector worker */ },
     });
   };
 

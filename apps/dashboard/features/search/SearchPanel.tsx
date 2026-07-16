@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, Info, Search as SearchIcon } from 'lucide-react';
+import type { DBFile, DBSymbol, HybridSearchResult } from '@mcp/shared/types.js';
 import { EmbeddingsDebugPanel } from './EmbeddingsDebugPanel.js';
+import { structuralResultPreview } from './search-result-preview.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -13,14 +15,7 @@ import {
   SelectValue,
 } from '../../components/ui/select.js';
 
-interface SearchResult {
-  id: number;
-  type: 'file' | 'symbol';
-  score: number;
-  fts_rank: number | null;
-  vector_score: number | null;
-  data: Record<string, unknown>;
-}
+type SearchResult = HybridSearchResult;
 
 interface SearchDiagnostics {
   vectorAvailable: boolean;
@@ -34,7 +29,6 @@ interface SearchDiagnostics {
 
 interface SearchPanelProps {
   projectId: number;
-  projectName: string;
 }
 
 type SearchMode = 'hybrid' | 'fts' | 'vector';
@@ -54,15 +48,13 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
       const res = await fetch(
         `/api/projects/${projectId}/search?q=${encodeURIComponent(query)}&mode=${mode}&limit=20`,
       );
-      const data = await res.json();
-      // Support both old format (array) and new format ({ results, diagnostics })
-      if (Array.isArray(data)) {
-        setResults(data as SearchResult[]);
-        setDiagnostics(null);
-      } else {
-        setResults((data.results ?? []) as SearchResult[]);
-        setDiagnostics((data.diagnostics ?? null) as SearchDiagnostics | null);
-      }
+      if (!res.ok) throw new Error(`search failed (${res.status})`);
+      const data = await res.json() as {
+        results?: SearchResult[];
+        diagnostics?: SearchDiagnostics | null;
+      };
+      setResults(data.results ?? []);
+      setDiagnostics(data.diagnostics ?? null);
     } catch {
       setResults([]);
       setDiagnostics(null);
@@ -147,9 +139,11 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
       {results.length > 0 && (
         <div className="space-y-2">
           {results.map((r, i) => {
-            const path = (r.data.path ?? r.data.file_path ?? '') as string;
-            const name = (r.data.name ?? '') as string;
-            const summary = ((r.data.summary ?? r.data.comment ?? '') as string).slice(0, 160);
+            const path = r.type === 'file'
+              ? (r.data as DBFile).path
+              : (r.data as DBSymbol).file_path;
+            const name = r.type === 'symbol' ? (r.data as DBSymbol).name : '';
+            const structuralPreview = structuralResultPreview(r);
             return (
               <div
                 key={`${r.type}-${r.id}-${i}`}
@@ -167,7 +161,11 @@ export default function SearchPanel({ projectId }: SearchPanelProps) {
                     score: {r.score.toFixed(4)}
                   </span>
                 </div>
-                {summary && <p className="text-sm text-muted-foreground">{summary}</p>}
+                {structuralPreview && (
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                    {structuralPreview}
+                  </p>
+                )}
               </div>
             );
           })}

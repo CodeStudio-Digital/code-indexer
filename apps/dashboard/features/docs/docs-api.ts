@@ -172,18 +172,10 @@ export async function createCollection(input: {
   });
 }
 
-/**
- * Outcome of a delete-with-vector-cleanup call. Both fields are zero when
- * the source/collection had no embeddings registered (e.g. indexed before
- * the embedder was wired). Non-zero `queued_for_retry` means the vector
- * store rejected the remote delete and the leftover ids landed in the
- * tombstone sweep queue — they'll be retried at the next server boot or
- * via POST /api/docs/vectors/sweep.
- */
+/** Outcome of removing corpus rows and their local sqlite-vec entries. */
 export interface DocDeleteResult {
   ok: boolean;
-  remote_deleted: number;
-  queued_for_retry: number;
+  vectors_deleted: number;
 }
 
 export async function deleteCollection(id: number): Promise<DocDeleteResult> {
@@ -237,10 +229,6 @@ export async function deleteSource(collectionId: number, sourceId: number): Prom
   return jsonFetch(`/api/docs/collections/${collectionId}/sources/${sourceId}`, {
     method: 'DELETE',
   });
-}
-
-export async function fetchPendingVectorTombstones(): Promise<{ pending: number }> {
-  return jsonFetch('/api/docs/vectors/pending');
 }
 
 export interface DocSourceHealth {
@@ -315,10 +303,6 @@ export async function retryCollectionEmbeddingsStream(
     headers: { accept: 'text/event-stream' },
   });
   return consumeEventStream(r, callbacks);
-}
-
-export async function sweepVectorTombstones(): Promise<{ drained: number; still_pending: number }> {
-  return jsonFetch('/api/docs/vectors/sweep', { method: 'POST' });
 }
 
 export async function addUrlSource(

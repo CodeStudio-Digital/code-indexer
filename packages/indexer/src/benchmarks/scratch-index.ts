@@ -9,13 +9,9 @@
  * byte-identical to what a real index would produce — the comparison reflects
  * production retrieval, not a benchmark-only encoding.
  *
- * Two deviations from the live path, both deliberate:
- *   1. The live index's embedding hashes would make `buildEmbeddingCandidates`
- *      skip already-embedded items. A proxy zeroes the hash *getters* so EVERY
- *      candidate is emitted into the fresh store.
- *   2. We never call `candidate.onCommit` — that would stamp the live index's
- *      hash table as if these vectors were in the real store. Read-only w.r.t.
- *      the project index; only the scratch file is written.
+ * The scratch build supplies an empty semantic-items ledger so every candidate
+ * is emitted without mutating the live generation. Only the scratch file is
+ * written.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,7 +19,6 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { SqliteVecVectorStore } from '@mcp/store/sqlite-vec-store.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
-import { safeJsonArray } from '@mcp/shared/utils/safe-json.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { buildEmbeddingCandidates, type CandidateFile } from '@mcp/indexer/indexer/indexer/embedding-candidates.js';
 
@@ -44,20 +39,6 @@ export interface ScratchResult {
   files: number;
 }
 
-/** Force buildEmbeddingCandidates to emit every candidate (live hashes would
- *  otherwise skip them) without mutating the live index. */
-function allCandidatesDb(db: CodeIndexDB): CodeIndexDB {
-  return new Proxy(db, {
-    get(target, prop, receiver) {
-      if (prop === 'getFileEmbeddingHashes' || prop === 'getSymbolEmbeddingHashes') {
-        return () => new Map();
-      }
-      const v = Reflect.get(target, prop, receiver);
-      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
-    },
-  }) as CodeIndexDB;
-}
-
 const WAVE_FILES = 100;
 const EMBED_CHUNK = 64;
 
@@ -68,8 +49,7 @@ export async function buildScratchVectorStore(
   opts: ScratchOpts,
 ): Promise<ScratchResult> {
   const store = new SqliteVecVectorStore({ path: opts.scratchPath });
-  const namespace = codeNamespace(project.name);
-  const proxy = allCandidatesDb(db);
+  const namespace = codeNamespace(project.id);
 
   // Select files: always include ground-truth targets, then fill to `sample`.
   const all = db.listFiles(project.id);
@@ -102,14 +82,28 @@ export async function buildScratchVectorStore(
         path: dbFile.path,
         fileId: dbFile.id,
         language: dbFile.language,
-        summary: dbFile.summary,
-        concepts: safeJsonArray<string>(dbFile.concepts),
-        symbols: syms.map((s) => ({ name: s.name, kind: s.kind, signature: s.signature, comment: s.comment, line: s.line })),
+        symbols: syms.map((s) => ({
+          id: s.id,
+          stable_id: s.stable_id,
+          name: s.name,
+          kind: s.kind,
+          signature: s.signature,
+          comment: s.comment,
+          line: s.line,
+          end_line: s.end_line,
+          parent: s.parent,
+        })),
         content,
       });
     }
 
-    const candidates = buildEmbeddingCandidates(proxy, project, files);
+    const candidates = buildEmbeddingCandidates(
+      db,
+      project,
+      files,
+      [],
+      embService.fingerprint?.() ?? 'embedding:unknown',
+    );
     for (let j = 0; j < candidates.length; j += EMBED_CHUNK) {
       const batch = candidates.slice(j, j + EMBED_CHUNK);
       const { vectors, tokens: t } = await embService.embed(batch.map((c) => c.text));

@@ -19,8 +19,10 @@
  * weighted fusion), so observability metrics line up.
  */
 import {
+  assertEmbeddingFingerprint,
   cosineSimilarity,
   LruCache,
+  resolveEmbeddingFingerprint,
   weightedSum,
 } from '@mcp/candidate-pipeline';
 import { ESSENTIAL_TOOL_NAMES, canonicalToolName } from './helpers.js';
@@ -29,7 +31,8 @@ import type { AgentDecisionTelemetry } from '../agents/decision-types.js';
 import type { JsonSchema } from '../core/tool.js';
 
 /**
- * Process-wide LRU for task embeddings — keyed by simpleHash(taskText).
+ * Process-wide LRU for task embeddings — keyed by model fingerprint and
+ * simpleHash(taskText).
  *
  * Rationale (A4 — Sprint 1): the thin path already caches TOOL embeddings
  * via `embeddingStore` (rarely change), but recomputes the TASK embedding
@@ -42,9 +45,8 @@ import type { JsonSchema } from '../core/tool.js';
  *   - Shadow A/B traffic that re-runs the same query
  *   - Re-evaluation after a tool result lands (taskText = last user message)
  *
- * Capacity 64 = generous for a single session. Different text → different
- * key → no false hits. No TTL: tool descriptions are stable; if a model
- * upgrade changes embedding semantics the cache is naturally bounded.
+ * Capacity 64 = generous for a single session. Different text or vector
+ * space → different key → no false hits.
  *
  * The cache is process-wide because the cost-of-recompute is identical
  * across sessions and the keys can't collide on different content
@@ -151,12 +153,14 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
 
   try {
     const startedAt = Date.now();
+    const embeddingFingerprint = resolveEmbeddingFingerprint(embed);
     // Cache hit/miss on the task embedding — the dominant cost of this path.
-    const taskKey = simpleHash(taskText);
+    const taskKey = JSON.stringify([embeddingFingerprint, simpleHash(taskText)]);
     let taskEmbedding = taskEmbeddingCache.get(taskKey);
     const taskEmbeddingCacheHit = taskEmbedding !== undefined;
     if (!taskEmbedding) {
       taskEmbedding = await embed(taskText);
+      assertEmbeddingFingerprint(embed, embeddingFingerprint);
       taskEmbeddingCache.set(taskKey, taskEmbedding);
     }
 
@@ -174,13 +178,15 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
     for (const tool of allTools) {
       const isEssential = ESSENTIAL_TOOL_NAMES.has(tool.name);
       const text = descriptionText(tool);
-      const cached = embeddingStore.get(tool.name, simpleHash(text));
+      assertEmbeddingFingerprint(embed, embeddingFingerprint);
+      const cached = embeddingStore.get(tool.name, simpleHash(text), embeddingFingerprint);
       let embedding: Float32Array;
       if (cached) {
         embedding = cached;
       } else {
         embedding = await embed(text);
-        embeddingStore.set(tool.name, simpleHash(text), embedding);
+        assertEmbeddingFingerprint(embed, embeddingFingerprint);
+        embeddingStore.set(tool.name, simpleHash(text), embeddingFingerprint, embedding);
       }
       const taskAffinity = cosineSimilarity(taskEmbedding, embedding);
       const freq = frequencyBoost(tool.name, events, now);

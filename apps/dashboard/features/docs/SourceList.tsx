@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileText, Folder, Globe, Loader2, PauseCircle, Play, RefreshCcw, StopCircle, Trash2 } from 'lucide-react';
+import { formatDateTime } from '../../lib/datetime.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm, useNotify } from '../../components/ui/dialog-provider.js';
@@ -44,10 +45,8 @@ export function SourceList({ collection, sources, onChanged }: Props) {
   // → enrich → embed) and replaces existing chunks. `kind: 'retry-embed'`
   // only fills the missing embeddings (preserves the 99% that already
   // worked — primary recovery path for the "stuck at N/M" scenario).
-  // `force: true` wipes existing `doc_chunk_vectors` + nulls
-  // `embedding_hash` BEFORE retrying — for the "badge says embedded
-  // but search returns 0" case (remote vector store silently rejected
-  // earlier upserts).
+  // `force: true` clears the accepted embedding state before rebuilding
+  // the source's entries in the local sqlite-vec documentation database.
   const [activeStream, setActiveStream] = useState<
     { sourceId: number; kind: 'reindex' | 'retry-embed'; force?: boolean } | null
   >(null);
@@ -77,19 +76,10 @@ export function SourceList({ collection, sources, onChanged }: Props) {
     try {
       const result = await deleteSource(collection.id, src.id);
       await onChanged();
-      // Only surface a follow-up notify when something interesting
-      // happened with the remote vector store. The "everything worked"
-      // case (or "nothing to delete") stays silent — the row disappearing
-      // from the table is already the confirmation.
-      if (result.queued_for_retry > 0) {
-        void notify({
-          title: t('sources.deletedQueuedTitle'),
-          description: t('sources.deletedQueuedDescription', { count: result.queued_for_retry }),
-        });
-      } else if (result.remote_deleted > 0) {
+      if (result.vectors_deleted > 0) {
         void notify({
           title: t('sources.deletedTitle'),
-          description: t('sources.deletedDescription', { count: result.remote_deleted }),
+          description: t('sources.deletedDescription', { count: result.vectors_deleted }),
         });
       }
     } catch (e) {
@@ -242,7 +232,7 @@ export function SourceList({ collection, sources, onChanged }: Props) {
                   {s.pages_accepted}/{s.page_count}
                 </td>
                 <td className="px-3 py-2 text-right align-top text-xs text-muted-foreground">
-                  {s.last_indexed_at ? new Date(s.last_indexed_at).toLocaleString() : '—'}
+                  {formatDateTime(s.last_indexed_at, undefined, undefined, '—')}
                 </td>
                 <td className="px-3 py-2 text-right align-top">
                   <div className="flex items-center justify-end gap-1">
@@ -344,8 +334,8 @@ function prettyUri(uri: string): string {
 
 /**
  * Post-completion health badge: green when every persisted chunk has an
- * embedding registered, amber when there's drift (vector store crash,
- * embedder hung partway, manual deletion in the remote store). Hidden
+ * embedding registered, amber when there's drift (local sqlite-vec write
+ * failed or the embedder stopped partway). Hidden
  * while the source is still active (the live progress bar handles that).
  *
  * In amber state, also exposes a "Re-embedar" action that opens the

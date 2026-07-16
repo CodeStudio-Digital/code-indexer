@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, ChevronRight, Crown, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
+import { parseDbDate } from '../../lib/datetime.js';
 import { Button } from '../../components/ui/button.js';
 import { useApi } from '../../hooks/useApi.js';
 import { Markdown } from '../chat/messages/Markdown.js';
@@ -271,11 +272,10 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-/** SQLite timestamps use space separator ("2026-04-10 17:41:22"), not ISO "T".
- *  new Date() fails in strict browsers without the T. */
+/** SQLite timestamps are UTC without a zone ("2026-04-10 17:41:22");
+ *  `parseDbDate` normalizes them before rendering in the local timezone. */
 function formatTime(ts: string | null | undefined): string {
   if (!ts) return '—';
-  const iso = ts.includes('T') ? ts : ts.replace(' ', 'T');
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? ts.slice(11, 19) : d.toLocaleTimeString();
+  const d = parseDbDate(ts);
+  return d ? d.toLocaleTimeString() : ts.slice(11, 19);
 }

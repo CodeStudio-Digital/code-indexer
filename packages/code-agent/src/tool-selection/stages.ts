@@ -17,7 +17,9 @@ import type {
   SelectResult,
 } from '@mcp/candidate-pipeline';
 import {
+  assertEmbeddingFingerprint,
   cosineSimilarity,
+  resolveEmbeddingFingerprint,
   weightedSum,
   recencyDecay,
   batchFrequencyBoost,
@@ -32,20 +34,24 @@ import type { CoderTool } from '../core/tool.js';
 
 export interface EmbeddingFn {
   (text: string): Promise<Float32Array>;
+  readonly fingerprint?: () => string;
 }
 
 export class TaskEmbeddingHydrator implements QueryHydrator<ToolSelectionQuery> {
   readonly name = 'task_embedding';
   constructor(private embed: EmbeddingFn) {}
   enable(query: ToolSelectionQuery): boolean {
-    return query.taskText.trim().length > 0 && !query.taskEmbedding;
+    return query.taskText.trim().length > 0 && (!query.taskEmbedding || !query.embeddingFingerprint);
   }
   async hydrate(query: ToolSelectionQuery): Promise<Partial<ToolSelectionQuery>> {
+    const embeddingFingerprint = resolveEmbeddingFingerprint(this.embed);
     const taskEmbedding = await this.embed(query.taskText);
-    return { taskEmbedding };
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+    return { taskEmbedding, embeddingFingerprint };
   }
   update(query: ToolSelectionQuery, partial: Partial<ToolSelectionQuery>): void {
     if (partial.taskEmbedding) query.taskEmbedding = partial.taskEmbedding;
+    if (partial.embeddingFingerprint) query.embeddingFingerprint = partial.embeddingFingerprint;
   }
 }
 
@@ -68,8 +74,8 @@ export class ToolRegistrySource implements Source<ToolSelectionQuery, ToolCandid
 
 export interface ToolEmbeddingStore {
   /** Returns cached embedding if present, undefined otherwise. */
-  get(toolName: string, descriptionHash: string): Float32Array | undefined;
-  set(toolName: string, descriptionHash: string, embedding: Float32Array): void;
+  get(toolName: string, descriptionHash: string, embeddingFingerprint: string): Float32Array | undefined;
+  set(toolName: string, descriptionHash: string, embeddingFingerprint: string, embedding: Float32Array): void;
 }
 
 export class ToolEmbeddingHydrator implements Hydrator<ToolSelectionQuery, ToolCandidate> {
@@ -81,19 +87,22 @@ export class ToolEmbeddingHydrator implements Hydrator<ToolSelectionQuery, ToolC
   ) {}
   enable(): boolean { return true; }
   async hydrate(
-    _query: ToolSelectionQuery,
+    query: ToolSelectionQuery,
     candidates: readonly ToolCandidate[],
   ): Promise<CandidateResult<ToolCandidate>[]> {
+    const embeddingFingerprint = query.embeddingFingerprint ?? resolveEmbeddingFingerprint(this.embed);
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
     return Promise.all(
       candidates.map(async (c): Promise<CandidateResult<ToolCandidate>> => {
         const hash = this.hashFn(c.descriptionText);
-        const cached = this.store.get(c.name, hash);
+        const cached = this.store.get(c.name, hash, embeddingFingerprint);
         if (cached) {
           return { ok: true, candidate: { ...c, embedding: cached } };
         }
         try {
           const embedding = await this.embed(c.descriptionText);
-          this.store.set(c.name, hash, embedding);
+          assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+          this.store.set(c.name, hash, embeddingFingerprint, embedding);
           return { ok: true, candidate: { ...c, embedding } };
         } catch (e) {
           return { ok: false, candidateId: c.candidateId, error: (e as Error).message };

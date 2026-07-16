@@ -18,6 +18,7 @@ import {
 import { Panel, PanelGroup, type ImperativePanelHandle } from 'react-resizable-panels';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
+import { formatDay } from '../../lib/datetime.js';
 import { RailButton, RailContainer } from '../../components/chrome/index.js';
 import {
   WorkbenchPanelHeader,
@@ -410,7 +411,7 @@ function CompanyHome({
                       <span className="block truncate text-[11px] font-medium text-foreground">{session.name}</span>
                       <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                         <StatusBadge status={session.status} />
-                        {new Date(session.created_at).toLocaleDateString()}
+                        {formatDay(session.created_at)}
                       </span>
                     </span>
                     <ArrowRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
@@ -602,7 +603,7 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
       <div className="mt-1 flex items-center gap-1.5 pl-8">
         <StatusBadge status={s.status} />
         <span className="text-[10px] text-muted-foreground">
-          {new Date(s.created_at).toLocaleDateString()}
+          {formatDay(s.created_at)}
         </span>
       </div>
       {Menu}

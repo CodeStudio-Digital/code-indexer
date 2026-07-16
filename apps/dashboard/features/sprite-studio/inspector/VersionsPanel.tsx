@@ -7,6 +7,7 @@
  */
 import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatDay } from '../../../lib/datetime.js';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { History } from 'lucide-react';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
@@ -120,7 +121,7 @@ export function VersionsPanel({
                   {`${vLabel(active)} · ${active.width}×${active.height} · ${t(`source.${active.source}`)}`}
                 </span>
                 <span className="shrink-0">
-                  {active.createdAt ? new Date(active.createdAt).toLocaleDateString() : ''}
+                  {formatDay(active.createdAt)}
                 </span>
               </div>
             </div>

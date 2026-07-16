@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { History, ImageOff } from 'lucide-react';
 import { thumbnailUrl, type BuilderCheckpoint } from './useCheckpoints.js';
+import { parseDbDate } from '../../../lib/datetime.js';
 
 interface CheckpointCardProps {
   projectId: number;
@@ -21,7 +22,7 @@ const KIND_BADGE: Record<BuilderCheckpoint['kind'], string> = {
 export function CheckpointCard({ projectId, checkpoint, busy, onRestore, onViewDiff }: CheckpointCardProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const url = imgFailed ? null : thumbnailUrl(projectId, checkpoint);
-  const time = new Date(checkpoint.created_at.endsWith('Z') ? checkpoint.created_at : `${checkpoint.created_at}Z`);
+  const time = parseDbDate(checkpoint.created_at);
 
   return (
     <div className="w-40 shrink-0 rounded-md border bg-card overflow-hidden">
@@ -43,8 +44,8 @@ export function CheckpointCard({ projectId, checkpoint, busy, onRestore, onViewD
           <span className={`rounded px-1 text-[9px] uppercase ${KIND_BADGE[checkpoint.kind]}`}>
             {checkpoint.kind}
           </span>
-          <span className="text-[9px] text-muted-foreground ml-auto" title={time.toLocaleString()}>
-            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          <span className="text-[9px] text-muted-foreground ml-auto" title={time?.toLocaleString()}>
+            {time ? time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
           </span>
         </div>
         <div className="text-[10px] leading-tight line-clamp-2 break-words" title={checkpoint.label}>

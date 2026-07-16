@@ -8,9 +8,7 @@ export function register(program: Command): void {
     if (!project) { console.error('Project not found'); process.exit(1); }
     const file = db.getFile(project.id, filePath);
     if (!file) { console.error('File not found'); process.exit(1); }
-    console.log(`Path: ${file.path}\nLanguage: ${file.language}\nLines: ${file.line_count}\nComplexity: ${file.complexity}`);
-    console.log(`Summary: ${file.summary}`);
-    console.log(`Concepts: ${JSON.parse(file.concepts).join(', ')}`);
+    console.log(`Path: ${file.path}\nLanguage: ${file.language}\nLines: ${file.line_count}\nBytes: ${file.size}`);
     const symbols = db.getSymbolsByFile(project.id, filePath);
     if (symbols.length > 0) {
       console.log(`\nSymbols (${symbols.length}):`);
@@ -42,15 +40,6 @@ export function register(program: Command): void {
     db.close();
   });
 
-  program.command('concept <project> <concept>').description('Find files by concept').action((projectName: string, concept: string) => {
-    const db = getDB();
-    const project = db.getProjectByName(projectName);
-    if (!project) { console.error('Project not found'); process.exit(1); }
-    const files = db.getFilesByConcept(project.id, concept);
-    for (const f of files) { console.log(`  ${f.path} — ${f.summary.slice(0, 80)}`); }
-    db.close();
-  });
-
   program.command('stats <project>').description('Show project stats').action((projectName: string) => {
     const db = getDB();
     const project = db.getProjectByName(projectName);
@@ -66,7 +55,7 @@ export function register(program: Command): void {
     if (!project) { console.error('Project not found'); process.exit(1); }
     const runs = db.getRuns(project.id);
     for (const r of runs) {
-      console.log(`  #${r.id} ${r.status} | ${r.started_at} | ${r.indexed_files}/${r.total_files} files | $${r.estimated_cost_usd.toFixed(4)}`);
+      console.log(`  #${r.id} structural ${r.status} | ${r.started_at} | ${r.indexed_files}/${r.total_files} files | errors ${r.error_count}`);
     }
     db.close();
   });

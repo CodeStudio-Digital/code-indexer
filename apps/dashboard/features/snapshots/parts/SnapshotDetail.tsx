@@ -13,6 +13,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Copy, Pencil, Star, Trash2 } from 'lucide-react';
+import { formatDateTime } from '../../../lib/datetime.js';
 import { Button } from '../../../components/ui/button.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../components/ui/tabs.js';
 import { useApi } from '../../../hooks/useApi.js';
@@ -73,7 +74,7 @@ export function SnapshotDetail({ snapshot, onEdit, onDelete, onTogglePin }: Snap
         </div>
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
           <span className="truncate">
-            {new Date(snapshot.created_at).toLocaleString()} · {snapshot.created_by}
+            {formatDateTime(snapshot.created_at)} · {snapshot.created_by}
             {snapshot.source ? ` · ${snapshot.source}` : ''}
             {typeof snapshot.importance === 'number'
               ? ` · imp ${snapshot.importance.toFixed(2)}`
@@ -198,7 +199,7 @@ function HistoryList({ snapshotId }: { snapshotId: number }) {
           <summary className="cursor-pointer px-2 py-1.5 text-[11px] hover:bg-muted/60">
             <span className="font-medium">v{v.version}</span>
             <span className="text-muted-foreground ml-2">
-              {new Date(v.updated_at).toLocaleString()} · {v.updated_by}
+              {formatDateTime(v.updated_at)} · {v.updated_by}
             </span>
           </summary>
           <div className="px-2 py-2 border-t text-[11px] font-mono whitespace-pre-wrap break-words">

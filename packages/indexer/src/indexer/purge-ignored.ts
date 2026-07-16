@@ -5,15 +5,15 @@ import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { buildScannerIgnore } from './scanner-ignore.js';
 import { isHardExcluded } from './mapper.js';
 import type { LshIndexingSink } from './lsh-indexing-sink.js';
+import { semanticItemKeysForIndexedPaths } from './indexer/embedding-candidates.js';
 
 export interface PurgeIgnoredIndexedFilesResult {
   ok: true;
   matched_files: number;
   local_deleted: number;
   vectors_known: number;
-  vectors_deleted_remote: number;
-  tombstoned: number;
-  remote_error: string | null;
+  vectors_deleted: number;
+  vector_error: string | null;
   file_count: number;
   symbol_count: number;
 }
@@ -29,37 +29,29 @@ export async function purgeIgnoredIndexedFiles(
 
   const ig = buildScannerIgnore(project.root_path, projectIndexIgnorePatterns(project), isHardExcluded);
   const matched = db.listFiles(projectId).filter((file) => ig.ignores(file.path));
-  const vectorIds: string[] = [];
+  const itemKeys = semanticItemKeysForIndexedPaths(db, projectId, matched.map((file) => file.path));
+  const itemRows = vectorStore
+    ? await vectorStore.listItems?.(codeNamespace(project.id), itemKeys) ?? []
+    : [];
+  const vectorIds = itemRows.flatMap((item) => item.vectorId ? [item.vectorId] : []);
   let localDeleted = 0;
 
   for (const file of matched) {
-    vectorIds.push(...db.deleteVectorIdsByFile(projectId, file.path));
     db.deleteFile(projectId, file.path);
     localDeleted++;
   }
 
-  let vectorsDeletedRemote = 0;
-  let tombstoned = 0;
-  let remoteError: string | null = null;
-  if (vectorIds.length > 0) {
-    if (vectorStore) {
+  let vectorsDeleted = 0;
+  let vectorError: string | null = null;
+  if (itemKeys.length > 0) {
+    if (vectorStore?.deleteByItemKeys) {
       try {
-        vectorsDeletedRemote = await vectorStore.deleteByIds(vectorIds, codeNamespace(project.name));
+        vectorsDeleted = await vectorStore.deleteByItemKeys(itemKeys, codeNamespace(project.id));
       } catch (err) {
-        remoteError = err instanceof Error ? err.message : String(err);
-        tombstoned = db.enqueuePendingVectorDeletes(vectorIds.map((vector_id) => ({
-          vector_id,
-          project_name: project.name,
-          error: remoteError,
-        })));
+        vectorError = err instanceof Error ? err.message : String(err);
       }
     } else {
-      remoteError = 'vector store unavailable';
-      tombstoned = db.enqueuePendingVectorDeletes(vectorIds.map((vector_id) => ({
-        vector_id,
-        project_name: project.name,
-        error: remoteError,
-      })));
+      vectorError = 'vector store unavailable';
     }
     try { await lshSink?.afterDelete?.(projectId, vectorIds); }
     catch { /* LSH is best-effort; stale buckets only cost recall. */ }
@@ -75,10 +67,9 @@ export async function purgeIgnoredIndexedFiles(
     ok: true,
     matched_files: matched.length,
     local_deleted: localDeleted,
-    vectors_known: vectorIds.length,
-    vectors_deleted_remote: vectorsDeletedRemote,
-    tombstoned,
-    remote_error: remoteError,
+    vectors_known: itemRows.length,
+    vectors_deleted: vectorsDeleted,
+    vector_error: vectorError,
     file_count: stats.file_count,
     symbol_count: stats.symbol_count,
   };

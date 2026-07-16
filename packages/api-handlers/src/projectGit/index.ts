@@ -205,6 +205,23 @@ function runGit(
   });
 }
 
+/**
+ * Keep large path batches off argv (especially the short Windows command line)
+ * and preserve unusual UTF-8 names without quoting ambiguity.
+ */
+function runGitPathspec(
+  cwd: string,
+  args: string[],
+  paths: readonly string[],
+  options: Omit<GitRunOptions, 'stdin'> = {},
+): Promise<GitResult> {
+  return runGit(
+    cwd,
+    ['--literal-pathspecs', ...args, '--pathspec-from-file=-', '--pathspec-file-nul'],
+    { ...options, stdin: `${paths.join('\0')}\0` },
+  );
+}
+
 function interpretStatusChar(c: string): GitStatusFile['state'] | null {
   switch (c) {
     case 'M': return 'modified';
@@ -1182,7 +1199,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         ? new Map([[await resolveCwd(projectId, repoPath), paths]])
         : await groupPathsByRepo(projectId, paths);
       for (const [cwd, gitPaths] of groups) {
-        const r = await runGit(cwd, ['add', '--', ...gitPaths]);
+        const r = await runGitPathspec(cwd, ['add'], gitPaths, { profile: 'mutation' });
         if (r.code !== 0) throw new ApiError('git_stage_failed', 500, r.stderr.trim() || 'git add failed');
       }
       return { ok: true as const };
@@ -1196,8 +1213,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       for (const [cwd, gitPaths] of groups) {
         const hasHead = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { profile: 'read' });
         const r = hasHead.code === 0
-          ? await runGit(cwd, ['restore', '--staged', '--', ...gitPaths], { profile: 'mutation' })
-          : await runGit(cwd, ['rm', '--cached', '--ignore-unmatch', '--', ...gitPaths], { profile: 'mutation' });
+          ? await runGitPathspec(cwd, ['restore', '--staged'], gitPaths, { profile: 'mutation' })
+          : await runGitPathspec(cwd, ['rm', '--cached', '--ignore-unmatch'], gitPaths, { profile: 'mutation' });
         if (r.code !== 0) throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
       }
       return { ok: true as const };
@@ -1209,10 +1226,13 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         ? new Map([[await resolveCwd(projectId, repoPath), paths]])
         : await groupPathsByRepo(projectId, paths);
       for (const [cwd, gitPaths] of groups) {
-        // Classify the complete batch. Checking only its first item can turn a
-        // mixed tracked/untracked request into a recursive delete of tracked
-        // content (or make checkout reject every untracked item).
-        const trackedResult = await runGit(cwd, ['ls-files', '-z', '--', ...gitPaths], {
+        // Classify the complete batch. `ls-files` has no pathspec-from-file
+        // support, so use literal argv for small requests and scan the index
+        // once for batches that could approach the Windows command-line limit.
+        const pathArgBytes = gitPaths.reduce((bytes, gitPath) => bytes + Buffer.byteLength(gitPath, 'utf8') + 1, 0);
+        const trackedResult = await runGit(cwd, pathArgBytes <= 16 * 1024
+          ? ['--literal-pathspecs', 'ls-files', '-z', '--', ...gitPaths]
+          : ['ls-files', '-z'], {
           profile: 'read',
           maxOutputBytes: GIT_LIST_MAX_OUTPUT_BYTES,
         });
@@ -1231,16 +1251,23 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         const untrackedPaths = gitPaths.filter((gitPath) => !isTracked(gitPath));
 
         if (trackedPaths.length > 0) {
-          const r = await runGit(cwd, ['checkout', '--', ...trackedPaths], { profile: 'mutation' });
-          if (r.code !== 0) throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git checkout failed');
+          const r = await runGitPathspec(cwd, ['restore'], trackedPaths, { profile: 'mutation' });
+          if (r.code !== 0) throw new ApiError('git_discard_failed', 500, r.stderr.trim() || 'git restore failed');
         }
         // The Changes UI labels untracked discard as Delete. Delete only after
         // the shared validator proved every path is relative and non-escaping.
-        for (const gitPath of untrackedPaths) {
+        const absoluteUntrackedPaths = untrackedPaths.map((gitPath) => {
           const absolute = path.resolve(cwd, gitPath);
           const relative = path.relative(cwd, absolute);
           if (relative.startsWith('..') || path.isAbsolute(relative)) throw new ApiError('git_discard_escape', 400, 'discard path escapes repository');
-          await rm(absolute, { recursive: true, force: true });
+          return absolute;
+        });
+        // A small bounded fan-out avoids deleting hundreds of new files one by
+        // one without overwhelming slower disks.
+        for (let offset = 0; offset < absoluteUntrackedPaths.length; offset += 32) {
+          await Promise.all(absoluteUntrackedPaths.slice(offset, offset + 32).map((absolute) => (
+            rm(absolute, { recursive: true, force: true })
+          )));
         }
       }
       return { ok: true as const };

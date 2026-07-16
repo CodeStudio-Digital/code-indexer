@@ -66,6 +66,11 @@ import * as subagentRecommendations from './store/subagent-recommendations.js';
 import * as chapters from './store/chapters.js';
 import * as compactionAttempts from './store/compaction-attempts.js';
 import * as sessionImports from './store/imports.js';
+import type {
+  SemanticMutation,
+  SemanticMutationFence,
+  SemanticMutationSink,
+} from '@mcp/services/semantic-mutation-sink.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -77,8 +82,10 @@ export class SessionStore {
    *  SHARED handle is owned by CodeIndexDB — closing it here would yank the
    *  connection out from under every sibling store. */
   private readonly ownsHandle: boolean;
+  private readonly semanticMutationSink: SemanticMutationSink | null;
 
-  constructor(dbPathOrHandle: string | DB) {
+  constructor(dbPathOrHandle: string | DB, semanticMutationSink: SemanticMutationSink | null = null) {
+    this.semanticMutationSink = semanticMutationSink;
     if (typeof dbPathOrHandle === 'string') {
       this.db = new Database(dbPathOrHandle);
       this.db.pragma('journal_mode = WAL');
@@ -264,10 +271,50 @@ export class SessionStore {
   setSessionMemoryPinned(sessionId: number, id: number, pinned: boolean): boolean { return sessionDrive.setMemoryPinned(this.db, sessionId, id, pinned); }
   deleteSessionMemory(sessionId: number, id: number): boolean { return sessionDrive.deleteMemory(this.db, sessionId, id); }
   copySessionMemory(fromSessionId: number, toSessionId: number): number { return sessionDrive.copyMemory(this.db, fromSessionId, toSessionId); }
-  recordInvestigation(input: sessionDrive.RecordInvestigationInput): sessionDrive.InvestigationRow { return sessionDrive.recordInvestigation(this.db, input); }
-  setInvestigationEmbedding(id: number, embedding: Float32Array): void { sessionDrive.setInvestigationEmbedding(this.db, id, embedding); }
+  recordInvestigation(input: sessionDrive.RecordInvestigationInput): sessionDrive.InvestigationRow {
+    const projectId = sessionDrive.investigationProjectId(this.db, input.session_id);
+    if (projectId == null || !this.semanticMutationSink) {
+      return sessionDrive.recordInvestigation(this.db, input);
+    }
+    const mutation: SemanticMutation = {
+      namespace: `memory:project:p${projectId}`,
+      // INSERT chooses the identity. Wildcard coverage keeps activation closed
+      // until the new row is visible and a full source reconciliation drains it.
+      itemKeys: ['*'],
+      operation: 'upsert',
+    };
+    const canFence = typeof this.semanticMutationSink.beginMutation === 'function'
+      && typeof this.semanticMutationSink.settleMutation === 'function';
+    let fence: SemanticMutationFence | null = null;
+    if (canFence) fence = this.semanticMutationSink.beginMutation!(mutation);
+    let row: sessionDrive.InvestigationRow;
+    try {
+      row = sessionDrive.recordInvestigation(this.db, input);
+    } catch (error) {
+      if (fence) this.semanticMutationSink.settleMutation!(fence, error);
+      throw error;
+    }
+    if (fence) this.semanticMutationSink.settleMutation!(fence);
+    else if (!canFence) {
+      this.semanticMutationSink.noteMutation({
+        ...mutation,
+        itemKeys: [`investigation:${row.id}`],
+      });
+    }
+    return row;
+  }
   recallInvestigations(sessionId: number, query: string, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigations(this.db, sessionId, query, limit); }
-  recallInvestigationsByVector(sessionId: number, queryVec: Float32Array, limit?: number): sessionDrive.InvestigationRow[] { return sessionDrive.recallInvestigationsByVector(this.db, sessionId, queryVec, limit); }
+  recallInvestigationsByIds(
+    sessionId: number,
+    ids: readonly number[],
+    limit?: number,
+  ): sessionDrive.InvestigationRow[] {
+    return sessionDrive.recallInvestigationsByIds(this.db, sessionId, ids, limit);
+  }
+  listInvestigationsForSemanticIndex(projectId: number): sessionDrive.InvestigationRow[] {
+    return sessionDrive.listInvestigationsForSemanticIndex(this.db, projectId);
+  }
+  investigationProjectId(sessionId: number): number | null { return sessionDrive.investigationProjectId(this.db, sessionId); }
   getDriveAggregate(sessionId: number): sessionDrive.DriveAggregate { return sessionDrive.getDriveAggregate(this.db, sessionId); }
   getDriveInjectionPayload(sessionId: number): sessionDrive.DriveInjectionPayload { return sessionDrive.getDriveInjectionPayload(this.db, sessionId); }
   getSessionStateData(sessionId: number): sessionDrive.SessionStateData { return sessionDrive.getSessionStateData(this.db, sessionId); }

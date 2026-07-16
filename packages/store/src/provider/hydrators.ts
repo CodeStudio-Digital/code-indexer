@@ -1,15 +1,9 @@
 import type {
   AuthMode,
-  EmbeddingConfigRow,
-  EmbeddingKind,
   OAuthTokenRow,
   ProviderConfig,
   ProviderKind,
   ProviderModel,
-  RerankerConfigRow,
-  RerankerKind,
-  VectorStoreConfigRow,
-  VectorStoreKind,
 } from './types.js';
 
 export interface ProviderConfigRaw {
@@ -63,36 +57,6 @@ export interface OAuthTokenRaw {
   expires_at: number | null;
   scope: string | null;
   extra: string | null;
-  updated_at: string;
-}
-
-export interface EmbeddingConfigRaw {
-  id: string;
-  kind: string;
-  name: string;
-  enabled: number;
-  is_default: number;
-  config: string;
-  updated_at: string;
-}
-
-export interface VectorStoreConfigRaw {
-  id: string;
-  kind: string;
-  name: string;
-  enabled: number;
-  is_default: number;
-  config: string;
-  updated_at: string;
-}
-
-export interface RerankerConfigRaw {
-  id: string;
-  kind: string;
-  name: string;
-  enabled: number;
-  is_default: number;
-  config: string;
   updated_at: string;
 }
 
@@ -171,42 +135,6 @@ export function hydrateOAuth(r: OAuthTokenRaw): OAuthTokenRow {
     expires_at: r.expires_at,
     scope: r.scope,
     extra: parseJson<Record<string, unknown>>(r.extra, {}),
-    updated_at: r.updated_at,
-  };
-}
-
-export function hydrateEmbedding(r: EmbeddingConfigRaw): EmbeddingConfigRow {
-  return {
-    id: r.id,
-    kind: r.kind as EmbeddingKind,
-    name: r.name,
-    enabled: !!r.enabled,
-    is_default: !!r.is_default,
-    config: parseJson<Record<string, unknown>>(r.config, {}),
-    updated_at: r.updated_at,
-  };
-}
-
-export function hydrateVectorStore(r: VectorStoreConfigRaw): VectorStoreConfigRow {
-  return {
-    id: r.id,
-    kind: r.kind as VectorStoreKind,
-    name: r.name,
-    enabled: !!r.enabled,
-    is_default: !!r.is_default,
-    config: parseJson<Record<string, unknown>>(r.config, {}),
-    updated_at: r.updated_at,
-  };
-}
-
-export function hydrateReranker(r: RerankerConfigRaw): RerankerConfigRow {
-  return {
-    id: r.id,
-    kind: r.kind as RerankerKind,
-    name: r.name,
-    enabled: !!r.enabled,
-    is_default: !!r.is_default,
-    config: parseJson<Record<string, unknown>>(r.config, {}),
     updated_at: r.updated_at,
   };
 }

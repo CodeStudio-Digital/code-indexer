@@ -12,6 +12,7 @@ import {
   mergeDBCapabilities,
   resolveContextWindowWithSource,
 } from '@mcp/code-agent/providers/capabilities.js';
+import { SUBAGENT_PROFILE_IDS } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 
 export function modelsRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -224,13 +225,36 @@ export function modelsRouter(store: ProviderStore): Hono {
   app.patch('/providers/:id/subagent-model', async (c) => {
     const id = c.req.param('id');
     if (!store.getProvider(id)) return c.json({ error: 'not found' }, 404);
-    const body = await c.req.json<{ provider_id?: string | null; model_id?: string | null }>();
+    const body = await c.req.json<{
+      provider_id?: string | null;
+      model_id?: string | null;
+      profile?: string | null;
+      effort?: string | null;
+    }>();
+    const profile = body.profile;
+    if (profile != null && profile !== '' && !SUBAGENT_PROFILE_IDS.some((p) => p === profile)) {
+      return c.json({ error: `unknown subagent profile: ${profile}` }, 400);
+    }
+    // Effort update path — orthogonal to provider/model (reasoning-effort override).
+    if ('effort' in body) {
+      const effort = body.effort ?? null;
+      if (profile) store.setSubagentProfileEffort(id, profile, effort);
+      else store.setSubagentEffort(id, effort);
+      return c.json({ ok: true });
+    }
+    // Provider/model target path.
     const targetProviderId = body.provider_id && body.provider_id.length > 0 ? body.provider_id : id;
     const targetProvider = store.getProvider(targetProviderId);
     if (!targetProvider || !targetProvider.enabled || !targetProvider.use_for_coder) {
       return c.json({ error: 'subagent provider must be an enabled coder provider' }, 400);
     }
-    store.setSubagentTarget(id, targetProviderId, body.model_id ?? null);
+    if (profile) {
+      // Per-profile override: a null provider_id means "use default" (inherit
+      // the single control), so store it as-is rather than the coerced self.
+      store.setSubagentProfileTarget(id, profile, body.provider_id ?? null, body.model_id ?? null);
+    } else {
+      store.setSubagentTarget(id, targetProviderId, body.model_id ?? null);
+    }
     return c.json({ ok: true });
   });
 

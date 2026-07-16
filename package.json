@@ -52,6 +52,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@aws-sdk/client-bedrock": "^3.1029.0",
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1087.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1029.0",
     "@google/genai": "^1.48.0",
     "@google/generative-ai": "^0.21.0",

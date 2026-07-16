@@ -1,15 +1,11 @@
 import type { SearchDiagnostics } from '@mcp/indexer/search/hybrid.js';
 
-/** Subset of EmbeddingCoverage the trailer needs (lazy — only on zero/degraded results). */
+/** Structural + generation coverage needed only for zero/degraded results. */
 export interface CoverageCounts {
   files_total: number;
-  files_embedded: number;
-  /**
-   * Files whose semantic layer (LLM summary/embeddings) lags current content
-   * — structurally re-indexed by the watcher/auto-index but not yet seen by
-   * a full run. Optional: older callers don't compute it.
-   */
-  files_semantic_stale?: number;
+  semantic_expected: number;
+  semantic_indexed: number;
+  pending_delta_items?: number;
 }
 
 /**
@@ -17,9 +13,12 @@ export interface CoverageCounts {
  * agent can act on. Null when the vector path looked healthy.
  */
 export function vectorIssue(diag: SearchDiagnostics): string | null {
+  // Preserve the concrete owner/worker error even when availability is false;
+  // callers should not have to claim a backend is available merely to surface
+  // why it could not be reached.
+  if (diag.vectorError) return `vector_error: ${diag.vectorError}`;
   if (!diag.vectorAvailable) return 'vector_store_unavailable';
   if (!diag.embeddingAvailable) return 'embedding_unavailable';
-  if (diag.vectorError) return `vector_error: ${diag.vectorError}`;
   return null;
 }
 
@@ -60,22 +59,18 @@ export function renderZeroResultDiagnostics(
     lines.push(
       'This project has NO index yet (not even the structural layer) — zero results are meaningless. Open the project to trigger the auto structural index, or run indexing manually; grep_code disk fallback works meanwhile.',
     );
-  } else if (cov && cov.files_total > 0 && cov.files_embedded === 0) {
-    // Structural-only ("dumb mode"): symbols + FTS + content index work,
-    // semantic summaries/embeddings don't exist yet.
+  } else if (cov && cov.files_total > 0 && cov.semantic_indexed === 0) {
     lines.push(
-      'Index is STRUCTURAL-ONLY (symbols/FTS/content — no LLM summaries, no embeddings yet). Prefer exact identifiers or grep_code; semantic absence is NOT evidence of absence.',
+      'Index is STRUCTURAL-ONLY (symbols/FTS/content); no active semantic vectors are available yet. Prefer exact identifiers or grep_code; semantic absence is NOT evidence of absence.',
     );
-  } else if (cov && cov.files_total > 0 && cov.files_embedded < cov.files_total) {
-    // Tier-coverage honesty: under the aggressive profile, on_demand files
-    // (tests/docs/migrations/fixtures) are indexed for FTS but never embedded.
+  } else if (cov && cov.semantic_expected > 0 && cov.semantic_indexed < cov.semantic_expected) {
     lines.push(
-      `Embeddings cover ${cov.files_embedded}/${cov.files_total} indexed files — semantic search cannot see the rest (e.g. on_demand-tier files under the aggressive profile); grep_code covers them.`,
+      `Semantic generation coverage is ${cov.semantic_indexed}/${cov.semantic_expected} items; grep_code and structural search still cover the project while backfill continues.`,
     );
   }
-  if (cov?.files_semantic_stale && cov.files_semantic_stale > 0) {
+  if (cov?.pending_delta_items && cov.pending_delta_items > 0) {
     lines.push(
-      `${cov.files_semantic_stale} file(s) changed since the last semantic pass (summaries/embeddings stale there) — structural data (symbols/grep) is current.`,
+      `${cov.pending_delta_items} semantic delta item(s) are pending; structural data (symbols/grep) remains current.`,
     );
   }
   return lines.join('\n');

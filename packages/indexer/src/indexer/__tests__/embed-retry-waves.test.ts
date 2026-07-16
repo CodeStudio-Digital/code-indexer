@@ -4,15 +4,20 @@
  * Requires the Node-ABI better-sqlite3 build.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { makeHarness, smallFileFixture, type Harness } from './index-agent-harness.js';
+import {
+  makeStructuralHarness,
+  smallFileFixture,
+  type StructuralHarness,
+} from './structural-test-harness.js';
 import { retryEmbeddings } from '../indexer/embed-retry.js';
 import { NullLshIndexingSink } from '../lsh-indexing-sink.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 
-const harnesses: Harness[] = [];
-const make = (): Harness => { const h = makeHarness(); harnesses.push(h); return h; };
+const harnesses: StructuralHarness[] = [];
+const make = (): StructuralHarness => { const h = makeStructuralHarness(); harnesses.push(h); return h; };
 afterEach(() => { for (const h of harnesses.splice(0)) h.dispose(); });
 
-function deps(h: Harness) {
+function deps(h: StructuralHarness) {
   return {
     db: h.db, embeddingService: h.embedding, vectorStore: h.vectorStore,
     costTracker: { record: () => 0 } as never, lshSink: new NullLshIndexingSink(),
@@ -23,8 +28,8 @@ describe('retryEmbeddings in waves', () => {
   it('progress is file-based, monotonic, and ends at 100%', async () => {
     const h = make();
     for (let i = 0; i < 7; i++) h.writeFile(`f${i}.ts`, smallFileFixture(`fn${i}`));
-    await h.agent.indexProject(h.projectRoot);
-    h.db.clearEmbeddingHashes(h.projectId); // force a full re-embed
+    await h.indexStructural();
+    h.vectorStore.clearItems(codeNamespace(h.projectId)); // force a full ledger reconciliation
 
     const seen: Array<{ current: number; total: number; percent: number }> = [];
     const res = await retryEmbeddings(deps(h), h.projectRoot, {
@@ -47,8 +52,8 @@ describe('retryEmbeddings in waves', () => {
   it('a failing wave is counted and the rest still embeds', async () => {
     const h = make();
     for (let i = 0; i < 6; i++) h.writeFile(`f${i}.ts`, smallFileFixture(`fn${i}`));
-    await h.agent.indexProject(h.projectRoot);
-    h.db.clearEmbeddingHashes(h.projectId);
+    await h.indexStructural();
+    h.vectorStore.clearItems(codeNamespace(h.projectId));
     h.embedding.calls = 0;
     h.embedding.failOn = (idx) => idx === 0; // first embed() call (wave 1) dies
 
@@ -61,6 +66,23 @@ describe('retryEmbeddings in waves', () => {
     const second = await retryEmbeddings(deps(h), h.projectRoot, { waveFiles: 2 });
     expect(second.failedBatches).toBe(0);
     expect(second.embedded).toBeGreaterThan(0);
+  });
+
+  it('reads only the project-relative paths supplied by an incremental catch-up', async () => {
+    const h = make();
+    for (let i = 0; i < 4; i++) h.writeFile(`f${i}.ts`, smallFileFixture(`fn${i}`));
+    await h.indexStructural();
+    h.vectorStore.clearItems(codeNamespace(h.projectId));
+    const seen: Array<{ current: number; total: number }> = [];
+
+    const result = await retryEmbeddings(deps(h), h.projectRoot, {
+      paths: ['f2.ts', 'f2.ts'],
+      onProgress: ({ current, total }) => seen.push({ current, total }),
+    });
+
+    expect(result.failedBatches).toBe(0);
+    expect(result.embedded).toBeGreaterThan(0);
+    expect(seen.at(-1)).toEqual({ current: 1, total: 1 });
   });
 
   it('throws when the vector store is unavailable', async () => {

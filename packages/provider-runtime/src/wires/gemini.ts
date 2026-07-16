@@ -1,10 +1,9 @@
 import type { ProviderSpec, ResolvedCreds, ProviderDefinition } from '@mcp/provider-sdk';
 import { GeminiChatProvider } from '@mcp/code-agent/providers/gemini.js';
-import { GeminiProvider } from '@mcp/indexer/indexer/providers/gemini.js';
 
 type WireParts = Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 /**
@@ -28,15 +27,6 @@ export function buildGemini(spec: ProviderSpec): WireParts {
           // while leaving `defaultModel` unset (defaultModelFor → defaultModels[0]).
           model: model ?? spec.defaultModel ?? 'gemini-2.5-flash',
         }),
-
-      createIndexer: (creds: ResolvedCreds, model?: string) =>
-        new GeminiProvider(
-          undefined,
-          model,
-          creds.apiKey,
-          creds.extra?.refreshToken as string | undefined,
-          creds.extra?.projectId as string | undefined,
-        ),
     };
   }
 
@@ -46,8 +36,5 @@ export function buildGemini(spec: ProviderSpec): WireParts {
         apiKey: creds.apiKey,
         model: model ?? spec.defaultModel,
       }),
-
-    createIndexer: (creds: ResolvedCreds, model?: string) =>
-      new GeminiProvider(creds.apiKey, model),
   };
 }

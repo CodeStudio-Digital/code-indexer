@@ -1,4 +1,4 @@
-import type { DBFile, ProjectStats, Project } from '@mcp/shared/types.js';
+import type { ProjectStats, Project } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
 /**
@@ -23,11 +23,6 @@ export function projectStats(db: DB, centralDb: DB, projectId: number, project: 
   const runCount = centralDb.prepare('SELECT COUNT(*) as cnt FROM runs WHERE project_id = ?')
     .get(projectId) as { cnt: number };
 
-  const staleSemantic = db.prepare(`
-    SELECT COUNT(*) as cnt FROM files
-    WHERE project_id = ? AND (semantic_hash IS NULL OR semantic_hash != content_hash)
-  `).get(projectId) as { cnt: number };
-
   return {
     file_count: fileCounts.file_count,
     symbol_count: symbolCount.cnt,
@@ -36,50 +31,29 @@ export function projectStats(db: DB, centralDb: DB, projectId: number, project: 
     total_size: fileCounts.total_size,
     last_indexed: project?.last_indexed ?? null,
     structural_indexed_at: project?.structural_indexed_at ?? null,
-    semantic_stale_count: staleSemantic.cnt,
+    semantic_stale_count: countSemanticBacklog(centralDb, projectId),
     run_count: runCount.cnt,
   };
 }
 
-export function listConcepts(db: DB, projectId: number): Array<{ concept: string; count: number }> {
-  return db.prepare(`
-    SELECT concept, COUNT(*) as count
-    FROM file_concepts
-    WHERE project_id = ?
-    GROUP BY concept
-    ORDER BY count DESC
-  `).all(projectId) as Array<{ concept: string; count: number }>;
-}
-
-export function getFilesByConcept(db: DB, projectId: number, concept: string): DBFile[] {
-  return db.prepare(`
-    SELECT f.* FROM files f
-    JOIN file_concepts fc ON fc.file_id = f.id
-    WHERE fc.project_id = ? AND fc.concept = ?
-    ORDER BY f.path
-  `).all(projectId, concept) as DBFile[];
-}
-
-export function getLastTwoRunIds(db: DB, projectId: number): [number, number] | null {
-  // Full runs only — structural runs write no file_snapshots, so pairing one
-  // would produce an empty/false diff.
-  const runs = db.prepare(
-    "SELECT id FROM runs WHERE project_id = ? AND status = 'completed' AND kind = 'full' ORDER BY started_at DESC LIMIT 2"
-  ).all(projectId) as Array<{ id: number }>;
-
-  if (runs.length < 2) return null;
-  return [runs[1].id, runs[0].id];
-}
-
-export function getFilesByLayer(db: DB, projectId: number, layer: string): DBFile[] {
-  return db.prepare('SELECT * FROM files WHERE project_id = ? AND layer = ? ORDER BY path')
-    .all(projectId, layer) as DBFile[];
-}
-
-export function getArchitectureOverview(db: DB, projectId: number): Array<{ layer: string; count: number }> {
-  return db.prepare(`
-    SELECT layer, COUNT(*) as count
-    FROM files WHERE project_id = ?
-    GROUP BY layer ORDER BY count DESC
-  `).all(projectId) as Array<{ layer: string; count: number }>;
+/** Compatibility metric backed by the semantic namespace ledger, not files. */
+export function countSemanticBacklog(db: DB, projectId: number): number {
+  try {
+    const row = db.prepare(`
+      SELECT building_generation_id, expected_items, indexed_items, delta_items
+      FROM semantic_namespace_generations WHERE namespace = ?
+    `).get(`code:p${projectId}`) as {
+      building_generation_id: number | null;
+      expected_items: number;
+      indexed_items: number;
+      delta_items: number;
+    } | undefined;
+    if (!row) return 0;
+    const building = row.building_generation_id === null
+      ? 0
+      : Math.max(0, row.expected_items - row.indexed_items);
+    return building + Math.max(0, row.delta_items);
+  } catch {
+    return 0;
+  }
 }

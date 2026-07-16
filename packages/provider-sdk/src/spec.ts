@@ -65,8 +65,9 @@ export interface WireOpts {
     defaultModeKey?: string;
   };
   /** Attribution / extra headers built from cfg.extra/env (openrouter). Each
-   *  header takes the first non-empty of its sources (extra and/or env). */
-  headerSources?: Array<{ header: string; sources: ValueSource[] }>;
+   *  header takes the first non-empty of its sources (extra and/or env), then
+   *  falls back to `defaultValue` when declared. */
+  headerSources?: Array<{ header: string; sources: ValueSource[]; defaultValue?: string }>;
   /** Per-request thinking mode read from creds.extra (kimi). */
   thinkingMode?: { from: 'extra'; key: string; default: 'auto' | 'enabled' | 'disabled' };
 
@@ -210,6 +211,33 @@ export interface ProviderModelMeta {
   applyPatchToolType?: string | null;
 }
 
+/** Wire contracts exposed by providers for semantic indexing. These describe
+ * inference only; vector persistence is always the host's local sqlite-vec. */
+export type SemanticEmbeddingProtocol =
+  | 'openai-embeddings'
+  | 'cloudflare'
+  | 'bedrock';
+
+export type SemanticRerankProtocol =
+  | 'cohere-rerank'
+  | 'openai-rerank'
+  | 'cloudflare'
+  | 'bedrock';
+
+export interface ProviderSemanticCapability<P extends string> {
+  protocol: P;
+  /** Known-safe defaults. Discovery may add models and manual IDs remain
+   * available after a successful runtime probe. */
+  defaultModels?: string[];
+  /** Optional conservative model-id filters used to classify a mixed catalog. */
+  modelPatterns?: string[];
+}
+
+export interface ProviderSemanticDescriptor {
+  embedding?: ProviderSemanticCapability<SemanticEmbeddingProtocol>;
+  rerank?: ProviderSemanticCapability<SemanticRerankProtocol>;
+}
+
 export interface ProviderSpec {
   specVersion?: number;
   // ── identity ──
@@ -234,6 +262,8 @@ export interface ProviderSpec {
    */
   pricingPriority?: number;
   capabilities?: ProviderCapabilities;
+  /** Optional embedding/rerank inference exposed through this provider. */
+  semantic?: ProviderSemanticDescriptor;
   // ── wire + per-wire knobs ──
   wire: WireKind;
   wireOpts?: WireOpts;

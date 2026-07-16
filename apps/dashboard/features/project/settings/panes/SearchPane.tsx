@@ -1,4 +1,4 @@
-/** Search & indexing settings pane — embeddings toggle + search mode (save-on-change). */
+/** Search & indexing settings pane — search mode + ignored paths (save-on-change). */
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,21 +14,18 @@ import { apiPost } from '../../../../hooks/useApi.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Combobox } from '../../../../components/ui/combobox.js';
 import { Input } from '../../../../components/ui/input.js';
-import { Switch } from '../../../../components/ui/switch.js';
 import { confirm } from '../../../../components/ui/prompt-dialog.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 
 interface PurgeIgnoredResult {
   local_deleted: number;
   vectors_known: number;
-  vectors_deleted_remote: number;
-  tombstoned: number;
-  remote_error: string | null;
+  vectors_deleted: number;
+  vector_error: string | null;
 }
 
 export function SearchPane({ project, patch }: { project: Project; patch: PatchFn }) {
   const { t } = useTranslation(['projects']);
-  const embeddings = project.embeddings_enabled !== 0;
   const searchMode = project.search_mode ?? 'hybrid';
   const patterns = useMemo(() => projectIndexIgnorePatterns(project), [project]);
   const searchModeOptions = useMemo(() => [
@@ -83,7 +80,7 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
         count: result.local_deleted,
         vectors: result.vectors_known,
       }));
-      if (result.remote_error) setLocalError(result.remote_error);
+      if (result.vector_error) setLocalError(result.vector_error);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -93,14 +90,6 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
 
   return (
     <div className="w-full max-w-3xl space-y-5">
-
-      <div className="flex items-center justify-between gap-4">
-        <div className="space-y-0.5">
-          <label className="text-sm font-medium">{t('edit.embeddingsLabel')}</label>
-          <p className="text-xs text-muted-foreground">{t('edit.embeddingsHint')}</p>
-        </div>
-        <Switch checked={embeddings} onCheckedChange={(v) => void patch({ embeddings_enabled: v ? 1 : 0 })} />
-      </div>
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">{t('edit.searchModeLabel')}</label>

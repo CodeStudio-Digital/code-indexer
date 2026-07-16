@@ -29,7 +29,7 @@ describe('vectorIssue', () => {
 });
 
 describe('renderZeroResultDiagnostics', () => {
-  const fullCoverage = () => ({ files_total: 10, files_embedded: 10 });
+  const fullCoverage = () => ({ files_total: 10, semantic_expected: 100, semantic_indexed: 100 });
 
   it('healthy zero-result reports streams without scare text', () => {
     const out = renderZeroResultDiagnostics('hybrid', healthy, fullCoverage);
@@ -50,9 +50,13 @@ describe('renderZeroResultDiagnostics', () => {
     expect(out).toContain('does NOT mean');
   });
 
-  it('partial embedding coverage is surfaced', () => {
-    const out = renderZeroResultDiagnostics('hybrid', healthy, () => ({ files_total: 1900, files_embedded: 812 }));
-    expect(out).toContain('812/1900');
+  it('partial semantic generation coverage is surfaced', () => {
+    const out = renderZeroResultDiagnostics('hybrid', healthy, () => ({
+      files_total: 1900,
+      semantic_expected: 20_000,
+      semantic_indexed: 8_120,
+    }));
+    expect(out).toContain('8120/20000');
   });
 
   it('planner-resolved mode is shown; coverage errors never break the result', () => {

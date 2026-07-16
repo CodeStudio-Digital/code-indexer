@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getDB } from '../helpers.js';
+import { requestProjectRemoval } from '../semantic-control.js';
 
 export function register(program: Command): void {
   const projects = program.command('projects').description('Manage projects');
@@ -39,13 +40,29 @@ export function register(program: Command): void {
   projects
     .command('remove <name>')
     .description('Remove a project')
-    .action((name: string) => {
+    .action(async (name: string) => {
       const db = getDB();
-      const project = db.getProjectByName(name);
-      if (!project) { console.error(`Project "${name}" not found.`); process.exit(1); }
-      db.deleteProject(project.id);
-      console.log(`Project "${name}" removed.`);
-      db.close();
+      try {
+        const project = db.getProjectByName(name);
+        if (!project) {
+          console.error(`Project "${name}" not found.`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const removal = await requestProjectRemoval(db, project.id);
+        if (removal.completed) {
+          console.log(`Project "${name}" removed by the server-owned semantic worker.`);
+        } else {
+          console.log(
+            `Removal of project "${name}" scheduled (job #${removal.marker.id}). `
+            + 'The project and FTS data were kept until the local server can drain vectors.db safely.'
+            + (removal.server.reached && removal.server.error ? ` Server: ${removal.server.error}.` : ''),
+          );
+        }
+      } finally {
+        db.close();
+      }
     });
 
   projects
@@ -112,10 +129,10 @@ export function register(program: Command): void {
       console.log(`Name: ${project.name}`);
       console.log(`Path: ${project.root_path}`);
       console.log(`Description: ${project.description ?? '-'}`);
-      console.log(`Provider: ${project.provider ?? 'auto'} | Model: ${project.model ?? 'auto'}`);
       console.log(`Files: ${stats.file_count} | Symbols: ${stats.symbol_count} | Lines: ${stats.total_lines}`);
       console.log(`Languages: ${Object.entries(stats.languages).map(([l, c]) => `${l}(${c})`).join(', ')}`);
-      console.log(`Last Indexed: ${stats.last_indexed ?? 'Never'} | Runs: ${stats.run_count}`);
+      console.log(`Structural Indexed: ${project.structural_indexed_at ?? 'Never'}`);
+      console.log(`Structural Checked: ${project.structural_last_checked_at ?? 'Never'} | Runs: ${stats.run_count}`);
       db.close();
     });
 }

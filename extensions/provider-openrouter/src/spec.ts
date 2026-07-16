@@ -214,8 +214,19 @@ export const openrouterSpec: ProviderSpec = {
     'google/gemini-2.5-pro',
     'deepseek/deepseek-chat',
   ],
+  semantic: {
+    embedding: {
+      protocol: 'openai-embeddings',
+      modelPatterns: ['embedding', 'embed'],
+    },
+    rerank: {
+      protocol: 'cohere-rerank',
+      defaultModels: ['nvidia/llama-nemotron-rerank-vl-1b-v2:free'],
+      modelPatterns: ['rerank'],
+    },
+  },
   pricing: {},
-  capabilities: { supportsVision: true, supportsThinking: true },
+  capabilities: { supportsVision: true, supportsThinking: true, fileInput: 'native' },
   wire: 'openai-compat',
   wireOpts: {
     vendor: 'openrouter',
@@ -223,6 +234,7 @@ export const openrouterSpec: ProviderSpec = {
     headerSources: [
       {
         header: 'HTTP-Referer',
+        defaultValue: 'https://codestudio.digital',
         sources: [
           { from: 'extra', key: 'http_referer' },
           { from: 'extra', key: 'referer' },
@@ -233,6 +245,7 @@ export const openrouterSpec: ProviderSpec = {
       },
       {
         header: 'X-OpenRouter-Title',
+        defaultValue: 'MegaBrain',
         sources: [
           { from: 'extra', key: 'app_title' },
           { from: 'extra', key: 'title' },

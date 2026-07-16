@@ -41,7 +41,7 @@ export interface CreateGlobalInput {
 }
 
 /** Create a global session backed by a NEW synthetic union project (junctions). */
-export function createGlobalWorkspaceSession(deps: ServerDeps, input: CreateGlobalInput): CoderSession {
+export async function createGlobalWorkspaceSession(deps: ServerDeps, input: CreateGlobalInput): Promise<CoderSession> {
   const wsId = randomUUID();
   const dir = globalWorkspaceDir(wsId);
   const projects = [...input.projects].sort(
@@ -69,8 +69,22 @@ export function createGlobalWorkspaceSession(deps: ServerDeps, input: CreateGlob
     return session;
   } catch (e) {
     // Best-effort rollback (cross-connection → no single tx).
-    try { cleanupGlobalWorkspace(dir); } catch { /* ignore */ }
-    if (syntheticId != null) { try { deps.db.deleteProject(syntheticId); } catch { /* ignore */ } }
+    if (syntheticId == null) {
+      try { cleanupGlobalWorkspace(dir); } catch { /* ignore */ }
+    } else {
+      const projectId = syntheticId;
+      try {
+        await deps.projectIndexService.stopWatching(projectId).catch(() => undefined);
+        await deps.semanticCoordinator.removeProject(projectId, {
+          finalize: () => deps.db.deleteProject(projectId),
+        });
+        try { cleanupGlobalWorkspace(dir); } catch { /* picked up by the orphan-dir sweep */ }
+      } catch (cleanupError) {
+        console.warn(
+          `[global-workspace] rollback project ${projectId} kept after project cleanup failure: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        );
+      }
+    }
     throw e;
   }
 }
@@ -183,7 +197,7 @@ export function attachProjectToGlobalSession(
   }
   deps.sessionStore.linkSessionProject(sessionId, projectId, { isPrimary: false });
   ensureGlobalWorkspaceLinks(deps, session); // rebuild junctions from the union
-  try { deps.projectIndexService.ensureFresh(session.project_id, 'session'); } catch { /* best-effort */ }
+  try { deps.projectIndexService.ensureFresh(session.project_id, 'workspace'); } catch { /* best-effort */ }
   return deps.sessionStore.getSessionProjects(sessionId);
 }
 
@@ -211,7 +225,7 @@ export function detachProjectFromGlobalSession(
   if (current.length <= 1) throw new GlobalWorkspaceError('cannot remove the last project', 400);
   deps.sessionStore.unlinkSessionProject(sessionId, projectId);
   ensureGlobalWorkspaceLinks(deps, session); // rebuild junctions from the union
-  try { deps.projectIndexService.ensureFresh(session.project_id, 'session'); } catch { /* best-effort */ }
+  try { deps.projectIndexService.ensureFresh(session.project_id, 'workspace'); } catch { /* best-effort */ }
   return deps.sessionStore.getSessionProjects(sessionId);
 }
 
@@ -220,12 +234,17 @@ export function detachProjectFromGlobalSession(
  * this AFTER the session row(s) have been removed, so the count is accurate.
  * SAFE: `cleanupGlobalWorkspace` only unlinks the junctions, never real files.
  */
-export function teardownGlobalWorkspaceIfOrphan(deps: ServerDeps, syntheticProjectId: number): void {
+export async function teardownGlobalWorkspaceIfOrphan(deps: ServerDeps, syntheticProjectId: number): Promise<void> {
   const sp = deps.db.getProject(syntheticProjectId);
   if (!sp?.is_synthetic) return;
   if (deps.sessionStore.countSessionsForProject(sp.id) > 0) return; // still in use
-  try { cleanupGlobalWorkspace(sp.root_path); } catch { /* ignore */ }
-  try { deps.db.deleteProject(sp.id); } catch { /* ignore */ }
+  // The project row is required to resolve its vectors.db path. Never delete
+  // metadata (or the union directory) if semantic cleanup could not finish.
+  await deps.projectIndexService.stopWatching(sp.id).catch(() => undefined);
+  await deps.semanticCoordinator.removeProject(sp.id, {
+    finalize: () => deps.db.deleteProject(sp.id),
+  });
+  try { cleanupGlobalWorkspace(sp.root_path); } catch { /* picked up by the orphan-dir sweep */ }
 }
 
 /**
@@ -234,16 +253,25 @@ export function teardownGlobalWorkspaceIfOrphan(deps: ServerDeps, syntheticProje
  * under `global-workspaces/` with no synthetic project row. Returns a count for
  * the boot log. SAFE: only unlinks junctions, never real files.
  */
-export function sweepOrphanGlobalWorkspaces(deps: ServerDeps): number {
+export async function sweepOrphanGlobalWorkspaces(deps: ServerDeps): Promise<number> {
   let removed = 0;
   const liveDirs = new Set<string>();
   for (const sp of deps.db.listSyntheticProjects()) {
     liveDirs.add(sp.root_path);
     if (deps.sessionStore.countSessionsForProject(sp.id) === 0) {
-      try { cleanupGlobalWorkspace(sp.root_path); } catch { /* ignore */ }
-      try { deps.db.deleteProject(sp.id); } catch { /* ignore */ }
-      liveDirs.delete(sp.root_path);
-      removed++;
+      try {
+        await deps.projectIndexService.stopWatching(sp.id).catch(() => undefined);
+        await deps.semanticCoordinator.removeProject(sp.id, {
+          finalize: () => deps.db.deleteProject(sp.id),
+        });
+        try { cleanupGlobalWorkspace(sp.root_path); } catch { /* loose dir sweep retries below */ }
+        liveDirs.delete(sp.root_path);
+        removed++;
+      } catch (error) {
+        console.warn(
+          `[global-workspace] orphan project ${sp.id} kept after cleanup failure: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
   // GC loose ad-hoc folders (mig 176) that no global session references anymore
@@ -254,7 +282,17 @@ export function sweepOrphanGlobalWorkspaces(deps: ServerDeps): number {
   // never touched (loose folders are indexed via the synthetic junction, not
   // standalone). Done AFTER the synthetic sweep so unions are torn down first.
   for (const lp of deps.db.listOrphanLooseProjects()) {
-    try { deps.db.deleteProject(lp.id); removed++; } catch { /* ignore */ }
+    try {
+      await deps.projectIndexService.stopWatching(lp.id).catch(() => undefined);
+      await deps.semanticCoordinator.removeProject(lp.id, {
+        finalize: () => deps.db.deleteProject(lp.id),
+      });
+      removed++;
+    } catch (error) {
+      console.warn(
+        `[global-workspace] loose project ${lp.id} kept after cleanup failure: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   // Stray dirs with no synthetic project row (e.g. crash between mkdir + createProject).

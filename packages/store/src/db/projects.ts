@@ -14,7 +14,7 @@ function pruneLocalHistory(db: DB, projectId: number): void {
 
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
-  'last_indexed' | 'structural_indexed_at' | 'file_count' | 'symbol_count' |
+  'last_indexed' | 'structural_indexed_at' | 'structural_last_checked_at' | 'file_count' | 'symbol_count' |
   'embeddings_enabled' | 'search_mode' | 'index_ignore_patterns' |
   'node_version' | 'runner_shell' | 'builder_json' | 'language_levels' | 'runtime_versions' |
   'package_managers' | 'wsl_runtime_versions' | 'wsl_package_managers' | 'git_remote' | 'default_branch'
@@ -141,6 +141,14 @@ export function update(db: DB, id: number, updates: ProjectUpdates): void {
   db.prepare(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`).run(...values);
 }
 
+/** Record a completed structural validation without making the project look
+ * edited and without creating an indexing run/history entry. */
+export function markStructuralChecked(db: DB, id: number, checkedAt: string): void {
+  db.prepare(
+    `UPDATE projects SET structural_last_checked_at = ? WHERE id = ?`,
+  ).run(checkedAt, id);
+}
+
 export function del(db: DB, id: number): void {
   pruneLocalHistory(db, id);
   // `DELETE FROM projects` cascades (ON DELETE CASCADE) into `files`/`snapshots`,
@@ -164,7 +172,7 @@ export function del(db: DB, id: number): void {
 /**
  * Top-level project-scoped tables. Deleting these clears ALL of a project's
  * data because `ON DELETE CASCADE` + the FTS AFTER-DELETE triggers fan out to
- * the children (files → symbols/file_snapshots/file_concepts/file_dependencies/
+ * the children (files → symbols/file_dependencies/
  * symbol_references/symbol_relations/*_fts; runs → costs; snapshots →
  * snapshot_versions/*_fts; coder_sessions → coder_messages → coder_tool_calls;
  * pipelines → pipeline_executions). Listing only the parents keeps this from
@@ -175,7 +183,6 @@ const PROJECT_SCOPED_TABLES = [
   'runs',
   'snapshots',
   'webhooks',
-  'vector_ids',
   'coder_session_groups',
   'coder_sessions',
   'pipelines',
@@ -185,8 +192,8 @@ const PROJECT_SCOPED_TABLES = [
 /**
  * Wipe every bit of a project's indexed data, sessions, snapshots, runs and
  * costs — but KEEP the project row (name/root_path/config) so the user can
- * re-index without re-creating it. Counters are reset; vectors are handled by
- * the caller (it owns the remote VectorStore). Runs in one transaction.
+ * re-index without re-creating it. Counters are reset; semantic generations
+ * and their local vectors are handled by the caller. Runs in one transaction.
  */
 export function clearData(db: DB, id: number): void {
   const tx = db.transaction((projectId: number) => {
@@ -202,7 +209,8 @@ export function clearData(db: DB, id: number): void {
     db.prepare(
       `UPDATE projects
          SET file_count = 0, symbol_count = 0, last_indexed = NULL,
-             structural_indexed_at = NULL, updated_at = datetime('now')
+             structural_indexed_at = NULL, structural_last_checked_at = NULL,
+             updated_at = datetime('now')
        WHERE id = ?`,
     ).run(projectId);
   });

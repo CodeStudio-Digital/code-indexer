@@ -88,57 +88,6 @@ export interface OAuthTokenRow {
   updated_at: string;
 }
 
-/**
- * `'provider'` reuses an already-configured chat provider's credentials
- * (OpenAI-compatible `/embeddings`) instead of storing its own key — the
- * config blob holds `{ providerId, model, dimensions? }`.
- */
-export type EmbeddingKind = 'cloudflare' | 'bedrock' | 'local' | 'provider' | 'null';
-
-export interface EmbeddingConfigRow {
-  id: string;
-  kind: EmbeddingKind;
-  name: string;
-  enabled: boolean;
-  is_default: boolean;
-  config: Record<string, unknown>;
-  updated_at: string;
-}
-
-/**
- * Vector store backends. Decoupled from EmbeddingKind because a user can
- * generate embeddings with Bedrock Titan and store them in Qdrant, etc.
- */
-export type VectorStoreKind = 'cloudflare' | 'qdrant' | 'bedrock-opensearch' | 'pinecone' | 'sqlite-vec' | 'null';
-
-export interface VectorStoreConfigRow {
-  id: string;
-  kind: VectorStoreKind;
-  name: string;
-  enabled: boolean;
-  is_default: boolean;
-  config: Record<string, unknown>;
-  updated_at: string;
-}
-
-/**
- * Cross-encoder reranker backends. Applied after the RRF merge of FTS +
- * vector results to re-score (query, document) pairs. Decoupled from the
- * embedding/vector kinds because a user can embed locally yet rerank via a
- * Cloudflare Worker, or use Cohere independently of either.
- */
-export type RerankerKind = 'local' | 'cloudflare' | 'cohere' | 'provider' | 'null';
-
-export interface RerankerConfigRow {
-  id: string;
-  kind: RerankerKind;
-  name: string;
-  enabled: boolean;
-  is_default: boolean;
-  config: Record<string, unknown>;
-  updated_at: string;
-}
-
 export interface UpsertProviderInput {
   id: string;
   name: string;

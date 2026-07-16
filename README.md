@@ -87,7 +87,6 @@ packages/
   shared/              Types + utilities shared across packages
   candidate-pipeline/  ML classifiers (quality, tool-selection)
   orchestrator-host/   Host orchestration
-worker/                Cloudflare Worker — vector embeddings (existing)
 worker-license/        Cloudflare Worker — auth + billing (planned, Week 3)
 docs/                  Internal + user docs
 ```

@@ -6,10 +6,9 @@
  * is exactly what lets this run automatically on project open (freemium/BYOK:
  * zero spend) and inside the dedicated indexer worker (no singletons to wire).
  *
- * Deliberately NOT an IndexAgent mode: the agent's constructor demands
- * provider/embedding/vector deps this path must never touch. The full
- * pipeline reuses this run's work via `files.semantic_hash` staleness (see
- * process-file-structural.ts for the invariants).
+ * This is the only code-index build path. Semantic embeddings consume its
+ * durable files/symbols after the baseline is ready and remain independently
+ * replaceable by generation.
  */
 import { join } from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
@@ -118,8 +117,48 @@ export async function runStructuralIndex(
     };
   }
 
+  // A reopen reconciliation that found no path/hash changes is a health
+  // check, not an indexing job. Keep the integral baseline/counters current
+  // (and repair legacy missing content coverage) without polluting `runs` or
+  // the user-facing activity history with a fake 0/N execution.
+  if (scan.toIndex.length === 0 && scan.toRemove.length === 0) {
+    let coverageErrors = 0;
+    try {
+      const sweep = sweepContentCoverage(db, projectId, project.root_path);
+      if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
+    } catch (err) {
+      coverageErrors++;
+      console.error('[structural] Content coverage sweep failed:', err);
+    }
+    const stats = db.getStats(projectId, { fresh: true });
+    const checkedAt = new Date().toISOString();
+    const needsMetadataRepair = stats.file_count !== project.file_count
+      || stats.symbol_count !== project.symbol_count
+      || (!project.structural_indexed_at && stats.file_count > 0);
+    if (needsMetadataRepair) {
+      db.updateProject(projectId, {
+        file_count: stats.file_count,
+        symbol_count: stats.symbol_count,
+        structural_last_checked_at: checkedAt,
+        ...(!project.structural_indexed_at && stats.file_count > 0
+          ? { structural_indexed_at: checkedAt }
+          : {}),
+      });
+    } else {
+      db.markProjectStructuralChecked(projectId, checkedAt);
+    }
+    return {
+      totalFiles,
+      indexed: 0,
+      removed: 0,
+      skipped: scan.unchanged.length,
+      errorCount: coverageErrors,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
   const { removed } = removeFilesStructural(db, projectId, scan.toRemove);
-  const runId = db.startRun(projectId, 'tree-sitter', undefined, 'structural');
+  const runId = db.startRun(projectId);
 
   const treeSitter = buildTreeSitterDispatch();
   let indexed = 0;
@@ -169,11 +208,13 @@ export async function runStructuralIndex(
   // never flip the status chip to "Symbols ready". `fresh` bypasses the stats
   // read cache so the PERSISTED counts are never a stale cached value.
   const stats = db.getStats(projectId, { fresh: true });
+  const checkedAt = new Date().toISOString();
   db.updateProject(projectId, {
     file_count: stats.file_count,
     symbol_count: stats.symbol_count,
+    structural_last_checked_at: checkedAt,
     ...(status !== 'failed' && indexed + scan.unchanged.length > 0
-      ? { structural_indexed_at: new Date().toISOString() }
+      ? { structural_indexed_at: checkedAt }
       : {}),
     // last_indexed untouched — it keeps meaning "semantic index".
   });
@@ -183,7 +224,6 @@ export async function runStructuralIndex(
     indexedFiles: indexed,
     skippedFiles: scan.unchanged.length,
     errorCount,
-    inputTokens: 0, outputTokens: 0, embeddingTokens: 0, estimatedCostUsd: 0,
   }, projectId);
 
   return {

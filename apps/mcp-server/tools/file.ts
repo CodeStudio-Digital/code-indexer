@@ -169,7 +169,7 @@ const get_file_skeleton = defineTool({
       const extX = filePath.split('.').pop() ?? '';
       if (asJsonX) {
         return JSON.stringify({
-          file: { path: filePath, ext: extX, layer: 'unknown', line_count: fallback.lineCount, complexity: 'unknown', summary: null, concepts: [] },
+          file: { path: filePath, ext: extX, line_count: fallback.lineCount, size_bytes: fallback.bytes },
           total_symbols: totalX,
           shown_symbols: shownX.length,
           truncated: truncatedX,
@@ -195,8 +195,6 @@ const get_file_skeleton = defineTool({
       try { const re = new RegExp(nameFilter); symbols = symbols.filter(s => re.test(s.name)); } catch { /* ignore */ }
     }
     const ext = filePath.split('.').pop() ?? '';
-    const concepts = JSON.parse(file.concepts || '[]') as string[];
-
     const totalSymbols = symbols.length;
     const truncated = totalSymbols > maxSymbols;
     const shownSymbols = truncated ? symbols.slice(0, maxSymbols) : symbols;
@@ -220,11 +218,10 @@ const get_file_skeleton = defineTool({
         file: {
           path: filePath,
           ext,
-          layer: file.layer,
+          language: file.language,
           line_count: file.line_count,
-          complexity: file.complexity,
-          summary: file.summary || null,
-          concepts: concepts.slice(0, 8),
+          size_bytes: file.size,
+          content_hash: file.content_hash,
         },
         total_symbols: totalSymbols,
         shown_symbols: shownSymbols.length + extras.length,
@@ -243,9 +240,7 @@ const get_file_skeleton = defineTool({
       });
     }
 
-    const header = `${filePath} | ${ext} | ${file.layer} | ${file.line_count}L | ${file.complexity}`;
-    const summary = file.summary ? `summary: ${file.summary}` : '';
-    const cline = concepts.length ? `concepts: ${concepts.slice(0, 8).join(', ')}` : '';
+    const header = `${filePath} | ${file.language || ext} | ${file.line_count}L | ${file.size} bytes`;
     const truncateNote = truncated
       ? `[truncated: showing ${shownSymbols.length}/${totalSymbols} symbols — use max_symbols or kind/filter to refine]`
       : '';
@@ -261,7 +256,7 @@ const get_file_skeleton = defineTool({
         symLines.push(`${String(e.line ?? '?').padStart(5)} ${e.kind} ${e.name} ${e.signature}`);
       }
     }
-    return [header, summary, cline, truncateNote, fallbackNote, '', ...symLines].filter(Boolean).join('\n');
+    return [header, truncateNote, fallbackNote, '', ...symLines].filter(Boolean).join('\n');
   }),
 });
 
@@ -451,7 +446,7 @@ const read_file = defineTool({
         : remaining > 0 && file.line_count > AUTO_FULL_THRESHOLD
           ? ' [auto-full off — file > 800 lines, pass force=true to read all]'
           : '';
-      const richHeader = `${filePath} | ${file.line_count} lines | ${ext}${file.layer ? ` | layer=${file.layer}` : ''}\n[lines ${start}-${end}]${tag}\n`;
+      const richHeader = `${filePath} | ${file.line_count} lines | ${ext}\n[lines ${start}-${end}]${tag}\n`;
       const footer = remaining > 0
         ? `\n... [${remaining} more lines — pass force=true, symbol, around_line, or search_term]`
         : '';

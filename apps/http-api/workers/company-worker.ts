@@ -114,6 +114,7 @@ import {
 import type { DocsResearchResult } from '../../../packages/docs-agent/src/types.js';
 import { setCompanyMemoryPorts } from '../../../packages/company/src/services/memory/ports.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
+import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
@@ -263,7 +264,9 @@ setGlobalDocsResearcher(docsResearcherShim);
 // The canonical MemoryRetriever/RunEndMemory live once in server/deps.ts;
 // handlers in WorkerOrchestratorPool. MUST be set before the orchestrator
 // is constructed so the very first spawn already sees the ports.
-setCompanyMemoryPorts(buildWorkerMemoryShims(bridge));
+const memoryShims = buildWorkerMemoryShims(bridge);
+setCompanyMemoryPorts(memoryShims);
+setInvestigationSemanticIndex(memoryShims.investigationSemantic);
 
 // Multi-language LSP nav for subordinate agents — RPC to the main-side
 // router. Degrades to "TS only" when main hasn't wired the deps.

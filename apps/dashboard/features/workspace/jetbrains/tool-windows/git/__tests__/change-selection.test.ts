@@ -14,6 +14,8 @@ describe('Git change selection', () => {
   it('selects every discovered file by default', () => {
     const excluded = new Set<string>();
 
+    expect(selectedChangePaths('staged', files, excluded)).toEqual(files.map((file) => file.path));
+    expect(changeSelectionState('staged', files, excluded)).toBe('all');
     expect(selectedChangePaths('unstaged', files, excluded)).toEqual(files.map((file) => file.path));
     expect(changeSelectionState('unstaged', files, excluded)).toBe('all');
   });
@@ -47,12 +49,19 @@ describe('Git change selection', () => {
     excluded = toggleChangeSelection('untracked', 'old.txt', excluded);
 
     const pruned = pruneChangeSelection(
-      { unstaged: files, untracked: [{ path: 'new.txt' }] },
+      { staged: [{ path: 'staged.ts' }], unstaged: files, untracked: [{ path: 'new.txt' }] },
       excluded,
     );
 
     expect(isChangeSelected('unstaged', 'src/a.ts', pruned)).toBe(false);
     expect(isChangeSelected('untracked', 'old.txt', pruned)).toBe(true);
     expect(pruned.size).toBe(1);
+  });
+
+  it('keeps staged selection independent from the same unstaged path', () => {
+    const excluded = toggleChangeSelection('staged', 'src/a.ts', new Set());
+
+    expect(isChangeSelected('staged', 'src/a.ts', excluded)).toBe(false);
+    expect(isChangeSelected('unstaged', 'src/a.ts', excluded)).toBe(true);
   });
 });

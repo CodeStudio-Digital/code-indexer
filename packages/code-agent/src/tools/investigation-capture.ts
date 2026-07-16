@@ -12,7 +12,7 @@
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import type { MicroAgentCapability } from '@mcp/code-agent/tools/micro-agent-profiles.js';
-import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
+import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 
 export function captureInvestigation(
   deps: SubagentDeps,
@@ -39,19 +39,11 @@ export function captureInvestigation(
     });
     // Live-update the Drive panel.
     ctx.runner?.emit('session_drive_changed', { kind: 'investigation' });
-    // Semantic recall: embed the digest in the background (in-process only;
-    // worker mode / no embedder → keyword recall still works). Fire-and-forget
-    // so the spawn result isn't blocked on a network/CPU round-trip.
-    const embed = getInvestigationEmbedder();
-    if (embed) {
-      void embed(`${topic}\n${summary}`)
-        .then((vec) => {
-          if (vec && vec.length > 0 && vec.some((x) => x !== 0)) {
-            deps.sessionStore!.setInvestigationEmbedding(row.id, vec);
-          }
-        })
-        .catch(() => { /* embedding is best-effort */ });
-    }
+    // SessionStore fenced the relational insert before it happened. This is
+    // only a low-latency wake-up; worker/no-host runs rely on the coordinator's
+    // durable external-job poll and remain lexical until catch-up completes.
+    try { getInvestigationSemanticIndex()?.wakeUpsert(row); }
+    catch { /* the durable fence/job remains authoritative */ }
   } catch (e) {
     console.warn(`[coder] captureInvestigation failed: ${e instanceof Error ? e.message : String(e)}`);
   }

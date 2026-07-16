@@ -1,10 +1,9 @@
 import type { ProviderSpec, ResolvedCreds, ProviderDefinition } from '@mcp/provider-sdk';
 import { KimiCodeChatProvider } from '@mcp/code-agent/providers/kimi-code.js';
-import { KimiCodeProvider } from '@mcp/indexer/indexer/providers/kimi-code.js';
 
 type WireParts = Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 type KimiThinkingMode = 'auto' | 'enabled' | 'disabled';
@@ -21,7 +20,7 @@ function readThinkingMode(value: unknown, fallback: KimiThinkingMode): KimiThink
 
 /**
  * Kimi Code wire (kimi-code, OAuth credentials resolved upstream). Lift of the
- * hand-written `createCoder`/`createIndexer` with the base-URL fallback and the
+ * hand-written coder adapter with the base-URL fallback and the
  * default model read from the spec, and the per-request thinking mode read from
  * `creds.extra` per `spec.wireOpts.thinkingMode`. The OAuth flow itself is added
  * separately — here creds arrive already resolved.
@@ -45,13 +44,5 @@ export function buildKimi(spec: ProviderSpec): WireParts {
           thinkingDefault,
         ),
       }),
-
-    createIndexer: (creds, model) =>
-      new KimiCodeProvider(
-        creds.apiKey,
-        model ?? defaultModel,
-        baseURL(creds),
-        creds.extraHeaders,
-      ),
   };
 }

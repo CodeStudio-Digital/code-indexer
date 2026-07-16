@@ -4,6 +4,7 @@
  * is read-only; the tooltip explains the phase and what still works.
  */
 import { AlertTriangle, Database, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../../components/ui/tooltip.js';
 import { cn } from '../../../../lib/utils.js';
 import type { ProjectIndexStatus } from './useIndexStatus.js';
@@ -57,6 +58,7 @@ function chipFor(s: ProjectIndexStatus): { label: string; tone: string; busy: bo
  * "Symbols ready · 0 files" happened: live chip + stale counters).
  */
 export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null }) {
+  const { t } = useTranslation('projects');
   if (!status) return null;
   const chip = chipFor(status);
 
@@ -86,15 +88,15 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
             <div>
               Symbols, references and text search are live (tree-sitter, $0).
               {status.semanticStaleCount > 0
-                ? ` Semantic layer (summaries/embeddings) pending for ${status.semanticStaleCount.toLocaleString()} file(s) — run a full index for semantic search.`
-                : ' Run a full index to add semantic search.'}
+                ? ` Semantic vectors pending for ${status.semanticStaleCount.toLocaleString()} file(s); structural tools remain available.`
+                : ' Semantic vectors build in the background when the configured target permits it.'}
             </div>
           )}
           {status.phase === 'semantic_ready' && (
             <div>
               Full index ready.
               {status.semanticStaleCount > 0
-                ? ` ${status.semanticStaleCount.toLocaleString()} file(s) changed since the last semantic pass — symbols stay current; re-index to refresh summaries/embeddings.`
+                ? ` ${status.semanticStaleCount.toLocaleString()} file(s) changed since the active vector generation; symbols stay current while deltas are embedded.`
                 : ' Symbols + semantic search current.'}
             </div>
           )}
@@ -105,7 +107,7 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
           {(status.phase === 'scanning' || status.phase === 'structural_indexing') && (
             <div>Building the structural index (symbols + word index). Search improves as it completes.</div>
           )}
-          {status.phase === 'semantic_indexing' && <div>Full index running (LLM summaries + embeddings).</div>}
+          {status.phase === 'semantic_indexing' && <div>{t('index.status.semanticBuilding')}</div>}
           {status.phase === 'none' && <div>No index yet — it builds automatically when the project opens.</div>}
           <div className="text-muted-foreground/70 pt-1">
             {status.watcherActive ? 'Watching files — edits index live.' : 'File watcher off.'}

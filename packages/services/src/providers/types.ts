@@ -7,7 +7,6 @@
  * working. New code should import directly from `@mcp/provider-sdk`.
  */
 export type {
-  LLMProvider,
   ChatProvider,
   ChatRequest,
   ToolSpec,

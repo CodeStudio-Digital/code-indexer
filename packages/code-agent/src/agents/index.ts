@@ -102,7 +102,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'admin',
     label: 'Ops',
     description:
-      'Everything unlocked. Full tier (~60 tools) including git_commit, index_project, get_diff. Use only when the user explicitly asks for admin actions.',
+      'Everything unlocked. Full tier (~60 tools) including git_commit and index_project. Use only when the user explicitly asks for admin actions.',
     profile: 'full',
     planMode: false,
     defaultTemperature: 0.1,

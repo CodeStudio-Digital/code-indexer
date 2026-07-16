@@ -12,7 +12,10 @@
  *   - `VectorStore` interface from `@mcp/store/vectors.ts`
  *   - `rrfMerge` + `RRF_DEFAULT_K` from `@mcp/candidate-pipeline`
  */
-import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import {
+  embedQueryForNamespace,
+  type EmbeddingService,
+} from '@mcp/indexer/search/embeddings.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { rrfMerge, RRF_DEFAULT_K } from '@mcp/candidate-pipeline';
 import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
@@ -22,17 +25,21 @@ import type { DocReranker, RerankCandidate } from './reranker.js';
 import { applyThreshold, type RelevanceSource } from './relevance-policy.js';
 import { docNamespace } from '@mcp/shared/vector-namespace.js';
 
-/** Default top-K expanded for rerank — gives the reranker headroom. */
-const DEFAULT_RERANK_TOP_K = 20;
-/** Hard cap on rerank top-K (cost control). */
-const MAX_RERANK_TOP_K = 50;
+const DEFAULT_MAX_RESULTS = 100;
+const DEFAULT_MAX_RERANK_CANDIDATES = 500;
+const DEFAULT_RERANK_MULTIPLIER = 4;
+
+function positiveEnvInt(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
 
 export interface DocSearchEnhancements {
   /** Run query-rewriter and merge variants via RRF. Default false. */
   rewrite?: boolean;
   /** Run reranker on hybrid output before final truncate. Default false. */
   rerank?: boolean;
-  /** Top-K to pull before rerank. Default 20, capped at MAX_RERANK_TOP_K. */
+  /** Candidates to score before the final top-K. Default: `limit * 4`. */
   top_k_for_rerank?: number;
 }
 
@@ -48,7 +55,7 @@ export interface DocSearchInput {
    * omitting the field, not by passing [].
    */
   collection_ids?: number[];
-  /** Top-K cap. Default 5; clamped to [1, 20]. */
+  /** Top-K cap. Default 5; operational ceiling defaults to 100 and is configurable. */
   limit?: number;
   /**
    * Drop results whose calibrated relevance is below this cutoff. Only
@@ -161,7 +168,9 @@ export class DocHybridSearch {
     results: DocSearchResult[];
     diag: DocSearchDiagnostics;
   }> {
-    const limit = clamp(input.limit ?? 5, 1, 20);
+    const maxResults = positiveEnvInt('MCP_DOC_SEARCH_MAX_RESULTS', DEFAULT_MAX_RESULTS);
+    const requestedLimit = Number(input.limit ?? 5);
+    const limit = clamp(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 5, 1, maxResults);
     const rewriter = this.enhancements.rewriter ?? null;
     const reranker = this.enhancements.reranker ?? null;
     const wantRewrite = !!input.enhancements?.rewrite && rewriter != null;
@@ -170,16 +179,23 @@ export class DocHybridSearch {
     // When rerank is requested we over-fetch beyond `limit` so the LLM
     // has more candidates to reorder. The final result is still truncated
     // to `limit` after rerank.
+    const requestedRerankLimit = Number(input.enhancements?.top_k_for_rerank);
+    const rerankLimit = Number.isFinite(requestedRerankLimit)
+      ? Math.floor(requestedRerankLimit)
+      : limit * DEFAULT_RERANK_MULTIPLIER;
     const effectiveLimit = wantRerank
       ? clamp(
-          input.enhancements?.top_k_for_rerank ?? DEFAULT_RERANK_TOP_K,
+          rerankLimit,
           limit,
-          MAX_RERANK_TOP_K,
+          Math.max(
+            limit,
+            positiveEnvInt('MCP_DOC_RERANK_MAX_CANDIDATES', DEFAULT_MAX_RERANK_CANDIDATES),
+          ),
         )
       : limit;
 
-    const ftsBudget = Math.max(effectiveLimit * 4, 20);
-    const vectorBudget = Math.max(effectiveLimit * 4, 20);
+    const ftsBudget = effectiveLimit * 4;
+    const vectorBudget = effectiveLimit * 4;
 
     // Resolve collection filter (name → id, or a project-scoped id subset).
     let collectionIds: number[] | undefined;
@@ -380,13 +396,6 @@ export class DocHybridSearch {
     onStale: (count: number) => void,
   ): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
-    let queryVec: number[];
-    try {
-      const result = await this.embeddingService.embedQuery(query);
-      queryVec = result.vector;
-    } catch {
-      return [];
-    }
 
     // Doc vectors are isolated PER COLLECTION via a namespace (docNamespace).
     // A filtered search (single collection or a project-linked subset) only
@@ -396,12 +405,29 @@ export class DocHybridSearch {
     // (collections are few). This replaces the old "fetch 10× and filter in
     // memory" hack that existed only because code+docs shared one index.
     const ids = collectionIds ?? this.docStore.listCollections().map((c) => c.id);
-    if (ids.length === 1) {
-      return this.searchNamespace(queryVec, docNamespace(ids[0]), budget, onStale);
-    }
-    const perCollection = await Promise.all(
-      ids.map((id) => this.searchNamespace(queryVec, docNamespace(id), budget, onStale)),
-    );
+    const searchCollection = async (id: number): Promise<RankedHit[]> => {
+      const namespace = docNamespace(id);
+      try {
+        // Each collection may still serve a different active generation while
+        // an atomic profile migration rolls forward. Encode in that exact
+        // namespace's model space; one failed target degrades only its branch.
+        const { vector, generationId } = await embedQueryForNamespace(this.embeddingService!, namespace, query);
+        return await this.searchNamespace(vector, namespace, budget, onStale, generationId);
+      } catch {
+        return [];
+      }
+    };
+    if (ids.length === 1) return searchCollection(ids[0]);
+
+    const perCollection: RankedHit[][] = new Array(ids.length);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < ids.length) {
+        const index = cursor++;
+        perCollection[index] = await searchCollection(ids[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
     return perCollection
       .flat()
       .sort((a, b) => b.score - a.score)
@@ -414,10 +440,11 @@ export class DocHybridSearch {
     namespace: string,
     budget: number,
     onStale: (count: number) => void,
+    generationId?: number,
   ): Promise<RankedHit[]> {
     let matches: Awaited<ReturnType<VectorStore['search']>>;
     try {
-      matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace });
+      matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace, generationId });
     } catch {
       return [];
     }
@@ -427,19 +454,17 @@ export class DocHybridSearch {
     })).filter((x) => Number.isFinite(x.chunkId));
     const chunks = this.docStore.getChunksByIds(parsed.map((x) => x.chunkId));
     const byId = new Map(chunks.map((chunk) => [chunk.id, chunk]));
-    const currentFingerprint = this.embeddingService?.fingerprint?.() ?? null;
     const hits: RankedHit[] = [];
     let stale = 0;
     for (const { match: m, chunkId } of parsed) {
       // Vector ids encode the chunk id; metadata carries it as a fallback in
       // case the id format ever rotates.
       const chunk = byId.get(chunkId);
-      const remoteHash = m.metadata?.embedding_hash;
-      const remoteFingerprint = m.metadata?.embedding_fingerprint;
-      if (!chunk?.embedding_hash
-        || (remoteHash && remoteHash !== chunk.embedding_hash)
-        || (remoteFingerprint && currentFingerprint && remoteFingerprint !== currentFingerprint)
-        || (chunk.embedding_fingerprint && currentFingerprint && chunk.embedding_fingerprint !== currentFingerprint)) {
+      // The router read from the namespace's atomically activated generation;
+      // semantic_items is its acceptance ledger. A missing corpus row is stale,
+      // but doc_chunks.embedding_* is only a compatibility mirror and must not
+      // veto an otherwise active local vector.
+      if (!chunk) {
         stale++;
         continue;
       }
@@ -455,16 +480,16 @@ export class DocHybridSearch {
     // Diagnostics must degrade to unknown/zero, never fail the actual search.
     const store = this.docStore as Partial<DocStore>;
     if (typeof store.countChunksByCollection !== 'function'
-      || typeof store.countChunksMissingEmbedding !== 'function') return 0;
+      || typeof store.countIndexedVectorsByCollection !== 'function') return 0;
     if (!collectionIds && typeof store.listCollections !== 'function') return 0;
     const ids = collectionIds ?? store.listCollections!.call(this.docStore).map((c) => c.id);
     let total = 0;
-    let missing = 0;
+    let indexed = 0;
     for (const id of ids) {
       total += store.countChunksByCollection.call(this.docStore, id);
-      missing += store.countChunksMissingEmbedding.call(this.docStore, { collectionId: id });
+      indexed += store.countIndexedVectorsByCollection.call(this.docStore, id);
     }
-    return total > 0 ? Math.max(0, Math.min(1, (total - missing) / total)) : 0;
+    return total > 0 ? Math.max(0, Math.min(1, indexed / total)) : 0;
   }
 }
 

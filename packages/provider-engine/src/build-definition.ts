@@ -10,7 +10,7 @@ import { buildImagesFactory } from './images/index.js';
 
 type WireBuilder = (spec: ProviderSpec) => Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 /** wire → builder. All 6 wires registered. */

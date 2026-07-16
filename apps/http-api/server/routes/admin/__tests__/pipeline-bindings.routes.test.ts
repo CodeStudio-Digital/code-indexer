@@ -12,16 +12,28 @@ import { Hono } from 'hono';
 import { mountAdminPipelineBindingsRoutes } from '../pipeline-bindings.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { PipelineProfileApplyRow } from '@mcp/store/pipeline-provider-bindings-store.js';
+import { PIPELINE_CATALOG } from '@mcp/services/pipelines/index.js';
 
 interface Captured {
   rows: PipelineProfileApplyRow[] | null;
   activated: Record<string, unknown> | null;
+  bulkTargets: Array<{ pipeline_name: string; binding_role: string }> | null;
+  updated: Record<string, unknown> | null;
 }
 
 function setup(opts: { knownProviders?: Set<string> } = {}) {
   const known = opts.knownProviders ?? new Set(['cf-1', 'openai-1', 'anthropic-1']);
-  const captured: Captured = { rows: null, activated: null };
+  const captured: Captured = {
+    rows: null,
+    activated: null,
+    bulkTargets: null,
+    updated: null,
+  };
   const pipelineBindingsStore = {
+    bulkApply(input: { targets: Array<{ pipeline_name: string; binding_role: string }> }): number[] {
+      captured.bulkTargets = input.targets;
+      return input.targets.map((_, i) => i + 1);
+    },
     bulkApplyProfile(rows: PipelineProfileApplyRow[]): number[] {
       captured.rows = rows;
       return rows.map((_, i) => i + 1);
@@ -29,6 +41,9 @@ function setup(opts: { knownProviders?: Set<string> } = {}) {
     activateGlobal(input: Record<string, unknown>) {
       captured.activated = input;
       return { id: 41, disabledIds: [7, 8] };
+    },
+    update(_id: number, input: Record<string, unknown>) {
+      captured.updated = input;
     },
     get(id: number) {
       return id === 41 ? { id, provider_id: 'cf-1', model_id: 'codestral', enabled: true } : null;
@@ -52,6 +67,51 @@ async function post(app: Hono, body: unknown) {
   });
 }
 
+async function postBulk(app: Hono, body: unknown) {
+  return app.request('/api/admin/pipeline-bindings/bulk/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('POST /bulk/apply', () => {
+  it('defaults to setup-eligible roles only', async () => {
+    const { app, captured } = setup();
+    const response = await postBulk(app, { provider_id: 'cf-1', model_id: 'llama-8b' });
+
+    expect(response.status).toBe(200);
+    const targets = captured.bulkTargets!;
+    expect(targets.length).toBeGreaterThan(0);
+    const appliedPairs = new Set(targets.map((target) => `${target.pipeline_name}::${target.binding_role}`));
+    for (const entry of PIPELINE_CATALOG.filter((candidate) => candidate.setupEligible === false)) {
+      expect(appliedPairs.has(`${entry.pipelineName}::${entry.bindingRole}`)).toBe(false);
+    }
+    for (const entry of PIPELINE_CATALOG.filter((candidate) => candidate.comingSoon)) {
+      expect(appliedPairs.has(`${entry.pipelineName}::${entry.bindingRole}`)).toBe(false);
+    }
+  });
+
+  it('rejects an explicit informational target atomically', async () => {
+    const { app, captured } = setup();
+    const response = await postBulk(app, {
+      provider_id: 'cf-1',
+      model_id: 'llama-8b',
+      targets: [
+        { pipeline_name: 'quality_off_topic', binding_role: 'classifier' },
+        { pipeline_name: 'doc_search', binding_role: 'reranker' },
+      ],
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: 'binding_not_configurable',
+      configure_in: 'semantic_indexing',
+    });
+    expect(captured.bulkTargets).toBeNull();
+  });
+});
+
 describe('POST /bulk/apply-profile', () => {
   it('fans a text_llm assignment out to every text_llm role with its OWN config', async () => {
     const { app, captured } = setup();
@@ -73,19 +133,20 @@ describe('POST /bulk/apply-profile', () => {
     expect((reviewer!.config as { json_mode: boolean }).json_mode).toBe(true);
   });
 
-  it('skips informational + cross-encoder entries for embeddings/reranking', async () => {
+  it('keeps semantic-profile embeddings/rerankers out of pipeline setup', async () => {
     const { app, captured } = setup();
     await post(app, { assignments: [
       { capability_kind: 'embeddings', provider_id: 'cf-1', model_id: 'bge-m3' },
       { capability_kind: 'reranking',  provider_id: 'cf-1', model_id: 'llama-8b' },
     ] });
     const rows = captured.rows!;
-    // doc_ingest embedder is informational → skipped.
-    expect(rows.some((row) => row.pipeline_name === 'doc_ingest' && row.binding_role === 'embedder')).toBe(false);
-    // indexer_search reranker is a cross-encoder → skipped.
+    // Embeddings are owned by the Code/Knowledge semantic profiles.
+    expect(rows.some((row) => row.binding_role === 'embedder')).toBe(false);
+    // Both semantic cross-encoders are profile-owned.
     expect(rows.some((row) => row.pipeline_name === 'indexer_search' && row.binding_role === 'reranker')).toBe(false);
-    // A real LLM reranker (doc_search) IS included.
-    expect(rows.some((row) => row.pipeline_name === 'doc_search' && row.binding_role === 'reranker')).toBe(true);
+    expect(rows.some((row) => row.pipeline_name === 'doc_search' && row.binding_role === 'reranker')).toBe(false);
+    // memory_recall is a distinct LLM filter and remains pipeline-configurable.
+    expect(rows.some((row) => row.pipeline_name === 'memory_recall' && row.binding_role === 'reranker')).toBe(true);
   });
 
   it('400 on unknown capability', async () => {
@@ -147,5 +208,55 @@ describe('POST /activate', () => {
     });
     expect(response.status).toBe(400);
     expect(captured.activated).toBeNull();
+  });
+
+  it('rejects a dead semantic-profile binding', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pipeline_name: 'indexer_search', binding_role: 'embedder',
+        provider_id: 'cf-1', model_id: 'bge-m3',
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: 'binding_not_configurable',
+      configure_in: 'semantic_indexing',
+    });
+    expect(captured.activated).toBeNull();
+  });
+});
+
+describe('POST /pipeline-bindings', () => {
+  it('does not persist known informational bindings', async () => {
+    const { app } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pipeline_name: 'doc_search', binding_role: 'reranker',
+        provider_id: 'cf-1', model_id: 'old-reranker', scope_type: 'global',
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: 'binding_not_configurable',
+      configure_in: 'semantic_indexing',
+    });
+  });
+});
+
+describe('PATCH /pipeline-bindings/:id', () => {
+  it('cannot rename a configurable binding into an informational target', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings/41', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pipeline_name: 'indexer_search', binding_role: 'embedder' }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'binding_not_configurable' });
+    expect(captured.updated).toBeNull();
   });
 });

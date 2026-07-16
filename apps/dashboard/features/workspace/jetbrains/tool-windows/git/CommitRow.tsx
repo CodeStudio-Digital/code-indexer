@@ -18,6 +18,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useContextMenu, type ContextMenuItem } from '../../../../../components/ui/context-menu.js';
 import { cn } from '../../../../../lib/utils.js';
+import { parseDbDate } from '../../../../../lib/datetime.js';
 import { GitGraphCell, type GitGraphRow } from './git-graph.js';
 
 export interface Commit {
@@ -180,8 +181,8 @@ export function CommitRow({
 }
 
 export function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  const d = parseDbDate(iso);
+  if (!d) return iso.slice(0, 10);
   const now = Date.now();
   const diff = now - d.getTime();
   if (diff < 60_000) return 'now';

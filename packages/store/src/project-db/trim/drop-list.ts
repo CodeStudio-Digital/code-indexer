@@ -14,7 +14,7 @@ import { INDEX_TABLES, FEATURE_TABLES } from '../../db-split/manifest.js';
  *  (DROP on the vtab removes its shadow tables). The KEPT code FTS (files_fts/
  *  symbols_fts/file_contents_fts) are NOT here. */
 export const CENTRAL_FTS_VTABS = [
-  'snapshots_fts', 'doc_chunks_fts', 'coder_session_chapters_fts',
+  'snapshots_fts', 'doc_chunks_fts', 'coder_session_chapters_fts', 'agent_memory_fts',
 ] as const;
 
 /**
@@ -34,6 +34,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'coder_subagent_runs', 'coder_subagent_tool_calls',
   'coder_phase_profiles', 'coder_session_groups', 'coder_task_runs', 'coder_task_run_items',
   'coder_session_index', 'coder_session_projects',
+  'session_events', 'coder_compaction_attempts',
   'session_file_baselines', 'session_file_edits', 'session_file_hunk_decisions',
   'session_file_round_snapshots', 'session_file_round_hunk_decisions',
   'session_file_round_review_findings',
@@ -41,8 +42,9 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'session_intent_contracts', 'review_comment_fates',
   // stats (central per Etapa A)
   'runs', 'costs', 'project_cost_rollup',
-  // user/project snapshots (central) + memory
+  // user/project snapshots (central) + memory control plane
   'snapshots', 'snapshot_files', 'snapshot_versions', 'memory_distill_log',
+  'agent_memory', 'agent_memory_events',
   // company + kanban
   'company_sessions', 'company_session_projects', 'company_session_envs',
   // tabela aposentada na migration 191 — manter 1 release p/ DBs antigos que ainda a tenham
@@ -55,7 +57,8 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'quality_classifications', 'quality_interventions', 'counterfactual_logs',
   // docs corpus (global)
   'doc_collections', 'doc_sources', 'doc_chunks', 'doc_chunk_vectors', 'doc_vector_tombstones',
-  'doc_rerank_cache', 'docs_research_sessions',
+  'doc_rerank_cache', 'docs_research_sessions', 'doc_source_items', 'doc_enrichment_cache',
+  'doc_search_events', 'doc_ingest_runs',
   // agents / supervision
   'agent_inbox', 'agent_board_watermarks', 'agent_supervision', 'agent_supervision_incidents',
   'sub_agent_result_cache',
@@ -64,11 +67,14 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'oauth_refresh_tokens', 'mcp_server_configs', 'mcp_server_tools', 'mcp_oauth_registrations',
   'mcp_oauth_tokens', 'mcp_oauth_pending', 'embedding_configs', 'embedding_store_configs',
   'vector_store_configs', 'reranker_configs', 'model_prices', 'models_cache', 'api_tokens',
+  'semantic_profiles', 'semantic_model_catalog', 'semantic_generations',
+  'semantic_namespace_generations', 'semantic_items', 'semantic_jobs',
   'auth_audit_log', 'app_settings', 'company_master_prompts',
   // skills / plugins / misc global
   'skill_definitions', 'skill_session_config', 'skill_usage_log', 'chrome_service_configs',
+  'sprite_projects', 'sprite_assets', 'sprite_asset_versions', 'sprite_references',
+  'sprite_generation_jobs', 'sprite_animations', 'sprite_frames', 'ssh_secrets',
   'installed_plugins', 'plugin_storage', 'verdaccio_configs', 'disabled_tools_global',
-  'pending_vector_deletes',
   // guided App Studio lives in the central product DB, never in code-index DBs
   'app_studio_workflow_snapshots', 'app_studio_delivery_blueprints', 'app_studio_work_items',
   'app_studio_approvals', 'app_studio_decision_requests', 'app_studio_workflow_events',

@@ -71,7 +71,7 @@ export function mountUserMemoryRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/user-memory', async (c) => {
     const body = await c.req.json<{ title: string; content: string; category?: string }>();
-    const row = deps.db.createAgentMemory({
+    const row = deps.agentMemoryService.create({
       scope: 'user',
       projectId: USER_PROJECT_ID,
       name: body.title,
@@ -105,7 +105,7 @@ export function mountUserMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const row = deps.db.getAgentMemoryById(id);
     if (!row) return c.json({ error: 'not found' }, 404);
-    deps.db.archiveAgentMemory(id, 'forgotten:user');
+    deps.agentMemoryService.archive(id, 'forgotten:user');
     await deps.agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
     try {
       deps.db.recordAgentMemoryEvent({

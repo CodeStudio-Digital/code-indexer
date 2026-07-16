@@ -42,9 +42,7 @@ describe('registry cutover parity', () => {
     const defs = BUILTIN_SPECS.map(buildProviderDefinition);
     expect(defs.map((d) => d.kind)).toEqual(REGISTRY_ORDER);
     expect(defs.every((d) => typeof d.createCoder === 'function')).toBe(true);
-    expect(defs.every((d) => typeof d.createIndexer === 'function' || typeof d.createIndexerAsync === 'function')).toBe(
-      true,
-    );
+    expect(defs.every((d) => !('createIndexer' in d) && !('createIndexerAsync' in d))).toBe(true);
   });
 
   it('pricing first-match is preserved for the cross-provider duplicate model ids', () => {

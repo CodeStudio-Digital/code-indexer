@@ -169,7 +169,16 @@ describe('project git premium safety and snapshots', () => {
     const second = await h.statusPage({ projectId: 1, repoPath: root, pageSize: 250, snapshotId: first.snapshotId!, cursor: first.nextCursor! }, {} as never);
     expect(second.files).toHaveLength(25);
     expect(second.nextCursor).toBeNull();
-    expect(new Set([...first.files, ...second.files].map((file) => file.path)).size).toBe(275);
+    const allFiles = [...first.files, ...second.files];
+    expect(new Set(allFiles.map((file) => file.path)).size).toBe(275);
+
+    // Bulk mutations use a NUL-delimited pathspec stream instead of hundreds of
+    // argv entries, which is both faster and safe from Windows command limits.
+    const allPaths = allFiles.map((file) => file.path);
+    await h.stage({ projectId: 1, repoPath: root, paths: allPaths }, {} as never);
+    expect((await git(root, ['diff', '--cached', '--name-only'])).stdout.trim().split(/\r?\n/)).toHaveLength(275);
+    await h.unstage({ projectId: 1, repoPath: root, paths: allPaths }, {} as never);
+    expect((await git(root, ['diff', '--cached', '--name-only'])).stdout.trim()).toBe('');
   });
 
   it('pins history pages to the original HEAD when new commits arrive', async () => {

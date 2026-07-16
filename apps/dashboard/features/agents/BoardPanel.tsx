@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
+import { parseDbDate, formatDateTime, formatClock } from '../../lib/datetime.js';
 import { Markdown } from '../chat/messages/Markdown.js';
 import type { BoardMessage } from '../../hooks/useCompanyStream.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
@@ -60,21 +61,17 @@ type FeedItem =
   | { type: 'prompt'; key: string; at: number; prompt: MasterPrompt };
 
 /**
- * Board entries and master prompts come from different sources with
- * different timestamp formats. SQLite's `datetime('now')` returns a
- * naive string (no timezone) for both the `company_board` and the
- * `company_master_prompts` rows, so we treat them identically: parse as
- * UTC for ordering.
+ * Board entries and master prompts come from different sources but share the
+ * same SQLite `datetime('now')` shape (naive UTC string, no zone) for both the
+ * `company_board` and `company_master_prompts` rows. `parseDbDate` handles the
+ * UTC normalization so ordering and display stay in the local timezone.
  */
 function parseAt(s: string): number {
-  // If the string already has a zone (Z/±hh:mm), Date() handles it.
-  // Otherwise treat as UTC (matches SQLite datetime('now')).
-  const hasZone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(s);
-  return new Date(hasZone ? s : s + 'Z').getTime();
+  return parseDbDate(s)?.getTime() ?? 0;
 }
 
 function formatBoardTime(createdAt: string): string {
-  return new Date(parseAt(createdAt)).toLocaleString();
+  return formatDateTime(createdAt);
 }
 
 function buildBoardMarkdown(items: FeedItem[], sessionName?: string, sessionId?: number): string {
@@ -241,7 +238,7 @@ export const BoardPanel = memo(function BoardPanel({
                   {isBlocker ? 'BLOCKER' : msg.kind}
                 </Badge>
                 <span className="text-[10px] text-muted-foreground ml-auto">
-                  {new Date(msg.created_at).toLocaleTimeString()}
+                  {formatClock(msg.created_at)}
                 </span>
                 <Button
                   type="button"

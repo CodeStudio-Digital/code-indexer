@@ -24,7 +24,6 @@ import type { DbClientApi } from './dbClient.js';
 import type { RunnerApi } from './runner.js';
 import type { RuntimeApi } from './runtime.js';
 import type { SnapshotsApi } from './snapshots.js';
-import type { RunsApi } from './runs.js';
 import type { SearchApi } from './search.js';
 import type { AdminApi } from './admin.js';
 import type { DocsApi } from './docs.js';
@@ -67,7 +66,6 @@ export * from './dbClient.js';
 export * from './runner.js';
 export * from './runtime.js';
 export * from './snapshots.js';
-export * from './runs.js';
 export * from './search.js';
 export * from './admin.js';
 export * from './docs.js';
@@ -102,7 +100,6 @@ export interface Api {
 
   // Project artifacts
   snapshots: SnapshotsApi;
-  runs: RunsApi;
   search: SearchApi;
 
   // Pro features

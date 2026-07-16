@@ -17,6 +17,28 @@ export interface ReadProject {
   name: string;
 }
 
+/** Preserve input order while bounding multi-project I/O. Semantic reads can
+ * open one vectors.db per project, so the global-session fan-out shares the
+ * same default ceiling as LocalVectorRouter.searchMany. */
+export async function mapProjectsConcurrent<T, R>(
+  projects: readonly T[],
+  mapper: (project: T, index: number) => Promise<R>,
+  concurrency = 4,
+): Promise<R[]> {
+  if (projects.length === 0) return [];
+  const limit = Math.max(1, Math.min(4, Math.floor(concurrency) || 1));
+  const results = new Array<R>(projects.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < projects.length) {
+      const index = cursor++;
+      results[index] = await mapper(projects[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, projects.length) }, worker));
+  return results;
+}
+
 /** Per-project fetch budget for the injected index when unioning N projects. */
 export function perProjectIndexLimit(projectCount: number, total = 12): number {
   return projectCount <= 1 ? total : Math.max(4, Math.ceil(total / projectCount));

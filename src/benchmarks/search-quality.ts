@@ -33,14 +33,22 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
-import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
+import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
+import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
+import { SemanticStore } from '@mcp/store/semantic-store.js';
+import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
+import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-runtime.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
-import { createReranker, NullReranker } from '@mcp/indexer/search/reranker.js';
+import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { runBenchmark, type CellResult, type EmbeddingEntry } from '@mcp/indexer/benchmarks/engine.js';
 import { buildReranker, buildEmbedding } from '@mcp/indexer/benchmarks/specs.js';
 import { buildScratchVectorStore } from '@mcp/indexer/benchmarks/scratch-index.js';
+import {
+  assertActiveBenchmarkGeneration,
+  assertPhysicalBenchmarkVectors,
+  resolveActiveBenchmarkQueryServices,
+} from '@mcp/indexer/benchmarks/active-query.js';
 import { generateQueriesFromIndex } from '@mcp/indexer/benchmarks/query-gen.js';
 import type { HybridSearchResult, SearchMode } from '@mcp/shared/types.js';
 
@@ -269,8 +277,11 @@ async function main(): Promise<void> {
       // production default resolved from the provider store.
       'no-rerank': { type: 'boolean' },
       'min-recall': { type: 'string' },
-      // Which mode the --min-recall gate applies to. Default: best across
-      // the run modes (legacy behavior, lets fts mask a hybrid regression).
+      // Quality gates are ON by default. Exploratory runs can opt out, but CI
+      // and the normal benchmark path enforce the accepted retrieval floor.
+      'no-gates': { type: 'boolean' },
+      // Which mode the --min-recall gate applies to. Default: hybrid when it
+      // runs, so FTS cannot mask a semantic regression.
       'gate-mode': { type: 'string' },
       // Optional: write results JSON to disk for diffing against future runs.
       // Used by the baseline workflow. Default: do not write a file (legacy behavior).
@@ -307,7 +318,8 @@ async function main(): Promise<void> {
   ];
 
   const minRecallRaw = values['min-recall'];
-  const minRecall = minRecallRaw !== undefined ? Number(minRecallRaw) : NaN;
+  const gatesEnabled = !values['no-gates'];
+  const minRecall = minRecallRaw !== undefined ? Number(minRecallRaw) : (gatesEnabled ? 0.70 : NaN);
   if (minRecallRaw !== undefined && (!Number.isFinite(minRecall) || minRecall < 0 || minRecall > 1)) {
     console.error(`[bench] --min-recall must be a number in [0, 1], got: ${minRecallRaw}`);
     process.exit(1);
@@ -319,15 +331,44 @@ async function main(): Promise<void> {
 
   const providerStore = new ProviderStore(config.dbPath);
   providerStore.seedFromEnvIfEmpty();
-  const embeddingService = createEmbeddingService(providerStore);
-  const vectorStore = createVectorStore(providerStore);
-  const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
-  const hyde = values['no-hyde'] ? null : new HyDEService(providerStore);
-  // Match production wiring (deps.ts, mcp-server): resolve the admin-managed
-  // default from the provider store — after `seedFromEnvIfEmpty()` that is
-  // LocalReranker, NOT NullReranker. Passing no store here would silently
-  // benchmark a reranker-less stack production never runs.
-  const reranker = values['no-rerank'] ? new NullReranker() : createReranker(providerStore);
+  const pipelineProviderResolver = new PipelineProviderResolver(
+    new PipelineProviderBindingsStore(db.raw()),
+    providerStore,
+  );
+  const semanticStore = new SemanticStore(db.raw());
+  const semanticRuntime = new SemanticProfileRuntime(semanticStore, providerStore);
+  const localVectorRouter = new LocalVectorRouter({
+    resolveProject: (projectId) => db.getProject(projectId),
+    semanticStore,
+  });
+  const vectorStore = localVectorRouter.asVectorStore();
+  // The desired profile may already point at a new model while this project's
+  // prior generation is still active. Benchmark exactly the serving space.
+  // Production search may fall back to FTS, but a quality gate must never
+  // report that fallback as a successful semantic benchmark.
+  const activeQuery = resolveActiveBenchmarkQueryServices(
+    semanticStore,
+    semanticRuntime,
+    vectorStore,
+    project.id,
+  );
+  const qualityGatesEnabled = gatesEnabled || Number.isFinite(minRecall);
+  if (qualityGatesEnabled) {
+    assertActiveBenchmarkGeneration(activeQuery);
+    const physicalVectorIds = await localVectorRouter.listIds(
+      activeQuery.namespace,
+      activeQuery.activeGenerationId,
+    );
+    assertPhysicalBenchmarkVectors(activeQuery, new Set(physicalVectorIds).size);
+  }
+  const { embeddingService, vectorStore: searchable } = activeQuery;
+  const hyde = values['no-hyde'] ? null : new HyDEService(pipelineProviderResolver);
+  // Match production wiring: Code and Knowledge own independent semantic
+  // profiles. Preserve --no-rerank as an explicit RRF-only override.
+  const rerankerTarget = semanticRuntime.currentRerankerTarget('code');
+  const reranker = values['no-rerank'] || rerankerTarget.kind === 'disabled'
+    ? new NullReranker()
+    : semanticRuntime.reranker('code');
   const search = new HybridSearch(db, searchable, embeddingService, hyde, reranker);
 
   const maxQueries = values['max-queries'] ? parseInt(values['max-queries'], 10) : undefined;
@@ -348,6 +389,12 @@ async function main(): Promise<void> {
       }
     }
   }
+  if (queries.length === 0) {
+    throw new Error('[bench] invalid gold set: zero queries');
+  }
+  if (db.listFiles(project.id).length === 0) {
+    throw new Error(`[bench] invalid index: project ${project.name} has zero indexed files`);
+  }
 
   // ── Matrix mode: compare reranker/embedding configs side by side ──────────
   // Triggered by --rerankers/--embeddings. Runs the (embedding × reranker)
@@ -355,7 +402,10 @@ async function main(): Promise<void> {
   if (values.rerankers || values.embeddings) {
     const rerankerSpecs = (values.rerankers ?? 'default').split(',').map((s) => s.trim()).filter(Boolean);
     const embSpecs = (values.embeddings ?? 'live').split(',').map((s) => s.trim()).filter(Boolean);
-    const rerankers = rerankerSpecs.map((s) => buildReranker(s, providerStore));
+    const rerankers = rerankerSpecs.map((s) =>
+      s === 'default' || s === 'store'
+        ? { label: 'default', reranker }
+        : buildReranker(s, providerStore));
 
     // Non-live embeddings need their vectors re-embedded into a throwaway store
     // (different vector space). Targets from the query set are always embedded
@@ -366,11 +416,11 @@ async function main(): Promise<void> {
 
     const embeddings: EmbeddingEntry[] = [];
     for (const s of embSpecs) {
-      const e = buildEmbedding(s, providerStore);
-      if (!e.needsScratch) {
-        embeddings.push({ label: e.label, service: e.service, vectorStore: searchable });
+      if (s === 'live' || s === 'default' || s === 'store') {
+        embeddings.push({ label: 'live', service: embeddingService, vectorStore: searchable });
         continue;
       }
+      const e = buildEmbedding(s, providerStore);
       const safe = `${project.name}.${s}`.replace(/[^a-z0-9._-]+/gi, '_');
       const scratchPath = join('bench', 'scratch', `${safe}.db`);
       mkdirSync(dirname(scratchPath), { recursive: true });
@@ -389,6 +439,9 @@ async function main(): Promise<void> {
       });
       process.stdout.write('\n');
       console.log(`[bench] '${s}': ${embedded} vectors from ${files} files, ~${tokens} tokens`);
+      if (qualityGatesEnabled && embedded === 0) {
+        throw new Error(`[bench] invalid semantic index: '${s}' produced zero physical vectors`);
+      }
       embeddings.push({ label: e.label, service: e.service, vectorStore: store });
     }
     const matrixMode = (values.mode as SearchMode | 'expanded') ?? 'hybrid';
@@ -411,7 +464,23 @@ async function main(): Promise<void> {
     );
     process.stdout.write('\n\n');
     printMatrix(cells);
+    let matrixFailure: string | null = null;
+    if (cells.length === 0 || cells.some((cell) => cell.queries === 0)) {
+      matrixFailure = '[bench] invalid matrix: zero evaluated items';
+    }
+    if (!matrixFailure && Number.isFinite(minRecall)) {
+      const failed = cells.filter((cell) => cell.recall_at_10 < minRecall);
+      if (failed.length > 0) {
+        matrixFailure = `[bench] ${failed.length} matrix cell(s) below R@10 ${minRecall.toFixed(3)}: ${
+          failed.map((cell) => `${cell.embedding}/${cell.reranker}=${cell.recall_at_10.toFixed(3)}`).join(', ')
+        }`;
+      }
+    }
+    await semanticRuntime.dispose();
+    await localVectorRouter.drainAndClose();
+    providerStore.close();
     db.close();
+    if (matrixFailure) throw new Error(matrixFailure);
     return;
   }
 
@@ -419,6 +488,7 @@ async function main(): Promise<void> {
   console.log(`[bench] modes: ${modes.join(', ')}\n`);
 
   const results: ModeResult[] = [];
+  const modeErrors: string[] = [];
   for (const mode of modes) {
     process.stdout.write(`  running ${mode}… `);
     const t0 = Date.now();
@@ -427,7 +497,9 @@ async function main(): Promise<void> {
       results.push(r);
       console.log(`done (${Date.now() - t0}ms)`);
     } catch (e) {
-      console.log(`FAILED: ${(e as Error).message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      modeErrors.push(`${mode}: ${message}`);
+      console.log(`FAILED: ${message}`);
     }
   }
 
@@ -437,6 +509,7 @@ async function main(): Promise<void> {
 
   // Highlight lift from fts → expanded if both were run.
   const fts = results.find((r) => r.mode === 'fts');
+  const hybrid = results.find((r) => r.mode === 'hybrid');
   const exp = results.find((r) => r.mode === 'expanded');
   if (fts && exp && fts.recall_at_10 > 0) {
     const lift = ((exp.recall_at_10 - fts.recall_at_10) / fts.recall_at_10) * 100;
@@ -471,14 +544,24 @@ async function main(): Promise<void> {
     console.log(`[bench] results written to ${outPath}`);
   }
 
+  await semanticRuntime.dispose();
+  await localVectorRouter.drainAndClose();
+  providerStore.close();
   db.close();
 
-  // CI gate: if --min-recall set, fail when recall@10 is under the threshold.
-  // By default "best across run modes" (legacy — at least one mode hits the
-  // bar). With --gate-mode the gate pins a single mode, so e.g. fts can no
-  // longer mask a hybrid regression.
+  if (modeErrors.length > 0) {
+    throw new Error(`[bench] unclassified search error(s):\n- ${modeErrors.join('\n- ')}`);
+  }
+  if (gatesEnabled && fts && hybrid && hybrid.recall_at_10 < fts.recall_at_10) {
+    throw new Error(
+      `[bench] hybrid R@10 ${hybrid.recall_at_10.toFixed(3)} < FTS R@10 ${fts.recall_at_10.toFixed(3)}`,
+    );
+  }
+
+  // CI gate: fail when recall@10 is under the threshold. By default the gate
+  // pins hybrid when that mode ran; --gate-mode can select another mode.
   if (Number.isFinite(minRecall)) {
-    const gateMode = values['gate-mode'];
+    const gateMode = values['gate-mode'] ?? (results.some((result) => result.mode === 'hybrid') ? 'hybrid' : undefined);
     const gated = gateMode ? results.filter((r) => r.mode === gateMode) : results;
     if (gated.length === 0) {
       console.error(

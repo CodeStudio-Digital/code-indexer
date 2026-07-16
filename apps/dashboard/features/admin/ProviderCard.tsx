@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Loader2, RefreshCw, Trash2, XCircle, Zap } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -8,7 +8,9 @@ import { Switch } from '../../components/ui/switch.js';
 import { ClaudeCodeUsagePanel } from './ClaudeCodeUsagePanel.js';
 import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
 import { FallbackChainPanel } from './FallbackChainPanel.js';
+import { SubagentProfilesPanel } from './SubagentProfilesPanel.js';
 import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
+import { SubagentTargetSelect } from './providers/SubagentTargetSelect.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
 
 interface ProviderCardProps {
@@ -38,6 +40,7 @@ interface ProviderCardProps {
     providerId: string,
     subagentProviderId: string | null,
     modelId: string | null,
+    profile?: string,
   ) => void;
 }
 
@@ -68,30 +71,10 @@ export function ProviderCard({
 }: ProviderCardProps) {
   const { t } = useTranslation(['admin', 'common']);
   const selectedSubagentProviderId = readSubagentProviderId(p.extra?.subagent_provider_id);
-  const subagentTargetProviderId = selectedSubagentProviderId ?? p.id;
-  const subagentModels = providerModelsById[subagentTargetProviderId] ?? (
-    subagentTargetProviderId === p.id ? models : []
-  );
   const selectedSubagentModelId = readSubagentModelId(p.extra?.subagent_model);
   const enabledSubagentProviderOptions = allProviders.filter((candidate) => (
     candidate.id !== p.id && candidate.enabled && candidate.use_for_coder
   ));
-  const selectedSubagentProvider = selectedSubagentProviderId
-    ? allProviders.find((candidate) => candidate.id === selectedSubagentProviderId)
-    : null;
-  const subagentProviderOptions =
-    selectedSubagentProvider &&
-    !enabledSubagentProviderOptions.some((candidate) => candidate.id === selectedSubagentProvider.id)
-      ? [selectedSubagentProvider, ...enabledSubagentProviderOptions]
-      : enabledSubagentProviderOptions;
-  const enabledSubagentModels = subagentModels.filter((m) => m.enabled);
-  const selectedSubagentModelMissing = !!selectedSubagentModelId &&
-    !enabledSubagentModels.some((m) => m.model_id === selectedSubagentModelId);
-
-  useEffect(() => {
-    if (!isExpanded || providerModelsById[subagentTargetProviderId]) return;
-    void onLoadProviderModels(subagentTargetProviderId);
-  }, [isExpanded, onLoadProviderModels, providerModelsById, subagentTargetProviderId]);
 
   return (
     // `provider-card-shell` is a sentinel class that the new
@@ -260,57 +243,43 @@ export function ProviderCard({
               </Button>
             </div>
           )}
-          {/* Default subagent provider/model */}
-          <div className="pt-3 mt-3 border-t">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label className="grid gap-1 text-sm font-medium">
-                <span>{t('admin:provider.subagentProvider')}</span>
-                <select
-                  aria-label="Default subagent provider"
-                  className="h-8 rounded border bg-background px-2 text-xs"
-                  value={selectedSubagentProviderId ?? ''}
-                  onChange={(e) => {
-                    const nextProviderId = e.target.value === '' ? null : e.target.value;
-                    onSetSubagentTarget(p.id, nextProviderId, null);
-                    if (nextProviderId && !providerModelsById[nextProviderId]) {
-                      void onLoadProviderModels(nextProviderId);
-                    }
-                  }}
-                >
-                  <option value="">{t('admin:provider.subagentProviderDefault')}</option>
-                  {subagentProviderOptions.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="grid gap-1 text-sm font-medium">
-                <span>{t('admin:provider.subagentModel')}</span>
-                <select
-                  aria-label="Default subagent model"
-                  className="h-8 rounded border bg-background px-2 text-xs"
-                  value={selectedSubagentModelId ?? ''}
-                  onChange={(e) =>
-                    onSetSubagentTarget(
-                      p.id,
-                      selectedSubagentProviderId,
-                      e.target.value === '' ? null : e.target.value,
-                    )
-                  }
-                >
-                  <option value="">{t('admin:provider.subagentModelDefault')}</option>
-                  {selectedSubagentModelMissing && (
-                    <option value={selectedSubagentModelId}>{selectedSubagentModelId}</option>
-                  )}
-                  {enabledSubagentModels.map((m) => (
-                    <option key={`${m.provider_id}:${m.model_id}:${m.mode}`} value={m.model_id}>
-                      {m.name || m.model_id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+          {/* Default subagent provider/model + per-profile overrides */}
+          <div className="pt-3 mt-3 border-t space-y-3">
+            <SubagentTargetSelect
+              parentProviderId={p.id}
+              providerId={selectedSubagentProviderId}
+              modelId={selectedSubagentModelId}
+              providerOptions={enabledSubagentProviderOptions}
+              allProviders={allProviders}
+              baseModels={models}
+              providerModelsById={providerModelsById}
+              onLoadProviderModels={onLoadProviderModels}
+              onChange={(providerId, modelId) => onSetSubagentTarget(p.id, providerId, modelId)}
+              effort={readSubagentModelId(p.extra?.subagent_effort)}
+              onEffortChange={(effort) => onSetSubagentEffort(p.id, effort)}
+              providerLabel={t('admin:provider.subagentProvider')}
+              modelLabel={t('admin:provider.subagentModel')}
+              effortLabel={t('admin:provider.subagentEffort')}
+              providerEmptyLabel={t('admin:provider.subagentProviderDefault')}
+              modelEmptyLabel={t('admin:provider.subagentModelDefault')}
+              effortEmptyLabel={t('admin:provider.subagentEffortDefault')}
+              providerAriaLabel="Default subagent provider"
+              modelAriaLabel="Default subagent model"
+              effortAriaLabel="Default subagent effort"
+            />
+            <SubagentProfilesPanel
+              provider={p}
+              allProviders={allProviders}
+              models={models}
+              providerModelsById={providerModelsById}
+              onLoadProviderModels={onLoadProviderModels}
+              onSetProfileTarget={(providerId, profileId, subProviderId, modelId) =>
+                onSetSubagentTarget(providerId, subProviderId, modelId, profileId)
+              }
+              onSetProfileEffort={(providerId, profileId, effort) =>
+                onSetSubagentEffort(providerId, effort, profileId)
+              }
+            />
           </div>
           {/* Fallback chain configuration */}
           <div className="pt-3 mt-3 border-t">

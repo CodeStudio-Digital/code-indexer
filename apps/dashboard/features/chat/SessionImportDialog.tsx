@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AgentPreset } from '@mcp/api-bus';
 import { AlertTriangle, CheckCircle2, FileInput, Loader2, Search } from 'lucide-react';
+import { formatDateTime } from '../../lib/datetime.js';
 import { useTranslation } from 'react-i18next';
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -42,8 +43,7 @@ interface Props {
 
 function displayDate(value: string | null): string {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return formatDateTime(value, undefined, undefined, value);
 }
 
 function errorText(error: unknown): string {

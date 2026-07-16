@@ -241,7 +241,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     if (!requested) return;
     // Legacy deep-links (?tab=runs|indexed|...) now resolve to the unified
     // Index tab — the global running-tasks dropdown jumps to ?tab=runs.
-    const INDEX_ALIASES = new Set(['runs', 'indexed', 'search', 'dependencies', 'architecture', 'diff', 'costs']);
+    const INDEX_ALIASES = new Set(['runs', 'indexed', 'dependencies']);
     const surface = projectSurface(requested);
     const pluginWindow = contribWindows.find((window) => window.id === requested);
     if (requested === 'chat') {

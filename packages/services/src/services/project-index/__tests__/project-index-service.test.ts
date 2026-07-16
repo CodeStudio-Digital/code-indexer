@@ -35,6 +35,7 @@ const SETTINGS: ProjectIndexSettings = {
 
 class FakeExecutor implements StructuralExecutor {
   runs = 0;
+  runProjectIds: number[] = [];
   indexCalls: string[][] = [];
   removeCalls: string[][] = [];
   delayMs = 0;
@@ -45,10 +46,11 @@ class FakeExecutor implements StructuralExecutor {
   /** Frames emitted via onProgress during the run (scan/index liveness). */
   progressFrames: StructuralProgressFrame[] = [];
   async runStructuralIndex(
-    _projectId: number,
+    projectId: number,
     opts: { maxFiles?: number; allowEmptyWipe?: boolean; onProgress?: (p: StructuralProgressFrame) => void },
   ) {
     this.runs++;
+    this.runProjectIds.push(projectId);
     this.lastRunOpts = opts;
     if (this.delayMs) await sleep(this.delayMs);
     this.onRun?.();
@@ -77,6 +79,10 @@ class FakeFileWatcher {
   stopped: number[] = [];
   active = new Set<number>();
   events = new Map<number, { onFileChanged: (events: Array<{ path: string; kind: 'upsert' | 'delete'; isDir?: boolean }>) => void | Promise<void> }>();
+  waitCalls: number[] = [];
+  flushCalls: number[] = [];
+  onStart?: (projectId: number) => void;
+  onReadyWait?: (projectId: number) => void;
 
   startWatching(
     projectId: number,
@@ -84,8 +90,18 @@ class FakeFileWatcher {
     events: { onFileChanged: (events: Array<{ path: string; kind: 'upsert' | 'delete'; isDir?: boolean }>) => void | Promise<void> },
   ): void {
     this.started.push(projectId);
+    this.onStart?.(projectId);
     this.active.add(projectId);
     this.events.set(projectId, events);
+  }
+
+  async waitUntilReady(projectId: number): Promise<void> {
+    this.waitCalls.push(projectId);
+    this.onReadyWait?.(projectId);
+  }
+
+  async flushPending(projectId: number): Promise<void> {
+    this.flushCalls.push(projectId);
   }
 
   async stopWatching(projectId: number): Promise<void> {
@@ -181,6 +197,23 @@ describe('ProjectIndexService', () => {
     svc.ensureFresh(1, 'session');
     await sleep(80);
     expect(exec.runs).toBe(1);
+    for (let i = 0; i < 100; i++) svc.ensureFresh(1, 'session');
+    await sleep(20);
+    expect(exec.runs).toBe(1);
+    await svc.dispose();
+  });
+
+  it('coalesces a burst of global-workspace changes into one follow-up reconciliation', async () => {
+    const exec = new FakeExecutor();
+    exec.delayMs = 25;
+    const svc = makeService(exec);
+
+    svc.ensureFresh(1, 'open');
+    await sleep(5);
+    for (let i = 0; i < 50; i++) svc.ensureFresh(1, 'workspace');
+    await sleep(90);
+
+    expect(exec.runs).toBe(2);
     await svc.dispose();
   });
 
@@ -209,6 +242,50 @@ describe('ProjectIndexService', () => {
     expect(svc.deactivate(1, 'view-a')).toBe(false);
     expect(svc.deactivate(1, 'view-b')).toBe(true);
     expect(svc.deactivate(1, 'unknown-view')).toBe(true);
+    await svc.dispose();
+  });
+
+  it('performs one stat-first reconciliation per reopen lifecycle', async () => {
+    const projectRow = {
+      structural_indexed_at: '2026-07-14T00:00:00Z' as string | null,
+      last_indexed: null,
+    };
+    const exec = new FakeExecutor();
+    const svc = makeService(exec, fakeDb(projectRow));
+
+    svc.activate(1, 'view-a');
+    await sleep(25);
+    for (let i = 0; i < 25; i++) svc.ensureFresh(1, 'session');
+    await sleep(10);
+    expect(exec.runs).toBe(1);
+
+    expect(svc.deactivate(1, 'view-a')).toBe(true);
+    svc.activate(1, 'view-b');
+    await sleep(25);
+    expect(exec.runs).toBe(2);
+    await svc.dispose();
+  });
+
+  it('does not activate semantic backfill from a stale reopen baseline before reconcile+drain', async () => {
+    const exec = new FakeExecutor();
+    exec.delayMs = 25;
+    const svc = makeService(
+      exec,
+      fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null }),
+    );
+    const lifecycle: string[] = [];
+    svc.setSemanticCatchup({
+      noteDelta: () => undefined,
+      ensureProject: async () => undefined,
+      projectReady: (projectId) => { lifecycle.push(`ready:${projectId}`); },
+    });
+
+    svc.activate(1, 'view-a');
+    expect(lifecycle).toEqual([]);
+    await sleep(10);
+    expect(lifecycle).toEqual([]);
+    await sleep(50);
+    expect(lifecycle).toEqual(['ready:1']);
     await svc.dispose();
   });
 
@@ -400,6 +477,88 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
+  it('fences semantic activation immediately on dirty input and catches up only after the structural drain', async () => {
+    const exec = new FakeExecutor();
+    exec.delayMs = 25;
+    const svc = makeService(exec);
+    const events: string[] = [];
+    svc.setSemanticCatchup({
+      noteDelta: (projectId) => events.push(`delta:${projectId}`),
+      ensureProject: async (projectId) => { events.push(`ensure:${projectId}`); },
+    });
+
+    svc.markDirty(1, [{ path: 'src/new.ts', kind: 'upsert' }]);
+    expect(events).toEqual(['delta:1']);
+    await sleep(10);
+    expect(events).toEqual(['delta:1']);
+
+    await sleep(50);
+    expect(exec.indexCalls).toEqual([['src/new.ts']]);
+    expect(events).toEqual(['delta:1', 'ensure:1']);
+    await svc.dispose();
+  });
+
+  it('invalidates semantic hashes after a changed structural pass without snapshot fences', async () => {
+    const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
+    const exec = new FakeExecutor();
+    exec.delayMs = 20;
+    exec.onRun = () => { projectRow.structural_indexed_at = '2026-07-15T00:00:00Z'; };
+    const svc = makeService(exec, fakeDb(projectRow));
+    const events: string[] = [];
+    svc.setSemanticCatchup({
+      noteDelta: (projectId, changes) => events.push(`delta:${projectId}:${changes[0]?.path}`),
+      ensureProject: async (projectId) => { events.push(`ensure:${projectId}`); },
+      projectReady: (projectId) => { events.push(`ready:${projectId}`); },
+    });
+
+    svc.activate(1, 'view-a');
+    await sleep(5);
+    expect(events).toEqual([]);
+    await sleep(40);
+    expect(events).toEqual(['delta:1:*', 'ready:1', 'ensure:1']);
+    await svc.dispose();
+
+    const emptyExec = new FakeExecutor();
+    emptyExec.abortEmptyScan = true;
+    const emptySvc = makeService(emptyExec);
+    const emptyEvents: string[] = [];
+    emptySvc.setSemanticCatchup({
+      noteDelta: (projectId) => emptyEvents.push(`delta:${projectId}`),
+      ensureProject: async (projectId) => { emptyEvents.push(`ensure:${projectId}`); },
+      projectReady: (projectId) => { emptyEvents.push(`ready:${projectId}`); },
+    });
+    emptySvc.ensureFresh(1, 'open');
+    await sleep(30);
+    expect(emptySvc.getStatus(1).phase).toBe('error');
+    expect(emptyEvents).toEqual([]);
+    await emptySvc.dispose();
+  });
+
+  it('announces semantic lifecycle readiness once and inactivity after the final view leaves', async () => {
+    const exec = new FakeExecutor();
+    const events: string[] = [];
+    const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
+    exec.onRun = () => { projectRow.structural_indexed_at = '2026-07-15T00:00:00Z'; };
+    const svc = makeService(exec, fakeDb(projectRow), { ...SETTINGS, openDelayMs: 0 });
+    svc.setSemanticCatchup({
+      noteDelta: () => undefined,
+      ensureProject: async () => undefined,
+      projectReady: (projectId) => { events.push(`ready:${projectId}`); },
+      projectInactive: (projectId) => { events.push(`inactive:${projectId}`); },
+    });
+
+    svc.activate(1, 'view-a');
+    svc.activate(1, 'view-b');
+    await sleep(30);
+    expect(events).toEqual(['ready:1']);
+    expect(svc.deactivate(1, 'view-a')).toBe(false);
+    expect(events).toEqual(['ready:1']);
+    expect(svc.deactivate(1, 'view-b')).toBe(true);
+    await sleep(0);
+    expect(events).toEqual(['ready:1', 'inactive:1']);
+    await svc.dispose();
+  });
+
   it('git-meta subscription does not start the recursive file watcher', async () => {
     const exec = new FakeExecutor();
     const fileWatcher = new FakeFileWatcher();
@@ -415,6 +574,63 @@ describe('ProjectIndexService', () => {
     expect(gitWatcher.started).toEqual([1]);
     expect(fileWatcher.started).toEqual([]);
     unsubscribe();
+    await svc.dispose();
+  });
+
+  it('arms and awaits the file watcher before scanning, then drains scan-time changes before ready', async () => {
+    const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
+    const exec = new FakeExecutor();
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const order: string[] = [];
+    fileWatcher.onStart = () => order.push('watch:start');
+    fileWatcher.onReadyWait = () => order.push('watch:ready');
+    exec.onRun = () => {
+      order.push('scan');
+      projectRow.structural_indexed_at = '2026-07-15T00:00:00Z';
+      void fileWatcher.events.get(1)?.onFileChanged([
+        { path: 'D:/fake/src/during-scan.ts', kind: 'upsert' },
+      ]);
+    };
+    const svc = new ProjectIndexService(
+      fakeDb(projectRow),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true }),
+      gitWatcher as never,
+    );
+
+    svc.activate(1, 'view-a');
+    const readiness = await svc.ensureStructuralReady(1, 500);
+
+    expect(readiness.status).toBe('ready');
+    expect(order.slice(0, 3)).toEqual(['watch:start', 'watch:ready', 'scan']);
+    expect(exec.indexCalls).toEqual([['src/during-scan.ts']]);
+    expect(fileWatcher.flushCalls).toEqual([1]);
+    await svc.dispose();
+  });
+
+  it('keeps all active project lifecycles when the watcher cap is exceeded', async () => {
+    const exec = new FakeExecutor();
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const db = fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null });
+    const svc = new ProjectIndexService(
+      db,
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true, maxWatchedProjects: 1, openDelayMs: 20 }),
+      gitWatcher as never,
+    );
+
+    svc.activate(1, 'view-1');
+    svc.activate(2, 'view-2');
+    svc.activate(3, 'view-3');
+    await sleep(60);
+
+    expect(exec.runProjectIds.sort()).toEqual([1, 2, 3]);
+    expect(fileWatcher.stopped).toEqual([]);
+    expect(gitWatcher.stopped).toEqual([]);
     await svc.dispose();
   });
 

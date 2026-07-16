@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodeIndexDB } from '../db.js';
 import { DocStore } from '../doc-store.js';
+import { SemanticStore } from '../semantic-store.js';
 
 interface Handle {
   db: CodeIndexDB;
@@ -27,6 +28,40 @@ function setup(): Handle {
   const db = new CodeIndexDB(join(dir, 'test.db'));
   const store = new DocStore(db.raw());
   return { db, store, dir };
+}
+
+function recordSemanticVectors(h: Handle, collectionId: number, chunkIds: readonly number[]): void {
+  const semantic = new SemanticStore(h.db.raw());
+  const namespace = `docs:c${collectionId}`;
+  let state = semantic.listNamespaceGenerations({ namespace })[0];
+  let generationId = state?.active_generation_id ?? null;
+  if (!generationId) {
+    const generation = semantic.createGeneration({
+      purpose: 'knowledge', fingerprint: 'knowledge:test',
+      embedding_target: { kind: 'disabled' }, dimension: 3,
+    });
+    generationId = generation.id;
+    semantic.updateGeneration(generationId, { status: 'ready' });
+    semantic.beginNamespaceGeneration({
+      namespace, purpose: 'knowledge', generation_id: generationId,
+      expected_items: chunkIds.length,
+    });
+  }
+  for (const chunkId of chunkIds) {
+    semantic.upsertItem({
+      generation_id: generationId, namespace,
+      item_key: `doc_chunk:${chunkId}`, source_hash: `hash-${chunkId}`,
+      vector_id: `doc_chunk:${chunkId}`, chunk_index: 0,
+      status: 'indexed', attempts: 1, error: null,
+    });
+  }
+  state = semantic.listNamespaceGenerations({ namespace })[0];
+  if (state?.building_generation_id === generationId) {
+    semantic.updateNamespaceProgress(namespace, {
+      indexed_items: state.expected_items,
+    });
+    semantic.activateNamespaceGeneration(namespace, generationId);
+  }
 }
 
 describe('DocStore.tryAcquireSource', () => {
@@ -82,8 +117,8 @@ describe('DocStore vector cleanup helpers', () => {
   });
 
   /**
-   * Insert chunks + register their vector_ids so the listVectorIds* helpers
-   * have something to find. Returns the vector_id list for assertions.
+   * Insert chunks + persist their accepted embedding state so deterministic
+   * vector-id helpers have something to find.
    */
   function seedChunksWithVectors(
     collectionId: number,
@@ -103,9 +138,10 @@ describe('DocStore vector cleanup helpers', () => {
     const vectorIds: string[] = [];
     for (const chunkId of chunkIds) {
       const vid = `doc_chunk:${chunkId}`;
-      h.store.recordChunkVector(chunkId, vid, provider);
+      h.store.updateChunkEmbeddingState(chunkId, `hash-${chunkId}`, provider);
       vectorIds.push(vid);
     }
+    recordSemanticVectors(h, collectionId, chunkIds);
     return vectorIds;
   }
 
@@ -115,7 +151,11 @@ describe('DocStore vector cleanup helpers', () => {
     const expected = seedChunksWithVectors(c.id, s.id, 3);
     const refs = h.store.listVectorIdsForSource(s.id);
     expect(refs.map((r) => r.vector_id).sort()).toEqual(expected.sort());
-    expect(refs.every((r) => r.provider === 'default')).toBe(true);
+    expect(refs.every((r) => r.provider.startsWith('semantic:g'))).toBe(true);
+    expect(h.db.raw().prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'doc_chunk_vectors'`,
+    ).get()).toBeUndefined();
+    expect(h.store.countVectorMappings()).toBe(3);
   });
 
   it('listVectorIdsForCollection aggregates across multiple sources', () => {
@@ -129,40 +169,18 @@ describe('DocStore vector cleanup helpers', () => {
     expect(refs.map((r) => r.vector_id).sort()).toEqual([...a, ...b].sort());
   });
 
-  it('recordTombstones is idempotent for the same (vector_id, provider) pair', () => {
-    const inserted1 = h.store.recordTombstones([{ vector_id: 'v1', provider: 'default' }]);
-    expect(inserted1).toBe(1);
-    const inserted2 = h.store.recordTombstones([
-      { vector_id: 'v1', provider: 'default' },     // duplicate
-      { vector_id: 'v2', provider: 'default' },     // new
-      { vector_id: 'v1', provider: 'other' },       // different provider, new
+  it('ignores the retired chunk embedding mirror when semantic_items has no vector', () => {
+    const c = h.store.createCollection({ name: 'legacy-map' });
+    const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://legacy.example' });
+    const [chunkId] = h.store.insertChunks([
+      { collection_id: c.id, source_id: s.id, ord: 0, content: 'legacy', content_hash: 'legacy' },
     ]);
-    expect(inserted2).toBe(2);
-    expect(h.store.countPendingTombstones()).toBe(3);
+    h.store.updateChunkEmbeddingState(chunkId, 'legacy-hash', 'legacy-fingerprint');
+
+    expect(h.store.listVectorIdsForSource(s.id)).toEqual([]);
+    expect(h.store.countVectorMappings()).toBe(0);
   });
 
-  it('markTombstoneRetried bumps retry_count and stores last_error', () => {
-    h.store.recordTombstones([{ vector_id: 'v1', provider: 'default' }]);
-    const [row] = h.store.listPendingTombstones();
-    expect(row.retry_count).toBe(0);
-    expect(row.last_error).toBeNull();
-    h.store.markTombstoneRetried(row.id, 'timeout');
-    const [after] = h.store.listPendingTombstones();
-    expect(after.retry_count).toBe(1);
-    expect(after.last_error).toBe('timeout');
-    expect(after.last_retry_at).not.toBeNull();
-  });
-
-  it('deleteTombstone removes only the given row', () => {
-    h.store.recordTombstones([
-      { vector_id: 'a', provider: 'default' },
-      { vector_id: 'b', provider: 'default' },
-    ]);
-    const rows = h.store.listPendingTombstones();
-    h.store.deleteTombstone(rows[0].id);
-    expect(h.store.countPendingTombstones()).toBe(1);
-    expect(h.store.listPendingTombstones()[0].vector_id).toBe('b');
-  });
 });
 
 describe('DocStore.recoverStaleSources', () => {
@@ -213,7 +231,8 @@ describe('DocStore.getSourceHealth', () => {
       collection_id: c.id, source_id: s.id, ord: i, content: `c${i}`, content_hash: `h${i}`,
     }));
     const chunkIds = h.store.insertChunks(inputs);
-    for (const id of chunkIds) h.store.recordChunkVector(id, `doc_chunk:${id}`, 'default');
+    for (const id of chunkIds) h.store.updateChunkEmbeddingState(id, `hash-${id}`, 'default');
+    recordSemanticVectors(h, c.id, chunkIds);
 
     const health = h.store.getSourceHealth(s.id)!;
     expect(health.chunks_persisted).toBe(5);
@@ -222,7 +241,7 @@ describe('DocStore.getSourceHealth', () => {
     expect(health.missing_count).toBe(0);
   });
 
-  it('reports drift when chunks have no vector mapping', () => {
+  it('reports drift when chunks have no accepted embedding hash', () => {
     // Exactly the scenario the user hit: 6331 persisted, 448 embedded.
     const c = h.store.createCollection({ name: 'col' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://x.example' });
@@ -232,8 +251,9 @@ describe('DocStore.getSourceHealth', () => {
     const chunkIds = h.store.insertChunks(inputs);
     // Embed only the first 3.
     for (let i = 0; i < 3; i++) {
-      h.store.recordChunkVector(chunkIds[i]!, `doc_chunk:${chunkIds[i]}`, 'default');
+      h.store.updateChunkEmbeddingState(chunkIds[i]!, `hash-${chunkIds[i]}`, 'default');
     }
+    recordSemanticVectors(h, c.id, chunkIds.slice(0, 3));
 
     const health = h.store.getSourceHealth(s.id)!;
     expect(health.chunks_persisted).toBe(10);

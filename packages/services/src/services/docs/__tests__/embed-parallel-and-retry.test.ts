@@ -198,10 +198,7 @@ describe('retryEmbeddings — parallel + scope', () => {
     expect(h.embed).not.toHaveBeenCalled();
   });
 
-  it('does NOT record vector mapping when upsert returns 0 (silent remote rejection)', async () => {
-    // Reproduces the 2026-05-20 incident: Cloudflare Vectorize accepted
-    // the request but persisted nothing. Local mapping was wrongly set
-    // and the badge said "✓ embedded" while remote search returned 0.
+  it('does not mark embedding_hash when a vector upsert accepts zero records', async () => {
     h.upsert.mockResolvedValue(0);
     const c = h.store.createCollection({ name: 'col' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://x.example' });
@@ -212,7 +209,7 @@ describe('retryEmbeddings — parallel + scope', () => {
     // Embedding hash was NOT set (so future retries pick these up again).
     const stillMissing = h.store.listChunksMissingEmbedding({ sourceId: s.id });
     expect(stillMissing.length).toBe(3);
-    // No vector mapping rows registered.
+    // Deterministic ids are exposed only for accepted embedding hashes.
     const refs = h.store.listVectorIdsForSource(s.id);
     expect(refs.length).toBe(0);
   });
@@ -230,16 +227,19 @@ describe('retryEmbeddings — parallel + scope', () => {
     expect(result.embedded).toBe(4);
     expect(h.upsert.mock.calls.length).toBeGreaterThan(1);
     expect(h.store.listChunksMissingEmbedding({ sourceId: s.id })).toHaveLength(0);
-    expect(h.store.listVectorIdsForSource(s.id)).toHaveLength(4);
+    // This fake store predates the semantic ledger projection, so accepted
+    // vectors are mirrored on chunks but are not invented as semantic_items.
+    expect(h.store.listVectorIdsForSource(s.id)).toHaveLength(0);
+    const historicalRows = h.db.raw().prepare('SELECT COUNT(*) AS count FROM doc_chunk_vectors').get() as { count: number };
+    expect(historicalRows.count).toBe(0);
   });
 
-  it('force=true wipes existing mapping before retrying', async () => {
+  it('force=true clears accepted hash state before retrying', async () => {
     const c = h.store.createCollection({ name: 'col' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://x.example' });
     const chunkIds = seedPendingChunks(h.store, c.id, s.id, 4);
-    // Simulate a previous successful-looking embed (mapping rows + hash set).
+    // Simulate a previous successful embed.
     for (const id of chunkIds) {
-      h.store.recordChunkVector(id, `doc_chunk:${id}`, 'default');
       h.store.updateChunkEmbedding(id, `h${id}`, 'default');
     }
     // Without force: nothing pending, no work.
@@ -254,18 +254,16 @@ describe('retryEmbeddings — parallel + scope', () => {
     expect(h.embed).toHaveBeenCalledTimes(1);
   });
 
-  it('force does NOT trigger when sourceId is missing (collection-wide is foot-gun)', async () => {
+  it('force can re-embed an explicitly selected collection', async () => {
     const c = h.store.createCollection({ name: 'col' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://x.example' });
     const chunkIds = seedPendingChunks(h.store, c.id, s.id, 2);
     for (const id of chunkIds) {
-      h.store.recordChunkVector(id, `doc_chunk:${id}`, 'default');
       h.store.updateChunkEmbedding(id, `h${id}`, 'default');
     }
-    // collection-wide force is silently downgraded — no clearEmbeddings call.
+    h.upsert.mockResolvedValueOnce(2);
     const result = await h.uc.retryEmbeddings({ collectionId: c.id, force: true });
-    expect(result.total).toBe(0);
-    // Mapping still intact.
-    expect(h.store.listVectorIdsForSource(s.id).length).toBe(2);
+    expect(result).toEqual({ embedded: 2, tokens: 200, total: 2 });
+    expect(h.store.listChunksMissingEmbedding({ sourceId: s.id })).toHaveLength(0);
   });
 });

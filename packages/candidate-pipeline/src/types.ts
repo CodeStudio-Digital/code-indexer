@@ -9,7 +9,7 @@
  *   - Hydrator:      parallel
  *   - Filter:        sequential (kept feeds next filter)
  *   - Scorer:        sequential async, **order-preserving**
- *   - Selector:      single, top-K
+ *   - Selector:      top-K, with an optional final pass after post-hydration
  *   - SideEffect:    fire-and-forget (`tokio::spawn` equivalent — setImmediate)
  *
  * Every trait has an `enable(query)` gate consulted at runtime — the
@@ -78,9 +78,11 @@ export type StageName =
   | 'hydrator'
   | 'filter'
   | 'scorer'
+  | 'post_score_filter'
   | 'selector'
   | 'post_hydrator'
   | 'post_filter'
+  | 'post_selector'
   | 'side_effect';
 
 export interface PipelineResult<C extends PipelineCandidate> {

@@ -150,8 +150,6 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'coder:stream:sendMessage',
   'coder:stream:continueSession',
   'coder:stream:attach',
-  'projects:indexStream',
-  'projects:retryEmbeddingsStream',
   // Terminal PTY — `terminal.open` returns a duplex MessagePort stream
   // (data/exit/error frames out, data/resize/close frames in via the
   // same port). Implemented by apps/electron/src/terminal-ipc.ts.

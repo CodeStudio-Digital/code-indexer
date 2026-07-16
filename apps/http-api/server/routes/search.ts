@@ -22,7 +22,11 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       const mode = c.req.query('mode') as SearchMode | undefined;
       const type = c.req.query('type') as SearchType | undefined;
       const limit = parseIntQuery(c, 'limit', 20);
-      return c.json(await h.project({ projectId, query, mode, type, limit }, createContext()));
+      const supersessionKey = c.req.query('supersessionKey');
+      return c.json(await h.project(
+        { projectId, query, mode, type, limit, supersessionKey },
+        createContext({ signal: c.req.raw.signal, clientInfo: { sourceType: 'http' } }),
+      ));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -31,8 +35,14 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/search', async (c) => {
     try {
       const query = c.req.query('q') ?? '';
+      const mode = c.req.query('mode') as SearchMode | undefined;
+      const type = c.req.query('type') as SearchType | undefined;
       const limit = parseIntQuery(c, 'limit', 20);
-      return c.json(await h.global({ query, limit }, createContext()));
+      const supersessionKey = c.req.query('supersessionKey');
+      return c.json(await h.global(
+        { query, mode, type, limit, supersessionKey },
+        createContext({ signal: c.req.raw.signal, clientInfo: { sourceType: 'http' } }),
+      ));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -44,7 +54,10 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c);
       const query = c.req.query('q') ?? '';
       const limit = parseIntQuery(c, 'limit', 50);
-      return c.json(await h.symbols({ projectId, query, limit }, createContext()));
+      return c.json(await h.symbols(
+        { projectId, query, limit },
+        createContext({ signal: c.req.raw.signal, clientInfo: { sourceType: 'http' } }),
+      ));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -55,7 +68,10 @@ export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c);
       const query = c.req.query('q') ?? '';
       const limit = parseIntQuery(c, 'limit', 50);
-      return c.json(await h.text({ projectId, query, limit }, createContext()));
+      return c.json(await h.text(
+        { projectId, query, limit },
+        createContext({ signal: c.req.raw.signal, clientInfo: { sourceType: 'http' } }),
+      ));
     } catch (err) {
       return mapApiError(c, err);
     }

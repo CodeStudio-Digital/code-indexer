@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Archive, Bot, Crown, KanbanSquare, MessageSquare, X, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { formatDateTime } from '../../lib/datetime.js';
 import { useApi } from '../../hooks/useApi.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 
@@ -89,7 +90,7 @@ export function ArchiveDetailModal({
           <span className="font-medium">Arquivo #{archiveId}</span>
           {data && (
             <span className="text-xs text-muted-foreground">
-              {new Date(data.archive.archived_at + 'Z').toLocaleString()}
+              {formatDateTime(data.archive.archived_at)}
             </span>
           )}
           <Badge variant="outline" className="text-[10px]">read-only</Badge>
@@ -192,7 +193,7 @@ export function ArchiveDetailModal({
                               {b.kind}
                             </Badge>
                             <span className="text-[10px] text-muted-foreground ml-auto">
-                              {new Date(b.created_at + 'Z').toLocaleString()}
+                              {formatDateTime(b.created_at)}
                             </span>
                           </div>
                           <div className="text-xs whitespace-pre-wrap break-words">

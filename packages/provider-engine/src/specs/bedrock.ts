@@ -27,6 +27,18 @@ export const bedrockSpec: ProviderSpec = {
   // route currently enables native PDF for the Claude-on-Bedrock family and
   // extracts text for unknown/unsupported models.
   capabilities: { supportsVision: true, fileInput: 'model-dependent' },
+  semantic: {
+    embedding: {
+      protocol: 'bedrock',
+      defaultModels: ['amazon.titan-embed-text-v2:0', 'amazon.titan-embed-text-v1'],
+      modelPatterns: ['embed'],
+    },
+    rerank: {
+      protocol: 'bedrock',
+      defaultModels: ['amazon.rerank-v1:0', 'cohere.rerank-v3-5:0'],
+      modelPatterns: ['rerank'],
+    },
+  },
   wire: 'bedrock',
   discovery: { from: 'sdk:bedrock' },
   test: { from: 'unsupported', message: 'bedrock test not implemented' },

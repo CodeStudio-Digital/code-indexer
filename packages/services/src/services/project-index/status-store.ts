@@ -155,6 +155,7 @@ export class ProjectIndexStatusStore {
       symbolCount: project?.symbol_count ?? 0,
       semanticStaleCount,
       lastStructuralAt: project?.structural_indexed_at ?? null,
+      lastCheckedAt: project?.structural_last_checked_at ?? null,
       lastSemanticAt: project?.last_indexed ?? null,
     };
   }

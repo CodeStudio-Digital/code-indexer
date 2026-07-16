@@ -9,12 +9,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const chatCalls: Array<Record<string, unknown>> = [];
-const indexerCalls: Array<{
-  apiKey?: string;
-  model?: string;
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-}> = [];
 
 vi.mock('@mcp/code-agent/providers/kimi-code.js', () => ({
   KimiCodeChatProvider: vi.fn().mockImplementation(function (
@@ -23,19 +17,6 @@ vi.mock('@mcp/code-agent/providers/kimi-code.js', () => ({
   ) {
     chatCalls.push(opts);
     Object.assign(this, opts);
-  }),
-}));
-
-vi.mock('@mcp/indexer/indexer/providers/kimi-code.js', () => ({
-  KimiCodeProvider: vi.fn().mockImplementation(function (
-    this: Record<string, unknown>,
-    apiKey?: string,
-    model?: string,
-    baseURL?: string,
-    defaultHeaders?: Record<string, string>,
-  ) {
-    indexerCalls.push({ apiKey, model, baseURL, defaultHeaders });
-    Object.assign(this, { apiKey, model, baseURL, defaultHeaders });
   }),
 }));
 
@@ -48,7 +29,6 @@ const moonshot = buildProviderDefinition(moonshotSpec);
 
 beforeEach(() => {
   chatCalls.length = 0;
-  indexerCalls.length = 0;
 });
 
 describe('moonshot provider definition', () => {
@@ -61,13 +41,12 @@ describe('moonshot provider definition', () => {
   });
 
   it('is registered alongside kimi-code without colliding', async () => {
-    const { getDefinition, listCoderKinds, listIndexerKinds } = await import(
+    const { getDefinition, listCoderKinds } = await import(
       '@mcp/services/providers/registry.js'
     );
     expect(getDefinition('moonshot')).toBeDefined();
     expect(getDefinition('kimi-code')).toBeDefined();
     expect(listCoderKinds()).toContain('moonshot');
-    expect(listIndexerKinds()).toContain('moonshot');
   });
 });
 
@@ -103,16 +82,6 @@ describe('moonshot.createCoder', () => {
       'kimi-latest',
     );
     expect(chatCalls[1].thinkingMode).toBe('auto');
-  });
-});
-
-describe('moonshot.createIndexer', () => {
-  it('builds the same baseURL and forwards apiKey/model', () => {
-    const creds: ResolvedCreds = { apiKey: 'sk-test' };
-    moonshot.createIndexer!(creds, 'kimi-k2-0711-preview');
-    expect(indexerCalls[0].baseURL).toBe('https://api.moonshot.ai/v1');
-    expect(indexerCalls[0].apiKey).toBe('sk-test');
-    expect(indexerCalls[0].model).toBe('kimi-k2-0711-preview');
   });
 });
 

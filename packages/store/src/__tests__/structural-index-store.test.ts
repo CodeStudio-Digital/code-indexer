@@ -1,9 +1,6 @@
 /**
- * Migrations 139/140 — structural-layer store primitives.
- *
- * The load-bearing regression here: upsertFileStructural must NEVER erase the
- * semantic layer (summary/concepts/semantic_hash) written by a full index —
- * that's the whole dumb→smart contract.
+ * Structural store primitives. Semantic generations are intentionally kept
+ * outside the file row.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,14 +15,12 @@ const FULL_FILE = {
   size: 1000,
   lineCount: 50,
   contentHash: 'hash-v1',
-  summary: 'Auth service with token refresh',
-  concepts: ['auth', 'jwt'],
   dependencies: ['./client'],
   internalDeps: ['./client'],
   externalDeps: ['jose'],
-  notes: ['n1'],
-  complexity: 'medium',
-  layer: 'service',
+  isEntryPoint: false,
+  isTest: false,
+  isGenerated: false,
 };
 
 function indexedSymbol(name: string): LLMSymbol {
@@ -62,7 +57,7 @@ describe('structural index store (migrations 139/140)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('creates a new file row with empty semantic defaults', () => {
+  it('creates a structural row and indexes its path', () => {
     const { fileId, created } = db.upsertFileStructural(projectId, {
       path: 'src/new.ts', language: 'typescript', size: 10, lineCount: 2,
       contentHash: 'h1', dependencies: [], internalDeps: [], externalDeps: [],
@@ -70,9 +65,9 @@ describe('structural index store (migrations 139/140)', () => {
     expect(created).toBe(true);
     const row = db.getFile(projectId, 'src/new.ts')!;
     expect(row.id).toBe(fileId);
-    expect(row.summary).toBe('');
-    expect(row.concepts).toBe('[]');
-    expect(row.semantic_hash).toBeNull();
+    expect(row.is_entry_point).toBe(0);
+    expect(row.is_test).toBe(0);
+    expect(row.is_generated).toBe(0);
     // files_ai trigger indexed the path.
     const fts = db.raw().prepare(
       "SELECT rowid FROM files_fts WHERE files_fts MATCH 'new'"
@@ -80,15 +75,14 @@ describe('structural index store (migrations 139/140)', () => {
     expect(fts.map((r) => r.rowid)).toContain(fileId);
   });
 
-  it('UPDATE path preserves the semantic layer (central regression)', () => {
+  it('updates structural facts in place without a second source of semantic truth', () => {
     const fileId = db.upsertFile(projectId, FULL_FILE);
-    db.setFileSemanticHash(projectId, FULL_FILE.path, 'hash-v1');
-    expect(db.countSemanticStale(projectId)).toBe(0);
 
     const { created } = db.upsertFileStructural(projectId, {
       path: FULL_FILE.path, language: 'typescript', size: 1200, lineCount: 60,
       contentHash: 'hash-v2', dependencies: ['./client', './other'],
       internalDeps: ['./client', './other'], externalDeps: ['jose'],
+      isEntryPoint: true, isTest: false, isGenerated: false,
     });
     expect(created).toBe(false);
 
@@ -96,12 +90,8 @@ describe('structural index store (migrations 139/140)', () => {
     expect(row.id).toBe(fileId);
     expect(row.content_hash).toBe('hash-v2');           // structural advanced
     expect(row.size).toBe(1200);
-    expect(row.summary).toBe(FULL_FILE.summary);        // semantics intact
-    expect(JSON.parse(row.concepts)).toEqual(['auth', 'jwt']);
-    expect(row.layer).toBe('service');
-    expect(row.semantic_hash).toBe('hash-v1');          // untouched → stale marker
-    expect(db.countSemanticStale(projectId)).toBe(1);
-    expect(db.listSemanticStalePaths(projectId)).toEqual([FULL_FILE.path]);
+    expect(JSON.parse(row.dependencies)).toEqual(['./client', './other']);
+    expect(row.is_entry_point).toBe(1);
   });
 
   it('content FTS: upsert + search + AD trigger + guard', () => {
@@ -225,22 +215,20 @@ describe('structural index store (migrations 139/140)', () => {
     expect(db.getProjectByPath('backend')).toBeUndefined();
   });
 
-  it('runs.kind: structural runs are excluded from snapshot-diff pairing', () => {
+  it('keeps structural reconciliation history without LLM telemetry', () => {
     const finish = {
       status: 'completed' as const, totalFiles: 1, indexedFiles: 1, skippedFiles: 0,
-      errorCount: 0, inputTokens: 0, outputTokens: 0, embeddingTokens: 0, estimatedCostUsd: 0,
+      errorCount: 0,
     };
-    const full1 = db.startRun(projectId, 'p', 'm');
-    db.finishRun(full1, finish);
-    const structural = db.startRun(projectId, 'tree-sitter', undefined, 'structural');
+    const structural = db.startRun(projectId);
     db.finishRun(structural, finish);
-    const full2 = db.startRun(projectId, 'p', 'm', 'full');
-    db.finishRun(full2, finish);
 
-    expect(db.getRun(structural)!.kind).toBe('structural');
-    expect(db.getRun(full1)!.kind).toBe('full');
-    // started_at is second-granular — assert membership, not order.
-    const pair = db.getLastTwoRunIds(projectId)!;
-    expect(new Set(pair)).toEqual(new Set([full1, full2]));
+    expect(db.getRun(structural)).toMatchObject({
+      project_id: projectId,
+      status: 'completed',
+      indexed_files: 1,
+      total_files: 1,
+    });
+    expect(db.getRuns(projectId)).toHaveLength(1);
   });
 });

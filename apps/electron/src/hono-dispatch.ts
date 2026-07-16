@@ -64,8 +64,6 @@ export const STREAMING_DISPATCH_PATHS = new Set<string>([
   'docs.sources.retryEmbeddingsStream',
   'docs.research.stream',
   'company.stream',
-  'projects.indexStream',
-  'projects.retryEmbeddingsStream',
 ]);
 
 /**
@@ -150,9 +148,6 @@ export const DISPATCH_TABLE: Record<string, DispatchSpec> = {
   'workspace.config':            { method: 'GET',  url: ()  => `/api/workspace/config` },
   'workspace.setConfig':         { method: 'PUT',  url: ()  => `/api/workspace/config`, body: json },
 
-  // ─── projects.* streaming ──────────────────────────────────
-  'projects.indexStream':            { method: 'POST', url: (i) => `/api/projects/${num(i, 'id')}/index/stream` },
-  'projects.retryEmbeddingsStream':  { method: 'POST', url: (i) => `/api/projects/${num(i, 'id')}/retry-embeddings/stream` },
 };
 
 // ─── small helpers ───────────────────────────────────────────────

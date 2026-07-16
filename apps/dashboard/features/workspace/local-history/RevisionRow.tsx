@@ -5,6 +5,7 @@
 import { memo } from 'react';
 import { Tag } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
+import { parseDbDate } from '../../../lib/datetime.js';
 import type { HistoryRevision } from '../../../state/local-history-store.js';
 
 const KIND_META: Record<HistoryRevision['kind'], { label: string; cls: string }> = {
@@ -15,10 +16,10 @@ const KIND_META: Record<HistoryRevision['kind'], { label: string; cls: string }>
   manual: { label: 'Label', cls: 'text-accent-foreground' },
 };
 
-/** created_at do SQLite é UTC sem 'Z' — anexa antes de formatar para a TZ local. */
+/** created_at do SQLite é UTC sem 'Z'; parseDbDate normaliza para a TZ local. */
 export function formatWhen(createdAt: string): string {
-  const d = new Date(`${createdAt.replace(' ', 'T')}Z`);
-  if (Number.isNaN(d.getTime())) return createdAt;
+  const d = parseDbDate(createdAt);
+  if (!d) return createdAt;
   const diffMs = Date.now() - d.getTime();
   const min = Math.floor(diffMs / 60_000);
   if (min < 1) return 'just now';

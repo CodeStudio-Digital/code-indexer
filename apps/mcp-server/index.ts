@@ -14,42 +14,10 @@ import { allTools, buildToolRegistry } from './tools/index.js';
 import { allResources, collectListedResources, readResource } from './resources/index.js';
 import { coerceArgs } from './utils.js';
 import { VERSION, PACKAGE_NAME } from '@mcp/shared/version.js';
-import { backfillSnapshotEmbeddings } from '@mcp/services/services/snapshot-backfill.js';
 import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
 
 const ctx = buildContext();
 const registry = buildToolRegistry();
-
-/**
- * Background reconciliation: any project whose snapshot count exceeds its
- * snapshot-vector count gets the missing rows embedded. Skips silently when
- * no embedding backend is configured. The work is intentionally fire-and-
- * forget — boot continues immediately so the stdio handshake isn't blocked.
- */
-function scheduleSnapshotBackfill(): void {
-  if (!ctx.snapshotService.hasEmbeddingBackend()) return;
-  void (async () => {
-    try {
-      const projects = ctx.db.listProjects();
-      for (const p of projects) {
-        const total = ctx.db.countSnapshots(p.id);
-        if (total === 0) continue;
-        // Don't gate on countSnapshotVectors: snapshots are chunked now, so
-        // the vector count can exceed the snapshot count even while some
-        // snapshots remain un-embedded. backfill queries `embedding_hash IS
-        // NULL` (the source of truth) and short-circuits cheaply when none.
-        const result = await backfillSnapshotEmbeddings(ctx.db, ctx.snapshotService, p.id);
-        if (result.embedded > 0 || result.failed > 0) {
-          console.error(
-            `[snapshot-backfill] project=${p.name} embedded=${result.embedded} failed=${result.failed} skipped=${result.skipped}`,
-          );
-        }
-      }
-    } catch (err) {
-      console.error('[snapshot-backfill] error:', (err as Error).message);
-    }
-  })();
-}
 
 const server = new Server(
   { name: PACKAGE_NAME, version: VERSION },
@@ -124,7 +92,6 @@ async function main() {
   console.error(
     `MCP Code Indexer server running on stdio (${allTools.length} tools, ${allResources.length} resources)`,
   );
-  scheduleSnapshotBackfill();
 }
 
 main().catch(console.error);

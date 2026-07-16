@@ -5,7 +5,7 @@
  * investigation record/recall (project-scoped) + count, the derived file
  * map, and the aggregate + injection payload composition.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import type DatabaseConstructor from 'better-sqlite3';
 import { coderSessions004 } from '@mcp/store/migrations/004_coder_sessions.js';
@@ -14,6 +14,9 @@ import { coderTasks008 } from '@mcp/store/migrations/008_coder_tasks.js';
 import { coderSessionMemory125 } from '@mcp/store/migrations/125_coder_session_memory.js';
 import { coderInvestigations126 } from '@mcp/store/migrations/126_coder_investigations.js';
 import { investigationEmbedding127 } from '@mcp/store/migrations/127_investigation_embedding.js';
+import { investigationEmbeddingFingerprint228 } from '@mcp/store/migrations/228_investigation_embedding_fingerprint.js';
+import { distributeInvestigationVectors229 } from '@mcp/store/migrations/229_distribute_investigation_vectors.js';
+import { SessionStore } from '../../store.js';
 import * as drive from '../session-drive.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
@@ -38,6 +41,8 @@ beforeEach(() => {
   coderSessionMemory125.up(db);
   coderInvestigations126.up(db);
   investigationEmbedding127.up(db);
+  investigationEmbeddingFingerprint228.up(db);
+  distributeInvestigationVectors229.up(db);
   s1 = mkSession(1);
   s2 = mkSession(1);
   s3 = mkSession(2);
@@ -133,36 +138,68 @@ describe('session-drive investigations', () => {
     expect(drive.recallInvestigations(db, s1, '   ')).toHaveLength(2);
   });
 
-  it('does not leak the embedding column into returned rows', () => {
-    const row = drive.recordInvestigation(db, { session_id: s1, topic: 't', summary: 's' });
-    drive.setInvestigationEmbedding(db, row.id, Float32Array.from([1, 0, 0]));
-    const listed = drive.listInvestigations(db, s1)[0];
-    expect('embedding' in listed).toBe(false);
+  it('keeps no vector payload or fingerprint in the central table', () => {
+    drive.recordInvestigation(db, { session_id: s1, topic: 't', summary: 's' });
+    const columns = (db.prepare('PRAGMA table_info(coder_investigations)').all() as Array<{ name: string }>)
+      .map((column) => column.name);
+    expect(columns).not.toContain('embedding');
+    expect(columns).not.toContain('embedding_fingerprint');
   });
 });
 
-describe('session-drive semantic recall', () => {
-  it('ranks by cosine, applies a relevance floor, and project-scopes', () => {
+describe('session-drive distributed semantic row resolution', () => {
+  it('persists a durable wildcard fence before the relational insert and settles after it', () => {
+    const order: string[] = [];
+    const sink = {
+      noteMutation: vi.fn(),
+      beginMutation: vi.fn((input: { namespace: string; itemKeys: readonly string[] }) => {
+        order.push(`begin:${drive.listInvestigationsForSemanticIndex(db, 1).length}`);
+        expect(input).toMatchObject({
+          namespace: 'memory:project:p1', itemKeys: ['*'], operation: 'upsert',
+        });
+        return { jobId: 4, token: 'fence', namespace: input.namespace };
+      }),
+      settleMutation: vi.fn(() => {
+        order.push(`settle:${drive.listInvestigationsForSemanticIndex(db, 1).length}`);
+      }),
+    };
+    const store = new SessionStore(db, sink);
+
+    const saved = store.recordInvestigation({ session_id: s1, topic: 'fenced', summary: 'safe' });
+
+    expect(saved.project_id).toBe(1);
+    expect(order).toEqual(['begin:0', 'settle:1']);
+    expect(sink.noteMutation).not.toHaveBeenCalled();
+  });
+
+  it('does not expose an unfenced relational row when durable fence creation fails', () => {
+    const store = new SessionStore(db, {
+      noteMutation: vi.fn(),
+      beginMutation: vi.fn(() => { throw new Error('control plane unavailable'); }),
+      settleMutation: vi.fn(),
+    });
+
+    expect(() => store.recordInvestigation({ session_id: s1, topic: 'unsafe', summary: 'no' }))
+      .toThrow('control plane unavailable');
+    expect(drive.listInvestigationsForSemanticIndex(db, 1)).toEqual([]);
+  });
+
+  it('preserves vector rank order, deduplicates ids, and project-scopes', () => {
     const a = drive.recordInvestigation(db, { session_id: s1, topic: 'auth', summary: 'jwt' });
     const b = drive.recordInvestigation(db, { session_id: s1, topic: 'billing', summary: 'stripe' });
     const c = drive.recordInvestigation(db, { session_id: s1, topic: 'login', summary: 'session' });
-    drive.setInvestigationEmbedding(db, a.id, Float32Array.from([1, 0, 0]));      // exact match
-    drive.setInvestigationEmbedding(db, b.id, Float32Array.from([0, 1, 0]));      // orthogonal → below floor
-    drive.setInvestigationEmbedding(db, c.id, Float32Array.from([0.9, 0.1, 0]));  // close to query
-
-    const hits = drive.recallInvestigationsByVector(db, s2 /* same project */, Float32Array.from([1, 0, 0]), 8);
-    expect(hits.map((h) => h.topic)).toEqual(['auth', 'login']); // b excluded (cosine 0 < floor)
+    expect(drive.recallInvestigationsByIds(db, s2, [c.id, a.id, c.id, b.id], 3)
+      .map((row) => row.topic)).toEqual(['login', 'auth', 'billing']);
+    expect(drive.recallInvestigationsByIds(db, s3, [a.id, b.id, c.id], 8)).toEqual([]);
   });
 
-  it('ignores rows without an embedding', () => {
-    drive.recordInvestigation(db, { session_id: s1, topic: 'no-embed', summary: 'x' });
-    expect(drive.recallInvestigationsByVector(db, s1, Float32Array.from([1, 0, 0]), 8)).toHaveLength(0);
-  });
-
-  it('a different project sees none of it', () => {
-    const a = drive.recordInvestigation(db, { session_id: s1, topic: 'auth', summary: 'jwt' });
-    drive.setInvestigationEmbedding(db, a.id, Float32Array.from([1, 0, 0]));
-    expect(drive.recallInvestigationsByVector(db, s3, Float32Array.from([1, 0, 0]), 8)).toHaveLength(0);
+  it('ignores stale/malformed ids and enumerates the project rebuild source', () => {
+    const a = drive.recordInvestigation(db, { session_id: s1, topic: 'a', summary: 'one' });
+    drive.recordInvestigation(db, { session_id: s3, topic: 'b', summary: 'two' });
+    expect(drive.recallInvestigationsByIds(db, s1, [999, -1, a.id], 8)
+      .map((row) => row.id)).toEqual([a.id]);
+    expect(drive.listInvestigationsForSemanticIndex(db, 1).map((row) => row.id)).toEqual([a.id]);
+    expect(drive.investigationProjectId(db, s1)).toBe(1);
   });
 });
 

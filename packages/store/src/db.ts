@@ -1,9 +1,9 @@
 import { runMigrations, getSchemaVersion } from './migrations/index.js';
 import type {
   Project, DBFile, DBSymbol, IndexRun, CostSummary, ContextSnapshot, Webhook,
-  FileSnapshot, VectorIdRecord, ProjectStats, DiscoveredModel, SnapshotCategory,
+  ProjectStats, DiscoveredModel, SnapshotCategory,
   SnapshotVersion, LLMSymbol, DBFileDependency, DBFileDependent,
-  DBSymbolReference, DBSymbolRelation, RunKind,
+  DBSymbolReference, DBSymbolRelation,
   AgentMemoryRow, AgentMemoryScope, AgentMemoryType,
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
@@ -17,11 +17,8 @@ import {
 } from './project-db/index.js';
 import {
   splitProject, type SplitOutcome,
-  splitProjectVectors, centralVectorsPath, projectVectorsPath,
   purgeProjectIndex,
 } from './db-split/index.js';
-import { SqliteVecVectorStore } from './sqlite-vec-store.js';
-import type { VectorStore } from './vectors.js';
 import { initSchema } from './db/schema/index.js';
 import { repairCodeFtsIndexes } from './db/schema/fts.js';
 import * as projects from './db/projects.js';
@@ -42,8 +39,6 @@ import * as memoryConsolidation from './db/memory-consolidation.js';
 import * as memoryDistillLog from './db/memory-distill-log.js';
 import * as costs from './db/costs.js';
 import * as webhooks from './db/webhooks.js';
-import * as vectors from './db/vectors.js';
-import * as embeddings from './db/embeddings.js';
 import * as modelsCache from './db/models-cache.js';
 import * as stats from './db/stats.js';
 import * as deps from './db/dependencies.js';
@@ -73,6 +68,15 @@ export interface UnionProjectLink {
   is_primary: boolean;
 }
 
+export interface EmbeddingCoverage {
+  files_total: number;
+  files_embedded: number;
+  symbols_total: number;
+  symbols_embedded: number;
+  symbol_bodies_total: number;
+  symbol_bodies_embedded: number;
+}
+
 export class CodeIndexDB {
   private db: DB;
   /** Central DB file path (for ATTACH + backup during the split). */
@@ -88,8 +92,6 @@ export class CodeIndexDB {
   /** Short-TTL read cache for the main-thread-freezing hot reads (getStats,
    *  listProjects). Invalidated on the centralized write methods below. */
   private readonly readCache = new ReadCache();
-  /** Lazily-built per-project code-vector stores (R2 routing). Closed on evict. */
-  private readonly codeVecStores = new Map<number, SqliteVecVectorStore>();
   /** This process's boot time (SQL datetime fmt) — the C3 purge soak gate: only
    *  purge a project whose split landed in a PRIOR session (db_split_at < this). */
   private bootedAt = '';
@@ -135,7 +137,6 @@ export class CodeIndexDB {
       // projects beyond the pool's cap (each rebuilds lazily on next access;
       // the active project is MRU so it is never the one evicted).
       onEvict: (projectId) => {
-        this.evictCodeVectorStore(projectId);
         this.aliasCache.delete(projectId);
         this.routeCache.delete(projectId);
       },
@@ -333,18 +334,9 @@ export class CodeIndexDB {
       });
       this.routeCache.delete(projectId);
     }
-    // R2 — vectors split runs once the relational copy is 'done' (its OWN marker
-    // + flag). Fire-and-forget + non-fatal: it must never block the index, and
-    // code-vector routing stays on the central store until vectors_split_status
-    // flips 'done' (else a relational-done/vectors-pending project would read an
-    // empty per-project vectors.db and silently lose all code RAG).
-    if (
-      this.pdbFlags.vectors &&
-      this.getProjectSplitStatus(projectId) === 'done' &&
-      this.getVectorsSplitStatus(projectId) !== 'done'
-    ) {
-      void this.ensureProjectVectorsSplit(projectId).catch(() => { /* non-fatal */ });
-    }
+    // Legacy vector rows are intentionally not copied during the relational
+    // split. LocalVectorRouter creates generation tables from original content
+    // and FTS remains available until each namespace is complete.
     // C3 — reclaim central space: delete this project's INDEX rows from central
     // once it's 'done', soaked (split in a PRIOR session), and not yet purged.
     // Deferred by default (purgeMode); the one-time .bak is the rollback.
@@ -374,72 +366,6 @@ export class CodeIndexDB {
     return !!row && row.s === 'done' && !row.purged && !!row.at && row.at < this.bootedAt;
   }
 
-  /** Read a project's vectors-split status marker (R2). */
-  getVectorsSplitStatus(projectId: number): string {
-    const row = this.db.prepare('SELECT vectors_split_status AS s FROM projects WHERE id = ?')
-      .get(projectId) as { s?: string } | undefined;
-    return row?.s ?? 'pending';
-  }
-
-  private setVectorsSplitStatus(projectId: number, status: string, err?: string | null): void {
-    this.db.prepare(
-      `UPDATE projects SET vectors_split_status = ?, vectors_split_at = datetime('now'),
-              vectors_split_err = ? WHERE id = ?`,
-    ).run(status, err ?? null, projectId);
-  }
-
-  /**
-   * Copy a project's code+snapshot vectors into its own vectors.db (R2). Runs
-   * only after the relational split is 'done'. Non-fatal: a 'pending' outcome
-   * leaves routing on the central store and retries on the next index.
-   */
-  private async ensureProjectVectorsSplit(projectId: number): Promise<void> {
-    if (this.getVectorsSplitStatus(projectId) === 'done') return;
-    const project = projects.get(this.db, projectId);
-    if (!project) return;
-    const outcome = await splitProjectVectors({
-      centralVectorsPath: centralVectorsPath(this.centralDbPath),
-      projectVectorsPath: projectVectorsPath(this.resolveProjectDbPath(projectId)),
-      projectName: project.name,
-      trackedVectorIds: this.getVectorIdStats(projectId).total,
-    });
-    this.setVectorsSplitStatus(projectId, outcome.status === 'done' ? 'done' : 'pending', outcome.reason ?? null);
-  }
-
-  /**
-   * The vector store a project's CODE + snapshot vectors should read/write (R2
-   * routing flip). Returns `central` UNCHANGED unless the vectors split is on,
-   * the project has migrated (vectors_split_status='done'), AND the backend is
-   * the embedded sqlite-vec store (remote backends isolate by namespace, so a
-   * per-file split is meaningless). Flag-off / non-migrated / remote → `central`
-   * (byte-identical to today). All consumers (HybridSearch, embed-executor,
-   * SnapshotService) hold `db`, so the per-project routing decision + the open
-   * connection cache + eviction live HERE, with no per-consumer wiring.
-   *
-   * Search and write MUST both route through this for a migrated project — else
-   * re-embeds land in central while reads hit the per-project store (stale).
-   */
-  codeVectorStoreFor(projectId: number, central: VectorStore | null): VectorStore | null {
-    if (!this.pdbFlags.vectors || central === null) return central;
-    if (!this.useProjectDb(projectId)) return central;
-    if (this.getVectorsSplitStatus(projectId) !== 'done') return central;
-    if (!(central instanceof SqliteVecVectorStore)) return central; // remote backend
-    let store = this.codeVecStores.get(projectId);
-    if (!store) {
-      store = new SqliteVecVectorStore({ path: projectVectorsPath(this.resolveProjectDbPath(projectId)) });
-      this.codeVecStores.set(projectId, store);
-    }
-    return store;
-  }
-
-  /** Close + drop a project's cached per-project vector store (before file teardown). */
-  private evictCodeVectorStore(projectId: number): void {
-    const store = this.codeVecStores.get(projectId);
-    if (store) {
-      store.close();
-      this.codeVecStores.delete(projectId);
-    }
-  }
   /**
    * Run `fn` (synchronous) inside one SQLite transaction. Inner
    * `db.transaction` calls (files.upsert, symbols.upsert, …) become
@@ -611,6 +537,12 @@ export class CodeIndexDB {
     routed.prepare(`UPDATE project_runtime_config SET ${sets} WHERE project_id = ?`).run(...cols.map((c) => cfg[c]), id);
   }
 
+  markProjectStructuralChecked(id: number, checkedAt = new Date().toISOString()): void {
+    projects.markStructuralChecked(this.db, id, checkedAt);
+    this.readCache.invalidateProject(id);
+    this.readCache.invalidateKey('projects:list');
+  }
+
   private overlayEditorConfig(project: Project, id: number): Project {
     try {
       const sql = 'SELECT settings_json FROM project_editor_config WHERE project_id = ?';
@@ -669,15 +601,16 @@ export class CodeIndexDB {
       // The relational index is wiped — wipe the routed vectors.db too so search
       // doesn't surface vectors for files that no longer exist. Evict the open
       // handle first, then delete the file (a fresh empty one is reopened lazily
-      // for future embeds). Central vectors orphan harmlessly (pre-existing).
-      this.evictCodeVectorStore(id);
-      const vp = projectVectorsPath(this.resolveProjectDbPath(id));
+      // for future embeds). Callers perform that worker drain before reaching
+      // this relational cleanup seam.
+      const vp = join(dirname(this.resolveProjectDbPath(id)), 'vectors.db');
       for (const suffix of ['', '-wal', '-shm']) {
         try { rmSync(vp + suffix, { force: true }); } catch { /* best-effort */ }
       }
       this.db.prepare(
         `UPDATE projects SET file_count = 0, symbol_count = 0, last_indexed = NULL,
-           structural_indexed_at = NULL, updated_at = datetime('now') WHERE id = ?`,
+           structural_indexed_at = NULL, structural_last_checked_at = NULL,
+           updated_at = datetime('now') WHERE id = ?`,
       ).run(id);
       this.readCache.invalidateProject(id);
       this.readCache.invalidateKey('projects:list'); // counts shown in the list reset to 0
@@ -691,7 +624,6 @@ export class CodeIndexDB {
   /** Evict the pooled handle and delete a project's DB files (index + vectors). */
   private removeProjectDbFiles(projectId: number): void {
     this.projectPool.evict(projectId);
-    this.evictCodeVectorStore(projectId); // release the vectors.db handle before rm
     this.routeCache.delete(projectId);
     this.seededRows.delete(projectId);
     const row = this.db.prepare('SELECT root_path, db_path FROM projects WHERE id = ?')
@@ -725,15 +657,9 @@ export class CodeIndexDB {
   deleteFile(projectId: number, path: string): void { files.del(this.idx(projectId), projectId, path); }
   deleteFilesByProject(projectId: number): void { files.delByProject(this.idx(projectId), projectId); }
   searchFiles(projectId: number, query: string, limit: number = 20): DBFile[] { return files.search(this.idx(projectId), projectId, query, limit); }
-  saveFileSnapshot(data: files.FileSnapshotData): void { files.saveSnapshot(this.idx(data.projectId), data); }
-  getFileSnapshots(runId: number, projectId?: number): FileSnapshot[] { return files.listSnapshots(this.idx(projectId), runId); }
-
-  // ─── Structural layer (migration 139/140) ───────────────────────
-  /** Partial upsert that NEVER touches the semantic columns — see files-structural.ts. */
+  // ─── Structural layer ───────────────────────────────────────────
   upsertFileStructural(projectId: number, data: filesStructural.UpsertStructuralData): { fileId: number; created: boolean } { return filesStructural.upsertStructural(this.idx(projectId), projectId, data); }
-  setFileSemanticHash(projectId: number, path: string, contentHash: string): void { filesStructural.setSemanticHash(this.idx(projectId), projectId, path, contentHash); }
-  listSemanticStalePaths(projectId: number, limit?: number): string[] { return filesStructural.listSemanticStalePaths(this.idx(projectId), projectId, limit); }
-  countSemanticStale(projectId: number): number { return filesStructural.countSemanticStale(this.idx(projectId), projectId); }
+  countSemanticStale(projectId: number): number { return stats.countSemanticBacklog(this.db, projectId); }
   upsertFileContent(fileId: number, content: string, sizeBytes?: number, projectId?: number): boolean { return fileContents.upsertContent(this.idx(projectId), fileId, content, sizeBytes); }
   removeFileContent(fileId: number, projectId?: number): void { fileContents.removeContent(this.idx(projectId), fileId); }
   searchFileContents(projectId: number, match: string, limit?: number): fileContents.ContentMatch[] { return fileContents.searchContent(this.idx(projectId), projectId, match, limit); }
@@ -772,10 +698,9 @@ export class CodeIndexDB {
   traceSymbolUsage(projectId: number, symbolName: string, maxDepth: number = 3): symbolRelations.UsageTraceResult { return symbolRelations.traceUsage(this.idx(projectId), projectId, symbolName, maxDepth); }
 
   // ─── Runs ───────────────────────────────────────────────────────
-  // Index-run provenance + stats stay CENTRAL (faithful run history; FK parent
-  // of `costs`). The `projectId` params are kept for call-site compatibility but
-  // routing is intentionally central.
-  startRun(projectId: number, provider?: string, model?: string, kind?: RunKind): number { return runs.start(this.db, projectId, provider, model, kind); }
+  // Structural-run provenance stays central. Semantic execution state lives in
+  // semantic_jobs/generations instead of sharing the retired LLM-run ledger.
+  startRun(projectId: number): number { return runs.start(this.db, projectId); }
   finishRun(runId: number, data: runs.FinishRunData, _projectId?: number): void { runs.finish(this.db, runId, data); }
   getRun(id: number, _projectId?: number): IndexRun | undefined { return runs.get(this.db, id); }
   getRuns(projectId: number, limit: number = 20): IndexRun[] { return runs.list(this.db, projectId, limit); }
@@ -795,6 +720,7 @@ export class CodeIndexDB {
   bumpAgentMemoryAccess(ids: number[]): void { agentMemory.bumpAccess(this.db, ids); }
   updateAgentMemoryEmbedding(id: number, hash: string, vectorId: string | null): void { agentMemory.updateEmbedding(this.db, id, hash, vectorId); }
   listAgentMemoryMissingEmbedding(projectId?: number): AgentMemoryRow[] { return agentMemory.listMissingEmbedding(this.db, projectId); }
+  listAgentMemoryForSemanticIndex(scope: AgentMemoryScope, projectId: number): AgentMemoryRow[] { return agentMemory.listForSemanticIndex(this.db, scope, projectId); }
   countAgentMemory(scope: AgentMemoryScope, projectId: number): number { return agentMemory.count(this.db, scope, projectId); }
   findAgentMemoryBySourceSnapshot(snapshotId: number): AgentMemoryRow | undefined { return agentMemory.findBySourceSnapshot(this.db, snapshotId); }
   recordAgentMemoryEvent(event: agentMemory.AgentMemoryEvent): void { agentMemory.recordEvent(this.db, event); }
@@ -825,8 +751,8 @@ export class CodeIndexDB {
   updateSnapshot(id: number, updates: snapshots.UpdateSnapshotData): void { snapshots.update(this.db, id, updates); }
   updateSnapshotEmbeddingHash(id: number, hash: string): void { snapshots.updateEmbeddingHash(this.db, id, hash); }
   listSnapshotsMissingEmbedding(projectId?: number): ContextSnapshot[] { return snapshots.listMissingEmbedding(this.db, projectId); }
+  listSnapshotsForSemanticIndex(projectId?: number): ContextSnapshot[] { return snapshots.listForSemanticIndex(this.db, projectId); }
   countSnapshots(projectId: number): number { return snapshots.count(this.db, projectId); }
-  countSnapshotVectors(projectId: number): number { return snapshots.countVectors(this.db, projectId); }
   deleteSnapshot(id: number): void { snapshots.del(this.db, id); }
   getSnapshotById(id: number): ContextSnapshot | undefined { return snapshots.getById(this.db, id); }
   listSnapshots(projectId: number, category?: SnapshotCategory): ContextSnapshot[] { return snapshots.list(this.db, projectId, category); }
@@ -866,37 +792,100 @@ export class CodeIndexDB {
   updateWebhookStatus(id: number, statusCode: number): void { webhooks.updateStatus(this.db, id, statusCode); }
 
   // ─── Vector IDs ─────────────────────────────────────────────────
-  saveVectorIds(projectId: number, vecs: vectors.VectorIdInput[]): void { vectors.save(this.idx(projectId), projectId, vecs); }
-  getVectorIdsByProject(projectId: number): VectorIdRecord[] { return vectors.listByProject(this.idx(projectId), projectId); }
-  deleteVectorIdsByProject(projectId: number): void { vectors.delByProject(this.idx(projectId), projectId); }
-  deleteVectorIdsByFile(projectId: number, filePath: string): string[] { return vectors.delByFile(this.idx(projectId), projectId, filePath); }
-  getVectorIdStats(projectId: number): { total: number; byType: Record<string, number> } { return vectors.stats(this.idx(projectId), projectId); }
-  snapshotVectorIdsForProject(projectId: number): string[] { return vectors.snapshotForProject(this.idx(projectId), projectId); }
-  getOrphanVectorIds(projectId: number): Array<{ vector_id: string; file_path: string | null; type: string }> { return vectors.listOrphans(this.idx(projectId), projectId); }
-  deleteVectorIdRows(projectId: number, vectorIds: string[]): number { return vectors.deleteRows(this.idx(projectId), projectId, vectorIds); }
-  dedupVectorIds(projectId?: number): number { return vectors.dedup(this.idx(projectId), projectId); }
-  countPendingVectorDeletes(): number { return vectors.countPendingDeletes(this.db); }
-  enqueuePendingVectorDeletes(rows: vectors.PendingDeleteInput[]): number { return vectors.enqueuePendingDeletes(this.db, rows); }
-  takePendingVectorDeletes(limit = 5000): Array<{ id: number; vector_id: string; project_name: string | null }> { return vectors.takePendingDeletes(this.db, limit); }
-  deletePendingVectorDeletesByIds(ids: number[]): number { return vectors.deletePendingByIds(this.db, ids); }
+  getVectorIdStats(projectId: number): { total: number; byType: Record<string, number> } {
+    const rows = this.db.prepare(`
+      SELECT substr(item_key, 1, instr(item_key, ':') - 1) AS type, COUNT(*) AS cnt
+      FROM semantic_items WHERE namespace = ? GROUP BY type
+    `).all(`code:p${projectId}`) as Array<{ type: string; cnt: number }>;
+    const byType: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) { byType[row.type] = row.cnt; total += row.cnt; }
+    return { total, byType };
+  }
 
-  // ─── Embedding diagnostics & hashes ─────────────────────────────
-  // Embedding hashes live on files/symbols rows → route by project. The bare-id
-  // setters/getters (full semantic pipeline, not structural) take an optional
-  // projectId; thread it from the embedder when routing those is enabled.
-  sampleEmbeddedFiles(projectId: number, limit = 5): Array<{ id: number; path: string; embedding_hash: string }> { return embeddings.sampleEmbeddedFiles(this.idx(projectId), projectId, limit); }
-  sampleNotEmbeddedFiles(projectId: number, limit = 5): Array<{ id: number; path: string }> { return embeddings.sampleNotEmbeddedFiles(this.idx(projectId), projectId, limit); }
-  getFileEmbeddingHashes(fileIds: number[], projectId?: number): Map<number, string | null> { return embeddings.getFileHashes(this.idx(projectId), fileIds); }
-  setFileEmbeddingHash(fileId: number, hash: string, projectId?: number): void { embeddings.setFileHash(this.idx(projectId), fileId, hash); }
-  getFileStructureHash(projectId: number, path: string): string | null { return embeddings.getFileStructureHash(this.idx(projectId), projectId, path); }
-  setFileStructureHash(fileId: number, hash: string, projectId?: number): void { embeddings.setFileStructureHash(this.idx(projectId), fileId, hash); }
-  getFileStructureEmbedding(projectId: number, path: string): Float32Array | null { return embeddings.getFileStructureEmbedding(this.idx(projectId), projectId, path); }
-  setFileStructureEmbedding(fileId: number, embedding: Float32Array, projectId?: number): void { embeddings.setFileStructureEmbedding(this.idx(projectId), fileId, embedding); }
-  getSymbolEmbeddingHashes(symbolIds: number[], projectId?: number): Map<number, { sig: string | null; body: string | null }> { return embeddings.getSymbolHashes(this.idx(projectId), symbolIds); }
-  setSymbolEmbeddingHash(symbolId: number, hash: string, kind: 'sig' | 'body', projectId?: number): void { embeddings.setSymbolHash(this.idx(projectId), symbolId, hash, kind); }
-  getEmbeddingCoverage(projectId: number): embeddings.EmbeddingCoverage { return embeddings.coverage(this.idx(projectId), projectId); }
-  /** Null all embedding hashes for a project → next index re-embeds everything. */
-  clearEmbeddingHashes(projectId: number): void { embeddings.clearHashes(this.idx(projectId), projectId); }
+  // ─── Semantic diagnostics ───────────────────────────────────────
+  sampleEmbeddedFiles(projectId: number, limit = 5): Array<{ id: number; path: string; embedding_hash: string }> {
+    const namespace = `code:p${projectId}`;
+    const active = this.db.prepare(
+      'SELECT active_generation_id AS id FROM semantic_namespace_generations WHERE namespace = ?',
+    ).get(namespace) as { id: number | null } | undefined;
+    if (!active?.id) return [];
+    const rows = this.db.prepare(`
+      SELECT item_key, source_hash FROM semantic_items
+      WHERE generation_id = ? AND namespace = ? AND item_key LIKE 'file:%'
+        AND status = 'indexed' AND vector_id IS NOT NULL
+      ORDER BY RANDOM() LIMIT ?
+    `).all(active.id, namespace, limit) as Array<{ item_key: string; source_hash: string }>;
+    const getFile = this.idx(projectId).prepare(
+      'SELECT id, path FROM files WHERE project_id = ? AND id = ?',
+    );
+    return rows.flatMap((row) => {
+      const file = getFile.get(projectId, Number(row.item_key.slice(5))) as
+        | { id: number; path: string }
+        | undefined;
+      return file ? [{ ...file, embedding_hash: row.source_hash }] : [];
+    });
+  }
+  sampleNotEmbeddedFiles(projectId: number, limit = 5): Array<{ id: number; path: string }> {
+    const namespace = `code:p${projectId}`;
+    const active = this.db.prepare(
+      'SELECT active_generation_id AS id FROM semantic_namespace_generations WHERE namespace = ?',
+    ).get(namespace) as { id: number | null } | undefined;
+    const embeddedIds = active?.id
+      ? new Set((this.db.prepare(`
+          SELECT item_key FROM semantic_items
+          WHERE generation_id = ? AND namespace = ? AND item_key LIKE 'file:%'
+            AND status = 'indexed' AND vector_id IS NOT NULL
+        `).all(active.id, namespace) as Array<{ item_key: string }>)
+        .map((row) => Number(row.item_key.slice(5))))
+      : new Set<number>();
+    return (this.idx(projectId).prepare(
+      'SELECT id, path FROM files WHERE project_id = ? ORDER BY id',
+    ).all(projectId) as Array<{ id: number; path: string }>)
+      .filter((file) => !embeddedIds.has(file.id))
+      .slice(0, limit);
+  }
+  getEmbeddingCoverage(projectId: number): EmbeddingCoverage {
+    const sourceDb = this.idx(projectId);
+    const files = sourceDb.prepare(
+      'SELECT COUNT(*) AS total FROM files WHERE project_id = ?',
+    ).get(projectId) as { total: number };
+    const symbols = sourceDb.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN kind IN ('class','function','interface','method') AND line IS NOT NULL THEN 1 ELSE 0 END) AS bodies_eligible
+      FROM symbols WHERE project_id = ?
+    `).get(projectId) as { total: number; bodies_eligible: number | null };
+    const namespace = `code:p${projectId}`;
+    const active = this.db.prepare(`
+      SELECT active_generation_id AS id
+      FROM semantic_namespace_generations WHERE namespace = ?
+    `).get(namespace) as { id: number | null } | undefined;
+    const items = active?.id
+      ? this.db.prepare(`
+          SELECT item_key FROM semantic_items
+          WHERE generation_id = ? AND namespace = ?
+            AND status = 'indexed' AND vector_id IS NOT NULL
+        `).all(active.id, namespace) as Array<{ item_key: string }>
+      : [];
+    const fileKeys = new Set<string>();
+    const symbolKeys = new Set<string>();
+    const bodyKeys = new Set<string>();
+    for (const item of items) {
+      if (item.item_key.startsWith('file:')) fileKeys.add(item.item_key);
+      else if (item.item_key.startsWith('symbol:')) symbolKeys.add(item.item_key);
+      else if (item.item_key.startsWith('symbol_body:') || item.item_key.startsWith('symbol_group:')) {
+        bodyKeys.add(item.item_key.replace(/^symbol_(?:body|group):/, 'symbol:'));
+      }
+    }
+    return {
+      files_total: files.total,
+      files_embedded: fileKeys.size,
+      symbols_total: symbols.total,
+      symbols_embedded: symbolKeys.size,
+      symbol_bodies_total: symbols.bodies_eligible ?? 0,
+      symbol_bodies_embedded: bodyKeys.size,
+    };
+  }
   /** Embedding model/backend the project was last indexed with (migration 113). */
   getProjectEmbeddingFingerprint(projectId: number): string | null {
     const row = this.db.prepare('SELECT embedding_fingerprint FROM projects WHERE id = ?')
@@ -932,13 +921,6 @@ export class CodeIndexDB {
     }
     return this.readCache.get(key, STATS_CACHE_TTL_MS, compute);
   }
-  listConcepts(projectId: number): Array<{ concept: string; count: number }> { return stats.listConcepts(this.idx(projectId), projectId); }
-  getFilesByConcept(projectId: number, concept: string): DBFile[] { return stats.getFilesByConcept(this.idx(projectId), projectId, concept); }
-  // `runs` stays CENTRAL (stats) — read the run ids from there, not the project DB.
-  getLastTwoRunIds(projectId: number): [number, number] | null { return stats.getLastTwoRunIds(this.db, projectId); }
-  getFilesByLayer(projectId: number, layer: string): DBFile[] { return stats.getFilesByLayer(this.idx(projectId), projectId, layer); }
-  getArchitectureOverview(projectId: number): Array<{ layer: string; count: number }> { return stats.getArchitectureOverview(this.idx(projectId), projectId); }
-
   // ─── Dependencies ───────────────────────────────────────────────
   upsertFileDependencies(projectId: number, sourceFileId: number, sourceFilePath: string, internalDeps: string[], externalDeps: string[]): void {
     deps.upsert(this.idx(projectId), projectId, sourceFileId, sourceFilePath, internalDeps, externalDeps, this.getAliases(projectId));
@@ -954,12 +936,12 @@ export class CodeIndexDB {
 
   // ─── Maintenance / Hygiene ──────────────────────────────────────
   getProjectsHygiene(): maintenance.ProjectHygieneRow[] { return maintenance.listProjectsHygiene(this.db); }
+  getOrphanSemanticItems(projectId: number): maintenance.OrphanSemanticItem[] { return maintenance.listOrphanSemanticItems(this.db, projectId); }
   getFileIndegrees(projectId: number): Map<string, number> { return maintenance.getFileIndegrees(this.idx(projectId), projectId); }
   getProjectTierBreakdown(): Array<{ project_id: number; tier: string; count: number }> { return maintenance.getProjectTierBreakdown(this.db); }
   normalizeFileLanguages(projectId?: number): number { return maintenance.normalizeFileLanguages(this.idx(projectId), projectId); }
   // `runs` stays CENTRAL (stats) — stale-run marking operates on the central runs.
   markStaleRuns(olderThanHours = 2, projectId?: number): number { return maintenance.markStaleRuns(this.db, olderThanHours, projectId); }
-  setProjectPendingVectorGc(projectId: number, pending: boolean): void { maintenance.setProjectPendingVectorGc(this.db, projectId, pending); }
 
   private getAliases(projectId: number): PathAlias[] {
     const cached = this.aliasCache.get(projectId);

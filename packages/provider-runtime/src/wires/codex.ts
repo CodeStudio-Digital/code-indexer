@@ -1,10 +1,9 @@
 import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
-import { ChatGPTProvider } from '@mcp/indexer/indexer/providers/chatgpt.js';
 
 type WireParts = Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 const DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex';
@@ -17,14 +16,6 @@ const DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex';
  */
 export function buildCodex(spec: ProviderSpec): WireParts {
   return {
-    createIndexer: (creds: ResolvedCreds, model?: string) =>
-      new ChatGPTProvider({
-        apiKey: creds.apiKey ?? '',
-        model,
-        baseURL: creds.baseURL ?? DEFAULT_BASE_URL,
-        accountId: (creds.extra?.accountId as string | null | undefined) ?? null,
-      }),
-
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const resolvedModel = model ?? spec.defaultModel ?? spec.defaultModels[0];
 

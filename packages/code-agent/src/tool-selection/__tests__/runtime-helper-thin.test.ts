@@ -130,6 +130,52 @@ describe('applyToolSelectionThin', () => {
     expect(callsAfterFirst).toBeGreaterThan(1);
   });
 
+  it.each([4, 7])(
+    'does not reuse task or tool vectors after a model switch (new dimension %i)',
+    async (newDimension) => {
+      const store = new InMemoryToolEmbeddingStore();
+      let model = 'model-a';
+      let dimension = 4;
+      let calls: string[] = [];
+      const dynamicEmbed: EmbeddingFn = Object.assign(
+        async (text: string) => {
+          calls.push(text);
+          const vector = new Float32Array(dimension);
+          vector[model === 'model-a' ? 0 : 1] = 1;
+          return vector;
+        },
+        { fingerprint: () => model },
+      );
+      const taskText = 'select tools for the semantic index migration';
+
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText,
+        embed: dynamicEmbed,
+        embeddingStore: store,
+        k: 10,
+      });
+      expect(calls).toHaveLength(ALL_TOOLS.length + 1);
+
+      model = 'model-b';
+      dimension = newDimension;
+      calls = [];
+      const onResult = vi.fn();
+      await applyToolSelectionThin({
+        allTools: ALL_TOOLS,
+        taskText,
+        embed: dynamicEmbed,
+        embeddingStore: store,
+        k: 10,
+        onResult,
+      });
+
+      expect(calls).toHaveLength(ALL_TOOLS.length + 1);
+      expect(calls.filter((text) => text === taskText)).toHaveLength(1);
+      expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
+    },
+  );
+
   it('falls back to allTools when embed throws', async () => {
     const failingEmbed: EmbeddingFn = async () => {
       throw new Error('boom');

@@ -142,4 +142,33 @@ describe('RolePipeline', () => {
     const idx = (role: string) => result.recommendations.findIndex((r) => r.role === role);
     expect(idx('devops')).toBeGreaterThan(idx('qa'));
   });
+
+  it('namespaces role embeddings by the dynamic model fingerprint', async () => {
+    let model = 'model-a';
+    let embedCalls = 0;
+    const dynamicEmbed: EmbeddingFn = Object.assign(
+      async () => {
+        embedCalls++;
+        return Float32Array.from(model === 'model-a' ? [1, 0] : [0, 1]);
+      },
+      { fingerprint: () => model },
+    );
+    const pipeline = createRolePipeline({
+      embed: dynamicEmbed,
+      roleEmbeddingStore: new InMemoryRoleEmbeddingStore(),
+      k: 3,
+    });
+
+    await recommendRoles(pipeline, { queryId: 'a', taskText: 'frontend bug', availableRoles: ROLES });
+    expect(embedCalls).toBe(ROLES.length + 1);
+
+    model = 'model-b';
+    embedCalls = 0;
+    await recommendRoles(pipeline, { queryId: 'b', taskText: 'frontend bug', availableRoles: ROLES });
+    expect(embedCalls).toBe(ROLES.length + 1);
+
+    embedCalls = 0;
+    await recommendRoles(pipeline, { queryId: 'c', taskText: 'frontend bug', availableRoles: ROLES });
+    expect(embedCalls).toBe(1);
+  });
 });

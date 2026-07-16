@@ -14,6 +14,7 @@ import {
   setModelMaxTools as setModelMaxToolsApi,
   backfillContextWindows as backfillContextWindowsApi,
   setSubagentTarget as setSubagentTargetApi,
+  setSubagentEffort as setSubagentEffortApi,
   testProvider,
   toggleModelEnabled,
 } from '../api.js';
@@ -216,9 +217,27 @@ export function useAdminProviders() {
     providerId: string,
     subagentProviderId: string | null,
     modelId: string | null,
+    profile?: string,
   ) => {
     try {
-      await setSubagentTargetApi(providerId, subagentProviderId, modelId);
+      await setSubagentTargetApi(providerId, subagentProviderId, modelId, profile);
+      await load();
+    } catch (e) {
+      await notify({
+        title: 'Subagent settings update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const setSubagentEffort = async (
+    providerId: string,
+    effort: string | null,
+    profile?: string,
+  ) => {
+    try {
+      await setSubagentEffortApi(providerId, effort, profile);
       await load();
     } catch (e) {
       await notify({
@@ -264,6 +283,7 @@ export function useAdminProviders() {
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
+    setSubagentEffort,
     setFallback,
   };
 }

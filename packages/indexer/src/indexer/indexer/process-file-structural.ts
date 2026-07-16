@@ -5,6 +5,7 @@ import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js
 
 import { enrichReferencesWithLines } from './enrich-references.js';
 import { hashContent, countLines } from '../content-hash.js';
+import { structuralPathFlags } from '../mapper.js';
 
 export interface ProcessFileStructuralResult {
   fileId: number;
@@ -17,16 +18,8 @@ export interface ProcessFileStructuralResult {
  * Per-file STRUCTURAL pipeline — the free half of `processFile`: tree-sitter
  * extraction + persistence, no LLM, no embeddings, no cost tracking.
  *
- * Invariants (the dumb→smart contract):
- *  - Persists via `upsertFileStructural` — semantic columns (summary/concepts/
- *    layer/semantic_hash) are never written, so a previous full-index's work
- *    survives and `semantic_hash != content_hash` marks it stale.
- *  - Never writes `structure_hash`/`structure_embedding` — those are the FULL
- *    pipeline's llm-skip baseline; advancing them here would make the next
- *    full run reuse a stale summary forever.
- *  - No `saveFileSnapshot` (snapshots carry run semantics).
- *  - Unsupported languages keep their existing symbols/deps untouched
- *    (stale-but-useful LLM output beats nothing).
+ * Unsupported languages keep their existing structural symbols/dependencies;
+ * path/content FTS is still refreshed. Semantic generations are independent.
  */
 export async function processFileStructural(
   db: CodeIndexDB,
@@ -57,6 +50,7 @@ export async function processFileStructural(
   const tsResult = await treeSitter.extract(file.relativePath, content);
   const supported = tsResult.supported;
   const symbols = supported ? tsResult.analysis.symbols ?? [] : [];
+  const pathFlags = structuralPathFlags(file.relativePath);
 
   const fileId = db.indexTransaction(projectId, () => {
     const { fileId: id } = db.upsertFileStructural(projectId, {
@@ -66,8 +60,11 @@ export async function processFileStructural(
       lineCount,
       contentHash: hash,
       mtimeMs,
+      ...pathFlags,
+      indexTier: file.tier,
+      mapperReason: file.mapperReason,
       // Only overwrite the dependency columns when tree-sitter produced them;
-      // for unsupported languages the previous (LLM) values stay.
+      // for unsupported languages the previous structural values stay.
       ...(supported
         ? {
             dependencies: tsResult.analysis.dependencies ?? [],

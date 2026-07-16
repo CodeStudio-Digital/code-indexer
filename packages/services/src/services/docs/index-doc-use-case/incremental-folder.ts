@@ -1,4 +1,5 @@
 import type { DocChunkInput, DocCollection, DocSource } from '@mcp/store/doc-store.js';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 import { chunkMarkdown } from '../section-chunker.js';
 import type { SectionChunk } from '../section-chunker.js';
 import { enrichChunksBatched } from '../enricher.js';
@@ -8,6 +9,7 @@ import type { DocIngestProgress, DocIngestResult, RawPage } from '../types.js';
 import { DocError } from '../errors.js';
 import { deterministicMetadata, extractApiMetadata, stableChunkKey } from '../incremental-metadata.js';
 import { retryEmbeddings } from './embed-upsert.js';
+import { deleteLocalVectors } from './delete.js';
 import { buildEmbeddingText, hashContent, hashEmbeddingInput } from './utils.js';
 import type { IndexDocStreamCallbacks, IndexDocUseCaseDeps } from './types.js';
 import {
@@ -216,10 +218,12 @@ export async function runIncrementalFolderIngest(
       // file. FTS triggers still publish the whole wave atomically, while the
       // single writer avoids SQLite writer contention from worker threads.
       const chunkResults = docStore.upsertChunksForItems(source.id, run.id, chunkWrites);
+      const obsoleteVectors = chunkResults.flatMap((result) => result.removedVectors);
       if (!legacyRemoved && chunkResults.some((result) => result.ids.length > 0)) {
-        docStore.removeLegacyChunks(source.id);
+        obsoleteVectors.push(...docStore.removeLegacyChunks(source.id));
         legacyRemoved = true;
       }
+      await deleteLocalVectors(docStore, deps.vectorStore, obsoleteVectors, docNamespace(collection.id));
       docStore.upsertSourceItems(manifestWrites);
 
       const chunksPersisted = docStore.countChunksBySource(source.id);
@@ -263,7 +267,8 @@ export async function runIncrementalFolderIngest(
 
     if (!limited) {
       const stale = docStore.listSourceItemsNotSeen(source.id, run.id);
-      docStore.removeChunksForItems(source.id, stale.map((i) => i.item_key));
+      const obsoleteVectors = docStore.removeChunksForItems(source.id, stale.map((i) => i.item_key));
+      await deleteLocalVectors(docStore, deps.vectorStore, obsoleteVectors, docNamespace(collection.id));
       docStore.deleteSourceItems(stale.map((i) => i.id));
     }
 
@@ -330,7 +335,7 @@ export async function runIncrementalFolderIngest(
       phase: limited ? 'paused_limit' : 'done', current: processed, total: scan.entries.length,
       state, chunks_indexed: chunksPersisted, chunks_persisted: chunksPersisted,
       embeddings_completed: embeddingsCompleted,
-      embeddings_pending: docStore.countChunksMissingEmbeddingBySource(source.id),
+      embeddings_pending: docStore.getSourceHealth(source.id)?.missing_count ?? chunksPersisted,
       searchable: chunksPersisted > 0, elapsed_ms: elapsed,
     });
     await callbacks?.onDone?.(result);

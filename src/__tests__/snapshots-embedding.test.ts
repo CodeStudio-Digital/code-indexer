@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,13 +6,15 @@ import { CodeIndexDB } from '@mcp/store/db.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { backfillSnapshotEmbeddings } from '@mcp/services/services/snapshot-backfill.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import type { VectorStore } from '@mcp/store/vectors.js';
+import type { VectorItemState, VectorStore } from '@mcp/store/vectors.js';
 import type { VectorMatch, VectorRecord } from '@mcp/shared/types.js';
 
 class FakeEmbedding implements EmbeddingService {
   calls = 0;
   failNext = false;
+  beforeEmbed: (() => void) | null = null;
   async embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }> {
+    this.beforeEmbed?.();
     this.calls++;
     if (this.failNext) {
       this.failNext = false;
@@ -28,19 +30,49 @@ class FakeEmbedding implements EmbeddingService {
 class FakeVectorStore implements VectorStore {
   upserts: VectorRecord[] = [];
   failNext = false;
+  private readonly items = new Map<string, VectorItemState>();
   async upsert(records: VectorRecord[]): Promise<number> {
     if (this.failNext) {
       this.failNext = false;
       throw new Error('vector store offline');
     }
     this.upserts.push(...records);
+    for (const record of records) {
+      const itemKey = `${record.metadata.type}:${record.metadata.ref_id}`;
+      const chunkIndex = Number(record.metadata.chunk_index ?? 0);
+      this.items.set(`${itemKey}\0${chunkIndex}`, {
+        itemKey,
+        sourceHash: record.metadata.embedding_hash ?? record.id,
+        vectorId: record.id,
+        chunkIndex,
+        status: 'indexed',
+        attempts: 1,
+        error: null,
+      });
+    }
     return records.length;
   }
   async search(): Promise<VectorMatch[]> {
     return [];
   }
   async deleteByIds(ids: string[]): Promise<number> {
+    const remove = new Set(ids);
+    for (const [key, item] of this.items) if (item.vectorId && remove.has(item.vectorId)) this.items.delete(key);
     return ids.length;
+  }
+  async listItems(_namespace: string, itemKeys?: string[]): Promise<VectorItemState[]> {
+    const keys = itemKeys ? new Set(itemKeys) : null;
+    return [...this.items.values()].filter((item) => !keys || keys.has(item.itemKey));
+  }
+  async deleteByItemKeys(itemKeys: string[]): Promise<number> {
+    const keys = new Set(itemKeys);
+    let deleted = 0;
+    for (const [identity, item] of this.items) {
+      if (!keys.has(item.itemKey)) continue;
+      this.items.delete(identity);
+      deleted++;
+    }
+    return deleted;
   }
   async isAvailable(): Promise<boolean> {
     return true;
@@ -70,7 +102,7 @@ describe('Snapshot embedding pipeline', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('persists snapshot, embeds it, registers vector_id, writes embedding_hash', async () => {
+  it('persists snapshot and records vector ids/hashes in semantic_items', async () => {
     const { snap, embedError } = await svc.create(projectId, {
       title: 'Use ES modules',
       category: 'decision',
@@ -81,11 +113,63 @@ describe('Snapshot embedding pipeline', () => {
     expect(vectors.upserts[0].metadata?.type).toBe('snapshot');
     expect(vectors.upserts[0].metadata?.ref_id).toBe(String(snap.id));
 
-    const reread = db.getSnapshotById(snap.id)!;
-    expect(reread.embedding_hash).not.toBeNull();
+    expect(db.getSnapshotById(snap.id)!.embedding_hash).toBeNull();
+    const items = await vectors.listItems(`snapshot:p${projectId}`, [`snapshot:${snap.id}`]);
+    expect(items.some((item) => item.vectorId === vectors.upserts[0].id && item.sourceHash)).toBe(true);
+  });
 
-    const ids = db.getVectorIdsByProject(projectId);
-    expect(ids.some((r) => r.type === 'snapshot' && r.vector_id === vectors.upserts[0].id)).toBe(true);
+  it('persists the semantic mutation before starting asynchronous embedding', async () => {
+    const noteMutation = vi.fn();
+    const guarded = new SnapshotService(db, embedding, vectors, { noteMutation });
+    embedding.beforeEmbed = () => {
+      expect(noteMutation).toHaveBeenCalledWith({
+        namespace: `snapshot:p${projectId}`,
+        itemKeys: ['*'],
+        operation: 'upsert',
+      });
+    };
+
+    const { snap } = await guarded.create(projectId, {
+      title: 'Durable fence', category: 'decision', content: 'Delta precedes embedding.',
+    });
+
+    expect(noteMutation).toHaveBeenCalledTimes(1);
+    guarded.delete(snap.id);
+    expect(noteMutation).toHaveBeenLastCalledWith({
+      namespace: `snapshot:p${projectId}`,
+      itemKeys: [`snapshot:${snap.id}`],
+      operation: 'delete',
+    });
+  });
+
+  it('opens the durable snapshot fence before SQLite and settles after commit', async () => {
+    const order: string[] = [];
+    const beginMutation = vi.fn(() => {
+      expect(db.countSnapshots(projectId)).toBe(0);
+      order.push('fence:start');
+      return { jobId: 41, token: 'snapshot-41', namespace: `snapshot:p${projectId}` };
+    });
+    const settleMutation = vi.fn(() => {
+      expect(db.countSnapshots(projectId)).toBe(1);
+      order.push('fence:settle');
+    });
+    const guarded = new SnapshotService(db, null, null, {
+      noteMutation: vi.fn(),
+      beginMutation,
+      settleMutation,
+    });
+
+    const { snap } = await guarded.create(projectId, {
+      title: 'Cross process', category: 'decision', content: 'Fence first.',
+    });
+
+    expect(snap.id).toBeGreaterThan(0);
+    expect(order).toEqual(['fence:start', 'fence:settle']);
+    expect(beginMutation).toHaveBeenCalledWith({
+      namespace: `snapshot:p${projectId}`,
+      itemKeys: ['*'],
+      operation: 'upsert',
+    });
   });
 
   it('chunks a long snapshot into multiple vectors sharing one ref_id', async () => {
@@ -103,8 +187,8 @@ describe('Snapshot embedding pipeline', () => {
     expect(refIds).toEqual(new Set([String(snap.id)]));
     const indices = vectors.upserts.map((r) => r.metadata?.chunk_index).sort();
     expect(indices[0]).toBe('0');
-    // All chunk ids are registered for later file/project cleanup.
-    const registered = db.getVectorIdsByProject(projectId).filter((r) => r.type === 'snapshot');
+    // All chunk ids are registered in the semantic ledger for cleanup.
+    const registered = await vectors.listItems(`snapshot:p${projectId}`, [`snapshot:${snap.id}`]);
     expect(registered.length).toBe(vectors.upserts.length);
   });
 
@@ -158,8 +242,8 @@ describe('Snapshot embedding pipeline', () => {
     const result = await backfillSnapshotEmbeddings(db, svc, projectId);
     expect(result.embedded).toBe(2);
     expect(result.failed).toBe(0);
-    expect(db.getSnapshotById(r1.snap.id)!.embedding_hash).not.toBeNull();
-    expect(db.getSnapshotById(r2.snap.id)!.embedding_hash).not.toBeNull();
+    expect((await vectors.listItems(`snapshot:p${projectId}`, [`snapshot:${r1.snap.id}`])).length).toBe(1);
+    expect((await vectors.listItems(`snapshot:p${projectId}`, [`snapshot:${r2.snap.id}`])).length).toBe(1);
   });
 
   it('backfill is idempotent — second pass skips already-embedded rows', async () => {

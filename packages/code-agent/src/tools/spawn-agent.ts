@@ -74,6 +74,7 @@ import {
   describeProvider,
   type SubagentDeps,
 } from '@mcp/code-agent/tools/subagent.js';
+import { providerForProfile, effortForProfile } from '@mcp/code-agent/tools/subagent-provider.js';
 import {
   MICRO_AGENT_PROFILE_NAMES,
   MICRO_AGENT_PROFILES,
@@ -192,7 +193,7 @@ async function runSingleEphemeral(
   agent: NormalizedAgent,
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  const activeProvider = deps.subagentProvider ?? deps.provider;
+  const activeProvider = await providerForProfile(deps, agent.profile);
   const providerInfo = describeProvider(activeProvider);
   const parentSessionId = ctx.runner?.sessionId;
   const spawnId = randomUUID().slice(0, 8);
@@ -258,6 +259,7 @@ async function runSingleEphemeral(
       label: agent.label,
       profile: agent.profile.id,
       spawnId,
+      reasoningEffort: effortForProfile(deps, agent.profile),
       systemPrompt: agent.profile.systemPrompt,
       allowlist: agent.profile.allowlist,
       initialMessages,
@@ -304,24 +306,35 @@ async function runParallelEphemeral(
   agents: NormalizedAgent[],
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  const activeProvider = deps.subagentProvider ?? deps.provider;
-  const providerInfo = describeProvider(activeProvider);
   const parentSessionId = ctx.runner?.sessionId;
   const groupId = randomUUID().slice(0, 8);
+  // Resolve each agent's provider from its profile (memoized in the resolver,
+  // so same-profile agents in the batch reuse one provider; a profile that
+  // inherits falls back to the parent provider).
+  const agentProviders = await Promise.all(
+    agents.map((a) => providerForProfile(deps, a.profile)),
+  );
+  const agentInfos = agentProviders.map((p) => describeProvider(p));
+  // Representative label for batch-level summaries (header/retention). When the
+  // batch mixes providers, show them joined instead of one misleading value.
+  const distinctLabels = [...new Set(agentInfos.map((info) => info.label))];
+  const headInfo = distinctLabels.length <= 1
+    ? (agentInfos[0] ?? describeProvider(deps.provider))
+    : { provider: 'mixed', model: distinctLabels.join(', '), label: distinctLabels.join(', ') };
   console.log(
     `[coder s=${parentSessionId ?? '?'}] spawn_agent: ${agents.length} parallel ` +
-    `provider=${providerInfo.label} labels=[${agents.map((a) => a.label).join(', ')}] group=${groupId}`,
+    `providers=[${distinctLabels.join(', ')}] labels=[${agents.map((a) => a.label).join(', ')}] group=${groupId}`,
   );
 
   ctx.runner?.emit('agents_group_start', {
     groupId,
-    provider: providerInfo.provider,
-    model: providerInfo.model,
+    provider: agentInfos[0]?.provider,
+    model: agentInfos[0]?.model,
     agents: agents.map((a, i) => ({
       index: i,
       label: a.label,
-      provider: providerInfo.provider,
-      model: providerInfo.model,
+      provider: agentInfos[i]?.provider,
+      model: agentInfos[i]?.model,
       task: a.task,
     })),
   });
@@ -344,11 +357,13 @@ async function runParallelEphemeral(
     } catch { /* best-effort */ }
   }
 
-  const specs: ParallelAgentSpec[] = agents.map((a) => ({
+  const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
     task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
     maxTurns: a.maxTurns,
     profile: a.profile.id,
+    provider: agentProviders[i],
+    reasoningEffort: effortForProfile(deps, a.profile),
     spawnId: groupId,
     systemPrompt: a.profile.systemPrompt,
     allowlist: a.profile.allowlist,
@@ -361,7 +376,7 @@ async function runParallelEphemeral(
 
   const { results, totalUsage } = await runParallelAgents(
     {
-      provider: activeProvider,
+      provider: deps.provider,
       tools: deps.parentTools,
       ctx,
       sessionId: parentSessionId,
@@ -372,10 +387,11 @@ async function runParallelEphemeral(
     MICRO_AGENT_PROFILES.explore.systemPrompt,
     MICRO_AGENT_PROFILES.explore.allowlist,
     (progress) => {
+      const info = agentInfos[progress.agentIndex] ?? headInfo;
       ctx.runner?.emit('agent_progress', {
         groupId,
-        provider: providerInfo.provider,
-        model: providerInfo.model,
+        provider: info.provider,
+        model: info.model,
         ...progress,
       });
     },
@@ -388,7 +404,7 @@ async function runParallelEphemeral(
     successCount: results.filter((r) => r.reason === 'completed').length,
   });
 
-  const header = renderParallelHeader(results.length, providerInfo, totalUsage, groupId);
+  const header = renderParallelHeader(results.length, headInfo, totalUsage, groupId);
   const body = renderParallelBody(results.map((r, i) => ({
     label: r.label,
     type: agents[i].type,
@@ -410,8 +426,8 @@ async function runParallelEphemeral(
   retainSpawnGroup({
     sessionId: parentSessionId,
     spawnId: groupId,
-    provider: providerInfo.provider,
-    model: providerInfo.model,
+    provider: headInfo.provider,
+    model: headInfo.model,
     agents: results.map((r, i) => ({
       ...toRetentionAgent(i, agents[i], r),
       toolCallCount: r.toolCallCount,

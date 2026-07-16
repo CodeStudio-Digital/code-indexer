@@ -84,8 +84,8 @@ export interface UpsertItemChunksResult {
 
 /**
  * Incrementally replace one logical page/file while preserving chunk row ids.
- * Stable ids keep vector ids stable across re-indexes. Removed chunk vectors
- * are tombstoned before the FK cascade deletes their mappings.
+ * Stable ids keep vector ids stable across re-indexes. Removed vector ids are
+ * derived from embedded chunk ids before those chunks are deleted.
  */
 export function upsertForItem(
   db: DB,
@@ -130,7 +130,6 @@ function upsertForItemInner(
     const nextKeys = new Set(inputs.map((c) => c.stable_key).filter((k): k is string => !!k));
     const removedIds = existing.filter((r) => !r.stable_key || !nextKeys.has(r.stable_key)).map((r) => r.id);
     const removedVectors = vectorRefsForChunkIds(db, removedIds);
-    tombstoneRefs(db, removedVectors, 'chunk removed during incremental re-index');
     deleteChunkIds(db, removedIds);
 
     const insertStmt = db.prepare(
@@ -174,7 +173,6 @@ function upsertForItemInner(
           `UPDATE doc_chunks SET embedding_hash=NULL, embedding_provider_id=NULL,
              embedding_fingerprint=NULL WHERE id=?`,
         ).run(row.id);
-        db.prepare(`DELETE FROM doc_chunk_vectors WHERE chunk_id=?`).run(row.id);
       }
     }
     return { ids, changedIds, removedVectors };
@@ -190,25 +188,23 @@ export function removeForItems(
   const ids = (db.prepare(
     `SELECT id FROM doc_chunks WHERE source_id=? AND item_key IN (${placeholders})`,
   ).all(sourceId, ...itemKeys) as Array<{ id: number }>).map((r) => r.id);
-  return removeChunkIds(db, ids, 'source item removed');
+  return removeChunkIds(db, ids);
 }
 
 export function removeLegacy(db: DB, sourceId: number): Array<{ vector_id: string; provider: string }> {
   const ids = (db.prepare(
     `SELECT id FROM doc_chunks WHERE source_id=? AND stable_key IS NULL`,
   ).all(sourceId) as Array<{ id: number }>).map((r) => r.id);
-  return removeChunkIds(db, ids, 'legacy chunk replaced by stable generation');
+  return removeChunkIds(db, ids);
 }
 
 function removeChunkIds(
   db: DB,
   ids: readonly number[],
-  reason: string,
 ): Array<{ vector_id: string; provider: string }> {
   if (ids.length === 0) return [];
   const tx = db.transaction(() => {
     const refs = vectorRefsForChunkIds(db, ids);
-    tombstoneRefs(db, refs, reason);
     deleteChunkIds(db, ids);
     return refs;
   });
@@ -222,19 +218,13 @@ function vectorRefsForChunkIds(
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => '?').join(',');
   return db.prepare(
-    `SELECT vector_id,provider FROM doc_chunk_vectors WHERE chunk_id IN (${placeholders})`,
+    `SELECT DISTINCT COALESCE(si.vector_id, si.item_key) AS vector_id,
+            'semantic:g' || si.generation_id AS provider
+       FROM semantic_items si
+      WHERE si.item_key IN (
+        SELECT 'doc_chunk:' || id FROM doc_chunks WHERE id IN (${placeholders})
+      )`,
   ).all(...ids) as Array<{ vector_id: string; provider: string }>;
-}
-
-function tombstoneRefs(
-  db: DB,
-  refs: ReadonlyArray<{ vector_id: string; provider: string }>,
-  reason: string,
-): void {
-  const stmt = db.prepare(
-    `INSERT OR IGNORE INTO doc_vector_tombstones(vector_id,provider,last_error) VALUES (?,?,?)`,
-  );
-  for (const ref of refs) stmt.run(ref.vector_id, ref.provider, reason);
 }
 
 function deleteChunkIds(db: DB, ids: readonly number[]): void {
@@ -280,6 +270,13 @@ export function listBySource(db: DB, sourceId: number): DocChunk[] {
   return rows.map(mapChunk);
 }
 
+export function listByCollection(db: DB, collectionId: number): DocChunk[] {
+  const rows = db
+    .prepare('SELECT * FROM doc_chunks WHERE collection_id = ? ORDER BY source_id, ord ASC')
+    .all(collectionId) as Array<Record<string, unknown>>;
+  return rows.map(mapChunk);
+}
+
 /**
  * All chunks of ONE section — same source, same `heading_path` AND same
  * `source_uri` (so a same-named heading on another crawled page isn't merged
@@ -304,29 +301,35 @@ export function listBySourceHeading(
 }
 
 /**
- * Wipe embedding state for a source: drops `doc_chunk_vectors` rows AND
- * nulls `embedding_hash` on every chunk so `retryEmbeddings` picks them up
- * as pending. Use when you suspect the remote vector store rejected
- * silently. Local-only operation; remote orphans stay until manual cleanup.
+ * Wipe accepted embedding state so `retryEmbeddings` picks every chunk up as
+ * pending. Re-upsert uses the same deterministic ids and replaces local rows.
  */
 export function clearEmbeddingsForSource(db: DB, sourceId: number): { cleared: number } {
-  const tx = db.transaction(() => {
-    db
-      .prepare(
-        `DELETE FROM doc_chunk_vectors WHERE chunk_id IN (
-           SELECT id FROM doc_chunks WHERE source_id = ?
-         )`,
-      )
-      .run(sourceId);
-    const result = db
-      .prepare(
-        `UPDATE doc_chunks SET embedding_hash = NULL, embedding_provider_id = NULL
-          WHERE source_id = ?`,
-      )
-      .run(sourceId);
-    return { cleared: result.changes };
-  });
-  return tx();
+  const result = db
+    .prepare(
+      `UPDATE doc_chunks
+          SET embedding_hash = NULL, embedding_provider_id = NULL, embedding_fingerprint = NULL
+        WHERE source_id = ?`,
+    )
+    .run(sourceId);
+  return { cleared: result.changes };
+}
+
+export function clearEmbeddingsForCollection(db: DB, collectionId: number): { cleared: number } {
+  const result = db.prepare(
+    `UPDATE doc_chunks
+        SET embedding_hash = NULL, embedding_provider_id = NULL, embedding_fingerprint = NULL
+     WHERE collection_id = ?`,
+  ).run(collectionId);
+  return { cleared: result.changes };
+}
+
+export function clearAllEmbeddings(db: DB): { cleared: number } {
+  const result = db.prepare(
+    `UPDATE doc_chunks
+        SET embedding_hash = NULL, embedding_provider_id = NULL, embedding_fingerprint = NULL`,
+  ).run();
+  return { cleared: result.changes };
 }
 
 /**

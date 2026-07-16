@@ -12,7 +12,12 @@ import type {
   FilterResult,
   SelectResult,
 } from '@mcp/candidate-pipeline';
-import { cosineSimilarity, weightedSum } from '@mcp/candidate-pipeline';
+import {
+  assertEmbeddingFingerprint,
+  cosineSimilarity,
+  resolveEmbeddingFingerprint,
+  weightedSum,
+} from '@mcp/candidate-pipeline';
 import {
   DEFAULT_WEIGHTS,
   type IdleRunDescriptor,
@@ -23,6 +28,7 @@ import {
 
 export interface EmbeddingFn {
   (text: string): Promise<Float32Array>;
+  readonly fingerprint?: () => string;
 }
 
 export interface HistorySuccessSource {
@@ -63,13 +69,17 @@ export class TaskEmbeddingHydrator implements QueryHydrator<RolePipelineQuery> {
   readonly name = 'task_embedding';
   constructor(private embed: EmbeddingFn) {}
   enable(q: RolePipelineQuery): boolean {
-    return q.taskText.trim().length > 0 && !q.taskEmbedding;
+    return q.taskText.trim().length > 0 && (!q.taskEmbedding || !q.embeddingFingerprint);
   }
   async hydrate(q: RolePipelineQuery): Promise<Partial<RolePipelineQuery>> {
-    return { taskEmbedding: await this.embed(q.taskText) };
+    const embeddingFingerprint = resolveEmbeddingFingerprint(this.embed);
+    const taskEmbedding = await this.embed(q.taskText);
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+    return { taskEmbedding, embeddingFingerprint };
   }
   update(q: RolePipelineQuery, p: Partial<RolePipelineQuery>): void {
     if (p.taskEmbedding) q.taskEmbedding = p.taskEmbedding;
+    if (p.embeddingFingerprint) q.embeddingFingerprint = p.embeddingFingerprint;
   }
 }
 
@@ -103,8 +113,8 @@ export class ActiveIdleRunsSource implements Source<RolePipelineQuery, RoleCandi
 // ─── Hydrators ─────────────────────────────────────────────────────────
 
 export interface RoleEmbeddingStore {
-  get(roleKey: string): Float32Array | undefined;
-  set(roleKey: string, embedding: Float32Array): void;
+  get(roleKey: string, embeddingFingerprint: string): Float32Array | undefined;
+  set(roleKey: string, embeddingFingerprint: string, embedding: Float32Array): void;
 }
 
 export class RoleEmbeddingHydrator implements Hydrator<RolePipelineQuery, RoleCandidate> {
@@ -115,17 +125,20 @@ export class RoleEmbeddingHydrator implements Hydrator<RolePipelineQuery, RoleCa
   ) {}
   enable(): boolean { return true; }
   async hydrate(
-    _q: RolePipelineQuery,
+    query: RolePipelineQuery,
     candidates: readonly RoleCandidate[],
   ): Promise<CandidateResult<RoleCandidate>[]> {
+    const embeddingFingerprint = query.embeddingFingerprint ?? resolveEmbeddingFingerprint(this.embed);
+    assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
     return Promise.all(
       candidates.map(async (c): Promise<CandidateResult<RoleCandidate>> => {
         const key = `${c.role.role}::${(c.role.skills ?? []).join(',')}`;
-        const cached = this.store.get(key);
+        const cached = this.store.get(key, embeddingFingerprint);
         if (cached) return { ok: true, candidate: { ...c, roleEmbedding: cached } };
         try {
           const emb = await this.embed(roleDescriptionText(c.role));
-          this.store.set(key, emb);
+          assertEmbeddingFingerprint(this.embed, embeddingFingerprint);
+          this.store.set(key, embeddingFingerprint, emb);
           return { ok: true, candidate: { ...c, roleEmbedding: emb } };
         } catch (e) {
           return { ok: false, candidateId: c.candidateId, error: (e as Error).message };

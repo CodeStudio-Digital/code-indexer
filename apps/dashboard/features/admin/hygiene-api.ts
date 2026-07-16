@@ -7,12 +7,10 @@ export interface HygieneProject {
   id: number;
   name: string;
   root_path: string;
-  pending_vector_gc: number;
   file_count: number;
   vector_count: number;
-  orphan_vector_ids: number;
+  orphan_semantic_items: number;
   stale_runs: number;
-  duplicate_vector_ids: number;
   mixed_case_languages: number;
   missing_on_disk: boolean;
   /** File counts by mapper tier — keys: core/support/on_demand/untagged. */
@@ -21,39 +19,28 @@ export interface HygieneProject {
 
 export interface HygieneStatus {
   projects: HygieneProject[];
-  pending_vector_deletes: number;
   vector_store_available: boolean;
 }
 
 export interface CleanupResult {
   ok: boolean;
-  orphan_vectors: number;
-  remote_deleted: number;
+  orphan_semantic_items: number;
+  vectors_deleted_local: number;
   local_deleted: number;
-  duplicates_removed: number;
   languages_normalized: number;
   stale_runs_closed: number;
-  remote_error: string | null;
-}
-
-export interface RetryResult {
-  ok: boolean;
-  attempted: number;
-  deleted: number;
-  remaining: number;
-  remote_error?: string | null;
+  vector_error: string | null;
 }
 
 export interface PurgeSummary {
   project_id: number;
   vectors_known: number;
-  vectors_deleted_remote: number;
-  remote_error: string | null;
+  vectors_deleted: number;
+  vector_error: string | null;
 }
 
 export interface SqlSweepResult {
   ok: boolean;
-  duplicates_removed: number;
   languages_normalized: number;
   stale_runs_closed: number;
 }
@@ -81,10 +68,6 @@ export function cleanupProject(id: number): Promise<CleanupResult> {
   return postJson<CleanupResult>(`/api/hygiene/projects/${id}/cleanup`);
 }
 
-export function retryPendingVectorDeletes(): Promise<RetryResult> {
-  return postJson<RetryResult>('/api/hygiene/vectorize/retry');
-}
-
 export function purgeProjects(projectIds: number[]): Promise<{
   ok: boolean;
   purged: number;
@@ -100,12 +83,12 @@ export function runGlobalSqlCleanup(): Promise<SqlSweepResult> {
 export interface ClearAllDataResult {
   ok: boolean;
   projects_cleared: number;
-  vectors_deleted_remote: number;
+  vectors_deleted: number;
   errors: Array<{ project: string; error: string }>;
 }
 
 /**
- * Wipe ALL projects' data (index, sessions, snapshots, runs, costs) + remote
+ * Wipe ALL projects' data (index, sessions, snapshots, runs, costs) + local
  * vectors, keeping the project rows so the user only re-indexes. Destructive.
  */
 export function clearAllProjectData(): Promise<ClearAllDataResult> {
@@ -115,11 +98,11 @@ export function clearAllProjectData(): Promise<ClearAllDataResult> {
 export interface ClearOneResult {
   ok: boolean;
   vectors_known: number;
-  vectors_deleted_remote: number;
-  remote_error: string | null;
+  vectors_deleted: number;
+  vector_error: string | null;
 }
 
-/** Wipe ONE project's data + remote vectors, keeping its row. Destructive. */
+/** Wipe ONE project's data + local vectors, keeping its row. Destructive. */
 export function clearProjectData(id: number): Promise<ClearOneResult> {
   return postJson<ClearOneResult>(`/api/projects/${id}/clear-data`);
 }

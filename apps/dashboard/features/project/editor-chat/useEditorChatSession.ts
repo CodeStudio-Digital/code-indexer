@@ -123,7 +123,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const stream = useAgentStream(selectedId, notificationContext);
   const {
     streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick, snapshotTick,
-    answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider,
+    answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider, pendingApprovals,
   } = stream;
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
@@ -620,7 +620,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     sessions: sessions ?? null, groups: groups ?? null, refetchSessions, selectedId, setSelectedId,
     createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
     moveSessionToGroup, createGroup,
-    sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error,
+    sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
     liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,

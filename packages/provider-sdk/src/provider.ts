@@ -7,7 +7,6 @@
  * providers integrate against.
  */
 import type { ChatProvider } from './adapter.js';
-import type { LLMProvider } from './indexer.js';
 import type { ImageGenClient } from './images.js';
 import type { CredKind, ResolvedCreds, ProviderConfigLike } from './credentials.js';
 import type { AuthDescriptor, ProviderAuthHandlers, ProviderCredentials } from './auth.js';
@@ -277,16 +276,12 @@ export interface ProviderDefinition {
    * no-op pass.
    */
   testConnection?(ctx: ProviderTestContext): Promise<void>;
-  /** Build an indexer (single-shot) client for this shape. */
-  createIndexer?(creds: ResolvedCreds, model?: string): LLMProvider;
-  /** Build an async indexer (OAuth shapes that need token refresh). */
-  createIndexerAsync?(creds: ResolvedCreds, model?: string): Promise<LLMProvider>;
   /** Build a coder (streaming) client for this shape. */
   createCoder?(creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts): ChatProvider;
   /**
    * Build an image-generation client for this shape. Present only when the
    * shape supports it (`capabilities.supportsImageGen`); the engine derives it
-   * per-wire like createCoder/createIndexer.
+   * per-wire like createCoder.
    */
   createImages?(creds: ResolvedCreds, model?: string): ImageGenClient;
 }

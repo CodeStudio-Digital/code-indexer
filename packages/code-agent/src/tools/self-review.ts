@@ -175,12 +175,13 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       const evidenceData = buildVerifyEvidence(deps.dbHandle, deps.sessionId);
       const evidence = evidenceData ? formatVerifyEvidence(evidenceData) : null;
 
-      // Absence detection needs the reference index; skip when the project
-      // was never indexed (the tool would fall back to a slow disk grep).
-      const referenceLookup =
-        deps.registry?.has('mcp__find_references') && ctx.projectIndexed !== false
-          ? buildRegistryReferenceLookup(deps.registry, ctx)
-          : undefined;
+      // Consult the registered owner-backed tool live. Do not freeze this
+      // capability from ToolContext.projectIndexed: a session may have started
+      // while its automatic structural baseline was still building. The lookup
+      // already degrades an INDEX_NOT_READY/error/timeout to an empty result.
+      const referenceLookup = deps.registry?.has('mcp__find_references')
+        ? buildRegistryReferenceLookup(deps.registry, ctx)
+        : undefined;
 
       // Learning + alignment surfaces (migration 224): fate tracking priors
       // and the compiled intent contract. Both degrade silently when the

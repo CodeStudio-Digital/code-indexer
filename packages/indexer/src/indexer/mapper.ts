@@ -22,6 +22,24 @@ export interface ClassificationResult {
   reason: string;
 }
 
+export interface StructuralPathFlags {
+  isEntryPoint: boolean;
+  isTest: boolean;
+  isGenerated: boolean;
+}
+
+/** Facts that can be reproduced from a path on every structural pass. */
+export function structuralPathFlags(relativePath: string): StructuralPathFlags {
+  const path = relativePath.replace(/\\/g, '/').toLowerCase();
+  return {
+    isEntryPoint: /(^|\/)(?:index|main|app|server|cli)\.[^/]+$/.test(path),
+    isTest: /(^|\/)(?:__tests__|tests?|specs?)(\/|$)/.test(path)
+      || /\.(?:test|spec)\.[^/]+$/.test(path),
+    isGenerated: /(^|\/)(?:generated|gen|__generated__)(\/|$)/.test(path)
+      || /\.(?:g|generated)\.[^/]+$/.test(path),
+  };
+}
+
 /**
  * Files that match these patterns add no signal to the index — they are
  * lockfiles, build artefacts, vendored bundles, or huge generated blobs.

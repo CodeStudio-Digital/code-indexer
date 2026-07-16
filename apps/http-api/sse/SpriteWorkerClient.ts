@@ -4,7 +4,7 @@
  * WorkerHost so it never pins the main thread (which, in Electron, IS the
  * whole backend).
  *
- * Unlike EmbeddingsWorkerClient there is deliberately NO in-process
+ * Like the semantic worker there is deliberately NO in-process
  * fallback: running the pipeline on the main thread would freeze the UI —
  * exactly the failure mode this worker exists to prevent. A missing worker
  * build or a permanently crashing worker surfaces as a clear error instead.

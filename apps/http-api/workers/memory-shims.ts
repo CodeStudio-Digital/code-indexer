@@ -17,6 +17,7 @@
 // Workers import via relative paths only — Node's loader resolves these
 // before tsx/tsconfig `paths` get a chance (see coder-worker.ts header).
 import type { MessageBridge } from '../../../packages/orchestrator-host/src/index.js';
+import type { InvestigationSemanticIndexPort } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 
 /** Mirrors the structural `RunCoderOptions.memoryRetriever` item shape. */
 export interface ShimRetrievedMemory {
@@ -99,6 +100,7 @@ export interface WorkerMemoryShims {
     ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     forget(projectId: number, projectName: string, target: string): Promise<{ archived: number }>;
   };
+  investigationSemantic: InvestigationSemanticIndexPort;
 }
 
 const CONFIGURED_CACHE_MS = 60_000;
@@ -209,6 +211,21 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
           );
         } catch {
           return { archived: 0 };
+        }
+      },
+    },
+    investigationSemantic: {
+      wakeUpsert: (record) => {
+        // SessionStore already persisted the durable pre-write fence in this
+        // worker. RPC is only a low-latency wake-up for the main coordinator.
+        void bridge.request('investigationWake', record, { timeoutMs: 10_000 })
+          .catch(() => undefined);
+      },
+      search: async (input) => {
+        try {
+          return await bridge.request<number[]>('investigationSearch', input, { timeoutMs: 10_000 });
+        } catch {
+          return [];
         }
       },
     },

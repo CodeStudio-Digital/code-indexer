@@ -128,6 +128,7 @@ export function setCoderWorkerDocDeps(
     memoryQuerySynthesizer?: CoderWorkerDocDeps['memoryQuerySynthesizer'];
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
     projectMemory?: CoderWorkerDocDeps['projectMemory'];
+    investigationSemantic?: CoderWorkerDocDeps['investigationSemantic'];
   },
 ): void {
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
@@ -138,6 +139,7 @@ export function setCoderWorkerDocDeps(
   if (deps.memoryQuerySynthesizer !== undefined) docDeps.memoryQuerySynthesizer = deps.memoryQuerySynthesizer;
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
   if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;
+  if (deps.investigationSemantic !== undefined) docDeps.investigationSemantic = deps.investigationSemantic;
 }
 
 /**

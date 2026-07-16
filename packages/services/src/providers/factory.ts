@@ -1,4 +1,4 @@
-import type { LLMProvider, ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
+import type { ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import { withStreamResilience } from '@mcp/provider-sdk';
 import { getRegistry, getDefinition } from './registry.js';
@@ -88,19 +88,6 @@ export async function lookupProvider(name?: string): Promise<LookupResult> {
   );
 }
 
-export async function createIndexerProvider(
-  name?: string,
-  model?: string,
-): Promise<LLMProvider> {
-  const { def, cfg } = await lookupProvider(name);
-  if (!def.createIndexer && !def.createIndexerAsync) {
-    throw new Error(`Shape '${def.kind}' does not support the indexer`);
-  }
-  const creds = await resolveCreds(def, cfg);
-  if (def.createIndexerAsync) return def.createIndexerAsync(creds, model);
-  return def.createIndexer!(creds, model);
-}
-
 export async function createCoderProvider(
   name?: string,
   model?: string,
@@ -125,45 +112,8 @@ export async function createCoderProvider(
 }
 
 // ─── Back-compat re-exports ──────────────────────────────────────
-// Existing call sites use createProviderAsync / createChatProviderAsync.
-// Keep the names so we can migrate consumers incrementally.
-
-export const createProviderAsync = createIndexerProvider;
+// Existing coder call sites use createChatProviderAsync.
 export const createChatProviderAsync = createCoderProvider;
-
-/** Synchronous counterpart — throws for OAuth/AWS shapes that need await. */
-export function createProvider(name?: string, model?: string): LLMProvider {
-  const registry = getRegistry();
-  const store = getStore();
-
-  // Only the ProviderStore lookup — no env-var fallback, no OAuth refresh.
-  let def: ProviderDefinition | undefined;
-  let cfg: ProviderConfig | null = null;
-
-  if (name && store) {
-    const row = store.getProvider(name);
-    if (row && row.enabled) {
-      def = registry.get(effectiveKind(row));
-      cfg = row;
-    }
-  }
-  if (!def && name) def = registry.get(name);
-  if (!def) throw new Error(`No provider available for name=${name ?? '(auto)'}`);
-
-  if (def.credKind !== 'api-key') {
-    throw new Error(
-      `Shape '${def.kind}' requires async construction. Use createProviderAsync.`,
-    );
-  }
-  if (!def.createIndexer) {
-    throw new Error(`Shape '${def.kind}' does not support the indexer`);
-  }
-  const creds = {
-    apiKey: cfg?.api_key ?? undefined,
-    baseURL: cfg?.base_url ?? def.defaultBaseURL,
-  };
-  return def.createIndexer(creds, model);
-}
 
 export { createImagesProvider } from './images-factory.js';
 
@@ -172,5 +122,4 @@ export {
   listDefinitions,
   getRegistry,
   listCoderKinds,
-  listIndexerKinds,
 } from './registry.js';

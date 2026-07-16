@@ -130,9 +130,6 @@ export interface FilesApi {
   symbol(input: { id: number; projectId?: number }, ctx: ApiContext): Promise<unknown>;
   symbolMembers(input: { id: number; projectId?: number }, ctx: ApiContext): Promise<unknown[]>;
 
-  listConcepts(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ concept: string; count: number }>>;
-  conceptFiles(input: { projectId: number; concept: string }, ctx: ApiContext): Promise<unknown[]>;
-
   // ── Local History (mig 160) ───────────────────────────────────────
   /** Revisões de um arquivo, mais novo primeiro. */
   historyList(input: { projectId: number; path: string }, ctx: ApiContext): Promise<{ revisions: HistoryRevision[] }>;

@@ -90,8 +90,7 @@ export function GitWindow({ projectId, host, active = true, onClose }: GitWindow
   const repoPrefix = rawPrefix.startsWith('..') ? '' : rawPrefix;
   const {
     status, loading, error, openSections, setOpenSections, tab, setTab, mergeState,
-    statusCounts, hasMoreStatus, loadingMoreStatus,
-    groups, reload, loadMoreStatus, showDiff, onStage, onUnstage, onDiscard,
+    statusCounts, groups, reload, showDiff, onStage, onUnstage, onDiscard,
   } = useGitWindow(projectId, active, repoPath, repoPrefix, !reposLoading);
   const [branchSwitcherOpen, setBranchSwitcherOpen] = useState(false);
   const [seenTabs, setSeenTabs] = useState<Set<GitTab>>(() => new Set<GitTab>(['changes']));
@@ -211,9 +210,6 @@ export function GitWindow({ projectId, host, active = true, onClose }: GitWindow
                   error={error}
                   groups={groups}
                   counts={statusCounts}
-                  hasMore={hasMoreStatus}
-                  loadingMore={loadingMoreStatus}
-                  onLoadMore={loadMoreStatus}
                   openSections={openSections}
                   setOpenSections={setOpenSections}
                   showDiff={showDiff}

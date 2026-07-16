@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, GitBranch, History, Loader2, RefreshCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../../../lib/datetime.js';
 import { Button } from '../../../components/ui/button.js';
 import { cn } from '../../../lib/utils.js';
 import { getAppSpecHistory, type AppSpecHistoryView, type AppSpecImpactView, type AppStudioSessionDetail } from '../app-studio-api.js';
@@ -13,7 +14,7 @@ const IMPACT_CLASS: Record<AppSpecImpactView['level'], string> = {
 };
 
 function formatDate(value: string | null): string {
-  return value ? new Date(value).toLocaleString() : '—';
+  return formatDateTime(value, undefined, undefined, '—');
 }
 
 export function VersionsPanel({ detail }: { detail: AppStudioSessionDetail; onChanged: () => void }) {

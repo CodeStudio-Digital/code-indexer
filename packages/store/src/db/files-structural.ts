@@ -15,19 +15,18 @@ export interface UpsertStructuralData {
   dependencies?: string[];
   internalDeps?: string[];
   externalDeps?: string[];
+  isEntryPoint?: boolean;
+  isTest?: boolean;
+  isGenerated?: boolean;
+  indexTier?: 'core' | 'support' | 'on_demand';
+  mapperReason?: string;
   mtimeMs?: number | null;
 }
 
 /**
- * Structural-layer upsert — the ONLY write path the structural pipeline may
- * use on `files`. Unlike files.upsert (which overwrites every column and
- * would erase an earlier full-index's semantic layer), the UPDATE branch
- * touches structural columns only: summary/concepts/notes/complexity/layer/
- * flags/index_tier/semantic_hash/structure_hash all keep their values, so
- * `semantic_hash != content_hash` becomes the "semantics stale" marker.
- *
- * files_fts needs no maintenance on UPDATE (it indexes path/summary/concepts,
- * none of which change here); on INSERT the files_ai trigger covers it.
+ * Structural upsert used by the automatic source scanner. Semantic state is
+ * deliberately absent from `files`; generations and item hashes live in the
+ * central semantic ledger.
  */
 export function upsertStructural(
   db: DB,
@@ -40,15 +39,19 @@ export function upsertStructural(
     ).get(projectId, data.path) as { id: number } | undefined;
 
     if (existing) {
-      // COALESCE keeps the stored dependency JSON when tree-sitter didn't
-      // produce any (unsupported language) — mirrors index_tier handling in
-      // files.upsert.
+      // COALESCE keeps the stored dependency JSON when tree-sitter does not
+      // support a language.
       db.prepare(`
         UPDATE files SET
           language = ?, size = ?, line_count = ?, content_hash = ?,
           dependencies = COALESCE(?, dependencies),
           internal_deps = COALESCE(?, internal_deps),
           external_deps = COALESCE(?, external_deps),
+          is_entry_point = COALESCE(?, is_entry_point),
+          is_test = COALESCE(?, is_test),
+          is_generated = COALESCE(?, is_generated),
+          index_tier = COALESCE(?, index_tier),
+          mapper_reason = COALESCE(?, mapper_reason),
           mtime_ms = COALESCE(?, mtime_ms),
           updated_at = datetime('now')
         WHERE id = ?
@@ -57,6 +60,10 @@ export function upsertStructural(
         data.dependencies ? JSON.stringify(data.dependencies) : null,
         data.internalDeps ? JSON.stringify(data.internalDeps) : null,
         data.externalDeps ? JSON.stringify(data.externalDeps) : null,
+        data.isEntryPoint === undefined ? null : Number(data.isEntryPoint),
+        data.isTest === undefined ? null : Number(data.isTest),
+        data.isGenerated === undefined ? null : Number(data.isGenerated),
+        data.indexTier ?? null, data.mapperReason ?? null,
         data.mtimeMs ?? null,
         existing.id
       );
@@ -65,47 +72,20 @@ export function upsertStructural(
 
     const result = db.prepare(`
       INSERT INTO files (project_id, path, language, size, line_count, content_hash,
-        summary, concepts, dependencies, internal_deps, external_deps, notes, complexity,
-        layer, is_entry_point, is_test, is_generated, mtime_ms)
-      VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?, ?, ?, '[]', 'unknown', 'unknown', 0, 0, 0, ?)
+        dependencies, internal_deps, external_deps,
+        is_entry_point, is_test, is_generated, index_tier, mapper_reason, mtime_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       projectId, data.path, data.language, data.size, data.lineCount, data.contentHash,
       JSON.stringify(data.dependencies ?? []), JSON.stringify(data.internalDeps ?? []),
       JSON.stringify(data.externalDeps ?? []),
+      Number(data.isEntryPoint ?? false), Number(data.isTest ?? false),
+      Number(data.isGenerated ?? false),
+      data.indexTier ?? null, data.mapperReason ?? null,
       data.mtimeMs ?? null
     );
     return { fileId: result.lastInsertRowid as number, created: true };
   });
 
   return tx();
-}
-
-/**
- * Stamp the semantic layer as fresh for this content. Called by the FULL
- * pipeline only, inside its per-file transaction (both the LLM path and the
- * structure-hash llmSkipped path — in both cases the stored semantics
- * correspond to this exact content).
- */
-export function setSemanticHash(db: DB, projectId: number, path: string, contentHash: string): void {
-  db.prepare('UPDATE files SET semantic_hash = ? WHERE project_id = ? AND path = ?')
-    .run(contentHash, projectId, path);
-}
-
-/** Paths whose semantic layer lags the current content (or never existed). */
-export function listSemanticStalePaths(db: DB, projectId: number, limit?: number): string[] {
-  const rows = db.prepare(`
-    SELECT path FROM files
-    WHERE project_id = ? AND (semantic_hash IS NULL OR semantic_hash != content_hash)
-    ORDER BY path
-    ${limit ? 'LIMIT ?' : ''}
-  `).all(...(limit ? [projectId, limit] : [projectId])) as Array<{ path: string }>;
-  return rows.map((r) => r.path);
-}
-
-export function countSemanticStale(db: DB, projectId: number): number {
-  const row = db.prepare(`
-    SELECT COUNT(*) as cnt FROM files
-    WHERE project_id = ? AND (semantic_hash IS NULL OR semantic_hash != content_hash)
-  `).get(projectId) as { cnt: number };
-  return row.cnt;
 }

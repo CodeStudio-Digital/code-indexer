@@ -1,42 +1,82 @@
 import { defineTool, type McpTool } from '../tool.js';
 import { truncateToTokens } from '../utils.js';
-import { createProviderAsync } from '@mcp/services/providers/factory.js';
-import { IndexAgent } from '@mcp/indexer/indexer/indexer.js';
 import { buildRepoMap } from '@mcp/services/services/repo-map.js';
-import type { ProviderName } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
+import { basename, resolve } from 'node:path';
+import { requestMcpLocalServer } from '../server-control.js';
+import { buildProjectSummary } from '../project-summary.js';
 
 const index_project = defineTool({
   name: 'index_project',
   description:
-    'Index or re-index a project from disk: parse files, extract symbols, and (when configured) embed for semantic search.\n' +
-    'Uses the default provider/model unless overridden; pass force=true to re-analyze unchanged files. Long-running and costs money — check estimate_cost first on large projects.',
+    'Reconcile the structural index for one project, then start its configured semantic generation. ' +
+    'Structural indexing extracts files, symbols, references and dependencies; semantic work runs in the server-owned worker. ' +
+    'Use rebuild_semantic only when you intentionally want to replace the active vector generation.',
   inputSchema: {
     type: 'object',
     properties: {
       project_path: { type: 'string', description: 'Path to project root' },
-      provider: { type: 'string' },
-      model: { type: 'string' },
-      force: { type: 'boolean' },
+      rebuild_semantic: {
+        type: 'boolean',
+        description: 'Build a replacement semantic generation instead of starting/catching up the current one.',
+      },
     },
     required: ['project_path'],
   },
   handler: async (args, ctx) => {
-    const { db, config, providerStore, embeddingService, vectorStore, costTracker, webhookDispatcher } = ctx;
-    const defaults = providerStore.getDefaultProviderAndModel();
-    const provider = await createProviderAsync(
-      ((args.provider as string) ?? defaults.kind) as ProviderName,
-      (args.model as string) ?? defaults.model,
+    const projectPath = resolve(args.project_path as string);
+    let project = ctx.db.getProjectByPath(projectPath);
+    if (!project) {
+      const created = await requestMcpLocalServer('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ name: basename(projectPath), root_path: projectPath }),
+      }, { config: ctx.config });
+      if (!created.ok) {
+        throw new Error(
+          `Index writes require the local owner server; project registration failed: ${created.error ?? 'unavailable'}`,
+        );
+      }
+      project = created.body as typeof project;
+    }
+    if (!project?.id) throw new Error(`Unable to resolve project for ${projectPath}`);
+    const structuralResponse = await requestMcpLocalServer(
+      `/api/projects/${project.id}/index/structural/reconcile`,
+      { method: 'POST' },
+      { config: ctx.config, timeoutMs: 190_000 },
     );
-    const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
-    const result = await agent.indexProject(args.project_path as string, { force: args.force as boolean });
-    return `Indexed ${result.indexedFiles} files (${result.skippedFiles} skipped, ${result.errorCount} errors) in ${(result.durationMs / 1000).toFixed(1)}s. Cost: $${result.costUsd.toFixed(4)}`;
+    if (!structuralResponse.ok) {
+      throw new Error(
+        `Structural indexing requires the local owner server: ${structuralResponse.error ?? 'unavailable'}`,
+      );
+    }
+    const structural = structuralResponse.body as {
+      ok?: boolean;
+      readiness?: { status?: string; phase?: string };
+      status?: { phase?: string; indexedFiles?: number; symbolCount?: number };
+    } | null;
+    if (structural?.ok === false) {
+      const state = structural.readiness?.status ?? structural.status?.phase ?? 'not_ready';
+      return `Structural reconciliation is still ${state}; semantic indexing was not started. Retry after the structural index becomes ready.`;
+    }
+
+    const semanticAction = args.rebuild_semantic === true ? 'rebuild' : 'start';
+    const semanticResponse = await requestMcpLocalServer(`/api/projects/${project.id}/semantic/reindex`, {
+      method: 'POST',
+      body: JSON.stringify({ action: semanticAction }),
+    }, { config: ctx.config, timeoutMs: 10_000 });
+    const structuralState = structural?.status?.phase ?? structural?.readiness?.phase ?? 'ready';
+    if (!semanticResponse.ok) {
+      return `Structural index is ${structuralState}. Semantic indexing was not started (${semanticResponse.error ?? 'profile disabled or worker unavailable'}); FTS and structural tools remain available.`;
+    }
+    const semantic = semanticResponse.body as { job?: { id?: number; status?: string }; scheduled?: boolean } | null;
+    const job = semantic?.job?.id ? ` job #${semantic.job.id}` : '';
+    return `Structural index is ${structuralState}. Semantic ${semanticAction}${job} was accepted by the server-owned worker.`;
   },
 });
 
 const get_project_overview = defineTool({
   name: 'get_project_overview',
-  description: 'Get project overview with file list and concepts. Use compact=true for dense output. In compact mode, file list is capped by max_files (default 50).',
+  description: 'Get a structural project overview with files, symbols, languages and semantic-generation status. Use compact=true for dense output. In compact mode, file list is capped by max_files (default 50).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -47,43 +87,40 @@ const get_project_overview = defineTool({
     },
     required: ['project_name'],
   },
-  handler: withProject((args, { db }, project) => {
-    const stats = db.getStats(project.id);
-    const concepts = db.listConcepts(project.id);
+  handler: withProject((args, ctx, project) => {
+    const { db } = ctx;
+    const summary = buildProjectSummary(ctx, project);
     const files = db.listFiles(project.id);
-    const archOverview = db.getArchitectureOverview(project.id);
     const compact = args.compact === true;
 
     if (compact) {
       const maxFiles = (args.max_files as number) ?? 50;
-      const langs = Object.entries(stats.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `${l}(${c})`).join(' ');
-      const layers = archOverview.map(l => `${l.layer}(${l.count})`).join(' ');
-      const conc = concepts.slice(0, 8).map(c => c.concept).join(', ');
+      const langs = Object.entries(summary.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `${l}(${c})`).join(' ');
+      const directories = summary.top_directories.map((row) => `${row.path}(${row.files})`).join(' ');
       const shownFiles = files.slice(0, maxFiles);
       const fileTrunc = files.length > maxFiles
         ? `\n  ... [${files.length - maxFiles} more files omitted — use max_files to expand]`
         : '';
-      const out = `${project.name} | ${stats.file_count}f ${stats.symbol_count}s ${stats.total_lines}L\nlangs: ${langs}\nlayers: ${layers}\nconcepts: ${conc}\nfiles:\n${shownFiles.map(f => `  ${f.path} (${f.language},${f.line_count}L)`).join('\n')}${fileTrunc}`;
+      const semantic = `${summary.semantic.state} ${summary.semantic.indexed_items}/${summary.semantic.expected_items} (${summary.semantic.coverage_pct}%)`;
+      const out = `${project.name} | ${summary.file_count}f ${summary.symbol_count}s ${summary.total_lines}L\nlangs: ${langs}\ndirectories: ${directories}\nstructural: ${summary.structural.state}\nsemantic: ${semantic}\nfiles:\n${shownFiles.map(f => `  ${f.path} (${f.language},${f.line_count}L)`).join('\n')}${fileTrunc}`;
       return truncateToTokens(out, args.max_tokens as number | undefined);
     }
 
     const sections = [
       `# ${project.name}`,
       `Path: ${project.root_path}`,
-      `Files: ${stats.file_count} | Symbols: ${stats.symbol_count} | Lines: ${stats.total_lines.toLocaleString()} | Runs: ${stats.run_count}`,
-      `Last Indexed: ${stats.last_indexed ?? 'Never'}`,
+      `Files: ${summary.file_count} | Symbols: ${summary.symbol_count} | Lines: ${summary.total_lines.toLocaleString()}`,
+      `Structural: ${summary.structural.state} | Indexed: ${summary.structural.indexed_at ?? 'Never'} | Checked: ${summary.structural.last_checked_at ?? 'Never'}`,
+      `Semantic: ${summary.semantic.state} | Generation: ${summary.semantic.active_generation_id ?? summary.semantic.building_generation_id ?? 'none'} | Coverage: ${summary.semantic.indexed_items}/${summary.semantic.expected_items} (${summary.semantic.coverage_pct}%)`,
       '',
       '## Languages',
-      Object.entries(stats.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `- ${l}: ${c} files`).join('\n'),
+      Object.entries(summary.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `- ${l}: ${c} files`).join('\n'),
     ];
 
-    if (archOverview.length > 0) {
-      sections.push('', '## Architecture Layers', archOverview.map(l => `- ${l.layer}: ${l.count} files`).join('\n'));
+    if (summary.top_directories.length > 0) {
+      sections.push('', '## Top-level directories', summary.top_directories.map(row => `- ${row.path}: ${row.files} files`).join('\n'));
     }
-    if (concepts.length > 0) {
-      sections.push('', '## Key Concepts', concepts.map(c => `- ${c.concept} (${c.count} files)`).join('\n'));
-    }
-    sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines, ${f.complexity})`).join('\n'));
+    sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines)`).join('\n'));
     return truncateToTokens(sections.join('\n'), args.max_tokens as number | undefined);
   }),
 });
@@ -99,82 +136,33 @@ const get_project_pulse = defineTool({
     },
     required: ['project_name'],
   },
-  handler: withProject((args, { db }, project) => {
-    const stats = db.getStats(project.id);
-    const arch = db.getArchitectureOverview(project.id);
-    const files = db.listFiles(project.id);
-    const conceptCount = new Map<string, number>();
-    const entryPoints: string[] = [];
-    for (const f of files) {
-      if (f.is_entry_point) entryPoints.push(f.path);
-      try {
-        const cs = JSON.parse(f.concepts || '[]') as string[];
-        for (const c of cs) conceptCount.set(c, (conceptCount.get(c) ?? 0) + 1);
-      } catch { /* ignore */ }
-    }
-    const topConcepts = [...conceptCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c]) => c);
-    const langs = Object.entries(stats.languages).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([l, n]) => `${l}(${n})`).join(' ');
-    const layers = arch.map(a => `${a.layer}(${a.count})`).join(' ');
-    const snaps = db.listSnapshots(project.id);
-    const costs = db.getCostSummary(project.id);
-    const avgCost = stats.file_count > 0 ? costs.total_cost_usd / stats.file_count : 0;
-    const cov = db.getEmbeddingCoverage(project.id);
-    const filePct = cov.files_total > 0 ? Math.round((cov.files_embedded / cov.files_total) * 100) : 0;
-    const symPct = cov.symbols_total > 0 ? Math.round((cov.symbols_embedded / cov.symbols_total) * 100) : 0;
-    const bodyPct = cov.symbol_bodies_total > 0 ? Math.round((cov.symbol_bodies_embedded / cov.symbol_bodies_total) * 100) : 0;
+  handler: withProject((args, ctx, project) => {
+    const summary = buildProjectSummary(ctx, project);
+    const langs = Object.entries(summary.languages).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([l, n]) => `${l}(${n})`).join(' ');
 
     if (args.format === 'json') {
-      return JSON.stringify({
-        project: project.name,
-        file_count: stats.file_count,
-        symbol_count: stats.symbol_count,
-        total_lines: stats.total_lines,
-        last_indexed: stats.last_indexed ?? null,
-        languages: stats.languages,
-        layers: arch,
-        top_concepts: topConcepts,
-        entry_points: entryPoints.slice(0, 5),
-        snapshots_count: snaps.length,
-        vector_coverage: {
-          files_pct: filePct,
-          symbols_pct: symPct,
-          bodies_pct: bodyPct,
-        },
-        cost: {
-          total_usd: costs.total_cost_usd,
-          llm_analysis_usd: costs.llm_analysis_cost_usd,
-          embedding_usd: costs.embedding_cost_usd,
-          per_file_avg_usd: avgCost,
-        },
-      });
+      return JSON.stringify(summary);
     }
 
-    const costLine = costs.total_cost_usd > 0
-      ? `cost: $${costs.total_cost_usd.toFixed(4)} (llm $${costs.llm_analysis_cost_usd.toFixed(4)} + emb $${costs.embedding_cost_usd.toFixed(4)}) | avg/file: $${avgCost.toFixed(5)}`
-      : '';
-    const covLine = cov.files_total > 0
-      ? `vector coverage: files ${filePct}% | symbols ${symPct}% | bodies ${bodyPct}%`
-      : 'vector coverage: none (search will use FTS only)';
     const lines = [
-      `${project.name} | ${stats.file_count} files, ${stats.symbol_count} symbols, ${stats.total_lines}L | indexed: ${stats.last_indexed ?? 'never'}`,
+      `${project.name} | ${summary.file_count} files, ${summary.symbol_count} symbols, ${summary.total_lines}L`,
       `langs: ${langs}`,
-      `layers: ${layers}`,
-      `top concepts: ${topConcepts.join(', ')}`,
-      entryPoints.length ? `entry points: ${entryPoints.slice(0, 5).join(', ')}` : '',
-      `snapshots: ${snaps.length}`,
-      covLine,
-      costLine,
+      `directories: ${summary.top_directories.map((row) => `${row.path}(${row.files})`).join(' ')}`,
+      summary.key_files.length ? `key files: ${summary.key_files.join(', ')}` : '',
+      `structural: ${summary.structural.state} | indexed ${summary.structural.indexed_at ?? 'never'} | checked ${summary.structural.last_checked_at ?? 'never'}`,
+      `semantic: ${summary.semantic.state} | generation ${summary.semantic.active_generation_id ?? summary.semantic.building_generation_id ?? 'none'} | coverage ${summary.semantic.indexed_items}/${summary.semantic.expected_items} (${summary.semantic.coverage_pct}%) | deltas ${summary.semantic.pending_delta_items}`,
+      summary.semantic.error ? `semantic error: ${summary.semantic.error}` : '',
+      `snapshots: ${summary.snapshots_count}`,
     ].filter(Boolean);
     return lines.join('\n');
   }),
 });
 
-// `get_architecture` was retired from the MCP surface (tool audit 2026-07,
-// docs/audit/TOOL_AUDIT.md): 2 calls in 30 days, and its layer/file-count
-// list is a strict subset of get_project_overview / get_project_pulse.
+// `get_architecture` was retired from the MCP surface. Structural directory,
+// dependency and symbol context is available through overview + repo map.
 const get_repo_map = defineTool({
   name: 'get_repo_map',
-  description: 'Structural map of the repository (~2000 tokens). Shows key files weighted by importance (entry points, hubs, high-complexity) with their top symbols. Use after get_project_pulse for a mental model of the codebase architecture. Based on dependency graph analysis (PageRank-style scoring).',
+  description: 'Structural map of the repository (~2000 tokens). Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Use after get_project_pulse for a mental model of the codebase architecture.',
   inputSchema: {
     type: 'object',
     properties: {

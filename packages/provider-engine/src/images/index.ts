@@ -5,7 +5,7 @@ import { ChatGPTImagesClient } from './chatgpt-images.js';
 
 /**
  * Derive `createImages` for an engine-built provider, mirroring how the wire
- * builders derive createCoder/createIndexer. Only shapes that opt in via
+ * builders derive createCoder. Only shapes that opt in via
  * `capabilities.supportsImageGen` get a factory; everything else stays
  * undefined so the services factory can reject with a clear message.
  *

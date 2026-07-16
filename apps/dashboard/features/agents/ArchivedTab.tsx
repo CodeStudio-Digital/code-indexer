@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Archive, Bot, Crown, MessageSquare, KanbanSquare, Loader2 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
+import { formatDateTime } from '../../lib/datetime.js';
 import { ArchiveDetailModal } from './ArchiveDetailModal.js';
 
 interface ArchiveSummary {
@@ -64,7 +65,7 @@ export function ArchivedTab({ companySessionId }: ArchivedTabProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <Archive className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-sm font-medium">
-              {new Date(a.archived_at + 'Z').toLocaleString()}
+              {formatDateTime(a.archived_at)}
             </span>
             <span className="text-[10px] text-muted-foreground ml-auto">#{a.id}</span>
           </div>

@@ -23,7 +23,6 @@ import { createCoderHandlers } from './coder/index.js';
 import { createLspHandlers } from './lsp/index.js';
 import { createEditorHandlers } from './editor/index.js';
 import { createSnapshotsHandlers } from './snapshots/index.js';
-import { createRunsHandlers } from './runs/index.js';
 import { createSearchHandlers } from './search/index.js';
 import { createProjectGitHandlers } from './projectGit/index.js';
 import { createPluginsHandlers } from './plugins/index.js';
@@ -89,7 +88,6 @@ export {
 } from './lsp/document-store.js';
 export { createEditorHandlers } from './editor/index.js';
 export { createSnapshotsHandlers } from './snapshots/index.js';
-export { createRunsHandlers } from './runs/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
 export { PROJECT_GIT_RPC_METHODS, type ProjectGitRpcMethod } from './projectGit/guard.js';
@@ -119,7 +117,6 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     lsp: createLspHandlers(deps),
     editor: createEditorHandlers(deps),
     snapshots: createSnapshotsHandlers(deps),
-    runs: createRunsHandlers(deps),
     search: createSearchHandlers(deps),
     projectGit: createProjectGitHandlers(deps),
     plugins: createPluginsHandlers(deps),

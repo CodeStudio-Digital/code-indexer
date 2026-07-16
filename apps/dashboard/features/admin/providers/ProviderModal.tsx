@@ -51,6 +51,7 @@ export interface ProviderModalProps {
     providerId: string,
     subagentProviderId: string | null,
     modelId: string | null,
+    profile?: string,
   ) => void;
 }
 

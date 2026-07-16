@@ -172,8 +172,17 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
       // the project row and wipe the empty workdir we just mkdirSync'd.
       try { companyStore.removeProjectFromCompanySession(id, projectId); } catch { /* best effort */ }
       if (createdOwnedProject) {
-        try { db.deleteProject(projectId); } catch { /* best effort */ }
-        try { await rm(rootPath, { recursive: true, force: true }); } catch { /* best effort */ }
+        try {
+          await deps.projectIndexService.stopWatching(projectId).catch(() => undefined);
+          await deps.semanticCoordinator.removeProject(projectId, {
+            finalize: () => db.deleteProject(projectId),
+          });
+          await rm(rootPath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          console.warn(
+            `[company] rollback project ${projectId} kept after cleanup failure: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          );
+        }
       }
       const message = e instanceof Error ? e.message : String(e);
       return c.json({ error: message }, 400);

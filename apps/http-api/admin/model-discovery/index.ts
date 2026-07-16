@@ -43,7 +43,7 @@ export interface DiscoveryResult {
  * a plugin-contributed provider's live discovery is served too. Falls back to the
  * built-in spec. Best-effort: a snapshot read failure just uses the built-in.
  */
-function resolveProviderSpec(kind: string): ProviderSpec | undefined {
+export function resolveProviderSpec(kind: string): ProviderSpec | undefined {
   try {
     for (const ref of listProviderPlugins()) {
       // First-party bundled refs may declare host capabilities (sdk:* discovery,

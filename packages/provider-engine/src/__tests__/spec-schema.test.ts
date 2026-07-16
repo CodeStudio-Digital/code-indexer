@@ -58,5 +58,20 @@ describe('ProviderSpec schema', () => {
       };
       expect(thirdPartyProviderSpecSchema.safeParse(ok).success).toBe(true);
     });
+
+    it('accepts local-vector semantic inference descriptors but rejects unknown protocols', () => {
+      const semantic = {
+        ...zaiSpec,
+        semantic: {
+          embedding: { protocol: 'openai-embeddings' as const, modelPatterns: ['embed'] },
+          rerank: { protocol: 'cohere-rerank' as const, defaultModels: ['rerank-v3.5'] },
+        },
+      };
+      expect(thirdPartyProviderSpecSchema.safeParse(semantic).success).toBe(true);
+      expect(thirdPartyProviderSpecSchema.safeParse({
+        ...semantic,
+        semantic: { rerank: { protocol: 'remote-vector-store' } },
+      }).success).toBe(false);
+    });
   });
 });

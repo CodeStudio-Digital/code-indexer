@@ -64,7 +64,7 @@ export interface ActiveIndexRun {
 }
 
 export interface ScheduledIndexRun {
-  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
+  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
   dueAt: number;
 }
 
@@ -83,6 +83,7 @@ export interface ProjectIndexStatus {
   /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;
+  lastCheckedAt: string | null;
   lastSemanticAt: string | null;
   error?: string;
 }
@@ -127,39 +128,6 @@ export interface UpdateProjectInput {
   /** Persisted in the routed project DB, not in repository files. */
   editor_settings?: EditorSettingsOverride | null;
 }
-
-export interface IndexProjectInput {
-  /** Provider id (e.g. 'anthropic', 'openai'). Defaults to the project's pinned provider. */
-  provider?: string;
-  model?: string;
-  /** Force a full re-index instead of incremental. */
-  force?: boolean;
-  /** 'structural' = tree-sitter + FTS only, $0, no provider needed. Default 'full'. */
-  mode?: 'full' | 'structural';
-}
-
-/**
- * Indexing payloads are passed through as-is from `IndexProjectUseCase`
- * — the dashboard already understands the existing shapes
- * (`IndexStartPayload`, `IndexProgressFrame`, `EmbeddingProgressFrame`,
- * etc. in @mcp/services/services/projects). Typing them here as `unknown`
- * keeps api-bus from coupling to the use-case's evolving frame shape.
- */
-export interface IndexResult {
-  runId: number;
-  totalFiles: number;
-  indexedFiles: number;
-  skippedFiles: number;
-  errorCount: number;
-  durationMs: number;
-  costUsd: number;
-}
-
-export type IndexStreamEvent =
-  | { event: 'start'; data: unknown }
-  | { event: 'progress'; data: unknown }
-  | { event: 'done'; data: IndexResult | unknown }
-  | { event: 'error'; data: { message: string } };
 
 /**
  * Stacks the New Project wizard can scaffold on the host (under
@@ -228,20 +196,20 @@ export interface ProjectsApi {
   delete(
     input: { id: number },
     ctx: ApiContext,
-  ): Promise<{ ok: true; vectors_known: number; vectors_deleted_remote: number; remote_error: string | null }>;
+  ): Promise<{ ok: true; vectors_known: number; vectors_deleted: number; vector_error: string | null }>;
 
   /**
    * Wipe ONE project's data (index, sessions, snapshots, runs, costs) and its
-   * remote vectors, KEEPING the project row so the user only re-indexes.
+   * local vectors, KEEPING the project row so the user only re-indexes.
    */
   clearData(
     input: { id: number },
     ctx: ApiContext,
-  ): Promise<{ ok: true; vectors_known: number; vectors_deleted_remote: number; remote_error: string | null }>;
+  ): Promise<{ ok: true; vectors_known: number; vectors_deleted: number; vector_error: string | null }>;
 
   /**
    * Wipe ALL projects' data (index, sessions, snapshots, runs, costs) and their
-   * remote vectors, KEEPING each project row so the user only re-indexes — not
+   * local vectors, KEEPING each project row so the user only re-indexes — not
    * re-creates. Per-project errors are collected, not fatal.
    */
   clearAllData(
@@ -250,7 +218,7 @@ export interface ProjectsApi {
   ): Promise<{
     ok: true;
     projects_cleared: number;
-    vectors_deleted_remote: number;
+    vectors_deleted: number;
     errors: Array<{ project: string; error: string }>;
   }>;
 
@@ -279,15 +247,6 @@ export interface ProjectsApi {
    * — so the branch chip / git window / file-tree colors refresh on screen.
    */
   gitMetaStream(input: { id: number }, ctx: ApiContext): AsyncStream<GitMetaFrame>;
-
-  /** One-shot index (no streaming progress). */
-  index(input: { id: number } & IndexProjectInput, ctx: ApiContext): Promise<IndexResult>;
-
-  /** Streaming index — emits IndexStreamEvent per phase/file. */
-  indexStream(input: { id: number } & IndexProjectInput, ctx: ApiContext): AsyncStream<IndexStreamEvent>;
-
-  /** Retry embeddings for files that previously failed embedding. */
-  retryEmbeddingsStream(input: { id: number }, ctx: ApiContext): AsyncStream<IndexStreamEvent>;
 
   /**
    * Scaffold a brand-new project on the host (`~/.mcp-code-indexer/projects/<slug>`)

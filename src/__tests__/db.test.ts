@@ -29,13 +29,9 @@ function mkFile(path: string, hash = 'h'): Parameters<CodeIndexDB['upsertFile']>
     size: 10,
     lineCount: 5,
     contentHash: hash,
-    summary: '',
-    concepts: [],
     dependencies: [],
     internalDeps: [],
     externalDeps: [],
-    notes: [],
-    complexity: 'low',
   };
 }
 
@@ -57,13 +53,13 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(95);
+      expect(db.getSchemaVersion()).toBe(233);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(95);
+      expect(db2.getSchemaVersion()).toBe(233);
       db2.close();
     });
 

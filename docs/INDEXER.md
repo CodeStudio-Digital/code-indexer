@@ -176,10 +176,8 @@ MCP_INDEX_PORT=7333
 # Budget (opcional, em USD)
 MCP_INDEX_BUDGET=1.00
 
-# Cloudflare Embeddings (opcional)
-MCP_INDEX_EMBEDDINGS=true
-MCP_INDEX_WORKER_URL=https://mcp-indexer-worker.seu-account.workers.dev
-MCP_INDEX_WORKER_TOKEN=seu-token
+# Embeddings e reranking sao configurados em Admin > Indexacao semantica.
+# Os modelos padrao executam localmente via ONNX; vetores nunca saem da maquina.
 ```
 
 ### Arquivo `.mcp-indexer.json`
@@ -193,11 +191,6 @@ Gerado automaticamente com `mcp-code-indexer init`:
   "concurrency": 5,
   "maxFileSize": 200,
   "ignorePatterns": ["*.test.*", "*.spec.*"],
-  "embeddings": {
-    "enabled": true,
-    "workerUrl": "https://...",
-    "workerToken": "..."
-  },
   "watcher": { "enabled": false, "debounce": 2000, "autoIndex": true },
   "webhooks": [],
   "costTracking": true,
@@ -635,34 +628,13 @@ Acesse `http://localhost:7333`. Tabs disponiveis por projeto:
 | `MCP_INDEX_CONCURRENCY` | Concorrencia de indexacao | `5` |
 | `MCP_INDEX_PORT` | Porta do dashboard/API | `7333` |
 | `MCP_INDEX_BUDGET` | Limite de custo em USD | - |
-| `MCP_INDEX_EMBEDDINGS` | Habilitar embeddings (`true`/`false`) | `false` |
-| `MCP_INDEX_WORKER_URL` | URL do Cloudflare Worker | - |
-| `MCP_INDEX_WORKER_TOKEN` | Token de auth do Worker | - |
 
-## Cloudflare Worker (Embeddings)
+## Perfis de embeddings e reranking
 
-O worker prove embeddings via Cloudflare Workers AI (`@cf/baai/bge-m3`) e armazenamento vetorial via Vectorize.
-
-### Deploy
-
-```bash
-cd worker
-npm install
-npx wrangler secret put AUTH_TOKEN  # definir token
-npx wrangler deploy
-```
-
-### Endpoints do Worker
-
-| Metodo | Rota | Descricao |
-|--------|------|-----------|
-| GET | `/health` | Health check (sem auth) |
-| POST | `/embed` | Gerar embeddings |
-| POST | `/upsert` | Inserir vetores |
-| POST | `/search` | Buscar vetores |
-| POST | `/delete` | Deletar vetores |
-
-Todos os endpoints (exceto `/health`) requerem header `Authorization: Bearer <token>`.
+Configure os perfis `code` e `knowledge` em **Admin > Indexacao semantica**.
+O runtime padrao e ONNX local. Tambem e possivel usar um endpoint HTTP em
+loopback ou um provider ja cadastrado apenas para inferencia; armazenamento,
+busca e exclusao de vetores sempre usam os bancos sqlite-vec locais.
 
 ## Scripts npm
 
@@ -689,10 +661,11 @@ src/
   mcp/             # MCP Server (stdio)
   search/          # Hybrid search (FTS5 + Vector + RRF)
   services/        # Costs, Snapshots, Watcher, Webhooks, Exporter, Differ
-  store/           # SQLite (better-sqlite3) + Cloudflare Vectorize
+  store/           # SQLite central + sqlite-vec distribuido por projeto/escopo
   utils/           # Config loader
   types.ts         # Todas as interfaces
-worker/            # Cloudflare Worker (embeddings + vectorize)
+<projeto>/.mcp-indexer/vectors.db  # codigo, snapshots e memoria do projeto
+<dados>/semantic/                  # docs-vectors.db + memory-vectors.db
 ```
 
 ### Tabelas do banco
@@ -715,12 +688,21 @@ worker/            # Cloudflare Worker (embeddings + vectorize)
 | `symbols_fts` | FTS5 para busca em symbols |
 | `snapshots_fts` | FTS5 para busca em snapshots |
 
-### Workers
-```bash 
-cd worker
-npx wrangler vectorize create-metadata-index code-index --property-name=project_name --type=string
-npx wrangler vectorize create-metadata-index code-index --property-name=type --type=string
-```
+### Indexacao semantica
+
+Os perfis globais `code` e `knowledge` escolhem embeddings e rerankers ONNX,
+HTTP local ou providers existentes. A persistencia vetorial e sempre local:
+um `vectors.db` por projeto, um banco global para documentacao compartilhada e
+outro para memoria global. Se um perfil falhar, a busca continua via FTS.
+
+Abrir o aplicativo ou um projeto nao inicia indexacao semantica. Somente o
+indice estrutural/FTS do projeto ativo e atualizado automaticamente, sem
+carregar ONNX. A primeira geracao vetorial exige a acao explicita `Indexar
+projeto` (ou `Reindexar todos` para uma operacao global). Depois de ativa,
+alteracoes com caminhos conhecidos podem ser reconciliadas incrementalmente;
+um delta curinga/desconhecido deixa a namespace pendente e a busca usa FTS ate
+um novo reindex explicito. Monaco e os agentes consultam o mesmo owner HTTP;
+os processos MCP nao abrem `sqlite-vec` nem instanciam modelos locais.
 
 
 

@@ -424,7 +424,7 @@ export function mountCoderSessionsRoutes(
     }
     let session;
     try {
-      session = createGlobalWorkspaceSession(deps, {
+      session = await createGlobalWorkspaceSession(deps, {
         title: body.title,
         provider: body.provider,
         model: body.model ?? '',
@@ -508,7 +508,7 @@ export function mountCoderSessionsRoutes(
       }
     }
     const deleted = sessionStore.deleteSessionsBatch(ids);
-    for (const u of unionIds) teardownGlobalWorkspaceIfOrphan(deps, u);
+    await Promise.all([...unionIds].map((u) => teardownGlobalWorkspaceIfOrphan(deps, u)));
     return c.json({ ok: true, deleted });
   });
 
@@ -1098,7 +1098,7 @@ export function mountCoderSessionsRoutes(
     const unionId = session?.is_global ? session.project_id : null;
     if (session?.is_global) await abortActiveRun(id);
     sessionStore.deleteSession(id);
-    if (unionId != null) teardownGlobalWorkspaceIfOrphan(deps, unionId);
+    if (unionId != null) await teardownGlobalWorkspaceIfOrphan(deps, unionId);
     return c.json({ ok: true });
   });
 

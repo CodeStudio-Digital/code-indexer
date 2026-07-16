@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Code2, Copy, Database, Eye, FileText, FolderOpen, HardDrive, RefreshCw } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
+import { formatDateTime } from '../../lib/datetime.js';
 import { Button } from '../../components/ui/button.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn } from '../../lib/utils.js';
@@ -84,7 +85,7 @@ function OriginBadge({ origin, mtime }: { origin: DocOrigin | null; mtime: strin
   const { t } = useTranslation('agents');
   if (!origin) return null;
   if (origin === 'drive_mirror') {
-    const stamp = mtime ? new Date(mtime).toLocaleString() : '';
+    const stamp = formatDateTime(mtime);
     return (
       <Badge
         variant="outline"

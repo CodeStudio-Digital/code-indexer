@@ -23,10 +23,8 @@ export type ExportSection =
   | 'architecture'
   | 'files'
   | 'symbols'
-  | 'concepts'
   | 'api'
-  | 'snapshots'
-  | 'changelog';
+  | 'snapshots';
 
 export type SymbolKind =
   | 'function'
@@ -53,8 +51,6 @@ export type WebhookEvent =
   | 'index.failed'
   | 'watch.changed'
   | 'snapshot.created';
-
-export type FileLayer = 'presentation' | 'business' | 'data' | 'infrastructure' | 'config' | 'test' | 'unknown';
 
 // ─── Project ──────────────────────────────────────────────────────
 
@@ -155,6 +151,8 @@ export interface Project {
    * is tool-usable (symbols/grep/skeleton) when EITHER is set.
    */
   structural_indexed_at: string | null;
+  /** Last complete stat-first validation, including no-op reopens. */
+  structural_last_checked_at?: string | null;
   file_count: number;
   symbol_count: number;
   /**
@@ -216,27 +214,14 @@ export interface LLMSymbol {
   tags: string[];
 }
 
-export interface LLMFileAnalysis {
+/** Deterministic facts extracted from source without an LLM enrichment pass. */
+export interface StructuralFileAnalysis {
   language: string;
-  summary: string;
-  concepts: string[];
   dependencies: string[];
   internal_deps: string[];
   external_deps: string[];
-  notes: string[];
-  complexity: string;
-  layer?: string;
-  is_entry_point?: boolean;
-  is_test?: boolean;
-  is_generated?: boolean;
   symbols: LLMSymbol[];
   references?: LLMReference[];
-}
-
-export interface AnalysisResult {
-  analysis: LLMFileAnalysis;
-  inputTokens: number;
-  outputTokens: number;
 }
 
 // ─── Database Records ─────────────────────────────────────────────
@@ -249,23 +234,12 @@ export interface DBFile {
   size: number;
   line_count: number;
   content_hash: string;
-  summary: string;
-  concepts: string; // JSON array
   dependencies: string; // JSON array
   internal_deps: string; // JSON array
   external_deps: string; // JSON array
-  notes: string; // JSON array
-  complexity: string;
-  layer: string;
-  is_entry_point: number; // SQLite boolean
+  is_entry_point: number; // deterministic path classification, SQLite boolean
   is_test: number;
   is_generated: number;
-  /**
-   * Content hash at the last SEMANTIC (LLM) pass — migration 139. Diverging
-   * from `content_hash` marks the file's summary/concepts as stale; NULL on
-   * structurally-indexed files that never saw the LLM.
-   */
-  semantic_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -305,9 +279,6 @@ export interface DBSymbol {
 
 // ─── Index Run ────────────────────────────────────────────────────
 
-/** 'structural' = tree-sitter + FTS only (no LLM/embeddings). Migration 139. */
-export type RunKind = 'full' | 'structural';
-
 export interface IndexRun {
   id: number;
   project_id: number;
@@ -318,16 +289,6 @@ export interface IndexRun {
   indexed_files: number;
   skipped_files: number;
   error_count: number;
-  provider: string | null;
-  model: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  embedding_tokens: number;
-  estimated_cost_usd: number;
-  /** JSON `{scan_ms, analyze_ms, embed_ms, sweep_ms}` (migration 138). */
-  phase_timings_json: string | null;
-  peak_rss_mb: number | null;
-  kind: RunKind;
 }
 
 // ─── Cost Tracking ────────────────────────────────────────────────
@@ -467,44 +428,6 @@ export interface WebhookPayload {
   data: Record<string, unknown>;
 }
 
-// ─── Diff ─────────────────────────────────────────────────────────
-
-export interface DiffSymbolEntry {
-  name: string;
-  kind: SymbolKind;
-  signature: string;
-}
-
-export interface DiffFileModified {
-  path: string;
-  language: string;
-  summary_before: string;
-  summary_after: string;
-  symbols_added: DiffSymbolEntry[];
-  symbols_removed: DiffSymbolEntry[];
-  concepts_added: string[];
-  concepts_removed: string[];
-}
-
-export interface DiffFileEntry {
-  path: string;
-  language: string;
-  summary: string;
-}
-
-export interface RunDiff {
-  project_id: number;
-  run_before: number;
-  run_after: number;
-  files_added: DiffFileEntry[];
-  files_removed: DiffFileEntry[];
-  files_modified: DiffFileModified[];
-  total_symbols_added: number;
-  total_symbols_removed: number;
-  concepts_added: string[];
-  concepts_removed: string[];
-}
-
 // ─── Export ───────────────────────────────────────────────────────
 
 export interface ExportOptions {
@@ -607,7 +530,7 @@ export interface ScanResult {
   stats?: ScanStats;
 }
 
-// ─── Index Result ─────────────────────────────────────────────────
+// ─── Index telemetry ──────────────────────────────────────────────
 
 /** Per-phase wall-clock + peak process RSS sampled during an index run. */
 export interface RunPhaseTelemetry {
@@ -618,17 +541,6 @@ export interface RunPhaseTelemetry {
   peak_rss_mb: number;
 }
 
-export interface IndexResult {
-  runId: number;
-  totalFiles: number;
-  indexedFiles: number;
-  skippedFiles: number;
-  errorCount: number;
-  durationMs: number;
-  costUsd: number;
-  phases?: RunPhaseTelemetry;
-}
-
 // ─── Model Discovery ─────────────────────────────────────────────
 
 export interface DiscoveredModel {
@@ -637,19 +549,6 @@ export interface DiscoveredModel {
   name: string;
   capabilities: string[];
   cached_at: string;
-}
-
-// ─── File Snapshot (for diff) ─────────────────────────────────────
-
-export interface FileSnapshot {
-  id: number;
-  run_id: number;
-  project_id: number;
-  file_path: string;
-  content_hash: string;
-  summary: string;
-  concepts: string; // JSON array
-  symbols: string; // JSON array
 }
 
 // ─── Vector ID Tracking ───────────────────────────────────────────
@@ -674,7 +573,7 @@ export interface ProjectStats {
   last_indexed: string | null;
   /** Last structural (tree-sitter only) pass; see Project.structural_indexed_at. */
   structural_indexed_at: string | null;
-  /** Files whose semantic layer (LLM summary/embeddings) lags current content. */
+  /** Pending/failed semantic items in the project's current build ledger. */
   semantic_stale_count: number;
   run_count: number;
 }

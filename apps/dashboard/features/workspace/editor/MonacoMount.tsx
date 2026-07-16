@@ -53,6 +53,7 @@ import { applyMonacoKeymap, watchKeymapPreset } from './monaco-keymap.js';
 import { useEffectiveEditorSettings } from '../../../state/editor-settings.js';
 import { attachDiagnosticNavigation } from './diagnostic-navigation.js';
 import { activateSharedMonacoTheme } from '../../../lib/monaco-theme.js';
+import { registerSemanticSearchAction } from './semantic-search-action.js';
 
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
@@ -212,6 +213,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // "Add File to Chat" in the context menu. They read the active file
       // from the workspace store at run time, so registering once is safe.
       registerChatActions(editor);
+      const semanticSearchAction = registerSemanticSearchAction(editor);
       // "Run File" (Shift+F10) — runs the active file with its runtime.
       registerRunActions(editor);
       // Histórico de navegação do cursor (Ctrl+Alt+Left/Right): empilha a
@@ -224,6 +226,7 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
       // Cursor/scroll/selection across UNMOUNTS (diff/welcome detours) —
       // while mounted, the wrapper handles per-path swaps itself.
       restoreViewStateFor(modelKey, editor);
+      editor.onDidDispose(() => semanticSearchAction.dispose());
     },
     [modelKey, onFocusPane, isActivePane, scheduleEditorRefresh],
   );

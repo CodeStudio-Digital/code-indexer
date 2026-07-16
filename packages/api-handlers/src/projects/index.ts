@@ -4,28 +4,25 @@
  * apps/http-api/server/routes/projects.ts now delegate here.
  */
 
-import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type GitMetaFrame, type IndexStreamEvent, type ScaffoldStreamEvent } from '@mcp/api-bus';
+import { ApiError, type ApiContext, type AsyncStream, type ProjectsApi, type ProjectIndexStatus, type FsEventsFrame, type GitMetaFrame, type ScaffoldStreamEvent } from '@mcp/api-bus';
 import { runScaffoldStream } from './scaffold.js';
 import { detectProjectFramework } from './detect-framework.js';
 import {
   CreateProjectService,
   UpdateProjectService,
-  IndexProjectUseCase,
   ProjectError,
   type CreateProjectInput,
   type UpdateProjectInput,
-  type IndexProjectInput,
 } from '@mcp/services/services/projects/index.js';
-import { makeHybridSearchCacheInvalidator } from '@mcp/indexer/search/cache-invalidator.js';
-import {
-  composeFilesUpdatedListeners,
-  makeAutoDiscoveryIndexListener,
-} from '@mcp/services/services/docs/index.js';
-import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import { clearProjectEdits } from '../editor/completion/snippets/edit-tracker.js';
 import { closeProjectDocs } from '../lsp/document-store.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import type { HandlerDeps } from '../types.js';
+import {
+  codeNamespace,
+  projectMemoryNamespace,
+  snapshotNamespace,
+} from '@mcp/shared/vector-namespace.js';
 
 /** Process-global: survives dual handler factories and dev HMR module reloads. */
 const activationGlobal = globalThis as typeof globalThis & {
@@ -49,19 +46,8 @@ function wrap<T>(fn: () => T): T {
   }
 }
 
-async function wrapAsync<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    if (err instanceof ProjectError) {
-      throw new ApiError(err.message, err.statusCode);
-    }
-    throw err;
-  }
-}
-
 export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
-  const { db, vectorStore } = deps;
+  const { db } = deps;
 
   const createService = new CreateProjectService(db);
   const updateService = new UpdateProjectService(db);
@@ -77,66 +63,43 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     closeProjectDocs(projectId);
     await getLspServerManager()?.stopProject(projectId);
   }
-  const indexUseCase = new IndexProjectUseCase({
-    db,
-    providerStore: deps.providerStore,
-    embeddingService: deps.embeddingService,
-    vectorStore: deps.vectorStore,
-    costTracker: deps.costTracker,
-    webhookDispatcher: deps.webhookDispatcher,
-    config: deps.config,
-    lshIndexingSink: deps.lshIndexingSink,
-    // I3 — invalidate HybridSearch query LRU after each re-index. Listener
-    // throws are swallowed inside IndexAgent; absent search instance is
-    // tolerated by makeHybridSearchCacheInvalidator. Safe to wire
-    // unconditionally — the listener no-ops when nothing is cached.
-    // Composed with the doc auto-discovery scan (fire-and-forget + 6h
-    // per-project debounce inside the listener — it never holds the run).
-    filesUpdatedListener: composeFilesUpdatedListeners(
-      deps.hybridSearch ? makeHybridSearchCacheInvalidator(deps.hybridSearch) : undefined,
-      makeAutoDiscoveryIndexListener({
-        db: db.raw(),
-        getProjectRoot: (projectId) => db.getProject(projectId)?.root_path ?? null,
-      }),
-    ),
-  });
-
-  // Clear a project's REMOTE vectors. Prefers a wholesale namespace drop
-  // (sqlite-vec / Qdrant / Pinecone); falls back to per-id snapshot delete on
-  // Cloudflare Vectorize (no delete-by-metadata). Shared by delete + clearAllData.
+  // Remove only this project's local vectors.db. Shared documentation and
+  // user-memory databases are routed elsewhere and remain untouched.
   async function clearProjectVectors(
     project: { id: number; name: string },
+    options: {
+      finalize?: () => void | Promise<void>;
+      retainProject?: boolean;
+    } = {},
   ): Promise<{ known: number; deleted: number; error: string | null }> {
-    const vectorIds = db.snapshotVectorIdsForProject(project.id);
+    const namespaces = [
+      codeNamespace(project.id),
+      snapshotNamespace(project.id),
+      projectMemoryNamespace(project.id),
+    ];
+    const known = namespaces.reduce((count, namespace) => {
+      const state = deps.semanticStore.listNamespaceGenerations({ namespace })[0];
+      const generations = new Set([
+        state?.active_generation_id,
+        state?.building_generation_id,
+      ].filter((id): id is number => id !== null && id !== undefined));
+      for (const generationId of generations) {
+        count += deps.semanticStore.listItems({
+          generation_id: generationId,
+          namespace,
+        }).length;
+      }
+      return count;
+    }, 0);
     let deleted = 0;
     let error: string | null = null;
-    if (typeof vectorStore.deleteNamespace === 'function') {
-      try {
-        deleted = await vectorStore.deleteNamespace(codeNamespace(project.name));
-      } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
-      }
-    } else if (vectorIds.length > 0) {
-      try {
-        deleted = await vectorStore.deleteByIds(vectorIds);
-      } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
-        db.enqueuePendingVectorDeletes(
-          vectorIds.map((vid) => ({ vector_id: vid, project_name: project.name, error: error! })),
-        );
-      }
+    try {
+      await deps.semanticCoordinator.removeProject(project.id, options);
+      deleted = known;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
     }
-    return { known: vectorIds.length, deleted, error };
-  }
-
-  // Serialize manual index runs against the structural service (auto run ×
-  // watcher drain × full index share one per-project mutex) and surface the
-  // semantic_indexing phase to status subscribers. Structural-mode manual
-  // runs take the bare lock — they must not flip the phase to semantic.
-  function lockedIndexRun<T>(id: number, input: IndexProjectInput, fn: () => Promise<T>): Promise<T> {
-    return input.mode === 'structural'
-      ? deps.projectIndexService.withProjectLock(id, fn)
-      : deps.projectIndexService.withSemanticRun(id, fn);
+    return { known, deleted, error };
   }
 
   return {
@@ -212,43 +175,69 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
         if (activation.projectId === id) clientActivations.delete(clientId);
       }
       clearProjectEdits(id); // completion edit-tracker: drop the project's ring
-      const v = await clearProjectVectors(project);
-      db.deleteProject(id);
+      const v = await clearProjectVectors(project, {
+        finalize: () => db.deleteProject(id),
+      });
+      if (v.error) {
+        deps.projectIndexService.restartFileWatching(id);
+        throw new ApiError(
+          'semantic_cleanup_failed',
+          409,
+          `project kept because semantic cleanup failed: ${v.error}`,
+        );
+      }
       return {
         ok: true as const,
         vectors_known: v.known,
-        vectors_deleted_remote: v.deleted,
-        remote_error: v.error,
+        vectors_deleted: v.deleted,
+        vector_error: v.error,
       };
     },
 
     async clearData({ id }) {
       const project = db.getProject(id);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
-      const v = await clearProjectVectors(project);
-      db.clearProjectData(id);
+      const v = await clearProjectVectors(project, {
+        finalize: () => db.clearProjectData(id),
+        retainProject: true,
+      });
+      if (v.error) {
+        throw new ApiError(
+          'semantic_cleanup_failed',
+          409,
+          `project data kept because semantic cleanup failed: ${v.error}`,
+        );
+      }
       deps.hybridSearch?.invalidateCache?.();
       return {
         ok: true as const,
         vectors_known: v.known,
-        vectors_deleted_remote: v.deleted,
-        remote_error: v.error,
+        vectors_deleted: v.deleted,
+        vector_error: v.error,
       };
     },
 
     async clearAllData() {
       // Wipe every project's data (index, sessions, snapshots, runs, costs) +
-      // its remote vectors, but KEEP each project row so the user only has to
+      // its local vectors, but KEEP each project row so the user only has to
       // re-index — not re-create. Errors per project are collected, not fatal.
       const all = db.listProjects();
       let projectsCleared = 0;
       let vectorsDeleted = 0;
       const errors: Array<{ project: string; error: string }> = [];
       for (const project of all) {
-        const v = await clearProjectVectors(project);
-        if (v.error) errors.push({ project: project.name, error: v.error });
+        const v = await clearProjectVectors(project, {
+          finalize: () => db.clearProjectData(project.id),
+          retainProject: true,
+        });
+        if (v.error) {
+          // Keep the relational project data intact when the worker could not
+          // drain/checkpoint its vectors.db. Deleting it here would bypass the
+          // semantic owner and leave the project half-cleared.
+          errors.push({ project: project.name, error: v.error });
+          continue;
+        }
         vectorsDeleted += v.deleted;
-        db.clearProjectData(project.id);
         projectsCleared++;
       }
       // Drop the in-memory search caches so stale results don't linger.
@@ -256,7 +245,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       return {
         ok: true as const,
         projects_cleared: projectsCleared,
-        vectors_deleted_remote: vectorsDeleted,
+        vectors_deleted: vectorsDeleted,
         errors,
       };
     },
@@ -421,84 +410,6 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
           };
         },
       };
-    },
-
-    async index({ id, ...input }) {
-      return wrapAsync(() => lockedIndexRun(id, input as IndexProjectInput, () => indexUseCase.run(id, input as IndexProjectInput)));
-    },
-
-    indexStream({ id, ...input }): AsyncStream<IndexStreamEvent> {
-      // Mirror every frame into the main-process status store. The manual run no
-      // longer lives only in renderer state tied to the SSE fetch: the live pass
-      // sits in the SoT, so navigating away and back re-hydrates the bar from the
-      // status stream. The run promise is independent of whoever drains the SSE,
-      // so a disconnect doesn't kill it — the store keeps updating either way.
-      const svc = deps.projectIndexService;
-      const runKind = (input as IndexProjectInput).mode === 'structural' ? 'structural' : 'semantic';
-      const startedAt = Date.now();
-      return streamFromCallbacks<IndexStreamEvent>((emit) =>
-        lockedIndexRun(id, input as IndexProjectInput, () => indexUseCase.runStream(id, input as IndexProjectInput, {
-          onStart: (p) => {
-            svc.setActiveRun(id, { kind: runKind, current: 0, total: 0, startedAt });
-            emit({ event: 'start', data: p });
-          },
-          onProgress: (p) => {
-            svc.setActiveRun(id, {
-              kind: runKind,
-              current: p.current,
-              total: p.total,
-              currentFile: p.current_file || undefined,
-              costUsd: p.cost_usd,
-              startedAt,
-            });
-            emit({ event: 'progress', data: p });
-          },
-          onDone: (result) => {
-            svc.refreshStatus(id); // clears the live pass + settles phase from DB
-            emit({
-              event: 'done',
-              data: {
-                runId: result.runId,
-                totalFiles: result.totalFiles,
-                indexedFiles: result.indexedFiles,
-                skippedFiles: result.skippedFiles,
-                errorCount: result.errorCount,
-                durationMs: result.durationMs,
-                costUsd: result.costUsd,
-              },
-            });
-          },
-          onError: (message) => {
-            svc.refreshStatus(id);
-            emit({ event: 'error', data: { message } });
-          },
-        })),
-      );
-    },
-
-    retryEmbeddingsStream({ id }): AsyncStream<IndexStreamEvent> {
-      const svc = deps.projectIndexService;
-      const startedAt = Date.now();
-      return streamFromCallbacks<IndexStreamEvent>((emit) =>
-        indexUseCase.retryEmbeddingsStream(id, {
-          onStart: (p) => {
-            svc.setActiveRun(id, { kind: 'embeddings', current: 0, total: 0, startedAt });
-            emit({ event: 'start', data: p });
-          },
-          onProgress: (p) => {
-            svc.setActiveRun(id, { kind: 'embeddings', current: p.current, total: p.total, startedAt });
-            emit({ event: 'progress', data: p });
-          },
-          onDone: (result) => {
-            svc.refreshStatus(id);
-            emit({ event: 'done', data: result as never });
-          },
-          onError: (message) => {
-            svc.refreshStatus(id);
-            emit({ event: 'error', data: { message } });
-          },
-        }),
-      );
     },
 
     scaffold(input): AsyncStream<ScaffoldStreamEvent> {

@@ -31,6 +31,7 @@ import {
   type PathScopeMode,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { type SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import { providerForProfile, effortForProfile } from '@mcp/code-agent/tools/subagent-provider.js';
 import {
   MICRO_AGENT_PROFILES,
   microAgentProfileForTaskKind,
@@ -536,7 +537,7 @@ async function runGroupParallel(
     ctx.runner?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
   }
 
-  const specs: ParallelAgentSpec[] = tasks.map((t) => {
+  const specs: ParallelAgentSpec[] = await Promise.all(tasks.map(async (t) => {
     const art = resolveKindArtifacts(t);
     const profile = t.agent_profile ?? (t.kind === 'investigate' ? 'explore' : t.kind === 'verify' ? 'verify' : 'implement');
     return {
@@ -544,13 +545,15 @@ async function runGroupParallel(
       label: `${profile}:${t.id}`,
       maxTurns: 100,
       profile,
+      provider: await providerForProfile(deps, profile),
+      reasoningEffort: effortForProfile(deps, profile),
       systemPrompt: art.systemPrompt,
       allowlist: art.allowlist,
       pathScope: art.pathScope,
       pathScopeMode: art.pathScopeMode,
       limits: resolveTaskLimit(t),
     };
-  });
+  }));
 
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
   ctx.runner?.emit('agents_group_start', {
@@ -562,7 +565,7 @@ async function runGroupParallel(
   try {
     parallelRun = await runParallelAgents(
       {
-        provider: deps.subagentProvider ?? deps.provider,
+        provider: deps.provider,
         tools: deps.parentTools,
         ctx,
         sessionId: ctx.runner?.sessionId,
@@ -709,11 +712,12 @@ async function runOneTask(
     const initialMessages: AgentMessage[] = [
       { role: 'user', content: [{ type: 'text', text: buildTaskBriefing(task) }] },
     ];
+    const taskProfile = task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement');
     let raw: Awaited<ReturnType<typeof runSubagent>>;
     try {
       raw = await runSubagent(
         {
-          provider: deps.subagentProvider ?? deps.provider,
+          provider: deps.provider,
           tools: deps.parentTools,
           ctx,
           sessionId: ctx.runner?.sessionId,
@@ -721,7 +725,9 @@ async function runOneTask(
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         },
         {
-          profile: task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement'),
+          profile: taskProfile,
+          provider: await providerForProfile(deps, taskProfile),
+          reasoningEffort: effortForProfile(deps, taskProfile),
           systemPrompt: art.systemPrompt,
           label: task.title,
           allowlist: art.allowlist,

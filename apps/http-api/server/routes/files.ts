@@ -19,6 +19,21 @@ function mapApiError(c: Context, err: unknown) {
 
 export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
   const h = createFilesHandlers(deps);
+  const touchIndexedFile = (projectId: number, filePath: string, kind: 'view' | 'edit'): void => {
+    try {
+      const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+      const file = deps.db.getFile(projectId, normalized);
+      if (!file) return;
+      deps.recentFilesSource.touch({
+        projectId,
+        fileId: file.id,
+        filePath: file.path,
+        kind,
+      });
+    } catch {
+      // Recency is an optional ranking signal; it must never break editor I/O.
+    }
+  };
 
   app.get('/api/projects/:id/files', async (c) => {
     try {
@@ -67,7 +82,9 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
       const filePath = c.req.query('path');
       if (!filePath) return c.json({ error: 'path query param required' }, 400);
       const ifModifiedSince = c.req.query('ifModifiedSince') || undefined;
-      return c.json(await h.read({ projectId, path: filePath, ifModifiedSince }, createContext()));
+      const result = await h.read({ projectId, path: filePath, ifModifiedSince }, createContext());
+      touchIndexedFile(projectId, filePath, 'view');
+      return c.json(result);
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -81,7 +98,9 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c);
       const body = await c.req.json<{ path: string; content: string; encoding?: 'utf8' | 'base64' }>();
       if (!body.path) return c.json({ error: 'path required' }, 400);
-      return c.json(await h.write({ projectId, ...body }, createContext()));
+      const result = await h.write({ projectId, ...body }, createContext());
+      touchIndexedFile(projectId, body.path, 'edit');
+      return c.json(result);
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -206,7 +225,9 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const projectId = parseIdParam(c);
       const filePath = c.req.path.replace(`/api/projects/${c.req.param('id')}/files/`, '');
-      return c.json(await h.get({ projectId, path: filePath }, createContext()));
+      const result = await h.get({ projectId, path: filePath }, createContext());
+      touchIndexedFile(projectId, filePath, 'view');
+      return c.json(result);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);
@@ -237,24 +258,4 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.get('/api/projects/:id/concepts', async (c) => {
-    try {
-      return c.json(await h.listConcepts({ projectId: parseIdParam(c) }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.get('/api/projects/:id/concepts/:concept', async (c) => {
-    try {
-      return c.json(
-        await h.conceptFiles(
-          { projectId: parseIdParam(c), concept: c.req.param('concept') },
-          createContext(),
-        ),
-      );
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
 }

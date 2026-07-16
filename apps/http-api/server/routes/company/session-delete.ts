@@ -195,14 +195,20 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     // if this was their only session. Only our synthetic `_builder_`
     // projects get cleaned up.
     for (const vp of virtualProjects) {
+      let projectDeleted = false;
       try {
-        db.deleteProject(vp.id);
+        // Resolve/drain vectors.db while the project row and root still exist.
+        await deps.projectIndexService.stopWatching(vp.id).catch(() => undefined);
+        await deps.semanticCoordinator.removeProject(vp.id, {
+          finalize: () => db.deleteProject(vp.id),
+        });
+        projectDeleted = true;
       } catch (e) {
         console.warn(
-          `[company] delete virtual project row ${vp.id} failed: ${e instanceof Error ? e.message : String(e)}`,
+          `[company] semantic/project cleanup ${vp.id} failed; row and root kept: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
-      if (vp.rootPath && selectedProjectPaths.has(vp.rootPath) && removableProjectPaths.has(vp.rootPath)) {
+      if (projectDeleted && vp.rootPath && selectedProjectPaths.has(vp.rootPath) && removableProjectPaths.has(vp.rootPath)) {
         try {
           await rm(vp.rootPath, { recursive: true, force: true });
         } catch (e) {

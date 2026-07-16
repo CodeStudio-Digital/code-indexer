@@ -60,6 +60,7 @@ function setup(
   opts: {
     sessionAgent?: string | null;
     globalFresh?: boolean;
+    projectFresh?: boolean;
     ensureStructuralReady?: () => Promise<{
       status: 'ready' | 'aborted' | 'disabled' | 'timeout' | 'error' | 'too_large';
       phase: 'none' | 'scanning' | 'structural_indexing' | 'structural_ready' | 'semantic_indexing' | 'semantic_ready' | 'too_large' | 'error';
@@ -68,7 +69,7 @@ function setup(
   } = {},
 ) {
   const appendCalls: unknown[] = [];
-  const projectId = opts.globalFresh ? 99 : null;
+  const projectId = opts.globalFresh || opts.projectFresh ? 99 : null;
   const sessionStore = {
     getSession: (id: number) => ({
       id,
@@ -78,7 +79,7 @@ function setup(
       is_global: !!opts.globalFresh,
       compaction_summary: null,
     }),
-    getMessageCount: () => opts.globalFresh ? 0 : 1,
+    getMessageCount: () => projectId != null ? appendCalls.length : 1,
     appendMessage: (_id: number, msg: unknown) => { appendCalls.push(msg); return appendCalls.length; },
     loadSessionWithMessages: (id: number) => ({
       session: { id, project_id: projectId, agent: opts.sessionAgent ?? null },
@@ -88,13 +89,16 @@ function setup(
   const deps = {
     sessionStore,
     providerStore: { getProvider: () => undefined, listModels: () => [] },
-    db: { getProject: () => null },
+    db: { getProject: () => projectId == null ? null : ({ id: projectId, root_path: 'D:/fake' }) },
     projectIndexService: {
       ensureFresh: () => {},
       ensureStructuralReady: opts.ensureStructuralReady ?? (async () => ({
         status: 'ready' as const,
         phase: 'structural_ready' as const,
       })),
+    },
+    semanticCoordinator: {
+      acquireCodeProjectLease: () => () => {},
     },
     taskPreflight: {
       run: async () => ({ status: 'unconfigured' }),
@@ -154,14 +158,14 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
-  it('does not start a fresh global runner before structural indexing is ready', async () => {
+  it('does not start a fresh normal runner before structural indexing is ready', async () => {
     let release!: (value: { status: 'ready'; phase: 'structural_ready' }) => void;
     const gate = vi.fn(() => new Promise<{ status: 'ready'; phase: 'structural_ready' }>((resolve) => {
       release = resolve;
     }));
-    const h = setup(new RecentMessageKeys(), { globalFresh: true, ensureStructuralReady: gate });
+    const h = setup(new RecentMessageKeys(), { projectFresh: true, ensureStructuralReady: gate });
 
-    const pending = h.post('/api/coder/sessions/1/messages', { content: 'inspect global workspace' });
+    const pending = h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
     await vi.waitFor(() => expect(gate).toHaveBeenCalledTimes(1));
     expect(runCoderMock).not.toHaveBeenCalled();
 
@@ -171,16 +175,15 @@ describe('POST /messages idempotency', () => {
     await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
   });
 
-  it('returns without starting the agent when the global index gate times out', async () => {
+  it('starts the same session in degraded mode when the structural gate times out', async () => {
     const h = setup(new RecentMessageKeys(), {
-      globalFresh: true,
+      projectFresh: true,
       ensureStructuralReady: async () => ({ status: 'timeout', phase: 'scanning' }),
     });
 
-    const response = await h.post('/api/coder/sessions/1/messages', { content: 'inspect global workspace' });
-    expect(response.status).toBe(425);
-    expect(await response.json()).toMatchObject({ code: 'GLOBAL_INDEX_NOT_READY', phase: 'scanning' });
-    expect(runCoderMock).not.toHaveBeenCalled();
+    const response = await h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
   });
 
   it('a retry with the same client_msg_id does not re-append into a live run', async () => {

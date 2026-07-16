@@ -32,17 +32,22 @@ export const indexHygiene070: Migration = {
   up: (db: DB): void => {
     // ── 1. Dedup vector_ids ────────────────────────────────────────
     // Keep the highest id (most recent insert) per (project_id, vector_id).
-    db.exec(`
-      DELETE FROM vector_ids
-      WHERE id NOT IN (
-        SELECT MAX(id) FROM vector_ids GROUP BY project_id, vector_id
-      );
-    `);
+    const vectorIdsExists = db.prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vector_ids'`,
+    ).get();
+    if (vectorIdsExists) {
+      db.exec(`
+        DELETE FROM vector_ids
+        WHERE id NOT IN (
+          SELECT MAX(id) FROM vector_ids GROUP BY project_id, vector_id
+        );
+      `);
 
-    db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_ids_unique
-        ON vector_ids(project_id, vector_id);
-    `);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_ids_unique
+          ON vector_ids(project_id, vector_id);
+      `);
+    }
 
     // ── 2. Normalize file language casing ──────────────────────────
     db.exec(`

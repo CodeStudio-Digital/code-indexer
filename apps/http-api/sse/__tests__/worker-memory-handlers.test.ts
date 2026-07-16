@@ -34,6 +34,8 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     const retrieve = vi.fn().mockResolvedValue([MEMORY_ITEM]);
     const extractAndPersist = vi.fn().mockResolvedValue(undefined);
     const memoryQuerySynthesizer = vi.fn().mockResolvedValue('oauth refresh flow');
+    const investigationSearch = vi.fn().mockResolvedValue([9, 4]);
+    const investigationWake = vi.fn();
     const deps: WorkerMemoryDeps = {
       memoryRetriever: { retrieve } as unknown as WorkerMemoryDeps['memoryRetriever'],
       memoryQuerySynthesizer,
@@ -41,6 +43,10 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
         extractAndPersist,
         isConfigured: vi.fn().mockResolvedValue(true),
       } as unknown as WorkerMemoryDeps['runEndMemory'],
+      investigationSemantic: {
+        search: investigationSearch,
+        wakeUpsert: investigationWake,
+      },
     };
     registerWorkerMemoryHandlers(bridge, () => deps);
     const shims = buildWorkerMemoryShims(bridge as unknown as MessageBridge);
@@ -56,6 +62,16 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     expect(extractAndPersist).toHaveBeenCalledWith(1, 'proj', { summary: 's', succeeded: true });
 
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(true);
+
+    const searchInput = { sessionId: 12, query: 'vector routing', limit: 8 };
+    await expect(shims.investigationSemantic.search(searchInput)).resolves.toEqual([9, 4]);
+    expect(investigationSearch).toHaveBeenCalledWith(searchInput);
+    const record = {
+      id: 9, project_id: 1, session_id: 12, topic: 't', summary: 's', body: '',
+      source_label: null, agent_type: null, tokens: 0, created_at: '2026-07-15 10:00:00',
+    };
+    shims.investigationSemantic.wakeUpsert(record);
+    await vi.waitFor(() => expect(investigationWake).toHaveBeenCalledWith(record));
   });
 
   it('degrades to no-op when the deps box is empty', async () => {
@@ -67,6 +83,8 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
+    await expect(shims.investigationSemantic.search({ sessionId: 1, query: 'q', limit: 8 }))
+      .resolves.toEqual([]);
   });
 
   it('degrades to no-op when no handler is registered at all (headless)', async () => {
@@ -77,6 +95,8 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
+    await expect(shims.investigationSemantic.search({ sessionId: 1, query: 'q', limit: 8 }))
+      .resolves.toEqual([]);
   });
 
   it('caches isConfigured so repeated runs pay one RPC per window', async () => {

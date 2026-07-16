@@ -122,9 +122,23 @@ export async function runBenchmark(
   cfg: BenchmarkConfig,
   onProgress?: (p: BenchmarkProgress) => void,
 ): Promise<CellResult[]> {
+  if (cfg.querySet.length === 0) throw new Error('benchmark requires at least one gold-set query');
+  if (cfg.embeddings.length === 0 || cfg.rerankers.length === 0) {
+    throw new Error('benchmark requires at least one embedding and reranker configuration');
+  }
   const mode = cfg.mode ?? 'hybrid';
   const limit = cfg.limit ?? 20;
   const hyde = cfg.hyde ?? null;
+  if (mode !== 'fts') {
+    const missingVectors = cfg.embeddings
+      .filter((embedding) => embedding.vectorStore === null)
+      .map((embedding) => embedding.label);
+    if (missingVectors.length > 0) {
+      throw new Error(
+        `semantic benchmark requires indexed vectors; unavailable for: ${missingVectors.join(', ')}`,
+      );
+    }
+  }
   const n = cfg.querySet.length;
   const total = cfg.embeddings.length * cfg.rerankers.length * Math.max(n, 1);
   const out: CellResult[] = [];

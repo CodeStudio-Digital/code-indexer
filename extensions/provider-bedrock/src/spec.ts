@@ -23,6 +23,20 @@ export const bedrockSpec: ProviderSpec = {
     'anthropic.claude-3-opus-20240229-v1:0': { inputPer1M: 15.0, outputPer1M: 75.0 },
     'meta.llama3-70b-instruct-v1:0': { inputPer1M: 2.65, outputPer1M: 3.5 },
   },
+  // Converse accepts document blocks, but support is model-specific.
+  capabilities: { supportsVision: true, fileInput: 'model-dependent' },
+  semantic: {
+    embedding: {
+      protocol: 'bedrock',
+      defaultModels: ['amazon.titan-embed-text-v2:0', 'amazon.titan-embed-text-v1'],
+      modelPatterns: ['embed'],
+    },
+    rerank: {
+      protocol: 'bedrock',
+      defaultModels: ['amazon.rerank-v1:0', 'cohere.rerank-v3-5:0'],
+      modelPatterns: ['rerank'],
+    },
+  },
   wire: 'bedrock',
   discovery: { from: 'sdk:bedrock' },
   test: { from: 'unsupported', message: 'bedrock test not implemented' },

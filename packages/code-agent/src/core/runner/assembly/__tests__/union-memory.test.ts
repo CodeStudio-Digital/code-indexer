@@ -9,7 +9,29 @@ import {
   perProjectIndexLimit,
   mergeMemoryIndex,
   interleaveLabeled,
+  mapProjectsConcurrent,
 } from '../union-memory.js';
+
+describe('mapProjectsConcurrent', () => {
+  it('preserves order and never runs more than four project reads at once', async () => {
+    let active = 0;
+    let maximum = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const pending = mapProjectsConcurrent([0, 1, 2, 3, 4, 5], async (value) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await gate;
+      active--;
+      return value * 2;
+    });
+
+    await Promise.resolve();
+    expect(maximum).toBe(4);
+    release();
+    await expect(pending).resolves.toEqual([0, 2, 4, 6, 8, 10]);
+  });
+});
 
 describe('perProjectIndexLimit', () => {
   it('gives the full budget to a single project', () => {

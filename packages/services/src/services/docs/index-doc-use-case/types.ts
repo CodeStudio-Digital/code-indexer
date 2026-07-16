@@ -24,13 +24,6 @@ export const EMBED_BATCH_SIZE = 64;
  */
 export const EMBED_CONCURRENCY = 4;
 /**
- * Cap on how many times the sweeper retries a single tombstone before giving
- * up. Keeps the queue from growing unbounded when an ID never existed
- * remotely or when the remote keeps rejecting forever.
- */
-export const MAX_TOMBSTONE_RETRIES = 5;
-
-/**
  * Pre-flight summary do `folder-reader`: quantos arquivos o glob encontrou
  * (`totalMatches`), quantos serão de fato processados (`willProcess`, após
  * cap), e qual o cap em vigor. Só `indexFolder` emite — `indexUrl`/`indexPdf`

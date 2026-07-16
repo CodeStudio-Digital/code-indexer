@@ -16,6 +16,7 @@
  * empty retrieval / skipped distillation instead of throwing.
  */
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
+import type { InvestigationSemanticIndexPort } from '@mcp/code-agent/tools/investigation-embedder.js';
 
 export interface WorkerMemoryDeps {
   /** Structural project-memory retrieval port (agent_memory-backed in deps.ts). */
@@ -61,6 +62,9 @@ export interface WorkerMemoryDeps {
       target: string,
     ): Promise<{ archived: number }>;
   } | null;
+  /** Session Drive calls stay main-side as orchestration; vector I/O is
+   * delegated through the semantic worker-owned store. */
+  investigationSemantic?: InvestigationSemanticIndexPort | null;
 }
 
 /** Minimal structural slice of MessageBridge used here (test-friendly). */
@@ -155,6 +159,20 @@ export function registerWorkerMemoryHandlers(
     return pm.forget(projectId, projectName, target);
   });
 
+  const offInvestigationSearch = bridge.handle('investigationSearch', async (payload) => {
+    const semantic = getDeps()?.investigationSemantic;
+    if (!semantic) return [];
+    return semantic.search(payload as Parameters<InvestigationSemanticIndexPort['search']>[0]);
+  });
+
+  const offInvestigationWake = bridge.handle('investigationWake', async (payload) => {
+    const semantic = getDeps()?.investigationSemantic;
+    if (semantic) semantic.wakeUpsert(
+      payload as Parameters<InvestigationSemanticIndexPort['wakeUpsert']>[0],
+    );
+    return undefined;
+  });
+
   return (): void => {
     try { offRetrieve(); } catch { /* best-effort */ }
     try { offQuerySynth(); } catch { /* best-effort */ }
@@ -164,5 +182,7 @@ export function registerWorkerMemoryHandlers(
     try { offRecall(); } catch { /* best-effort */ }
     try { offList(); } catch { /* best-effort */ }
     try { offForget(); } catch { /* best-effort */ }
+    try { offInvestigationSearch(); } catch { /* best-effort */ }
+    try { offInvestigationWake(); } catch { /* best-effort */ }
   };
 }

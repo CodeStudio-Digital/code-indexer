@@ -1,6 +1,9 @@
 import { resolve as resolvePath, join as joinPath } from 'node:path';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { SemanticStore } from '@mcp/store/semantic-store.js';
+import { createDurableSemanticMutationSink } from '@mcp/services/semantic-mutation-sink.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { coderToolOutputsBaseDir } from '@mcp/shared/utils/data-paths.js';
@@ -33,6 +36,7 @@ import {
   appendStaticPromptSection,
   buildSystemPrompt,
   normalizeProviderFamily,
+  promoteIndexReadySystemPrompt,
 } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
@@ -79,6 +83,14 @@ import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import {
+  createSubagentProviderResolver,
+  type SubagentTarget,
+} from '@mcp/code-agent/tools/subagent-provider.js';
+import {
+  SUBAGENT_PROFILE_IDS,
+  type MicroAgentProfileId,
+} from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
 import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
@@ -111,6 +123,7 @@ import {
   perProjectIndexLimit,
   mergeMemoryIndex,
   interleaveLabeled,
+  mapProjectsConcurrent,
 } from '@mcp/code-agent/core/runner/assembly/union-memory.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
@@ -138,7 +151,7 @@ import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tool
 import { buildConversationChapterTools } from '@mcp/code-agent/tools/conversation-chapters.js';
 import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-tools.js';
 import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
-import { getInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
+import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import { createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
@@ -246,7 +259,20 @@ function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStor
   if (!sharedCentral) {
     const db = new CodeIndexDB(dbPath);
     // Same single connection for sessions — NOT a 2nd writer on the file.
-    const store = new SessionStore(db.raw());
+    // Investigation inserts originate here in both the in-process runner and
+    // company/coder workers. Publish their pre-write fence directly to the
+    // central semantic control plane; the HTTP coordinator polls external jobs
+    // when this process has no in-memory wake-up port.
+    const semanticStore = new SemanticStore(db.raw());
+    const investigationMutationSink = createDurableSemanticMutationSink(
+      semanticStore,
+      {
+        owner: `coder:${process.pid}:${randomUUID()}`,
+        enabled: () =>
+          semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+      },
+    );
+    const store = new SessionStore(db.raw(), investigationMutationSink);
     sharedCentral = { dbPath, db, store };
     if (!sharedCentralExitHookInstalled) {
       sharedCentralExitHookInstalled = true;
@@ -780,12 +806,27 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ? registry.list().filter((t) => !allDisabled.has(t.name))
       : registry.list();
     let subagentProvider: ChatProvider | undefined;
+    let resolveProviderForProfile:
+      | ((id?: string) => Promise<ChatProvider | undefined>)
+      | undefined;
+    let resolveEffortForProfile: ((id?: string) => string | undefined) | undefined;
     try {
       const ps = new ProviderStore(config.dbPath);
-      const subagentTarget = ps.getSubagentTarget(session.provider);
+      const defaultTarget = ps.getSubagentTarget(session.provider);
+      const defaultEffort = ps.getSubagentEffort(session.provider);
+      // Snapshot per-profile targets + efforts (already default-merged by the
+      // store) so the resolver never re-touches the DB after the runner build.
+      const profileTargets = new Map<MicroAgentProfileId, SubagentTarget | null>();
+      const profileEfforts = new Map<MicroAgentProfileId, string | null>();
+      for (const id of SUBAGENT_PROFILE_IDS) {
+        profileTargets.set(id, ps.getSubagentProfileTarget(session.provider, id));
+        profileEfforts.set(id, ps.getSubagentProfileEffort(session.provider, id));
+      }
       ps.close();
-      const targetProviderId = subagentTarget?.providerId ?? session.provider;
-      const targetModel = subagentTarget?.modelId ?? undefined;
+
+      // Default subagent provider (single control) — eager, back-compat.
+      const targetProviderId = defaultTarget?.providerId ?? session.provider;
+      const targetModel = defaultTarget?.modelId ?? undefined;
       const usesDifferentProvider = targetProviderId !== session.provider;
       const usesDifferentModel = !!targetModel && targetModel !== session.model;
       if (usesDifferentProvider || usesDifferentModel) {
@@ -793,9 +834,22 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         subagentProvider = sub;
         console.log(`[coder] subagent provider override: ${targetProviderId}:${sub.model}`);
       }
+
+      // Per-profile resolver — lazy + memoized; used by every spawn path.
+      const resolver = createSubagentProviderResolver({
+        sessionProvider: session.provider,
+        sessionModel: session.model,
+        defaultTarget: defaultTarget ?? null,
+        profileTargets,
+        defaultEffort,
+        profileEfforts,
+        createProvider: createCoderProvider,
+      });
+      resolveProviderForProfile = (id) => resolver.forProfile(id);
+      resolveEffortForProfile = (id) => resolver.effortFor(id);
     } catch { /* non-fatal — falls back to parent provider */ }
 
-    subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider };
+    subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider, resolveProviderForProfile, resolveEffortForProfile };
   }
 
   // Company tools — registered when this runner is part of a company session.
@@ -1183,15 +1237,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }
       },
       recallInvestigations: async (query, limit) => {
-        // Semantic first (in-process embedder; worker/no-embedder → keyword).
+        // Semantic first through the host-owned Knowledge index. Missing
+        // generation/provider/worker returns no ids and falls through to the
+        // always-available relational lexical recall below.
         try {
-          const embed = getInvestigationEmbedder();
-          if (embed) {
-            const vec = await embed(query);
-            if (vec && vec.length > 0) {
-              const hits = store.recallInvestigationsByVector(session.id, vec, limit);
-              if (hits.length > 0) return hits;
-            }
+          const semantic = getInvestigationSemanticIndex();
+          if (semantic) {
+            const semanticLimit = limit ?? 8;
+            const ids = await semantic.search({ sessionId: session.id, query, limit: semanticLimit });
+            const hits = store.recallInvestigationsByIds(session.id, ids, semanticLimit);
+            if (hits.length > 0) return hits;
           }
         } catch {
           /* fall through to keyword */
@@ -1223,13 +1278,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
               if (memoryReadProjects.length <= 1) {
                 return opts.projectMemory!.recall(project.id, project.name, query, limit);
               }
-              const perProject = await Promise.all(
-                memoryReadProjects.map((p) =>
+              const perProject = await mapProjectsConcurrent(
+                memoryReadProjects,
+                (p) =>
                   opts
                     .projectMemory!.recall(p.id, p.name, query, limit)
                     .then((rows) => ({ name: p.name, rows }))
                     .catch(() => ({ name: p.name, rows: [] })),
-                ),
               );
               return interleaveLabeled(perProject, limit);
             },
@@ -1444,46 +1499,31 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
   const projectStats = db.getStats(project.id);
-  const isIndexed = (projectStats?.file_count ?? 0) > 0 && (projectStats?.run_count ?? 0) > 0;
+  // Structural readiness is a persisted baseline, not the presence of an old
+  // LLM/full-index run. The latter is being retired and no-op reconciliations
+  // intentionally do not create history rows.
+  const projectRow = project as typeof project & {
+    file_count?: number | null;
+    structural_indexed_at?: string | null;
+    last_indexed?: string | null;
+  };
+  const indexedFileCount = projectRow.file_count ?? projectStats?.file_count ?? 0;
+  const isIndexed = indexedFileCount > 0
+    && Boolean(projectRow.structural_indexed_at || projectRow.last_indexed);
   const indexStatus: IndexStatus = { isIndexed, mcpAvailable: mcpBridgeOk };
   toolContext.projectIndexed = isIndexed;
-
-  // Strip MCP tools that strictly depend on the symbol DB when the project
-  // has never been indexed. These would otherwise return empty/error
-  // results and waste turns. Disk-aware tools (mcp__read_file,
-  // mcp__list_directory, mcp__grep_code via ripgrep, etc.) stay registered.
-  if (!isIndexed) {
-    // Tools that genuinely need the symbol DB or vector store. Tools that
-    // gained a tree-sitter / disk-grep fallback (find_references,
-    // prepare_edit, trace_usage, get_symbol_body, get_file_skeleton,
-    // grep_code) are kept registered — they work without an index and
-    // degrade gracefully.
-    const indexDependent = new Set<string>([
-      'get_hierarchy', 'find_implementations',
-      'semantic_neighbors',
-      'get_dependencies', 'get_dependents',
-      'search',
-      'get_project_overview', 'get_project_pulse',
-      'get_repo_map',
-    ]);
-    const isIndexDep = (toolName: string): boolean => {
-      // Strip mcp__ prefix and any company-master per-project slug
-      // (mcp__{slug}__name → name).
-      const tail = toolName.replace(/^mcp__/, '').replace(/^[^_]+__/, '');
-      return indexDependent.has(tail);
-    };
-    const before = registry.list().length;
-    registry.filterInPlace((t) => t.source === 'native' || !isIndexDep(t.name));
-    const after = registry.list().length;
-    if (before !== after) {
-      console.log(`[coder] project not indexed — stripped ${before - after} index-dependent MCP tools`);
-    }
-  }
+  // Index-dependent tools stay registered even in dumb mode. Their handlers
+  // query live storage on every invocation, so a session created before the
+  // baseline can use them as soon as indexing completes without rebuilding
+  // the registry. Until then each tool keeps its disk/FTS fallback or returns
+  // the explicit readiness error supplied by its owner.
 
   // Optional repo map (B6). Auto-sized by indexed file count: 0 (<50 files),
   // 1500 chars (50-499), 3000 (500-1999), 4500 (≥2000). Set CODER_REPOMAP_TOKENS
   // to a positive integer to override the auto budget, or "0" to disable.
-  // Skipped when the project has never been indexed (no symbols to map).
+  // Skipped when the project has never been indexed (no symbols to map). The
+  // turn-start readiness refresher below injects it into this SAME runner as
+  // soon as the baseline appears; tool availability is never frozen.
   const repoMapBudget = resolveRepoMapBudget(db, project.id, isIndexed);
   const repoMap = repoMapBudget > 0
     ? buildRepoMap(db, project.id, repoMapBudget)
@@ -1896,11 +1936,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // ─── Incremental symbol re-indexing ──────────────────────────
   // Keep the symbol DB fresh as the agent edits files. Tree-sitter only —
-  // no LLM cost. Only runs when the project is already indexed (a brand-new
-  // project still needs the full pipeline to populate `files` rows). Fire
-  // and forget: the hook returns immediately and the indexer runs in the
-  // background while the next turn begins.
-  if (isIndexed && !sandboxBinding) {
+  // no LLM cost. Register this hook even when the session starts before its
+  // first baseline: once the scan settles, later edits in the SAME live run
+  // must participate in incremental indexing. Fire and forget.
+  if (!sandboxBinding) {
     const FILE_MUTATING_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit', 'manage_path']);
     hookRegistry.onToolCall('after', (ctx) => {
       if (!FILE_MUTATING_TOOLS.has(ctx.toolName)) return;
@@ -2179,13 +2218,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
               const p = memoryReadProjects[0];
               return opts.memoryRetriever!.retrieve(p.id, p.name, taskText);
             }
-            const perProject = await Promise.all(
-              memoryReadProjects.map((p) =>
+            const perProject = await mapProjectsConcurrent(
+              memoryReadProjects,
+              (p) =>
                 opts
                   .memoryRetriever!.retrieve(p.id, p.name, taskText)
                   .then((rows) => ({ name: p.name, rows: [...rows] }))
                   .catch(() => ({ name: p.name, rows: [] as Array<{ id: string; title: string; content: string; staleNote?: string }> })),
-              ),
             );
             return interleaveLabeled(perProject);
           }
@@ -2384,6 +2423,52 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // the field is undefined and the runner skips the hook entirely.
     toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
   });
+
+  // A runCoder invocation owns one CoderRunner, but that runner can execute
+  // many internal model turns. If the three-minute first-turn gate timed out,
+  // the baseline may become ready while this exact runner is still alive. Do a
+  // cheap live readiness read at turn boundaries until it succeeds, then
+  // atomically promote both the shared ToolContext and the prompt once. The
+  // registry is intentionally untouched and no reconciliation/full scan is
+  // scheduled here.
+  if (!isIndexed) {
+    let indexContextPromoted = false;
+    runner.on('turn_start', () => {
+      if (indexContextPromoted) return;
+      try {
+        const liveProject = db.getProject(project.id) as (typeof project & {
+          file_count?: number | null;
+          structural_indexed_at?: string | null;
+          last_indexed?: string | null;
+        }) | undefined;
+        const liveStats = db.getStats(project.id);
+        const liveFileCount = liveProject?.file_count ?? liveStats?.file_count ?? 0;
+        const structurallyReady = liveFileCount > 0
+          && Boolean(liveProject?.structural_indexed_at || liveProject?.last_indexed);
+        if (!structurallyReady) return;
+
+        toolContext.projectIndexed = true;
+        indexStatus.isIndexed = true;
+        const liveRepoMapBudget = resolveRepoMapBudget(db, project.id, true);
+        const liveRepoMap = liveRepoMapBudget > 0
+          ? buildRepoMap(db, project.id, liveRepoMapBudget)
+          : '';
+        systemPrompt = promoteIndexReadySystemPrompt(systemPrompt, {
+          mcpAvailable: effectiveMcpAvailable,
+          sessionDrive: availableTools.has('save_note') || availableTools.has('read_plan'),
+          repoMap: liveRepoMap,
+        });
+        runner.setSystemPromptForNextTurn(systemPrompt);
+        indexContextPromoted = true;
+      } catch (e) {
+        // A transient read race must not affect the model turn. Keep polling at
+        // later boundaries until the persisted baseline can be observed.
+        console.warn(
+          `[coder] live structural readiness refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    });
+  }
 
   // Post-merge migration: the lightweight checklist now lives in the unified
   // task store (coder_tasks_state, gate:'track') — one row per session. On

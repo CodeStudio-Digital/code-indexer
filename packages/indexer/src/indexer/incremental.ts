@@ -9,9 +9,8 @@
  *
  * Scope:
  *  - Only refreshes symbols for files that already have a row in `files`.
- *    New files (never indexed) are skipped — full indexing is the right path
- *    there because metadata fields (summary, concepts, layer, …) require the
- *    LLM and don't have sane tree-sitter defaults.
+ *    New files are handled by the project watcher/structural dirty queue,
+ *    which creates the row and indexes the same deterministic metadata.
  *  - Languages without a tree-sitter grammar return false (no-op).
  *  - Errors are swallowed and logged. This is a best-effort cache refresh,
  *    never a correctness gate.

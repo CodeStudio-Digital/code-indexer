@@ -81,15 +81,10 @@ export function CollectionDetail({ collection, onChanged }: Props) {
     try {
       const result = await deleteCollection(collection.id);
       await onChanged();
-      if (result.queued_for_retry > 0) {
-        void notify({
-          title: t('detail.deletedQueuedTitle'),
-          description: t('detail.deletedQueuedDescription', { count: result.queued_for_retry }),
-        });
-      } else if (result.remote_deleted > 0) {
+      if (result.vectors_deleted > 0) {
         void notify({
           title: t('detail.deletedTitle'),
-          description: t('detail.deletedDescription', { count: result.remote_deleted }),
+          description: t('detail.deletedDescription', { count: result.vectors_deleted }),
         });
       }
     } catch (e) {

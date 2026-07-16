@@ -221,6 +221,19 @@ export function listMissingEmbedding(db: DB, projectId?: number): ContextSnapsho
     .all(projectId) as ContextSnapshot[];
 }
 
+/** Source rows eligible for the semantic index. Completion is tracked in
+ * semantic_items, so this intentionally ignores the legacy embedding_hash. */
+export function listForSemanticIndex(db: DB, projectId?: number): ContextSnapshot[] {
+  if (projectId === undefined) {
+    return db.prepare(
+      'SELECT * FROM snapshots WHERE archived_at IS NULL ORDER BY id',
+    ).all() as ContextSnapshot[];
+  }
+  return db.prepare(
+    'SELECT * FROM snapshots WHERE project_id = ? AND archived_at IS NULL ORDER BY id',
+  ).all(projectId) as ContextSnapshot[];
+}
+
 export interface MemoryIndexEntry {
   id: number;
   title: string;
@@ -262,12 +275,6 @@ export function listMemoryIndex(db: DB, projectId: number, limit = 12): MemoryIn
 
 export function count(db: DB, projectId: number): number {
   const row = db.prepare('SELECT COUNT(*) AS c FROM snapshots WHERE project_id = ? AND archived_at IS NULL')
-    .get(projectId) as { c: number };
-  return row.c;
-}
-
-export function countVectors(db: DB, projectId: number): number {
-  const row = db.prepare("SELECT COUNT(*) AS c FROM vector_ids WHERE project_id = ? AND type = 'snapshot'")
     .get(projectId) as { c: number };
   return row.c;
 }

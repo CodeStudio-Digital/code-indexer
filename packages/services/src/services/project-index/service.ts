@@ -23,9 +23,17 @@ import {
   type StructuralReadinessResult,
 } from './structural-readiness.js';
 
-export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
+export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
 
-const ENSURE_COOLDOWN_MS = 30_000;
+export interface SemanticCatchupHooks {
+  noteDelta(projectId: number, events: readonly DirtyEvent[]): void;
+  ensureProject(projectId: number): Promise<void>;
+  /** Open-project lifecycle hand-off after an integral structural baseline exists. */
+  projectReady?(projectId: number): void | Promise<void>;
+  /** Final view/lease release; semantic backfill may pause after its current batch. */
+  projectInactive?(projectId: number): void | Promise<void>;
+}
+
 const DRAIN_BATCH = 200;
 const PROGRESS_MIN_INTERVAL_MS = 150;
 const LARGE_PROJECT_FILE_COUNT = 5_000;
@@ -65,8 +73,12 @@ export class ProjectIndexService {
   private dirty = new DirtyQueue();
   private status: ProjectIndexStatusStore;
   private running = new Set<number>();
+  private runReason = new Map<number, EnsureFreshReason>();
   private draining = new Set<number>();
-  private lastEnsureAt = new Map<number, number>();
+  /** One stat-first reconciliation per open lifecycle, regardless of turns. */
+  private reconciledLifecycle = new Set<number>();
+  /** A branch switch received during a run collapses into one follow-up pass. */
+  private queuedReconcile = new Map<number, 'branch' | 'workspace'>();
   private lastProgressAt = new Map<number, number>();
   /** Deferred-open timers (MCP_INDEX_OPEN_DELAY_MS) — cancelled when a run starts. */
   private pendingOpen = new Map<number, ReturnType<typeof setTimeout>>();
@@ -85,6 +97,8 @@ export class ProjectIndexService {
   /** UI git-meta subscribers (branch chip / git window refresh), per project. */
   private gitMetaListeners = new Map<number, Set<(event: GitMetaEvent) => void>>();
   private disposed = false;
+  private semanticCatchup: SemanticCatchupHooks | null = null;
+  private semanticLifecycleActive = new Set<number>();
 
   constructor(
     private db: CodeIndexDB,
@@ -99,6 +113,19 @@ export class ProjectIndexService {
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
   setExecutor(executor: StructuralExecutor): void {
     this.executor = executor;
+  }
+
+  setSemanticCatchup(hooks: SemanticCatchupHooks | null): void {
+    this.semanticCatchup = hooks;
+    if (!hooks) {
+      this.semanticLifecycleActive.clear();
+      return;
+    }
+    for (const [projectId, activations] of this.activations) {
+      if (activations.size > 0 && this.reconciledLifecycle.has(projectId)) {
+        this.notifyProjectReady(projectId);
+      }
+    }
   }
 
   /**
@@ -131,9 +158,15 @@ export class ProjectIndexService {
     const firstView = active.size === 0;
     active.add(activationId);
     this.ensureGitMetaWatching(projectId);
+    // Arm the recursive watcher at the lifecycle edge, before any full scan.
+    // The editor/LSP remain independent; runStructural waits for chokidar's
+    // ready barrier in the background and drains events before publishing the
+    // structural baseline.
+    this.ensureFileWatching(projectId, 0, true);
     const s = this.settings();
     if (!firstView || this.disposed || !s.autoIndex || this.running.has(projectId)
-      || this.pendingOpen.has(projectId) || this.pendingActivation.has(projectId)) {
+      || this.pendingOpen.has(projectId) || this.pendingActivation.has(projectId)
+      || this.reconciledLifecycle.has(projectId)) {
       return { scheduled: this.pendingActivation.has(projectId), delayMs: null, largeProject };
     }
 
@@ -141,7 +174,7 @@ export class ProjectIndexService {
       ? envDelay('MCP_INDEX_LARGE_OPEN_DELAY_MS', 30_000)
       : s.openDelayMs;
     if (delayMs <= 0) {
-      this.startStructuralRun(projectId, s, false);
+      this.startStructuralRun(projectId, s, false, 'open');
       return { scheduled: false, delayMs: 0, largeProject };
     }
 
@@ -152,7 +185,7 @@ export class ProjectIndexService {
         this.status.setScheduledRun(projectId, undefined);
         return;
       }
-      this.startStructuralRun(projectId, this.settings(), false);
+      this.startStructuralRun(projectId, this.settings(), false, 'open');
     }, delayMs);
     timer.unref?.();
     this.pendingActivation.set(projectId, timer);
@@ -167,12 +200,16 @@ export class ProjectIndexService {
     active.delete(activationId);
     if (active.size > 0) return false;
     this.activations.delete(projectId);
+    this.reconciledLifecycle.delete(projectId);
+    this.queuedReconcile.delete(projectId);
+    if (this.semanticLifecycleActive.delete(projectId)) this.notifyProjectInactive(projectId);
     const timer = this.pendingActivation.get(projectId);
     if (timer) {
       clearTimeout(timer);
       this.pendingActivation.delete(projectId);
       this.status.setScheduledRun(projectId, undefined);
     }
+    this.scheduleFileWatcherStop(projectId);
     return true;
   }
 
@@ -181,27 +218,37 @@ export class ProjectIndexService {
     if (this.disposed) return;
     const s = this.settings();
     if (!s.autoIndex && reason !== 'manual') return;
-    if (this.running.has(projectId)) return;
-    const last = this.lastEnsureAt.get(projectId) ?? 0;
-    // 'branch' bypasses the cooldown like 'manual' (a fresh checkout must
-    // re-index now), but stays gated by autoIndex above.
-    if (reason !== 'manual' && reason !== 'branch' && Date.now() - last < ENSURE_COOLDOWN_MS) {
-      return; // fresh enough — the watcher is keeping it current
+
+    if ((reason === 'branch' || reason === 'workspace') && this.running.has(projectId)) {
+      if (this.runReason.get(projectId) !== reason) this.queuedReconcile.set(projectId, reason);
+      return;
     }
-    this.lastEnsureAt.set(projectId, Date.now());
+    if (reason !== 'manual' && (
+      this.running.has(projectId)
+      || this.pendingOpen.has(projectId)
+      || this.pendingActivation.has(projectId)
+    )) {
+      return;
+    }
+    // Session messages and scaffold notifications no longer trigger periodic
+    // full scans. The first lifecycle request still establishes/validates the
+    // baseline; subsequent turns are served by watcher/Monaco deltas.
+    if (reason !== 'manual' && reason !== 'branch' && reason !== 'workspace'
+      && this.reconciledLifecycle.has(projectId)) return;
+
     // Expose global busy state before create-session lets the composer send.
     if (this.db.getProject(projectId)?.is_synthetic) {
       this.status.setPhase(projectId, 'scanning');
     }
-    // The cheap .git watcher starts on open so branch switches re-index.
-    // The recursive working-tree watcher is delayed until the UI asks for
-    // live fs events, keeping project mount off the hot path.
+    // Both watchers are armed before the pass. The recursive watcher barrier
+    // prevents the scan→watch gap that could otherwise lose a save.
     this.ensureGitMetaWatching(projectId);
+    this.ensureFileWatching(projectId, 0, true);
 
     const manual = reason === 'manual';
     const delay = manual ? 0 : s.openDelayMs;
     if (delay <= 0) {
-      this.startStructuralRun(projectId, s, manual);
+      this.startStructuralRun(projectId, s, manual, reason);
       return;
     }
     if (this.pendingOpen.has(projectId)) return; // already scheduled
@@ -210,7 +257,7 @@ export class ProjectIndexService {
     // window preempts — startStructuralRun cancels this timer.
     const t = setTimeout(() => {
       this.pendingOpen.delete(projectId);
-      this.startStructuralRun(projectId, s, false);
+      this.startStructuralRun(projectId, s, false, reason);
     }, delay);
     t.unref?.();
     this.pendingOpen.set(projectId, t);
@@ -223,10 +270,10 @@ export class ProjectIndexService {
     if (signal?.aborted) {
       return Promise.resolve({ status: 'aborted', phase: current.phase });
     }
-    const hasOutstandingRun = this.running.has(projectId)
-      || this.pendingOpen.has(projectId)
-      || this.pendingActivation.has(projectId);
-    if (isStructurallyReady(current) && !hasOutstandingRun) {
+    // A prior integral baseline is immediately usable while the stat-first
+    // reopen reconciliation runs in the background. Only a missing baseline
+    // gates the first agent turn.
+    if (isStructurallyReady(current)) {
       return Promise.resolve({ status: 'ready', phase: current.phase });
     }
     const settings = this.settings();
@@ -235,18 +282,22 @@ export class ProjectIndexService {
       subscribe: (fn) => this.subscribe(projectId, fn),
       timeoutMs,
       signal,
-      waitForNextReady: isStructurallyReady(current) && hasOutstandingRun,
       start: () => {
         if (this.running.has(projectId)) return true;
         if (this.disposed || !settings.autoIndex) return false;
-        this.startStructuralRun(projectId, settings, false);
+        this.startStructuralRun(projectId, settings, false, 'session');
         return this.running.has(projectId);
       },
     });
   }
 
   /** Kick the locked structural run + drain. Cancels any deferred-open timer. */
-  private startStructuralRun(projectId: number, s: ProjectIndexSettings, manual: boolean): void {
+  private startStructuralRun(
+    projectId: number,
+    s: ProjectIndexSettings,
+    manual: boolean,
+    reason: EnsureFreshReason = manual ? 'manual' : 'open',
+  ): void {
     const pending = this.pendingOpen.get(projectId);
     if (pending) {
       clearTimeout(pending);
@@ -260,13 +311,40 @@ export class ProjectIndexService {
     this.status.setScheduledRun(projectId, undefined);
     if (this.disposed || this.running.has(projectId)) return;
     this.running.add(projectId);
+    this.runReason.set(projectId, reason);
+    this.ensureGitMetaWatching(projectId);
+    this.ensureFileWatching(projectId, 0, true);
+    let reconciled = false;
     void this.mutex
-      .withLock(projectId, () => this.runStructural(projectId, s, manual))
+      .withLock(projectId, async () => {
+        await this.waitForFileWatcherReady(projectId);
+        const completed = await this.runStructural(projectId, s, manual);
+        if (!completed) return;
+        // Give watcher callbacks queued in the same event-loop turn a chance
+        // to enter their debounce buffer, then flush it at the scan barrier.
+        await yieldToEventLoop();
+        await this.flushWatcherEvents(projectId);
+        await this.drainDirtyLocked(projectId);
+        this.status.refreshFromDb(projectId);
+        reconciled = true;
+        if ((this.activations.get(projectId)?.size ?? 0) > 0) this.notifyProjectReady(projectId);
+        void this.semanticCatchup?.ensureProject(projectId).catch((error) =>
+          console.warn(`[project-index] semantic project catch-up paused for ${projectId}: ${msg(error)}`));
+      })
       .catch((err) => this.status.setPhase(projectId, 'error', msg(err)))
       .finally(() => {
         this.running.delete(projectId);
+        this.runReason.delete(projectId);
+        if (reconciled) this.reconciledLifecycle.add(projectId);
         this.lastProgressAt.delete(projectId);
-        this.scheduleDrain(projectId);
+        const queuedReason = this.queuedReconcile.get(projectId);
+        this.queuedReconcile.delete(projectId);
+        if (queuedReason && !this.disposed) {
+          this.startStructuralRun(projectId, this.settings(), false, queuedReason);
+        } else {
+          this.scheduleDrain(projectId);
+          if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
+        }
       });
   }
 
@@ -274,6 +352,7 @@ export class ProjectIndexService {
   markDirty(projectId: number, events: DirtyEvent[]): void {
     if (this.disposed || events.length === 0) return;
     this.dirty.add(projectId, events);
+    this.semanticCatchup?.noteDelta(projectId, events);
     this.status.setDirtyPending(projectId, this.dirty.size(projectId));
     // Every indexable change is also a UI-visible change — markDirty is the
     // single funnel (watcher + Monaco fast-path + scaffold), so publishing
@@ -333,7 +412,10 @@ export class ProjectIndexService {
     }
     return () => {
       set!.delete(fn);
-      if (set!.size === 0) this.gitMetaListeners.delete(projectId);
+      if (set!.size === 0) {
+        this.gitMetaListeners.delete(projectId);
+        if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
+      }
     };
   }
 
@@ -348,18 +430,34 @@ export class ProjectIndexService {
   /** Branch switch (HEAD changed) → explicit re-index; any git-dir change → UI refresh. */
   private onGitMetaChange(projectId: number, event: GitMetaEvent): void {
     this.publishGitMeta(projectId, event);
-    // HEAD change ⇒ branch switch ⇒ explicit structural pass. If a run is already
-    // in flight ensureFresh drops this (no queue) — acceptable: the checkout's
-    // working-tree deltas still flow through the file watcher → markDirty → drain,
-    // so symbols/FTS catch up incrementally even when the structural pass is skipped.
+    // HEAD change ⇒ one coalesced stat-first reconciliation. If the lifecycle
+    // pass is already running, one follow-up is queued; repeated HEAD events
+    // during that branch pass are ignored while watcher deltas keep flowing.
     if (event.changed.includes('head')) this.ensureFresh(projectId, 'branch');
   }
 
   private touchWatchOrder(projectId: number, s: ProjectIndexSettings): void {
     this.watchOrder = [projectId, ...this.watchOrder.filter((id) => id !== projectId)];
     while (this.watchOrder.length > s.maxWatchedProjects) {
-      void this.stopWatching(this.watchOrder[this.watchOrder.length - 1]);
+      const candidate = [...this.watchOrder]
+        .reverse()
+        .find((id) => id !== projectId && !this.shouldKeepWatcher(id));
+      // The cap is deliberately soft while every watched project is active.
+      // Evicting an active project used to delete its activation ownership and
+      // cancel its pending baseline; correctness wins over the handle target.
+      if (candidate == null) break;
+      this.watchOrder = this.watchOrder.filter((id) => id !== candidate);
+      void this.stopIdleWatcherHandles(candidate);
     }
+  }
+
+  private shouldKeepWatcher(projectId: number): boolean {
+    return (this.activations.get(projectId)?.size ?? 0) > 0
+      || (this.fsListeners.get(projectId)?.size ?? 0) > 0
+      || (this.gitMetaListeners.get(projectId)?.size ?? 0) > 0
+      || this.running.has(projectId)
+      || this.pendingOpen.has(projectId)
+      || this.pendingActivation.has(projectId);
   }
 
   private ensureGitMetaWatching(projectId: number): void {
@@ -375,29 +473,29 @@ export class ProjectIndexService {
     });
   }
 
-  private ensureFileWatching(projectId: number, delayMs: number): void {
+  private ensureFileWatching(projectId: number, delayMs: number, lifecycle = false): void {
     if (this.disposed) return;
     const s = this.settings();
     if (!s.autoWatch || this.watcher.isWatching(projectId)) return;
     this.touchWatchOrder(projectId, s);
     if (this.fileWatchOpenTimers.has(projectId)) return;
     if (delayMs <= 0) {
-      this.startFileWatchingNow(projectId);
+      this.startFileWatchingNow(projectId, lifecycle);
       return;
     }
     const timer = setTimeout(() => {
       this.fileWatchOpenTimers.delete(projectId);
-      if (this.disposed || !this.fsListeners.has(projectId) || this.watcher.isWatching(projectId)) return;
-      this.startFileWatchingNow(projectId);
+      if (this.disposed || !this.shouldKeepWatcher(projectId) || this.watcher.isWatching(projectId)) return;
+      this.startFileWatchingNow(projectId, lifecycle);
     }, delayMs);
     timer.unref?.();
     this.fileWatchOpenTimers.set(projectId, timer);
   }
 
-  private startFileWatchingNow(projectId: number): void {
+  private startFileWatchingNow(projectId: number, lifecycle = false): void {
     if (this.disposed || this.watcher.isWatching(projectId)) return;
     const s = this.settings();
-    if (!s.autoWatch || !this.fsListeners.has(projectId)) return;
+    if (!s.autoWatch || (!lifecycle && !this.shouldKeepWatcher(projectId))) return;
     this.touchWatchOrder(projectId, s);
     const project = this.db.getProject(projectId);
     if (!project?.root_path) return;
@@ -420,12 +518,12 @@ export class ProjectIndexService {
     }
     const idleMs = this.settings().watchIdleMs;
     if (idleMs <= 0) {
-      void this.stopFileWatching(projectId);
+      if (!this.shouldKeepWatcher(projectId)) void this.stopIdleWatcherHandles(projectId);
       return;
     }
     const timer = setTimeout(() => {
       this.fileWatchIdleTimers.delete(projectId);
-      if (!this.fsListeners.has(projectId)) void this.stopFileWatching(projectId);
+      if (!this.shouldKeepWatcher(projectId)) void this.stopIdleWatcherHandles(projectId);
     }, idleMs);
     timer.unref?.();
     this.fileWatchIdleTimers.set(projectId, timer);
@@ -446,8 +544,24 @@ export class ProjectIndexService {
     this.status.setWatcher(projectId, false);
   }
 
+  private async stopIdleWatcherHandles(projectId: number): Promise<void> {
+    if (this.shouldKeepWatcher(projectId)) return;
+    this.watchOrder = this.watchOrder.filter((id) => id !== projectId);
+    await this.stopFileWatching(projectId);
+    await this.gitMetaWatcher.stopWatching(projectId);
+  }
+
   async stopWatching(projectId: number): Promise<void> {
+    const wasSemanticallyActive = this.semanticLifecycleActive.delete(projectId);
     this.activations.delete(projectId);
+    this.reconciledLifecycle.delete(projectId);
+    this.queuedReconcile.delete(projectId);
+    const pending = this.pendingOpen.get(projectId);
+    if (pending) {
+      clearTimeout(pending);
+      this.pendingOpen.delete(projectId);
+      this.status.setScheduledRun(projectId, undefined);
+    }
     const activation = this.pendingActivation.get(projectId);
     if (activation) {
       clearTimeout(activation);
@@ -458,13 +572,14 @@ export class ProjectIndexService {
     await this.stopFileWatching(projectId);
     await this.gitMetaWatcher.stopWatching(projectId);
     this.status.setWatcher(projectId, false);
+    if (wasSemanticallyActive) this.notifyProjectInactive(projectId);
   }
 
   restartFileWatching(projectId: number): void {
-    if (this.disposed || !this.fsListeners.has(projectId)) return;
+    if (this.disposed || !this.shouldKeepWatcher(projectId)) return;
     void this.stopFileWatching(projectId)
       .then(() => {
-        if (!this.disposed && this.fsListeners.has(projectId)) this.startFileWatchingNow(projectId);
+        if (!this.disposed && this.shouldKeepWatcher(projectId)) this.startFileWatchingNow(projectId, true);
       })
       .catch((err) => console.warn(`[project-index] failed to restart watcher for project ${projectId}: ${msg(err)}`));
   }
@@ -530,7 +645,7 @@ export class ProjectIndexService {
 
   // ─── Internals ────────────────────────────────────────────────────
 
-  private async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<void> {
+  private async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<boolean> {
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
       maxFiles: s.maxFiles,
@@ -539,7 +654,7 @@ export class ProjectIndexService {
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
-      return;
+      return false;
     }
     if (result.aborted === 'empty_scan') {
       this.status.setPhase(
@@ -547,9 +662,15 @@ export class ProjectIndexService {
         'error',
         'scan found 0 files — check the project root path and .gitignore/.mcpindexignore; a manual reindex overrides',
       );
-      return;
+      return false;
     }
-    this.status.refreshFromDb(projectId);
+    if (result.indexed > 0 || result.removed > 0) {
+      // The stat-first scanner found changes that happened while the project
+      // was closed. It does not expose their individual paths, so one wildcard
+      // invalidation asks the semantic coordinator to compare item hashes.
+      this.semanticCatchup?.noteDelta(projectId, [{ path: '*', kind: 'upsert' }]);
+    }
+    return true;
   }
 
   private onWatcherEvents(projectId: number, rootPath: string, events: WatcherFileEvent[]): void {
@@ -581,20 +702,72 @@ export class ProjectIndexService {
     else this.status.setProgress(projectId, p.current, p.total);
   }
 
+  private async waitForFileWatcherReady(projectId: number): Promise<void> {
+    if (!this.settings().autoWatch) return;
+    this.startFileWatchingNow(projectId, true);
+    const watcher = this.watcher as FileWatcherService & {
+      waitUntilReady?: (id: number) => Promise<void>;
+    };
+    if (!watcher.waitUntilReady) return;
+    const timeoutMs = envDelay('MCP_WATCH_READY_TIMEOUT_MS', 30_000);
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      watcher.waitUntilReady(projectId),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, timeoutMs);
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (timedOut) {
+      console.warn(`[project-index] watcher ready barrier timed out for project ${projectId}; reconciling with watcher gap protection degraded`);
+    }
+  }
+
+  private async flushWatcherEvents(projectId: number): Promise<void> {
+    const watcher = this.watcher as FileWatcherService & {
+      flushPending?: (id: number) => Promise<void>;
+    };
+    await watcher.flushPending?.(projectId);
+  }
+
+  private async drainDirtyLocked(projectId: number): Promise<void> {
+    while (this.dirty.size(projectId) > 0) {
+      const batch = this.dirty.takeBatch(projectId, DRAIN_BATCH);
+      if (batch.total === 0) break;
+      if (batch.deletes.length > 0) await this.executor.removeFiles(projectId, batch.deletes);
+      if (batch.upserts.length > 0) await this.executor.indexFiles(projectId, batch.upserts);
+      this.status.setDirtyPending(projectId, this.dirty.size(projectId));
+      if (this.dirty.size(projectId) > 0) await yieldToEventLoop();
+    }
+  }
+
+  private notifyProjectReady(projectId: number): void {
+    if (!this.semanticCatchup?.projectReady || this.semanticLifecycleActive.has(projectId)) return;
+    this.semanticLifecycleActive.add(projectId);
+    void Promise.resolve(this.semanticCatchup.projectReady(projectId)).catch((error) => {
+      this.semanticLifecycleActive.delete(projectId);
+      console.warn(`[project-index] semantic lifecycle activation failed for ${projectId}: ${msg(error)}`);
+    });
+  }
+
+  private notifyProjectInactive(projectId: number): void {
+    void Promise.resolve(this.semanticCatchup?.projectInactive?.(projectId)).catch((error) =>
+      console.warn(`[project-index] semantic lifecycle deactivation failed for ${projectId}: ${msg(error)}`));
+  }
+
   private scheduleDrain(projectId: number): void {
-    if (this.disposed || this.draining.has(projectId) || this.dirty.size(projectId) === 0) return;
+    if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.dirty.size(projectId) === 0) return;
     this.draining.add(projectId);
     void this.mutex
       .withLock(projectId, async () => {
-        while (this.dirty.size(projectId) > 0) {
-          const batch = this.dirty.takeBatch(projectId, DRAIN_BATCH);
-          if (batch.total === 0) break;
-          if (batch.deletes.length > 0) await this.executor.removeFiles(projectId, batch.deletes);
-          if (batch.upserts.length > 0) await this.executor.indexFiles(projectId, batch.upserts);
-          this.status.setDirtyPending(projectId, this.dirty.size(projectId));
-          if (this.dirty.size(projectId) > 0) await yieldToEventLoop();
-        }
+        await this.drainDirtyLocked(projectId);
         this.status.refreshFromDb(projectId);
+        void this.semanticCatchup?.ensureProject(projectId).catch((error) =>
+          console.warn(`[project-index] semantic watcher catch-up paused for ${projectId}: ${msg(error)}`));
       })
       .catch((err) => console.warn(`[project-index] drain failed for project ${projectId}: ${msg(err)}`))
       .finally(() => {

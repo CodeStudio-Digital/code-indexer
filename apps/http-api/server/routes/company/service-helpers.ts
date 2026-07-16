@@ -193,13 +193,18 @@ export async function removeServiceAndProject(
     }
     if (linkedProject.name.startsWith('_builder_') && linkedProject.root_path) {
       try {
+        // Semantic cleanup must run first because vectors.db resolution depends
+        // on the still-live project row/root.
+        await deps.projectIndexService.stopWatching(linkedProject.id).catch(() => undefined);
+        await deps.semanticCoordinator.removeProject(linkedProject.id, {
+          finalize: () => db.deleteProject(linkedProject.id),
+        });
         await rm(linkedProject.root_path, { recursive: true, force: true });
       } catch (e) {
         console.warn(
-          `[sessions] failed to wipe service root_path ${linkedProject.root_path}: ${e instanceof Error ? e.message : String(e)}`,
+          `[sessions] service project ${linkedProject.id} kept after cleanup failure: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
-      try { db.deleteProject(linkedProject.id); } catch { /* best effort */ }
     }
   } else if (linked) {
     // Link existed but project row was already gone (orphan). Drop

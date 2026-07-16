@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { DBSymbol, HybridSearchResult } from '@mcp/shared/types.js';
-import { isRelevant, percentile, ndcgAt, type EvalQuery } from '../engine.js';
+import { isRelevant, percentile, ndcgAt, runBenchmark, type EvalQuery } from '../engine.js';
 import { generateQueriesFromIndex } from '../query-gen.js';
 
 function sym(name: string, filePath: string): HybridSearchResult {
@@ -108,5 +108,37 @@ describe('generateQueriesFromIndex', () => {
     const b = generateQueriesFromIndex(fakeDb(symbols), 1, { maxQueries: 10 });
     expect(a.length).toBe(10);
     expect(a.map((q) => q.query)).toEqual(b.map((q) => q.query)); // stable order
+  });
+});
+
+describe('benchmark validity gates', () => {
+  it('rejects an empty gold set instead of reporting a meaningless zero score', async () => {
+    await expect(runBenchmark({
+      db: {} as CodeIndexDB,
+      projectId: 1,
+      projectName: 'empty',
+      querySet: [],
+      embeddings: [],
+      rerankers: [],
+    })).rejects.toThrow(/at least one gold-set query/);
+  });
+
+  it('rejects a semantic cell that would silently degrade to FTS-only', async () => {
+    await expect(runBenchmark({
+      db: {} as CodeIndexDB,
+      projectId: 1,
+      projectName: 'missing-vectors',
+      querySet: [{ query: 'semantic query', relevant_files: ['target.ts'] }],
+      embeddings: [{
+        label: 'live',
+        service: {} as never,
+        vectorStore: null,
+      }],
+      rerankers: [{
+        label: 'rrf',
+        reranker: { name: 'rrf', rerank: async () => [] },
+      }],
+      mode: 'hybrid',
+    })).rejects.toThrow(/semantic benchmark requires indexed vectors/);
   });
 });

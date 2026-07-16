@@ -68,13 +68,9 @@ describe('FileScanner', () => {
         size: sf.sizeBytes,
         lineCount: sf.lineCount,
         contentHash: sf.hash,
-        summary: '',
-        concepts: [],
         dependencies: [],
         internalDeps: [],
         externalDeps: [],
-        notes: [],
-        complexity: 'low',
       });
 
       const second = await scanner.scan(db, project.id);
@@ -96,13 +92,9 @@ describe('FileScanner', () => {
         size: sf.sizeBytes,
         lineCount: sf.lineCount,
         contentHash: sf.hash,
-        summary: '',
-        concepts: [],
         dependencies: [],
         internalDeps: [],
         externalDeps: [],
-        notes: [],
-        complexity: 'low',
       });
 
       // Modify file

@@ -33,7 +33,7 @@ export interface ActiveIndexRun {
 
 /** A deferred structural reconciliation that has not started yet. */
 export interface ScheduledIndexRun {
-  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch';
+  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
   dueAt: number;
 }
 
@@ -54,6 +54,7 @@ export interface ProjectIndexStatus {
   /** @deprecated Use {@link activeRun}. Kept in sync for the StatusBar chip. */
   progress?: { current: number; total: number };
   lastStructuralAt: string | null;
+  lastCheckedAt: string | null;
   lastSemanticAt: string | null;
   error?: string;
 }

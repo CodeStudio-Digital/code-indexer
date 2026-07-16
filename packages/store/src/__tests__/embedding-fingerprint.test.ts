@@ -1,7 +1,7 @@
 /**
  * Migration 113 + the re-index-on-model-change primitives: per-project
- * embedding fingerprint storage and clearEmbeddingHashes. The IndexAgent uses
- * these to force a full re-embed when the embedding model/backend changes.
+ * embedding fingerprint storage. semantic_items source hashes include this
+ * fingerprint, so model changes no longer mutate structural hash columns.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '../db.js';
 
-describe('embedding fingerprint + clearEmbeddingHashes (migration 113)', () => {
+describe('embedding fingerprint (migration 113 compatibility)', () => {
   let dir: string;
   let db: CodeIndexDB;
   let projectId: number;
@@ -32,16 +32,5 @@ describe('embedding fingerprint + clearEmbeddingHashes (migration 113)', () => {
     // Overwrite (model switch).
     db.setProjectEmbeddingFingerprint(projectId, 'cloudflare:bge-m3');
     expect(db.getProjectEmbeddingFingerprint(projectId)).toBe('cloudflare:bge-m3');
-  });
-
-  it('clearEmbeddingHashes nulls the embedding hash (snapshot path)', () => {
-    // files/symbols clear via the identical `UPDATE ... SET embedding_hash =
-    // NULL WHERE project_id = ?` statement; snapshot is the cheap-to-set case.
-    const snap = db.createSnapshot(projectId, { title: 't', category: 'note', content: 'c' });
-    db.updateSnapshotEmbeddingHash(snap.id, 'sh');
-    expect(db.getSnapshotById(snap.id)!.embedding_hash).toBe('sh');
-
-    db.clearEmbeddingHashes(projectId);
-    expect(db.getSnapshotById(snap.id)!.embedding_hash).toBeNull();
   });
 });

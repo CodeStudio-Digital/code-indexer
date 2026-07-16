@@ -120,7 +120,8 @@ export interface Scorer<Q extends PipelineQuery, C extends PipelineCandidate> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Selector — picks the final top-K.
+// Selector — picks a top-K. Pipelines may optionally run a second selector
+// after post-selection hydration to apply the final ordering and limit.
 //
 // Translated from `candidate-pipeline/selector.rs:21-85`.
 // Default behavior: sort by `score(c)` descending, truncate to `size()`.

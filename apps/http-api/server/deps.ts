@@ -2,27 +2,38 @@ import { CodeIndexDB } from '@mcp/store/db.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
+import { projectMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { ProjectIndexService, createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
+import { InvestigationSemanticIndex } from '@mcp/services/memory/investigation-semantic-index.js';
 import { AgentMemoryRetriever } from '@mcp/services/memory/agent-memory-retriever.js';
 import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
 import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
 import { LlmMemoryQuerySynthesizer, type ConversationTail } from '@mcp/services/memory/query-synthesizer.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
-import { DiffService } from '@mcp/services/services/differ.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.js';
-import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import type { VectorStore } from '@mcp/store/vectors.js';
+import { NullEmbeddingService, type EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { NullReranker } from '@mcp/indexer/search/reranker.js';
+import { NullVectorStore, type VectorStore } from '@mcp/store/vectors.js';
+import {
+  SemanticStore,
+  type EmbeddingTarget,
+  type RerankerTarget,
+} from '@mcp/store/semantic-store.js';
+import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
 import { SessionStore, type RunCoderOptions } from '@mcp/code-agent/index.js';
-import { setInvestigationEmbedder } from '@mcp/code-agent/tools/investigation-embedder.js';
+import {
+  setInvestigationSemanticIndex,
+  type InvestigationSemanticIndexPort,
+} from '@mcp/code-agent/tools/investigation-embedder.js';
 import { CompanyStore } from '@mcp/store/company-store.js';
 import { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
 import { CompanySandboxServicesStore } from '@mcp/store/company-sandbox-services-store.js';
@@ -83,7 +94,6 @@ import {
   IndexDocumentationUseCase,
   PlainFetchBackend,
   QueryRewriter,
-  Reranker,
   UrlFetcher,
 } from '@mcp/services/services/docs/index.js';
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
@@ -130,16 +140,21 @@ import {
   createSearchBundle,
   deriveKindLabel,
 } from '@mcp/indexer/bootstrap/index.js';
-import { createReranker } from '@mcp/indexer/search/reranker.js';
-import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-runtime.js';
 import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
 import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
-import { createEmbeddingExecutor } from '../sse/EmbeddingsWorkerClient.js';
+import { SemanticVectorWorkerClient } from '../sse/SemanticVectorWorkerClient.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
 import { syncPluginProviders } from './plugin-providers.js';
+import { SemanticIndexCoordinator } from './semantic-index-coordinator.js';
+import {
+  createDurableSemanticMutationSink,
+  type SemanticMutationSink,
+} from '@mcp/services/semantic-mutation-sink.js';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Late-bound ChromeService reference shared with the doc indexer's
@@ -182,7 +197,12 @@ export interface ProviderDeps {
 
 export interface SearchDeps {
   embeddingService: EmbeddingService;
+  knowledgeEmbeddingService: EmbeddingService;
   vectorStore: VectorStore;
+  semanticStore: SemanticStore;
+  localVectorRouter: LocalVectorRouter;
+  semanticProfileRuntime: SemanticProfileRuntime;
+  semanticCoordinator: SemanticIndexCoordinator;
   hybridSearch: HybridSearch;
   /** Mem C — project-memory retrieval over agent_memory (relevance × importance).
    *  Structural port the runner consumes (project scope, no `setRecallFilter`). */
@@ -203,6 +223,8 @@ export interface SearchDeps {
    *  user-scope recall, embedding backfill and the consolidation sweeper. */
   agentMemoryService: AgentMemoryService;
   agentMemoryRetriever: AgentMemoryRetriever;
+  /** Host-owned investigation semantic selector; worker coders reach it by RPC. */
+  investigationSemantic: InvestigationSemanticIndexPort;
   /** Mem C write-back — end-of-run durable-memory distillation (facts + gotchas). */
   runEndMemory: RunEndMemory;
   /** Direct agent ports: save_note scope 'project' (dedup'd write) + recall_memory
@@ -235,11 +257,9 @@ export interface SearchDeps {
     ): Promise<{ archived: number }>;
   };
   /**
-   * I2 — process-wide hot cache of recently-touched files. Always
-   * constructed (so tools can `touch()` regardless of feature flag), but
-   * `HybridSearch` only consults it when `MCP_PIPELINES_RECENT_FILES_SOURCE=1`.
-   * Tools wiring the touch() calls live elsewhere; this exposure makes
-   * the source reachable for them.
+   * Process-wide hot cache of recently touched files. Agent read/edit tools
+   * feed it and the canonical candidate pipeline always treats it as one
+   * bounded RRF source.
    */
   recentFilesSource: RecentFilesSource;
   /** Resolved kind names for diagnostics (avoid importing concrete classes). */
@@ -253,7 +273,6 @@ export interface CostingDeps {
 
 export interface ProjectServiceDeps {
   snapshotService: SnapshotService;
-  diffService: DiffService;
   exportService: ExportService;
   webhookDispatcher: WebhookDispatcher;
   /**
@@ -479,7 +498,7 @@ export interface PipelineDeps {
   /** Direct store handle for diagnostics + admin maintenance endpoints. */
   lshIndexStore: LshIndexStore;
   /**
-   * Sink the IndexAgent calls after vector-store upserts. Null when LSH
+   * Sink semantic embedding calls after vector-store upserts. Null when LSH
    * is disabled (`MCP_LSH_INDEXING != '1'`); real impl pushes signatures
    * + buckets into the LSH store. Default: disabled so existing indexing
    * paths see zero overhead.
@@ -613,94 +632,131 @@ export function createDeps(): ServerDeps {
   // central -wal can't bloat under multi-agent worker write load (see db.ts).
   const db = new CodeIndexDB(config.dbPath, { checkpointOwner: true });
   const costTracker = new CostTracker(db);
-  const diffService = new DiffService(db);
   const exportService = new ExportService(db);
   const webhookDispatcher = new WebhookDispatcher(db);
   const modelDiscovery = new ModelDiscovery(db);
 
-  // Instantiated early so createEmbeddingService can query the DB-managed
-  // embedding_configs table. The admin UI writes there; legacy .env config
-  // is the fallback when no row is marked default.
+  // Chat providers remain the inference credential source. Semantic profiles
+  // select their embedding/rerank model independently below.
   const providerStore = createAndSeedProviderStore(config.dbPath);
+  const semanticStore = new SemanticStore(db.raw());
+  const semanticMutationOwner = `http-api:${process.pid}:${randomUUID()}`;
+  let semanticCoordinatorForMutations: SemanticIndexCoordinator | null = null;
+  const pendingMutationDrains = new Set<string>();
+  let mutationDrainScheduled = false;
+  const scheduleMutationDrain = (): void => {
+    if (mutationDrainScheduled || !semanticCoordinatorForMutations) return;
+    mutationDrainScheduled = true;
+    const timer = setTimeout(() => {
+      mutationDrainScheduled = false;
+      const namespaces = [...pendingMutationDrains];
+      pendingMutationDrains.clear();
+      for (const namespace of namespaces) {
+        void semanticCoordinatorForMutations?.catchUpKnowledgeNamespace(namespace).catch((error) =>
+          console.warn(`[semantic] mutation catch-up paused for ${namespace}: ${(error as Error).message}`));
+      }
+    }, 0);
+    (timer as { unref?: () => void }).unref?.();
+  };
+  const semanticMutationSink: SemanticMutationSink = createDurableSemanticMutationSink(
+    semanticStore,
+    {
+      owner: semanticMutationOwner,
+      enabled: () => semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+      onDurableMutation: (namespace, phase) => {
+        // The running fence deliberately blocks activation while its source
+        // row is changing. Reconcile only after commit (settled), or for an
+        // already-atomic note, to avoid embedding the pre-mutation snapshot.
+        if (phase === 'started') return;
+        if (semanticCoordinatorForMutations
+          && !semanticCoordinatorForMutations.allowsNamespaceMutation(namespace)) return;
+        pendingMutationDrains.add(namespace);
+        scheduleMutationDrain();
+      },
+    },
+  );
+  const localVectorRouter = new LocalVectorRouter({
+    resolveProject: (projectId) => db.getProject(projectId),
+    semanticStore,
+  });
+  let semanticVectorWorker: SemanticVectorWorkerClient | null = null;
+  try {
+    semanticVectorWorker = SemanticVectorWorkerClient.create(config.dbPath);
+  } catch (error) {
+    console.warn(`[semantic] vector worker unavailable; semantic jobs will pause and search will use FTS: ${(error as Error).message}`);
+  }
 
-  // Reranker is wired here for parity with mcp-server (apps/mcp-server/context.ts:43)
-  // and CLI snapshots (apps/cli/commands/snapshots.ts:67). Without this, the
-  // HybridSearch instance served to the Electron renderer via IPC has a
-  // NullReranker, which makes mode='hybrid' worse than 'fts' on code queries
-  // (measured: hybrid R@5 0.64 vs fts R@5 0.80 in bench/results/search-baseline-2026-05-25).
-  // `createReranker()` returns NullReranker when COHERE_API_KEY and
-  // MCP_RERANK_WORKER_URL are both unset — zero behavior change in that case.
+  // The Code semantic profile resolves the reranker below and ONNX execution
+  // is proxied to semantic-vector-worker. HybridSearch owns fail-open to RRF.
   //
-  // I2 — `RecentFilesSource` is constructed unconditionally but only
-  // consulted by HybridSearch when `MCP_PIPELINES_RECENT_FILES_SOURCE=1`
-  // is set. The source starts empty; downstream code is expected to call
-  // `recentFilesSource.touch(...)` whenever a file is read/edited via
-  // the agent (TODO: wire touches from `Read`/`Edit` tool dispatchers in
-  // a follow-up PR). Without touches the source stays empty → recent
-  // stream contributes 0 results → legacy 2-stream RRF path runs unchanged.
+  // `RecentFilesSource` is a normal candidate-pipeline source. It starts
+  // empty and is fed by successful agent read/edit operations below.
   const recentFilesSource = new RecentFilesSource();
-  // I1 — pipeline telemetry store is constructed early so the V2
-  // search pipeline (gated by MCP_PIPELINES_INDEXER_SEARCH_V2=1) can
-  // emit per-stage rows from inside HybridSearch. The same instance is
+  // The pipeline telemetry store is constructed early so the canonical
+  // search pipeline can emit per-stage rows from inside HybridSearch. The same instance is
   // reused below as the SearchDeps `pipelineTelemetryStore` so the
   // admin panel sees a unified view.
   const pipelineTelemetryStore = new PipelineTelemetryStore(db.raw());
+  // Provider/model routing for every LLM-backed pipeline, including the
+  // optional HyDE query-expansion stage. Construct it before the search
+  // bundle so HyDE has the same single source of truth as other pipelines.
+  const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
+  const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
   // Pipeline telemetry is disabled — a no-op sink drops every event so the
   // doc_search rewriter/reranker + quality/search pipelines stop hammering
   // `pipeline_telemetry` (the dashboard tab that read it was removed). The
   // store is kept only so the (now dead) admin routes still typecheck.
   const pipelineTelemetrySink = new NoopTelemetrySink();
-  // Single reranker instance shared by code search (HybridSearch) and the doc
-  // RAG cross-encoder below — a LocalReranker lazily loads a ~hundreds-of-MB
-  // ONNX model, so we must NOT construct it twice.
-  const codeReranker = createReranker(providerStore);
-  // Embeddings off the main thread: wrap the in-process service in a worker-
-  // backed executor when the backend is local ONNX. That inference is CPU-
-  // bound and would otherwise freeze the UI while the semantic pass reduces
-  // the "stale" count. cloudflare/bedrock stay in-process (async network I/O
-  // never blocks the event loop). Kill switch MCP_EMBED_WORKER=0; per-call
-  // fallback to in-process on worker errors. Built HERE (not in
-  // createSearchBundle) so the SAME wrapped instance reaches every consumer —
-  // there's no late-bound setter like the structural executor has.
-  const baseEmbedding = createEmbeddingService(providerStore);
-  const embedFingerprint = baseEmbedding.fingerprint?.() ?? '';
-  const embedLocalCfg = (providerStore.getDefaultEmbedding()?.config ?? {}) as { model?: string; cacheDir?: string };
-  const idleEnv = Number(process.env.MCP_EMBED_WORKER_IDLE_MS);
-  const embedExec = createEmbeddingExecutor(
-    {
-      isLocal: embedFingerprint.startsWith('local:'),
-      fingerprint: embedFingerprint,
-      model: embedLocalCfg.model,
-      cacheDir: embedLocalCfg.cacheDir,
-      idleTtlMs: Number.isFinite(idleEnv) && idleEnv > 0 ? idleEnv : undefined,
+  const semanticProfileRuntime = new SemanticProfileRuntime(
+    semanticStore,
+    providerStore,
+    (target: EmbeddingTarget, createFallback) => {
+      if (target.kind !== 'onnx') return createFallback();
+      return semanticVectorWorker?.embeddingService(target) ?? new NullEmbeddingService();
     },
-    baseEmbedding,
+    (target: RerankerTarget, createFallback) => {
+      if (target.kind !== 'onnx') return createFallback();
+      return semanticVectorWorker?.rerankerService(target) ?? new NullReranker();
+    },
   );
+  const codeEmbeddingService = semanticProfileRuntime.embedding('code');
+  const knowledgeEmbeddingService = semanticProfileRuntime.embedding('knowledge');
+  const codeQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('code');
+  const knowledgeQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('knowledge');
+  // HybridSearch owns the fail-open boundary so it can report the concrete
+  // fallback reason in per-query diagnostics. A fail-open profile proxy here
+  // would hide worker/provider failures and make the UI claim reranking ran.
+  const codeReranker = semanticProfileRuntime.reranker('code', { strict: true });
+  // Documentation applies calibrated relevance thresholds. Its reranker must
+  // surface failures so CrossEncoderReranker can keep the RRF set explicitly
+  // uncalibrated; code search remains fail-open inside HybridSearch.
+  const knowledgeReranker = semanticProfileRuntime.reranker('knowledge', { strict: true });
+  // Never open sqlite-vec from Electron's main process. If the dedicated
+  // worker entry is unavailable, keep structural/FTS search alive and let
+  // semantic jobs pause visibly until the worker can be restored.
+  const vectorOverride = semanticVectorWorker ?? new NullVectorStore();
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
     createSearchBundle(
       db,
-      providerStore,
       codeReranker,
       recentFilesSource,
       pipelineTelemetrySink,
-      embedExec.executor,
+      codeEmbeddingService,
+      vectorOverride,
+      codeQueryEmbeddingService,
+      knowledgeQueryEmbeddingService,
+      pipelineProviderResolver,
     );
-  // Release the local ONNX sessions (embeddings + reranker) on shutdown —
-  // both also self-evict after an idle TTL; this covers the exit path.
-  registerShutdownTask('onnx-dispose', async () => {
-    await Promise.allSettled([
-      embeddingService.dispose?.(),
-      (codeReranker as { dispose?: () => Promise<void> }).dispose?.(),
-    ]);
-  });
+  registerShutdownTask('semantic-runtime-dispose', () => semanticProfileRuntime.dispose());
+  registerShutdownTask('semantic-vector-worker', () =>
+    semanticVectorWorker ? semanticVectorWorker.dispose() : localVectorRouter.drainAndClose());
 
-  // I2 follow-up wiring — the fs tools (read_file/edit_file/write_file/
+  // The fs tools (read_file/edit_file/write_file/
   // create_file/multi_edit) call `emitRecentFileTouched({ absolutePath, kind })`
   // after a successful op. We resolve the abs path to (projectId, fileId)
   // by matching the longest project root prefix, then query the files
   // table. Sub-ms; failures are swallowed (touch is best-effort). Without
-  // this sink the cache stays empty — even with MCP_PIPELINES_RECENT_FILES_SOURCE=1
-  // the source would contribute nothing.
+  // this sink the source would contribute nothing.
   const findFileStmt = db
     .raw()
     .prepare(`SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1`);
@@ -743,7 +799,12 @@ export function createDeps(): ServerDeps {
     }
   });
 
-  const snapshotService = new SnapshotService(db, embeddingService, searchableVectorStore);
+  const snapshotService = new SnapshotService(
+    db,
+    knowledgeEmbeddingService,
+    searchableVectorStore,
+    semanticMutationSink,
+  );
 
   // Structural auto-index (dumb mode). In-process executor by default —
   // the entrypoints upgrade it to the indexer worker_thread right after
@@ -769,7 +830,13 @@ export function createDeps(): ServerDeps {
   // over the admin-configured backend; the retriever blends importance/recency/
   // staleness and applies the conservative selector. `memoryRetriever` below is
   // the project-scope port the runner consumes.
-  const agentMemoryService = new AgentMemoryService(db, embeddingService, searchableVectorStore);
+  const agentMemoryService = new AgentMemoryService(
+    db,
+    knowledgeEmbeddingService,
+    searchableVectorStore,
+    knowledgeQueryEmbeddingService,
+    semanticMutationSink,
+  );
   const agentMemoryRetriever = new AgentMemoryRetriever(agentMemoryService, db, {
     topK: 5,
     // Relevance floor (CODER_MEMORY_MIN_RELEVANCE, e.g. 0.2): drops tangential
@@ -800,7 +867,13 @@ export function createDeps(): ServerDeps {
   // read behind WAL lock contention, blocking the main-thread event loop
   // (and thus IPC for all windows). These two were the last stragglers; the
   // sibling stores below already shared the handle.
-  const sessionStore = new SessionStore(db.raw());
+  const sessionStore = new SessionStore(db.raw(), semanticMutationSink);
+  const investigationSemanticIndex = new InvestigationSemanticIndex(
+    { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
+    knowledgeEmbeddingService,
+    searchableVectorStore,
+    knowledgeQueryEmbeddingService,
+  );
   const companyStore = new CompanyStore(db.raw());
   const companySandboxStore = new CompanySandboxStore(db.raw());
   const companySandboxServicesStore = new CompanySandboxServicesStore(db.raw());
@@ -862,8 +935,6 @@ export function createDeps(): ServerDeps {
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
   // per-stage telemetry. The references here are the same instances.
-  const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
-  const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
   // Task preflight — analyzes the FIRST prompt of a fresh coder session.
   // Runs zero-config: a `code-agent/preflight` binding wins, else the general
   // default model (getFallbackDefault). The catalog spans native tools +
@@ -1015,7 +1086,7 @@ export function createDeps(): ServerDeps {
       const scope = tgt.id === 0 ? 'user' : 'project';
       const row = db.getAgentMemoryByName(scope, tgt.id, target);
       if (!row) return { archived: 0 };
-      db.archiveAgentMemory(row.id, 'forgotten:agent');
+      agentMemoryService.archive(row.id, 'forgotten:agent');
       await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
       try {
         db.recordAgentMemoryEvent({ eventType: 'forget', scope, projectId: tgt.id, memoryId: row.id });
@@ -1029,22 +1100,18 @@ export function createDeps(): ServerDeps {
   // shared across all sessions in this process — tools don't vary per
   // session so re-embedding would be wasteful.
   const toolEmbeddingStore = new InMemoryToolEmbeddingStore();
-  const toolSelectionEmbed: EmbeddingFn = async (text: string) => {
-    const result = await embeddingService.embedQuery(text);
-    return Float32Array.from(result.vector);
-  };
-
-  // Session Drive — investigation ledger semantic recall. Install the
-  // process-global embedder ONCE here (in-process path only; worker threads
-  // re-import code-agent fresh and leave it null → keyword recall fallback,
-  // same posture as Mem C). Reuses the admin-configured EmbeddingService.
-  setInvestigationEmbedder(async (text: string) => {
-    try {
-      return await toolSelectionEmbed(text);
-    } catch {
-      return null;
-    }
-  });
+  const toolSelectionEmbed: EmbeddingFn = Object.assign(
+    async (text: string) => {
+      // Internal selectors belong to the Knowledge profile. Cache consumers
+      // pin the dynamic fingerprint below so a profile edit cannot mix spaces.
+      const result = await knowledgeEmbeddingService.embedQuery(text);
+      return Float32Array.from(result.vector);
+    },
+    {
+      fingerprint: (): string =>
+        knowledgeEmbeddingService.fingerprint?.() ?? 'semantic:knowledge:unfingerprinted',
+    },
+  );
 
   // Context-relevance shares the same embedding adapter; message vectors
   // live in their own store keyed by message-id. The pipeline reads
@@ -1104,8 +1171,8 @@ export function createDeps(): ServerDeps {
   //
   // - `docQueryRewriter`: produces 2-3 variants merged via RRF. Backed
   //   by sub_agent_result_cache (24h TTL) and pipeline_telemetry.
-  // - `docReranker`: re-orders the top-K via LLM scoring. Backed by
-  //   doc_rerank_cache (migration 098) and pipeline_telemetry.
+  // - `docReranker`: re-orders candidates via the Knowledge profile's
+  //   cross-encoder before the final top-K is selected.
   //
   // Both degrade gracefully (no binding configured → no-op) so they are
   // safe to construct unconditionally and pass to DocHybridSearch.
@@ -1114,34 +1181,14 @@ export function createDeps(): ServerDeps {
     cache: subAgentResultCacheStore,
     // telemetry disabled (pipeline_telemetry tab removed)
   });
-  // Reranker selection. A real cross-encoder (local ONNX, Cohere, or the
-  // bge-reranker-v2-m3 worker) emits a NATIVE relevance score that's
-  // better-calibrated than the LLM-as-judge `Reranker` and feeds
-  // DocSearchResult.relevance directly. Since the desktop install now seeds a
-  // LOCAL cross-encoder by default (offline, free), prefer it automatically
-  // whenever one is configured — no env flag needed.
-  //   DOCS_RERANK_CROSS_ENCODER=1 → force the cross-encoder.
-  //   DOCS_RERANK_CROSS_ENCODER=0 → force the LLM-as-judge fallback.
-  // With no reranker configured (NullReranker), fall back to the LLM judge
-  // rather than trusting uncalibrated RRF order.
-  const docLlmReranker = new Reranker({
-    resolver: pipelineProviderResolver,
-    db: db.raw(),
-    // telemetry disabled (pipeline_telemetry tab removed)
-  });
-  // `codeReranker` is the single shared instance created above (before
-  // createSearchBundle) — reused here so the ONNX model loads at most once.
-  const crossEncoderFlag = process.env.DOCS_RERANK_CROSS_ENCODER;
-  const useCrossEncoder =
-    crossEncoderFlag === '0'
-      ? false
-      : crossEncoderFlag === '1' || codeReranker.name !== 'null';
-  const docReranker = useCrossEncoder
-    ? new CrossEncoderReranker(codeReranker)
-    : docLlmReranker;
+  // The Knowledge semantic profile is the sole source of truth. Its strict
+  // proxy lets CrossEncoderReranker distinguish inference failures from real
+  // calibrated scores; disabled still resolves to NullReranker and preserves
+  // the incoming RRF order without falling back to a pipeline LLM.
+  const docReranker = new CrossEncoderReranker(knowledgeReranker);
   const docHybridSearch = new DocHybridSearch(
     docStore,
-    embeddingService,
+    knowledgeQueryEmbeddingService,
     vectorStore,
     undefined,
     { rewriter: docQueryRewriter, reranker: docReranker },
@@ -1153,7 +1200,7 @@ export function createDeps(): ServerDeps {
   const docProgressTracker = new DocIngestProgressTracker();
   const indexDocsUseCase = new IndexDocumentationUseCase({
     docStore,
-    embeddingService,
+    embeddingService: knowledgeEmbeddingService,
     vectorStore,
     pipelineProviderResolver,
     renderBackend: docRenderer,
@@ -1231,10 +1278,71 @@ export function createDeps(): ServerDeps {
   });
   // LSH indexing sink — disabled by default (no overhead on indexing hot
   // path). Opt in with MCP_LSH_INDEXING=1 to start populating LSH buckets
-  // automatically as the indexer commits embeddings.
+  // automatically as the semantic coordinator commits embeddings.
   const lshIndexingSink: LshIndexingSink = process.env.MCP_LSH_INDEXING === '1'
     ? new RealLshIndexingSink(lshIndex)
     : new NullLshIndexingSink();
+
+  const semanticCoordinator = new SemanticIndexCoordinator({
+    db,
+    semanticStore,
+    router: localVectorRouter,
+    vectorStore: vectorOverride,
+    codeEmbedding: codeEmbeddingService,
+    knowledgeEmbedding: knowledgeEmbeddingService,
+    costTracker,
+    lshSink: lshIndexingSink,
+    snapshotService,
+    agentMemoryService,
+    investigationSemanticIndex,
+    docStore,
+    docsIndexer: indexDocsUseCase,
+    indexProfile: config.indexProfile,
+    withProjectLock: (projectId, operation) =>
+      projectIndexService.withProjectLock(projectId, operation),
+    mutationFenceOwner: semanticMutationOwner,
+  });
+  semanticCoordinatorForMutations = semanticCoordinator;
+  // Session Drive keeps only text/metadata in the central ledger. Semantic
+  // mutations are durable deltas on the project's shared Knowledge namespace;
+  // search resolves the active generation through the worker-backed index.
+  const investigationSemantic: InvestigationSemanticIndexPort = {
+    wakeUpsert: (row) => {
+      if (row.project_id == null) return;
+      // SessionStore already persisted and settled the exact durable fence.
+      // This is a targeted latency wake, never a profile-wide rebuild.
+      pendingMutationDrains.add(projectMemoryNamespace(row.project_id));
+      scheduleMutationDrain();
+    },
+    search: async ({ sessionId, query, limit }) => {
+      const projectId = sessionStore.investigationProjectId(sessionId);
+      return projectId == null
+        ? []
+        : investigationSemanticIndex.search(projectId, query, limit);
+    },
+  };
+  setInvestigationSemanticIndex(investigationSemantic);
+  registerShutdownTask('investigation-semantic-index', () => {
+    setInvestigationSemanticIndex(null);
+  });
+  indexDocsUseCase.setSemanticHooks({
+    prepareCollection: (collectionId) => semanticCoordinator.prepareDocsCollection(collectionId),
+    ensureCollection: (collectionId) => semanticCoordinator.ensureDocsCollection(collectionId),
+    beginCollectionMutation: (collectionId, operation) =>
+      semanticCoordinator.beginDocsCollectionMutation(collectionId, operation),
+    endCollectionMutation: (fence, mutationError) =>
+      semanticCoordinator.endDocsCollectionMutation(fence, mutationError),
+    runCollectionExclusive: (collectionId, operation) =>
+      semanticCoordinator.runDocsCollectionExclusive(collectionId, operation),
+  });
+  registerShutdownTask('semantic-coordinator', () => semanticCoordinator.dispose());
+  projectIndexService.setSemanticCatchup({
+    noteDelta: (projectId, events) => semanticCoordinator.noteCodeDelta(projectId, events),
+    ensureProject: (projectId) => semanticCoordinator.catchUpCodeProject(projectId),
+    projectReady: (projectId) => { semanticCoordinator.activateCodeProject(projectId); },
+    projectInactive: (projectId) => { semanticCoordinator.deactivateCodeProject(projectId); },
+  });
+  semanticCoordinator.recoverInterruptedJobsPassively();
 
   // Counterfactual feedback collector — registers a matcher per known
   // shadow pipeline. Runtime hooks call collector.observe(...) when they
@@ -1407,17 +1515,22 @@ export function createDeps(): ServerDeps {
     costTracker,
     snapshotService,
     projectIndexService,
-    diffService,
     exportService,
     webhookDispatcher,
     modelDiscovery,
     embeddingService,
+    knowledgeEmbeddingService,
     vectorStore,
+    semanticStore,
+    localVectorRouter,
+    semanticProfileRuntime,
+    semanticCoordinator,
     hybridSearch,
     memoryRetriever,
     memoryQuerySynthesizer,
     agentMemoryService,
     agentMemoryRetriever,
+    investigationSemantic,
     runEndMemory,
     projectMemory,
     recentFilesSource,

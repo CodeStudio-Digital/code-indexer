@@ -78,6 +78,8 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
   const [testQuery, setTestQuery] = useState('');
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
+  const embeddingUnavailable = stats?.health.embeddingService === 'null'
+    || stats?.health.embeddingService === 'disabled';
 
   // Always reflects the current prop, so async resolutions can detect a
   // project switch that happened while they were in flight.
@@ -153,7 +155,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
           <>
             {/* Health */}
             <div className="flex flex-wrap gap-2">
-              <Badge variant={stats.health.embeddingService === 'null' ? 'destructive' : 'outline'}>
+              <Badge variant={embeddingUnavailable ? 'destructive' : 'outline'}>
                 {t('search:debug.embedding')} {stats.health.embeddingService}
               </Badge>
               <Badge variant={stats.health.vectorStore === 'null' ? 'destructive' : 'outline'}>
@@ -165,7 +167,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
             </div>
 
             {/* Warnings */}
-            {stats.health.embeddingService === 'null' && (
+            {embeddingUnavailable && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>{t('search:debug.noEmbedding')}</span>
@@ -177,7 +179,7 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
                 <span>{t('search:debug.noVectorStore')}</span>
               </div>
             )}
-            {stats.coverage.files_embedded === 0 && stats.health.embeddingService !== 'null' && (
+            {stats.coverage.files_embedded === 0 && !embeddingUnavailable && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>{t('search:debug.noFiles')}</span>
@@ -279,14 +281,12 @@ export function EmbeddingsDebugPanel({ projectId }: { projectId: number }) {
               {testResult.matches.length === 0 && testResult.steps.length > 0 && (
                 <div className="text-xs text-muted-foreground">{t('search:debug.noMatches')}</div>
               )}
-              {/* Warn when unfiltered finds matches but filtered doesn't — metadata index missing */}
+              {/* A namespace/type-filter mismatch means the local generation is stale. */}
               {testResult.steps.find(s => s.step === 'search_unfiltered')?.ok &&
                !testResult.steps.find(s => s.step === 'search')?.ok && (
                 <div className="flex items-start gap-2 p-2 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs">
                   <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                  <span>
-                    {t('search:debug.vectorsExist')} <code className="bg-muted px-1 rounded">wrangler vectorize create-metadata-index &lt;index&gt; --propertyName=project_name --type=string</code> {t('search:debug.thenReindex')}
-                  </span>
+                  <span>{t('search:debug.vectorsExist')}</span>
                 </div>
               )}
             </div>

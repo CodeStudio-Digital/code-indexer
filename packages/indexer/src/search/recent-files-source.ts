@@ -8,10 +8,8 @@
  * queries (the user just edited `hybrid.ts` and now searches "hybrid RRF
  * merge" — Thunder hit pays off immediately).
  *
- * **Sprint 1 scope**: this class is purely additive. Behind the flag
- * `MCP_PIPELINES_RECENT_FILES_SOURCE=1` it can be consulted by
- * `HybridSearch` as a 3rd stream alongside FTS+vector and merged via RRF.
- * **Default OFF**: the class can exist without anyone calling it.
+ * The canonical hybrid pipeline consults it as a bounded stream alongside
+ * FTS, vector, content and graph candidates, then merges everything via RRF.
  *
  * **Why not LruCache from @mcp/candidate-pipeline?** We need to iterate
  * all entries to score them against a query — that LRU doesn't expose

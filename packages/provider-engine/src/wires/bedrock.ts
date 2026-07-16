@@ -1,20 +1,17 @@
 import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
 import { BedrockChatProvider } from '@mcp/code-agent/providers/bedrock.js';
-import { BedrockIndexerProvider } from '@mcp/indexer/indexer/providers/bedrock.js';
 
 type WireParts = Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 /**
- * AWS Bedrock wire (Converse / ConverseStream API). Lift of the hand-written
- * `bedrock` definition's `createCoder`/`createIndexer`.
+ * AWS Bedrock coder wire (Converse / ConverseStream API).
  *
  * GOTCHA: the model is passed through RAW (no `?? defaultModels[0]` default).
- * Both adapters apply their own default when `model` is undefined
- * (`anthropic.claude-3-5-sonnet-...` for the coder, `...haiku...` for the
- * indexer), so defaulting here would change behaviour. Credentials come from
+ * The adapter applies its own default when `model` is undefined, so defaulting
+ * here would change behaviour. Credentials come from
  * `creds.aws` (credKind='aws'); when absent the adapters fall back to the AWS
  * default credential chain.
  */
@@ -22,15 +19,6 @@ export function buildBedrock(_spec: ProviderSpec): WireParts {
   return {
     createCoder: (creds, model) =>
       new BedrockChatProvider({
-        model,
-        region: creds.aws?.region,
-        accessKeyId: creds.aws?.accessKeyId,
-        secretAccessKey: creds.aws?.secretAccessKey,
-        sessionToken: creds.aws?.sessionToken,
-      }),
-
-    createIndexer: (creds, model) =>
-      new BedrockIndexerProvider({
         model,
         region: creds.aws?.region,
         accessKeyId: creds.aws?.accessKeyId,

@@ -1,10 +1,36 @@
-import type { ProviderStore } from '@mcp/store/provider-store.js';
-import { LocalEmbeddingService } from './local-embeddings.js';
-import { resolveProviderEndpoint } from './provider-endpoints.js';
+import type { VectorWriteTarget } from '@mcp/store/vectors.js';
 
 export interface EmbeddingService {
   embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }>;
+  /** Embed documents against the immutable generation currently receiving
+   * writes for `namespace`. Production semantic writers use this instead of
+   * `embed()` so the resulting vectors carry their write-space pin. */
+  embedDocumentsForNamespace?(
+    namespace: string,
+    texts: string[],
+  ): Promise<NamespaceDocumentEmbedding>;
   embedQuery(text: string): Promise<{ vector: number[]; tokens: number }>;
+  /**
+   * Synchronous revision used by query-result caches. Namespace-aware
+   * runtimes should change it whenever the active generation changes so a
+   * cache lookup never serves results from the previous vector space.
+   *
+   * Optional for compatibility with standalone/legacy embedding services.
+   * Implementations must not perform embedding or network I/O here.
+   */
+  cacheRevisionForNamespace?(namespace: string): string;
+  /** Synchronous serving-policy guard. A non-null reason means the vector
+   * branch must be skipped before HyDE or embedding inference is attempted. */
+  queryBlockReasonForNamespace?(namespace: string): string | null;
+  /**
+   * Query using the immutable embedding snapshot of a namespace's active
+   * generation. Search paths should prefer this method when available so a
+   * saved profile change cannot mix a new query vector with old stored data.
+   */
+  embedQueryForNamespace?(
+    namespace: string,
+    text: string,
+  ): Promise<NamespaceQueryEmbedding>;
   /**
    * Stable id of the model + backend (e.g. `cloudflare:bge-m3`,
    * `local:Xenova/multilingual-e5-small`). Optional so test fakes don't need
@@ -24,6 +50,39 @@ export interface EmbeddingService {
    * must tolerate further calls after dispose (lazy re-create).
    */
   dispose?(): Promise<void>;
+}
+
+/** Query vector plus the immutable generation whose target produced it.
+ * Namespace-aware production services always set generationId; it remains
+ * optional so generic/custom embedding implementations keep working. */
+export interface NamespaceQueryEmbedding {
+  vector: number[];
+  tokens: number;
+  generationId?: number;
+}
+
+export interface NamespaceDocumentEmbedding {
+  vectors: number[][];
+  tokens: number;
+  /** Absent only for standalone/custom embedding services that do not own a
+   * semantic control plane. The built-in runtime always returns this pin. */
+  writeTarget?: VectorWriteTarget;
+}
+
+export function embedDocumentsForNamespace(
+  service: EmbeddingService,
+  namespace: string,
+  texts: string[],
+): Promise<NamespaceDocumentEmbedding> {
+  return service.embedDocumentsForNamespace?.(namespace, texts) ?? service.embed(texts);
+}
+
+export function embedQueryForNamespace(
+  service: EmbeddingService,
+  namespace: string,
+  text: string,
+): Promise<NamespaceQueryEmbedding> {
+  return service.embedQueryForNamespace?.(namespace, text) ?? service.embedQuery(text);
 }
 
 export class CloudflareEmbeddingService implements EmbeddingService {
@@ -260,8 +319,8 @@ function isAbortError(err: unknown): boolean {
 export class BedrockTitanEmbeddingService implements EmbeddingService {
   private region: string;
   private modelId: string;
-  private accessKeyId: string;
-  private secretAccessKey: string;
+  private accessKeyId?: string;
+  private secretAccessKey?: string;
   private sessionToken?: string;
   private requestTimeoutMs: number;
   private clientPromise: Promise<unknown> | null = null;
@@ -269,8 +328,8 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
   constructor(opts: {
     region: string;
     modelId?: string;
-    accessKeyId: string;
-    secretAccessKey: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
     sessionToken?: string;
     requestTimeoutMs?: number;
   }) {
@@ -305,13 +364,18 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
           // SDK versions accept it via `requestHandler` too.
           // Cast to `unknown` first — `BedrockRuntimeClient`'s constructor
           // is typed too loosely to satisfy `Parameters<typeof Class>[0]`.
+          const credentials = this.accessKeyId && this.secretAccessKey
+            ? {
+                accessKeyId: this.accessKeyId,
+                secretAccessKey: this.secretAccessKey,
+                sessionToken: this.sessionToken,
+              }
+            : undefined;
           const clientCfg = {
             region: this.region,
-            credentials: {
-              accessKeyId: this.accessKeyId,
-              secretAccessKey: this.secretAccessKey,
-              sessionToken: this.sessionToken,
-            },
+            // Omit credentials to preserve the AWS SDK default credential
+            // chain (profiles, SSO, web identity, EC2/ECS roles, and env).
+            credentials,
             requestHandler: {
               requestTimeout: this.requestTimeoutMs,
               connectionTimeout: Math.min(10_000, this.requestTimeoutMs),
@@ -398,7 +462,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
 
   constructor(opts: {
     baseURL: string;
-    apiKey: string;
+    apiKey?: string;
     model: string;
     dimensions?: number;
     providerId?: string;
@@ -406,7 +470,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     requestTimeoutMs?: number;
   }) {
     this.baseURL = opts.baseURL.replace(/\/+$/, '');
-    this.apiKey = opts.apiKey;
+    this.apiKey = opts.apiKey ?? '';
     this.model = opts.model;
     this.dimensions = opts.dimensions;
     this.providerId = opts.providerId ?? '';
@@ -424,12 +488,14 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     const timer = setTimeout(() => ctl.abort(), this.requestTimeoutMs);
     let response: Response;
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Local OpenAI-compatible runtimes (Ollama, LM Studio, llama.cpp) do not
+      // require a token. Cloud providers still receive the exact Bearer header
+      // they did before.
+      if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
       response = await this.fetchFn(`${this.baseURL}/embeddings`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
           model: this.model,
           input: batch,
@@ -444,13 +510,23 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
       const body = await response.text().catch(() => '');
       throw new Error(`Embedding API error: ${response.status} ${body}`.trim());
     }
-    const data = (await response.json()) as { data: Array<{ index: number; embedding: number[] }> };
+    const data = (await response.json()) as { data?: Array<{ index?: number; embedding?: number[] }> };
+    if (!Array.isArray(data.data) || data.data.length !== batch.length) {
+      throw new Error(
+        `Embedding API returned ${Array.isArray(data.data) ? data.data.length : 0} vector(s) for ${batch.length} input(s)`,
+      );
+    }
     // OpenAI returns rows in input order, but sort by `index` defensively so a
     // provider that reorders can't silently misalign vectors with their text.
-    return data.data
+    const rows = data.data
       .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((d) => d.embedding);
+      .sort((a, b) => (a.index ?? -1) - (b.index ?? -1));
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].index !== i || !Array.isArray(rows[i].embedding)) {
+        throw new Error('Embedding API returned invalid or duplicate vector indices');
+      }
+    }
+    return rows.map((row) => row.embedding!);
   }
 
   async embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }> {
@@ -491,71 +567,4 @@ export class NullEmbeddingService implements EmbeddingService {
   fingerprint(): string {
     return 'null';
   }
-}
-
-/**
- * Build an EmbeddingService from the admin-managed embedding_configs table.
- * Priority:
- *   1. Row marked is_default=1 and enabled=1 in provider_store.
- *   2. NullEmbeddingService (no embeddings, search falls back to FTS-only).
- *
- * Legacy .env vars (MCP_INDEX_WORKER_URL/TOKEN) are migrated into the
- * ProviderStore via seedFromEnvIfEmpty() at startup, so they are covered
- * by case 1 after the first run.
- *
- * The function is sync — it only queries SQLite via better-sqlite3 which is
- * synchronous — so callers don't need await.
- */
-export function createEmbeddingService(
-  store: ProviderStore | null,
-): EmbeddingService {
-  if (store) {
-    const cfg = store.getDefaultEmbedding();
-    if (cfg) {
-      if (cfg.kind === 'cloudflare') {
-        const c = cfg.config as { workerUrl?: string; workerToken?: string };
-        if (c.workerUrl) return new CloudflareEmbeddingService(c.workerUrl, c.workerToken ?? '');
-      }
-      if (cfg.kind === 'bedrock') {
-        const c = cfg.config as {
-          region?: string;
-          modelId?: string;
-          accessKeyId?: string;
-          secretAccessKey?: string;
-          sessionToken?: string;
-        };
-        if (c.region && c.accessKeyId && c.secretAccessKey) {
-          return new BedrockTitanEmbeddingService({
-            region: c.region,
-            modelId: c.modelId,
-            accessKeyId: c.accessKeyId,
-            secretAccessKey: c.secretAccessKey,
-            sessionToken: c.sessionToken,
-          });
-        }
-      }
-      if (cfg.kind === 'local') {
-        const c = cfg.config as { model?: string; cacheDir?: string };
-        return new LocalEmbeddingService({ model: c.model, cacheDir: c.cacheDir });
-      }
-      // Reuse a configured chat provider's credentials (OpenAI-compatible
-      // `/embeddings`). Switching to this changes the fingerprint → re-embed.
-      if (cfg.kind === 'provider') {
-        const c = cfg.config as { providerId?: string; model?: string; dimensions?: string | number };
-        const ep = resolveProviderEndpoint(store.getProvider(c.providerId ?? ''));
-        if (ep && c.model) {
-          const dims = typeof c.dimensions === 'number' ? c.dimensions : Number(c.dimensions);
-          return new OpenAICompatEmbeddingService({
-            baseURL: ep.baseURL,
-            apiKey: ep.apiKey,
-            model: c.model,
-            dimensions: Number.isFinite(dims) && dims > 0 ? dims : undefined,
-            providerId: c.providerId ?? '',
-          });
-        }
-      }
-    }
-  }
-
-  return new NullEmbeddingService();
 }

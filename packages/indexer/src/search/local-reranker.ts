@@ -1,5 +1,5 @@
 /**
- * Local, in-process cross-encoder reranker via transformers.js (ONNX/wasm) —
+ * Local cross-encoder reranker via transformers.js (ONNX/wasm) —
  * no network, no Cloudflare/Cohere round-trip, no per-query cost. The point
  * for a desktop IDE: calibrated reranking that works fully offline.
  *
@@ -12,14 +12,14 @@
  * comments + English code identifiers. A lighter alternative is
  * `mixedbread-ai/mxbai-rerank-xsmall-v1` (set via `config.model`).
  *
- * `@huggingface/transformers` is imported lazily on first use so the (heavy)
- * ONNX runtime only loads when local reranking is actually selected — exactly
- * mirroring `LocalEmbeddingService` in ./local-embeddings.ts.
+ * `@huggingface/transformers` is imported lazily on first use. The desktop
+ * host instantiates this engine only inside semantic-vector-worker.
  */
 import { createIdleResource, type IdleResource } from '@mcp/shared/utils/idle-disposer.js';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
+import type { SemanticOnnxDtype } from '@mcp/store/semantic-store.js';
 
 const DEFAULT_MODEL = 'Xenova/bge-reranker-base';
 const BATCH = 16;
@@ -27,7 +27,7 @@ const BATCH = 16;
 /** Minimal shape of the transformers.js tokenizer call we rely on. */
 type Tokenizer = (
   texts: string[],
-  opts: { text_pair: string[]; padding: boolean; truncation: boolean },
+  opts: { text_pair: string[]; padding: boolean; truncation: boolean; max_length?: number },
 ) => Record<string, unknown>;
 
 /** Minimal shape of the sequence-classification model call. */
@@ -60,13 +60,34 @@ export class LocalReranker implements RerankerService {
   readonly name = 'local';
   private model: string;
   private cacheDir?: string;
+  private revision?: string;
+  private dtype: SemanticOnnxDtype;
+  private maxTokens?: number;
+  private strict: boolean;
+  private executionProvider: string;
+  private lastLatencyMs: number | null = null;
   private lease: IdleResource<CrossEncoder>;
 
-  constructor(opts?: { model?: string; cacheDir?: string; idleTtlMs?: number }) {
+  constructor(opts?: {
+    model?: string;
+    cacheDir?: string;
+    revision?: string;
+    dtype?: SemanticOnnxDtype;
+    maxTokens?: number;
+    executionProvider?: string;
+    /** Probe mode: surface load/inference failures instead of returning RRF. */
+    strict?: boolean;
+    idleTtlMs?: number;
+  }) {
     this.model = opts?.model || DEFAULT_MODEL;
     // Only the explicit admin override is stored here; the auto default
     // (~/.mcp/models) is resolved lazily at load time via resolveModelCacheDir.
     this.cacheDir = opts?.cacheDir;
+    this.revision = opts?.revision;
+    this.dtype = opts?.dtype ?? 'q8';
+    this.maxTokens = opts?.maxTokens;
+    this.strict = opts?.strict ?? false;
+    this.executionProvider = opts?.executionProvider ?? 'cpu';
     // bge-reranker-base is the biggest local model (~250MB+) — the idle
     // lease evicts it after a quiet period instead of pinning it for the
     // whole desktop session. `acquire` refcounts; no dispose mid-inference.
@@ -80,8 +101,13 @@ export class LocalReranker implements RerankerService {
 
   private async loadEncoder(): Promise<CrossEncoder> {
     let mod: {
-      AutoTokenizer: { from_pretrained: (m: string) => Promise<unknown> };
-      AutoModelForSequenceClassification: { from_pretrained: (m: string) => Promise<unknown> };
+      AutoTokenizer: { from_pretrained: (m: string, opts?: { revision?: string }) => Promise<unknown> };
+      AutoModelForSequenceClassification: {
+        from_pretrained: (
+          m: string,
+          opts?: { revision?: string; dtype?: SemanticOnnxDtype },
+        ) => Promise<unknown>;
+      };
       env?: Record<string, unknown>;
     };
     try {
@@ -96,9 +122,14 @@ export class LocalReranker implements RerankerService {
     // Auto-resolve (and create) ~/.mcp/models unless overridden. No env
     // var or manual folder setup required.
     if (mod.env) (mod.env as { cacheDir?: string }).cacheDir = resolveModelCacheDir(this.cacheDir);
+    const tokenizerOptions = this.revision ? { revision: this.revision } : undefined;
+    const modelOptions = {
+      dtype: this.dtype,
+      ...(this.revision ? { revision: this.revision } : {}),
+    };
     const [tokenizer, model] = await Promise.all([
-      mod.AutoTokenizer.from_pretrained(this.model),
-      mod.AutoModelForSequenceClassification.from_pretrained(this.model),
+      mod.AutoTokenizer.from_pretrained(this.model, tokenizerOptions),
+      mod.AutoModelForSequenceClassification.from_pretrained(this.model, modelOptions),
     ]);
     return { tokenizer: tokenizer as Tokenizer, model: model as SeqClassModel };
   }
@@ -111,6 +142,7 @@ export class LocalReranker implements RerankerService {
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
 
+    const started = Date.now();
     try {
       // The whole scoring loop runs inside ONE acquire — eviction can never
       // strike between batches of the same rerank() call.
@@ -120,16 +152,24 @@ export class LocalReranker implements RerankerService {
           const batch = candidates.slice(i, i + BATCH);
           const inputs = encoder.tokenizer(
             batch.map(() => query),
-            { text_pair: batch.map((c) => c.text), padding: true, truncation: true },
+            {
+              text_pair: batch.map((c) => c.text),
+              padding: true,
+              truncation: true,
+              ...(this.maxTokens ? { max_length: this.maxTokens } : {}),
+            },
           );
           const { logits } = await encoder.model(inputs);
           const rows = logits.tolist();
           for (let j = 0; j < batch.length; j++) {
             // bge-reranker emits a single relevance logit per pair; sigmoid → 0-1.
-            const logit = rows[j]?.[0] ?? 0;
+            const logit = rows[j]?.[0];
+            if (!Number.isFinite(logit)) {
+              throw new Error('local reranker returned an invalid or missing logit');
+            }
             scored.push({
               id: batch[j].id,
-              score: sigmoid(logit),
+              score: sigmoid(logit!),
               originalScore: batch[j].originalScore,
             });
           }
@@ -137,10 +177,33 @@ export class LocalReranker implements RerankerService {
         return scored.sort((a, b) => b.score - a.score).slice(0, topK);
       });
     } catch (e) {
+      if (this.strict) throw e;
       // Load failure or inference failure — same passthrough contract.
       console.error(`[reranker] local rerank failed: ${(e as Error).message}`);
       return passthrough(candidates, topK);
+    } finally {
+      this.lastLatencyMs = Date.now() - started;
     }
+  }
+
+  cacheRevision(): string {
+    return `local-reranker:${this.model}:${this.revision ?? ''}:${this.dtype}`;
+  }
+
+  diagnostics(): {
+    model: string;
+    dtype: SemanticOnnxDtype;
+    loaded: boolean;
+    executionProvider: string;
+    lastLatencyMs: number | null;
+  } {
+    return {
+      model: this.model,
+      dtype: this.dtype,
+      loaded: this.lease.isLoaded(),
+      executionProvider: this.executionProvider,
+      lastLatencyMs: this.lastLatencyMs,
+    };
   }
 
   /** Release the ONNX session now (shutdown). The next rerank reloads lazily. */

@@ -175,4 +175,18 @@ describe('rag_search_docs rendering', () => {
     await ragSearchDocsTool.handler({ query: 'q', scope: 'all' }, ctx);
     expect(seen).toMatchObject({ scope: 'all' });
   });
+
+  it('passes requested limits above the legacy fixed 20 through to the backend', async () => {
+    let seen: Parameters<DocSearchBackend['search']>[0] | null = null;
+    setGlobalDocSearch({
+      search: async (input) => {
+        seen = input;
+        return { results: [], diag: diag() };
+      },
+    });
+
+    await ragSearchDocsTool.handler({ query: 'q', limit: 35 }, ctx);
+
+    expect(seen).toMatchObject({ limit: 35 });
+  });
 });

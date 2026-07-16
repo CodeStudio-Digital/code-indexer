@@ -9,9 +9,6 @@ vi.mock('@mcp/code-agent/providers/openai.js', () => ({
     chatCalls.push(opts);
   }),
 }));
-vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({ OpenAIProvider: vi.fn() }));
-vi.mock('@mcp/indexer/indexer/providers/zai.js', () => ({ ZAIProvider: vi.fn() }));
-vi.mock('@mcp/indexer/indexer/providers/deepseek.js', () => ({ DeepSeekProvider: vi.fn() }));
 
 import { buildProviderDefinition } from '../build-definition.js';
 import {

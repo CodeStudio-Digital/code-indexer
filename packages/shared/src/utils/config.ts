@@ -115,8 +115,6 @@ export interface ProjectDbFlags {
    * keeps reading/writing central (no behavior change, no bare-id breakage).
    */
   route: boolean;
-  /** P4 — split per-project vectors.db. */
-  vectors: boolean;
   /** P5 — cross-project reads go through ATTACH/rollups. */
   crossRead: boolean;
   /**
@@ -165,7 +163,6 @@ export function projectDbFlags(env: NodeJS.ProcessEnv = process.env): ProjectDbF
     splitIndex: on('MCP_PROJECT_DB_SPLIT'),
     splitSessions: on('MCP_PROJECT_DB_SPLIT_SESSIONS'),
     route: on('MCP_PROJECT_DB_ROUTE'),
-    vectors: on('MCP_PROJECT_DB_VECTORS'),
     crossRead: on('MCP_PROJECT_DB_XREAD'),
     trim: onByDefault('MCP_PROJECT_DB_TRIM'),
     eagerMigrate: on('MCP_PROJECT_DB_EAGER_MIGRATE'),

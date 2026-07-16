@@ -126,11 +126,16 @@ interface SendMessageBody {
  * exceeds this we'd rather fail fast than block the request handler.
  */
 const RUNNER_READY_TIMEOUT_MS = 5_000;
-const DEFAULT_GLOBAL_INDEX_GATE_TIMEOUT_MS = 180_000;
+const DEFAULT_INDEX_GATE_TIMEOUT_MS = 180_000;
 
-function globalIndexGateTimeoutMs(): number {
-  const parsed = Number.parseInt(process.env.CODER_GLOBAL_INDEX_GATE_TIMEOUT_MS ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GLOBAL_INDEX_GATE_TIMEOUT_MS;
+function structuralIndexGateTimeoutMs(): number {
+  const parsed = Number.parseInt(
+    process.env.CODER_INDEX_GATE_TIMEOUT_MS
+      ?? process.env.CODER_GLOBAL_INDEX_GATE_TIMEOUT_MS
+      ?? '',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INDEX_GATE_TIMEOUT_MS;
 }
 
 function projectRootForSession(deps: ServerDeps, sessionId: number): string | null {
@@ -165,6 +170,22 @@ export function mountCoderStreamRoutes(
 ): void {
   const { sessionStore, providerStore } = deps;
   const { activeRuns, BUS_LINGER_MS, wireRunnerToBus, recentMessageKeys } = runtime;
+  const semanticBusLeases = new WeakMap<ReturnType<typeof createBus>, () => void>();
+
+  function keepSemanticProjectAlive(sessionId: number, bus: ReturnType<typeof createBus>): void {
+    if (bus.ended || semanticBusLeases.has(bus)) return;
+    const projectId = sessionStore.getSession(sessionId)?.project_id;
+    if (projectId == null) return;
+    const release = deps.semanticCoordinator.acquireCodeProjectLease(
+      projectId,
+      `coder:${sessionId}:${bus.busId}`,
+    );
+    semanticBusLeases.set(bus, release);
+    bus.endListeners.add(() => {
+      semanticBusLeases.delete(bus);
+      release();
+    });
+  }
 
   /**
    * Whether the session's active model can consume images. Uses the provider's
@@ -556,10 +577,11 @@ export function mountCoderStreamRoutes(
       });
     }
 
-    // Structural auto-index — agents work live against symbols/grep/FTS, so
-    // a session turn counts as "project became active". Memory-only no-op
-    // when fresh (cooldown + watcher); MUST stay on the main side: inside
-    // the coder worker the service singleton doesn't exist.
+    // Structural auto-index. Only the FIRST turn claims the project lifecycle;
+    // later turns rely on watcher/Monaco deltas and never schedule another
+    // full reconciliation. A missing baseline gates for up to three minutes,
+    // while an existing integral index is returned immediately even if its
+    // stat-first reopen reconciliation is still running in the background.
     {
       const session = sessionStore.getSession(id);
       if (session?.project_id != null) {
@@ -567,32 +589,26 @@ export function mountCoderStreamRoutes(
         // then index the union itself (session.project_id IS the synthetic
         // project whose root spans every linked project via junctions).
         if (session.is_global) ensureGlobalWorkspaceLinks(deps, session);
-        deps.projectIndexService.ensureFresh(session.project_id, 'session');
-        const freshGlobal = session.is_global
-          && !body.resume
+        const freshSession = !body.resume
           && !session.compaction_summary
           && sessionStore.getMessageCount(id) === 0;
-        if (freshGlobal) {
+        if (freshSession) {
+          deps.projectIndexService.ensureFresh(session.project_id, 'session');
           const readiness = await deps.projectIndexService.ensureStructuralReady(
             session.project_id,
-            globalIndexGateTimeoutMs(),
+            structuralIndexGateTimeoutMs(),
             c.req.raw.signal,
           );
           if (readiness.status === 'aborted') {
-            return c.json({ code: 'GLOBAL_INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
-          }
-          if (readiness.status === 'timeout') {
-            return c.json({
-              code: 'GLOBAL_INDEX_NOT_READY',
-              message: 'O índice estrutural da sessão global ainda está em processamento. Aguarde a indexação terminar e envie novamente.',
-              phase: readiness.phase,
-            }, 425);
+            return c.json({ code: 'INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
           }
           if (readiness.status !== 'ready') {
-            // Auto-index disabled / terminal indexing error: do not deadlock
-            // the chat. Native DB-authorized disk fallbacks remain available.
+            // Timeout, disabled indexing or a terminal scan error starts dumb
+            // mode instead of rejecting the user's message. Tools remain in
+            // the registry and observe the live DB on later calls, so this
+            // same session recovers when the baseline eventually completes.
             console.warn(
-              `[coder] global index gate bypassed for session ${id}: ${readiness.status}` +
+              `[coder] structural index gate bypassed for session ${id}: ${readiness.status}` +
               `${readiness.error ? ` (${readiness.error})` : ''}`,
             );
           }
@@ -835,10 +851,13 @@ export function mountCoderStreamRoutes(
       return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
     if (decision.kind === 'attach') {
+      keepSemanticProjectAlive(id, decision.bus);
       return pumpBusToSSE(c, decision.bus, {
         since: decision.tailFrom,
       });
     }
+
+    keepSemanticProjectAlive(id, decision.bus);
 
     // Fresh run. When the worker flag is on, `pool.runFresh()` already
     // kicked off `runCoder()` inside the worker — the route just
@@ -1019,10 +1038,12 @@ export function mountCoderStreamRoutes(
       emitWorkerLog(decision.bus, 'warn', 'route', 'POST /continue attached to live run', {
         client_msg_id: dedupeKey ?? null,
       });
+      keepSemanticProjectAlive(id, decision.bus);
       return pumpBusToSSE(c, decision.bus, { since: decision.tailFrom });
     }
 
     const bus = decision.bus;
+    keepSemanticProjectAlive(id, bus);
     // Log the route hit on the fresh bus — the dashboard will see the
     // POST /continue entry seq=0 with the resume context.
     emitWorkerLog(bus, 'info', 'route', 'POST /continue', {

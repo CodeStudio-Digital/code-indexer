@@ -20,6 +20,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
+import { formatClock } from '../../lib/datetime.js';
 
 interface MasterStatusBannerProps {
   /** ISO timestamp of the last runner exit, null when active or never started. */
@@ -111,9 +112,7 @@ export function MasterStatusBanner({ endedAt, unexpected, errorDetail }: MasterS
 
 function formatTime(iso: string): string {
   try {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString();
+    return formatClock(iso);
   } catch {
     return '';
   }

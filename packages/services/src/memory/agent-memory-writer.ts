@@ -72,7 +72,7 @@ export class AgentMemoryWriter implements MemoryWriter {
     },
   ): Promise<AgentMemoryRow> {
     const scope = scopeForProject(projectId);
-    const row = this.db.createAgentMemory({
+    const row = this.service.create({
       scope,
       projectId,
       name: data.title,
@@ -95,7 +95,7 @@ export class AgentMemoryWriter implements MemoryWriter {
     // Content change → logical-immutable replace (archive old + create fresh,
     // earliest created_at preserved), then swap the vectors.
     if (updates.content != null && updates.content !== old.content) {
-      const fresh = this.db.replaceAgentMemory(id, {
+      const fresh = this.service.replace(id, {
         scope: old.scope,
         projectId: old.project_id,
         name: old.name,

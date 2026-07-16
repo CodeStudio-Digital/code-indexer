@@ -1,9 +1,18 @@
 import { createHash } from 'node:crypto';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ContextSnapshot, SnapshotCategory, SnapshotScope, SnapshotVersion, VectorRecord } from '@mcp/shared/types.js';
-import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import type { VectorStore } from '@mcp/store/vectors.js';
+import {
+  embedDocumentsForNamespace,
+  type EmbeddingService,
+} from '@mcp/indexer/search/embeddings.js';
+import type { VectorItemState, VectorStore, VectorWriteTarget } from '@mcp/store/vectors.js';
 import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
+import { snapshotNamespace } from '@mcp/shared/vector-namespace.js';
+import type {
+  SemanticMutation,
+  SemanticMutationFence,
+  SemanticMutationSink,
+} from '../semantic-mutation-sink.js';
 
 // Long snapshots are split into overlapping windows instead of being
 // truncated at 2000 chars, so the whole note stays semantically searchable.
@@ -43,8 +52,22 @@ function snapshotVecId(snapshotId: number, chunk = 0): string {
  *  "content unchanged → skip embedding" on update/backfill. Hashes the whole
  *  title+content (no truncation) so edits past the old 2000-char cap also
  *  trigger a re-embed. */
-function embeddingTextHash(snap: Pick<ContextSnapshot, 'title' | 'content'>): string {
-  return createHash('md5').update(`${snap.title}\n${snap.content}`).digest('hex');
+export function snapshotEmbeddingTextHash(
+  snap: Pick<ContextSnapshot, 'title' | 'content'>,
+  fingerprint: string,
+): string {
+  return createHash('md5').update(`${fingerprint}\n${snap.title}\n${snap.content}`).digest('hex');
+}
+
+export function snapshotEmbeddingTexts(
+  snap: Pick<ContextSnapshot, 'title' | 'content'>,
+): string[] {
+  const windows = slidingWindows(`${snap.title}\n${snap.content}`, {
+    windowChars: SNAPSHOT_WINDOW_CHARS,
+    overlapChars: SNAPSHOT_OVERLAP_CHARS,
+    maxChunks: MAX_SNAPSHOT_CHUNKS,
+  });
+  return windows.map((window, index) => index === 0 ? window : `${snap.title}\n${window}`);
 }
 
 export class SnapshotService {
@@ -56,8 +79,31 @@ export class SnapshotService {
     // only stored in SQLite. The mcp-server and http-api inject both so every
     // create/update/delete also touches the vector store.
     private embeddingService: EmbeddingService | null = null,
-    private vectorStore: VectorStore | null = null
+    private vectorStore: VectorStore | null = null,
+    private semanticMutationSink: SemanticMutationSink | null = null,
   ) {}
+
+  /** Run the relational write behind a durable pre-mutation barrier when the
+   * host supports fences. Legacy sinks retain their post-commit notification
+   * behavior; external CLI/MCP writers never enter SQLite without a fence. */
+  private commitRelationalMutation<T>(input: SemanticMutation, mutation: () => T): T {
+    const canFence = typeof this.semanticMutationSink?.beginMutation === 'function'
+      && typeof this.semanticMutationSink?.settleMutation === 'function';
+    let fence: SemanticMutationFence | null = null;
+    if (canFence) fence = this.semanticMutationSink!.beginMutation!(input);
+
+    let result!: T;
+    try {
+      result = mutation();
+    } catch (error) {
+      if (fence) this.semanticMutationSink!.settleMutation!(fence, error);
+      throw error;
+    }
+
+    if (fence) this.semanticMutationSink!.settleMutation!(fence);
+    else if (!canFence) this.semanticMutationSink?.noteMutation(input);
+    return result;
+  }
 
   hasEmbeddingBackend(): boolean {
     return this.embeddingService !== null && this.vectorStore !== null;
@@ -71,14 +117,35 @@ export class SnapshotService {
     return project.name;
   }
 
+  private async isCurrent(
+    namespace: string,
+    itemKey: string,
+    hash: string,
+    expectedChunks: number,
+    writeTarget?: VectorWriteTarget,
+  ): Promise<boolean> {
+    const rows: VectorItemState[] = await (writeTarget
+      ? this.vectorStore?.listItems?.(namespace, [itemKey], writeTarget)
+      : this.vectorStore?.listItems?.(namespace, [itemKey])) ?? [];
+    if (rows.length !== expectedChunks) return false;
+    const chunks = new Set<number>();
+    for (const row of rows) {
+      if (row.itemKey !== itemKey || row.status !== 'indexed' || !row.vectorId || row.sourceHash !== hash) {
+        return false;
+      }
+      chunks.add(row.chunkIndex);
+    }
+    return Array.from({ length: expectedChunks }, (_, index) => index).every((index) => chunks.has(index));
+  }
+
   /**
-   * Embed and upsert a single snapshot, then write the embedding hash and
-   * register the vector id. Returns an error string instead of throwing so
+   * Embed and upsert a single snapshot. The vector worker records its hash,
+   * chunks and vector ids in semantic_items. Returns an error string so
    * callers can surface it without losing the SQLite write that already
    * succeeded.
    *
-   * Skips when the embedding text hasn't changed since the last successful
-   * embed (`embedding_hash` matches). Skips when no embedding backend is
+   * Skips when the semantic item ledger already contains every current chunk.
+   * Skips when no embedding backend is
    * configured (CLI/tests).
    */
   async embedAndUpsert(snap: ContextSnapshot): Promise<{ ok: boolean; error?: string; skipped?: 'no-backend' | 'unchanged' }> {
@@ -88,23 +155,30 @@ export class SnapshotService {
     const projectName = this.resolveProjectName(snap.project_id);
     if (!projectName) return { ok: false, error: 'project not found' };
 
-    const newHash = embeddingTextHash(snap);
-    if (snap.embedding_hash === newHash) {
-      return { ok: true, skipped: 'unchanged' };
-    }
-
+    const initialHash = snapshotEmbeddingTextHash(
+      snap,
+      this.embeddingService.fingerprint?.() ?? 'embedding:unknown',
+    );
     try {
-      const windows = slidingWindows(`${snap.title}\n${snap.content}`, {
-        windowChars: SNAPSHOT_WINDOW_CHARS,
-        overlapChars: SNAPSHOT_OVERLAP_CHARS,
-        maxChunks: MAX_SNAPSHOT_CHUNKS,
-      });
-      // Non-first windows get the title prepended so every vector carries the
-      // snapshot's subject as context (chunk 0 already starts with it).
-      const chunkTexts = windows.map((w, i) => (i === 0 ? w : `${snap.title}\n${w}`));
-      const { vectors } = await this.embeddingService.embed(chunkTexts);
+      const chunkTexts = snapshotEmbeddingTexts(snap);
+      const namespace = snapshotNamespace(snap.project_id);
+      if (await this.isCurrent(namespace, `snapshot:${snap.id}`, initialHash, chunkTexts.length)) {
+        return { ok: true, skipped: 'unchanged' };
+      }
+      const embedded = await embedDocumentsForNamespace(this.embeddingService, namespace, chunkTexts);
+      const { vectors, writeTarget } = embedded;
       if (vectors.length === 0 || vectors[0].length === 0) {
         return { ok: false, error: 'embedding service returned no vectors' };
+      }
+      const newHash = snapshotEmbeddingTextHash(
+        snap,
+        writeTarget?.embeddingFingerprint
+          ?? this.embeddingService.fingerprint?.()
+          ?? 'embedding:unknown',
+      );
+      if (newHash !== initialHash
+        && await this.isCurrent(namespace, `snapshot:${snap.id}`, newHash, chunkTexts.length, writeTarget)) {
+        return { ok: true, skipped: 'unchanged' };
       }
       const records: VectorRecord[] = vectors.map((values, i) => ({
         id: snapshotVecId(snap.id, i),
@@ -114,25 +188,32 @@ export class SnapshotService {
           type: 'snapshot',
           ref_id: String(snap.id),
           chunk_index: String(i),
+          embedding_hash: newHash,
         },
       }));
-      await this.vectorStore.upsert(records);
-
-      // Drop leftover chunk vectors from a previously-longer version of this
-      // snapshot (e.g. it shrank from 5 windows to 2). Best-effort.
-      const staleIds: string[] = [];
-      for (let i = records.length; i < MAX_SNAPSHOT_CHUNKS; i++) staleIds.push(snapshotVecId(snap.id, i));
-      if (staleIds.length > 0) {
-        try { await this.vectorStore.deleteByIds(staleIds); } catch { /* best-effort */ }
+      const accepted = await (writeTarget
+        ? this.vectorStore.upsert(records, namespace, writeTarget)
+        : this.vectorStore.upsert(records, namespace));
+      if (accepted !== records.length) {
+        throw new Error(`vector store accepted ${accepted}/${records.length} snapshot record(s)`);
       }
 
-      this.db.updateSnapshotEmbeddingHash(snap.id, newHash);
-      // INSERT OR REPLACE keyed on (project_id, vector_id) — idempotent, so we
-      // register every current chunk id unconditionally.
-      this.db.saveVectorIds(
-        snap.project_id,
-        records.map((r) => ({ vectorId: r.id, type: 'snapshot' as const })),
-      );
+      // Drop leftover chunks from a previously-longer snapshot. A failed
+      // cleanup keeps the mutation pending; otherwise coverage could activate
+      // a generation that still contains stale text.
+      const itemKey = `snapshot:${snap.id}`;
+      const ledgerRows = await (writeTarget
+        ? this.vectorStore.listItems?.(namespace, [itemKey], writeTarget)
+        : this.vectorStore.listItems?.(namespace, [itemKey])) ?? [];
+      const staleIds = ledgerRows.flatMap((row) =>
+        row.vectorId && (row.sourceHash !== newHash || row.chunkIndex >= records.length)
+          ? [row.vectorId]
+          : []);
+      if (staleIds.length > 0) {
+        if (writeTarget) await this.vectorStore.deleteByIds(staleIds, namespace, writeTarget);
+        else await this.vectorStore.deleteByIds(staleIds, namespace);
+      }
+
       return { ok: true };
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
@@ -141,14 +222,36 @@ export class SnapshotService {
     }
   }
 
-  private async removeFromVectorStore(snapshotId: number): Promise<void> {
+  /** Persistent semantic backfill. Model fingerprints participate in the
+   * hash, so profile changes naturally rebuild every project snapshot. */
+  async backfillEmbeddings(
+    projectId?: number,
+    limit = 10_000,
+  ): Promise<{ embedded: number; failed: number; skipped: number; total: number }> {
+    const rows = this.db.listSnapshotsForSemanticIndex(projectId).slice(0, limit);
+    let embedded = 0;
+    let failed = 0;
+    let skipped = 0;
+    for (const row of rows) {
+      const result = await this.embedAndUpsert(row);
+      if (result.ok && !result.skipped) embedded++;
+      else if (result.ok) skipped++;
+      else if (!result.ok) failed++;
+    }
+    return { embedded, failed, skipped, total: rows.length };
+  }
+
+  private async removeFromVectorStore(snapshotId: number, projectId: number): Promise<void> {
     if (!this.vectorStore) return;
-    // Delete every possible chunk id — deleting absent ids is a no-op, so a
-    // fixed [0, MAX) sweep cleans up regardless of how many chunks existed.
-    const ids: string[] = [];
-    for (let i = 0; i < MAX_SNAPSHOT_CHUNKS; i++) ids.push(snapshotVecId(snapshotId, i));
     try {
-      await this.vectorStore.deleteByIds(ids);
+      const namespace = snapshotNamespace(projectId);
+      if (this.vectorStore.deleteByItemKeys) {
+        await this.vectorStore.deleteByItemKeys([`snapshot:${snapshotId}`], namespace);
+      } else {
+        const ids: string[] = [];
+        for (let i = 0; i < MAX_SNAPSHOT_CHUNKS; i++) ids.push(snapshotVecId(snapshotId, i));
+        await this.vectorStore.deleteByIds(ids, namespace);
+      }
     } catch (err) {
       console.error('[snapshot-embed] delete failed:', (err as Error).message);
     }
@@ -178,12 +281,21 @@ export class SnapshotService {
       scope?: SnapshotScope;
     }
   ): Promise<SnapshotMutationResult> {
-    const snap = this.db.createSnapshot(projectId, data);
     let skippedFiles: string[] | undefined;
-    if (data.referencedFiles && data.referencedFiles.length > 0) {
-      const result = this.db.setSnapshotFiles(snap.id, projectId, data.referencedFiles);
-      if (result.skipped.length > 0) skippedFiles = result.skipped;
-    }
+    const snap = this.commitRelationalMutation({
+      namespace: snapshotNamespace(projectId),
+      // The row id does not exist until INSERT returns. A wildcard is the
+      // only honest pre-write watermark and is reconciled idempotently.
+      itemKeys: ['*'],
+      operation: 'upsert',
+    }, () => {
+      const created = this.db.createSnapshot(projectId, data);
+      if (data.referencedFiles && data.referencedFiles.length > 0) {
+        const result = this.db.setSnapshotFiles(created.id, projectId, data.referencedFiles);
+        if (result.skipped.length > 0) skippedFiles = result.skipped;
+      }
+      return created;
+    });
     const embed = await this.embedAndUpsert(snap);
     return {
       snap,
@@ -203,31 +315,41 @@ export class SnapshotService {
       importance?: number;
     }
   ): Promise<SnapshotMutationResult> {
-    this.db.updateSnapshot(id, {
-      title: updates.title,
-      category: updates.category,
-      content: updates.content,
-      tags: updates.tags,
-      updatedBy: updates.updatedBy,
-      importance: updates.importance,
-    });
     let skippedFiles: string[] | undefined;
-    if (updates.referencedFiles !== undefined) {
-      if (updates.projectId === undefined) {
-        throw new Error('updateSnapshot: projectId is required when updating referencedFiles');
+    // Re-embed only when title/content changed — category/tags don't affect
+    // semantic match, and semantic_items already holds the current text hash.
+    const semanticChange = updates.title !== undefined || updates.content !== undefined;
+    const before = semanticChange ? this.db.getSnapshotById(id) : null;
+    const write = (): ContextSnapshot => {
+      this.db.updateSnapshot(id, {
+        title: updates.title,
+        category: updates.category,
+        content: updates.content,
+        tags: updates.tags,
+        updatedBy: updates.updatedBy,
+        importance: updates.importance,
+      });
+      if (updates.referencedFiles !== undefined) {
+        if (updates.projectId === undefined) {
+          throw new Error('updateSnapshot: projectId is required when updating referencedFiles');
+        }
+        const result = this.db.setSnapshotFiles(id, updates.projectId, updates.referencedFiles);
+        if (result.skipped.length > 0) skippedFiles = result.skipped;
       }
-      const result = this.db.setSnapshotFiles(id, updates.projectId, updates.referencedFiles);
-      if (result.skipped.length > 0) skippedFiles = result.skipped;
-    }
-    const current = this.db.getSnapshotById(id);
-    if (!current) throw new Error(`snapshot ${id} not found after update`);
+      const current = this.db.getSnapshotById(id);
+      if (!current) throw new Error(`snapshot ${id} not found after update`);
+      return current;
+    };
+    const current = semanticChange && before
+      ? this.commitRelationalMutation({
+          namespace: snapshotNamespace(before.project_id),
+          itemKeys: [`snapshot:${id}`],
+          operation: 'upsert',
+        }, write)
+      : write();
 
     let embedError: string | undefined;
-    // Re-embed only when title/content changed — category/tags don't affect
-    // semantic match. updateSnapshot clears embedding_hash for those fields,
-    // so the hash-equal short-circuit in embedAndUpsert will fire when only
-    // metadata moved.
-    if (updates.title !== undefined || updates.content !== undefined) {
+    if (semanticChange) {
       const embed = await this.embedAndUpsert(current);
       if (!embed.ok) embedError = embed.error;
     }
@@ -251,8 +373,17 @@ export class SnapshotService {
   }
 
   delete(id: number): void {
-    this.db.deleteSnapshot(id);
-    void this.removeFromVectorStore(id);
+    const snap = this.db.getSnapshotById(id);
+    if (snap) {
+      this.commitRelationalMutation({
+        namespace: snapshotNamespace(snap.project_id),
+        itemKeys: [`snapshot:${id}`],
+        operation: 'delete',
+      }, () => this.db.deleteSnapshot(id));
+      void this.removeFromVectorStore(id, snap.project_id);
+    } else {
+      this.db.deleteSnapshot(id);
+    }
   }
 
   /**
@@ -264,19 +395,31 @@ export class SnapshotService {
    */
   async archive(id: number, reason: string): Promise<void> {
     const snap = this.db.getSnapshotById(id);
-    this.db.archiveSnapshot(id, reason);
-    await this.removeFromVectorStore(id);
     if (snap) {
-      const vectorIds: string[] = [];
-      for (let i = 0; i < MAX_SNAPSHOT_CHUNKS; i++) vectorIds.push(snapshotVecId(id, i));
-      try { this.db.deleteVectorIdRows(snap.project_id, vectorIds); } catch { /* best-effort */ }
+      this.commitRelationalMutation({
+        namespace: snapshotNamespace(snap.project_id),
+        itemKeys: [`snapshot:${id}`],
+        operation: 'delete',
+      }, () => this.db.archiveSnapshot(id, reason));
+      await this.removeFromVectorStore(id, snap.project_id);
+    } else {
+      this.db.archiveSnapshot(id, reason);
     }
   }
 
   /** Restore an archived snapshot. The DB layer NULLs the embedding hash so
    *  the backfill re-embeds it on the next sweep. */
   unarchive(id: number): void {
-    this.db.unarchiveSnapshot(id);
+    const snap = this.db.getSnapshotById(id);
+    if (snap) {
+      this.commitRelationalMutation({
+        namespace: snapshotNamespace(snap.project_id),
+        itemKeys: [`snapshot:${id}`],
+        operation: 'upsert',
+      }, () => this.db.unarchiveSnapshot(id));
+    } else {
+      this.db.unarchiveSnapshot(id);
+    }
   }
 
   list(projectId: number, category?: SnapshotCategory): ContextSnapshot[] {

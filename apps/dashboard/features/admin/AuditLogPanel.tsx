@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../../lib/datetime.js';
 import { RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -70,7 +71,7 @@ export function AuditLogPanel() {
         )}
         {events.map((e, i) => (
           <div key={i} className="p-3 text-xs grid grid-cols-[150px_1fr_100px] gap-3 items-center">
-            <span className="text-muted-foreground">{new Date(e.at).toLocaleString()}</span>
+            <span className="text-muted-foreground">{formatDateTime(e.at)}</span>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Badge variant={STATUS_VARIANT[e.event] ?? 'outline'}>{e.event}</Badge>

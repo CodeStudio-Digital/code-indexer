@@ -1,10 +1,9 @@
 /**
  * Admin panel for pipeline_provider_bindings (migration 080).
  *
- * Lets the operator pick which provider+model+config a given pipeline uses
- * for a given role (embedder / classifier / reranker / …). Every entry in
- * `PIPELINE_CATALOG` is rendered, even if no row exists yet — so it's
- * obvious which pipelines still need configuration.
+ * Lets the operator pick which provider+model+config a consuming pipeline
+ * uses. Catalog entries owned by another source of truth (notably Semantic
+ * Indexing) are hidden unless a legacy row exists and needs removal.
  *
  * Each catalog entry has a "Comma" pattern:
  *   - Shows the catalog hint (recommended default, description)
@@ -266,6 +265,10 @@ export function PipelineBindingsPanel() {
   const grouped = useMemo(() => {
     const map = new Map<string, { catalog: PipelineCatalogEntry; rows: PipelineBinding[] }>();
     for (const entry of catalog) {
+      // Embedding/reranking entries owned by Semantic Indexing are not
+      // pipeline settings. Hide empty informational rows instead of offering
+      // a control that the runtime will never read.
+      if (entry.setupEligible === false) continue;
       const key = `${entry.pipelineName}::${entry.bindingRole}`;
       map.set(key, { catalog: entry, rows: [] });
     }
@@ -274,9 +277,12 @@ export function PipelineBindingsPanel() {
       const bucket = map.get(key);
       if (bucket) bucket.rows.push(b);
       else {
-        // Binding exists for a pipeline not in static catalog. Render anyway.
+        // Unknown custom bindings remain configurable. A known informational
+        // binding is legacy data: render it read-only so it can be deleted.
+        const catalogEntry = catalog.find((entry) =>
+          entry.pipelineName === b.pipeline_name && entry.bindingRole === b.binding_role);
         map.set(key, {
-          catalog: {
+          catalog: catalogEntry ?? {
             pipelineName: b.pipeline_name,
             bindingRole: b.binding_role,
             description: t('admin:pipelines.customDescription'),
@@ -640,9 +646,12 @@ export function PipelineBindingsPanel() {
 
       <div className="grid gap-3 xl:grid-cols-2">
         {filter.visibleGroups.map(([key, group]) => {
+          const configurable = group.catalog.setupEligible !== false;
           const enabledCount = group.rows.filter((r) => r.enabled).length;
-          const statusVariant = group.catalog.comingSoon ? 'warning' : enabledCount > 0 ? 'success' : 'muted';
-          const statusLabel = group.catalog.comingSoon
+          const statusVariant = !configurable ? 'warning' : group.catalog.comingSoon ? 'warning' : enabledCount > 0 ? 'success' : 'muted';
+          const statusLabel = !configurable
+            ? t('admin:pipelines.status.ignoredLegacy')
+            : group.catalog.comingSoon
             ? t('admin:pipelines.status.preconfigurable')
             : enabledCount > 0
               ? t('admin:pipelines.status.configured')
@@ -665,9 +674,11 @@ export function PipelineBindingsPanel() {
                       {group.catalog.pipelineName} / {group.catalog.bindingRole}
                     </div>
                   </div>
-                  <Button size="sm" variant={group.rows.length === 0 ? 'default' : 'outline'} onClick={() => openNew(group.catalog)}>
-                    <Plus className="h-3 w-3 mr-1" /> {group.rows.length === 0 ? t('admin:pipelines.configure') : t('admin:pipelines.addBinding')}
-                  </Button>
+                  {configurable && (
+                    <Button size="sm" variant={group.rows.length === 0 ? 'default' : 'outline'} onClick={() => openNew(group.catalog)}>
+                      <Plus className="h-3 w-3 mr-1" /> {group.rows.length === 0 ? t('admin:pipelines.configure') : t('admin:pipelines.addBinding')}
+                    </Button>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground line-clamp-2">
                   {group.catalog.description}
@@ -737,17 +748,21 @@ export function PipelineBindingsPanel() {
                               )}
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
-                              <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
-                              <Button size="sm" variant="ghost" onClick={() => openEdit(group.catalog, row)} disabled={busy === row.id} title={t('admin:pipelines.dialog.editTitle')}>
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                              <Button size="sm" variant="ghost" onClick={() => onTest(row)} disabled={busy === row.id} title={t('admin:pipelines.test')}>
-                                <PlayCircle className="h-3 w-3" />
-                              </Button>
-                              {isCompletion && (
-                                <Button size="sm" variant="ghost" onClick={() => void onCompletionProbe(row)} disabled={busy === row.id} title={t('admin:pipelines.completionProbeTitle')}>
-                                  <Sparkles className="h-3 w-3" />
-                                </Button>
+                              {configurable && (
+                                <>
+                                  <Switch checked={row.enabled} onCheckedChange={() => onToggleEnabled(row)} disabled={busy === row.id} />
+                                  <Button size="sm" variant="ghost" onClick={() => openEdit(group.catalog, row)} disabled={busy === row.id} title={t('admin:pipelines.dialog.editTitle')}>
+                                    <Pencil className="h-3 w-3" />
+                                  </Button>
+                                  <Button size="sm" variant="ghost" onClick={() => onTest(row)} disabled={busy === row.id} title={t('admin:pipelines.test')}>
+                                    <PlayCircle className="h-3 w-3" />
+                                  </Button>
+                                  {isCompletion && (
+                                    <Button size="sm" variant="ghost" onClick={() => void onCompletionProbe(row)} disabled={busy === row.id} title={t('admin:pipelines.completionProbeTitle')}>
+                                      <Sparkles className="h-3 w-3" />
+                                    </Button>
+                                  )}
+                                </>
                               )}
                               <Button size="sm" variant="ghost" onClick={() => onDelete(row)} disabled={busy === row.id} title={t('common:actions.delete')}>
                                 <Trash2 className="h-3 w-3 text-red-500" />

@@ -239,6 +239,13 @@ import { projectEditorConfig223 } from './223_project_editor_config.js';
 import { reviewAiNative224 } from './224_review_ai_native.js';
 import { externalSessionImports225 } from './225_external_session_imports.js';
 import { sessionThinkingEnabled226 } from './226_session_thinking_enabled.js';
+import { semanticIndexing227 } from './227_semantic_indexing.js';
+import { investigationEmbeddingFingerprint228 } from './228_investigation_embedding_fingerprint.js';
+import { distributeInvestigationVectors229 } from './229_distribute_investigation_vectors.js';
+import { semanticLocalQ8Auto230 } from './230_semantic_local_q8_auto.js';
+import { structuralLastChecked231 } from './231_structural_last_checked.js';
+import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
+import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -494,6 +501,13 @@ export const MIGRATIONS: Migration[] = [
   reviewAiNative224,
   externalSessionImports225,
   sessionThinkingEnabled226,
+  semanticIndexing227,
+  investigationEmbeddingFingerprint228,
+  distributeInvestigationVectors229,
+  semanticLocalQ8Auto230,
+  structuralLastChecked231,
+  removeCodeLlmIndex232,
+  removeLegacyVectorLedgers233,
 ];
 
 /**

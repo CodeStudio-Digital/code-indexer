@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { PanelLeft, PanelLeftClose, StopCircle, Users } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
+import { formatDateTime } from '../../../lib/datetime.js';
 import { cn } from '../../../lib/utils.js';
 import { SessionActionsMenu } from './SessionActionsMenu.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
@@ -116,12 +117,10 @@ export function SessionHeader({
   );
 }
 
-/** Format a SQLite/ISO timestamp into a short locale string. */
+/** Format a SQLite/ISO timestamp into a short locale string (local timezone). */
 function formatRecoveredAt(ts: string): string {
   try {
-    const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString();
+    return formatDateTime(ts, undefined, undefined, ts);
   } catch {
     return ts;
   }

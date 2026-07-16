@@ -46,8 +46,6 @@ describe('purgeProjectIndex (C3)', () => {
         ).run(pid, `p${pid}/a.ts`, `h${pid}`).lastInsertRowid as number;
         db.prepare(`INSERT INTO symbols (project_id, file_id, name, kind, file_path) VALUES (?, ?, ?, 'function', ?)`)
           .run(pid, fileId, `p${pid}sym`, `p${pid}/a.ts`);
-        db.prepare(`INSERT INTO vector_ids (project_id, vector_id, type) VALUES (?, ?, 'file')`)
-          .run(pid, `v${pid}`);
       }
 
       const result = purgeProjectIndex(db, 1);
@@ -56,7 +54,6 @@ describe('purgeProjectIndex (C3)', () => {
       // Project 1 INDEX gone; project 2 intact.
       expect((db.prepare(`SELECT COUNT(*) n FROM files WHERE project_id=1`).get() as { n: number }).n).toBe(0);
       expect((db.prepare(`SELECT COUNT(*) n FROM symbols WHERE project_id=1`).get() as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) n FROM vector_ids WHERE project_id=1`).get() as { n: number }).n).toBe(0);
       expect((db.prepare(`SELECT COUNT(*) n FROM files WHERE project_id=2`).get() as { n: number }).n).toBe(1);
 
       // Central code FTS cleaned for p1 (real AFTER DELETE triggers), p2 still found.

@@ -210,9 +210,8 @@ export interface DocFtsHit {
 }
 
 /**
- * Truth-source view of a source's persistence + embedding state. Built by
- * JOINing `doc_chunks` and `doc_chunk_vectors` so it doesn't rely on the
- * cached `doc_sources.chunk_count` (which lags during/after a hang).
+ * Truth-source view of a source's persistence + semantic ledger state. Chunk
+ * embedding columns and the historical vector-mapping table are not consulted.
  */
 export interface DocSourceHealth {
   source_id: number;
@@ -271,18 +270,12 @@ export interface DocSourceItem {
   updated_at: string;
 }
 
-/** (vector_id, provider) pair — used as input to remote delete + row shape for tombstones. */
+/** Semantic-ledger reference for one documentation item. */
 export interface DocVectorRef {
   vector_id: string;
+  /** Logical key in semantic_items. Present on the distributed local store. */
+  item_key?: string;
   provider: string;
-}
-
-export interface DocVectorTombstoneRow extends DocVectorRef {
-  id: number;
-  deleted_at: string;
-  last_retry_at: string | null;
-  retry_count: number;
-  last_error: string | null;
 }
 
 // ─── Auto-discovery suggestions (migration 096) ─────────────────────

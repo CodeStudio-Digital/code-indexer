@@ -115,6 +115,7 @@ export function TabContent(props: TabContentProps) {
       tab="databases"
       projectId={props.projectId}
       projectName={props.projectName}
+      onOpenFile={props.onOpenFile}
       contribWindows={props.contribWindows}
       builderJson={props.builderJson}
       framework={props.framework}
@@ -125,6 +126,7 @@ export function TabContent(props: TabContentProps) {
       tab={tab}
       projectId={props.projectId}
       projectName={props.projectName}
+      onOpenFile={props.onOpenFile}
       contribWindows={props.contribWindows}
       builderJson={props.builderJson}
       framework={props.framework}

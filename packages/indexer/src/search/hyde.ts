@@ -1,202 +1,137 @@
 /**
  * HyDE — Hypothetical Document Embeddings.
  *
- * Given a natural-language query, ask an LLM to draft a short, hypothetical
- * *answer snippet* (docstring-style) that would plausibly live in the
- * codebase. Embed that synthetic document and use the resulting vector for
- * ANN search. On code corpora with NL questions, this recovers tokens the
- * raw query would never match ("how does the retry loop handle 429s?" →
- * hypothetical: `// Exponential backoff retry handler for HTTP 429 responses`).
+ * HyDE is an optional query-expansion stage for semantic code search. Its
+ * provider and model are owned exclusively by the
+ * `indexer_search / hyde` PipelineBinding. An absent binding means disabled;
+ * callers then keep the original query and continue with normal FTS/vector
+ * retrieval.
  *
- * We deliberately do NOT touch the LLMProvider interface: HyDE only needs a
- * one-shot chat completion, and adding a generic `complete()` to every
- * provider would ripple across 6 files. Instead this service spins up its
- * own minimal client from the ProviderStore default row.
- *
- * Supports two shapes:
- *   - Anthropic (claude-haiku-4-5) via @anthropic-ai/sdk
- *   - OpenAI-compatible (openai, openrouter, zai, deepseek, ...) via openai SDK
- *
- * Results are cached in-process keyed by query — consecutive calls for the
- * same question are free.
+ * Keeping this behind PipelineProviderResolver avoids the old split-brain
+ * configuration where every provider row exposed its own model override,
+ * even though only the default provider was ever consulted at runtime.
  */
-import type { ProviderStore, ProviderConfig } from '@mcp/store/provider-store.js';
-import { nativeFetch, type CrossFetch } from '@mcp/shared/utils/native-fetch.js';
+import type {
+  PipelineProviderResolver,
+  ResolvedBinding,
+} from '@mcp/services/pipelines/index.js';
+import {
+  callConfiguredChat,
+  callChatWithFailover,
+  type ChatFn,
+  type ChatMessage,
+} from '@mcp/services/quality/index.js';
+
+type HyDEBindingResolver = Pick<PipelineProviderResolver, 'resolveChain'>;
+
+export interface HyDEServiceOptions {
+  /** Test seam; production uses the shared pipeline chat dispatcher. */
+  chat?: ChatFn;
+}
 
 export class HyDEService {
-  private store: ProviderStore | null;
-  private cache = new Map<string, string>();
-  private cacheMax = 128;
+  private readonly cache = new Map<string, string>();
+  private readonly cacheMax = 128;
 
-  constructor(store: ProviderStore | null) {
-    this.store = store;
-  }
+  constructor(
+    private readonly resolver: HyDEBindingResolver | null,
+    private readonly options: HyDEServiceOptions = {},
+  ) {}
 
   /**
-   * Return the cached hypothetical document for this query if present,
-   * otherwise generate one, cache, and return. On any error the query is
-   * returned unchanged — the caller should treat "HyDE output === input"
-   * as a graceful fallback.
+   * Generate a short hypothetical code document for `query`.
+   *
+   * Fail-open contract: disabled/missing bindings, provider errors and empty
+   * replies all return the original query. Hybrid search therefore never
+   * depends on an LLM being reachable.
    */
-  async generate(query: string, projectContext?: { language?: string; concepts?: string[] }): Promise<string> {
+  async generate(
+    query: string,
+    projectContext?: { language?: string; concepts?: string[] },
+  ): Promise<string> {
     const key = query.trim();
-    if (!key) return query;
+    if (!key || !this.resolver) return query;
 
-    const cached = this.cache.get(key);
+    // No implicit default provider/model. The pipeline binding is the single
+    // source of truth and its absence is the explicit "HyDE disabled" state.
+    const chain = await this.resolver.resolveChain('indexer_search', 'hyde', {});
+    if (chain.length === 0) return query;
+
+    // Include the resolved chain in the cache key so changing provider/model
+    // or config takes effect immediately without restarting the application.
+    const cacheKey = this.cacheKey(key, chain);
+    const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    if (!this.store) return query;
-    const cfg = this.pickProvider();
-    if (!cfg) return query;
+    const messages: ChatMessage[] = [
+      { role: 'user', content: buildHyDEPrompt(key, projectContext) },
+    ];
+    const { result } = await callChatWithFailover(
+      chain,
+      (binding) => {
+        const chat = this.options.chat ?? callConfiguredChat;
+        return chat(binding, messages, {
+          temperature: finiteNumber(binding.config.temperature) ?? 0.2,
+          maxTokens: finiteNumber(binding.config.max_tokens) ?? 180,
+          timeoutMs:
+            finiteNumber(binding.config.timeout_ms)
+            ?? finiteNumber(binding.config.timeout)
+            ?? 20_000,
+        });
+      },
+      { label: 'HyDE query expansion', codePrefix: 'hyde' },
+    );
 
-    try {
-      const text = await this.callLLM(cfg, key, projectContext);
-      const cleaned = this.clean(text);
-      if (!cleaned || cleaned.length < 8) return query;
-      // LRU-ish eviction: drop oldest when full.
-      if (this.cache.size >= this.cacheMax) {
-        const first = this.cache.keys().next().value;
-        if (first !== undefined) this.cache.delete(first);
-      }
-      this.cache.set(key, cleaned);
-      return cleaned;
-    } catch (err) {
-      console.error('[hyde] generation failed:', (err as Error).message);
+    if (result.errorBody) {
+      console.warn(`[hyde] generation unavailable: ${result.errorBody}`);
       return query;
     }
-  }
 
-  /**
-   * Pick the default-enabled provider suitable for one-shot chat. We avoid
-   * the OAuth kinds (copilot/chatgpt) because they need async token refresh
-   * that isn't worth threading through for a ~50-token call — the fallback
-   * to raw query is acceptable when the default is copilot.
-   */
-  private pickProvider(): ProviderConfig | null {
-    if (!this.store) return null;
-    const rows = this.store.listProviders({ enabled: true });
-    const usable = rows.filter(
-      (r) => r.api_key && r.kind !== 'copilot' && r.kind !== 'chatgpt' && r.kind !== 'bedrock'
-    );
-    if (usable.length === 0) return null;
-    return usable.find((r) => r.is_default) ?? usable[0];
-  }
-
-  private async callLLM(cfg: ProviderConfig, query: string, projectContext?: { language?: string; concepts?: string[] }): Promise<string> {
-    const prompt = buildHyDEPrompt(query, projectContext);
-    if (cfg.kind === 'anthropic') return this.callAnthropic(cfg, prompt);
-    // OpenAI-compatible: openai, openrouter, zai, deepseek, and any "kind: openai" custom.
-    return this.callOpenAICompat(cfg, prompt);
-  }
-
-  private async callAnthropic(cfg: ProviderConfig, prompt: string): Promise<string> {
-    const { default: Anthropic } = (await import('@anthropic-ai/sdk')) as {
-      default: new (opts: { apiKey: string; baseURL?: string; fetch?: CrossFetch }) => {
-        messages: {
-          create(req: {
-            model: string;
-            max_tokens: number;
-            messages: Array<{ role: string; content: string }>;
-          }): Promise<{ content: Array<{ type: string; text?: string }> }>;
-        };
-      };
-    };
-    const fetchImpl = nativeFetch();
-    const client = new Anthropic({
-      apiKey: cfg.api_key ?? '',
-      ...(cfg.base_url ? { baseURL: cfg.base_url } : {}),
-      // Use undici (native fetch) instead of bundled node-fetch@2.
-      ...(fetchImpl ? { fetch: fetchImpl } : {}),
-    });
-    const resp = await client.messages.create({
-      model: (cfg.extra?.hyde_model as string) || 'claude-haiku-4-5-20251001',
-      max_tokens: 180,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    return resp.content
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text ?? '')
-      .join('');
-  }
-
-  private async callOpenAICompat(cfg: ProviderConfig, prompt: string): Promise<string> {
-    const { default: OpenAI } = (await import('openai')) as {
-      default: new (opts: { apiKey: string; baseURL?: string; fetch?: CrossFetch }) => {
-        chat: {
-          completions: {
-            create(req: {
-              model: string;
-              max_tokens: number;
-              temperature: number;
-              messages: Array<{ role: string; content: string }>;
-            }): Promise<{ choices: Array<{ message?: { content?: string } }> }>;
-          };
-        };
-      };
-    };
-    // Pick a cheap default model per shape. Overridden only if the user set
-    // `extra.hyde_model` on the provider row.
-    const extraModel = (cfg.extra as { hyde_model?: string } | undefined)?.hyde_model;
-    const model = extraModel ?? this.defaultModelFor(cfg.kind);
-
-    const baseURL = cfg.base_url ?? (cfg.kind === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined);
-    const fetchImpl = nativeFetch();
-    const client = new OpenAI({
-      apiKey: cfg.api_key ?? '',
-      ...(baseURL ? { baseURL } : {}),
-      // Use undici (native fetch) instead of bundled node-fetch@2.
-      ...(fetchImpl ? { fetch: fetchImpl } : {}),
-    });
-    const resp = await client.chat.completions.create({
-      model,
-      max_tokens: 180,
-      temperature: 0.2,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    return resp.choices[0]?.message?.content ?? '';
-  }
-
-  private defaultModelFor(kind: string): string {
-    switch (kind) {
-      case 'openai':
-        return 'gpt-4o-mini';
-      case 'openrouter':
-        return 'openai/gpt-4o-mini';
-      case 'deepseek':
-        return 'deepseek-chat';
-      case 'zai':
-        return 'glm-4.5-flash';
-      case 'gemini':
-        return 'gemini-2.0-flash-lite';
-      default:
-        return 'gpt-4o-mini';
+    const cleaned = this.clean(result.content);
+    if (!cleaned || cleaned.length < 8) return query;
+    if (this.cache.size >= this.cacheMax) {
+      const first = this.cache.keys().next().value;
+      if (first !== undefined) this.cache.delete(first);
     }
+    this.cache.set(cacheKey, cleaned);
+    return cleaned;
   }
 
-  /**
-   * Strip fences / boilerplate and cap length. The LLM occasionally
-   * over-answers with explanatory prose; we only want the hypothetical
-   * snippet that gets embedded.
-   */
+  private cacheKey(query: string, chain: ResolvedBinding[]): string {
+    return JSON.stringify({
+      query,
+      bindings: chain.map((binding) => ({
+        id: binding.bindingId,
+        provider: binding.provider.id,
+        model: binding.modelId,
+        mode: binding.modelMode,
+        config: binding.config,
+      })),
+    });
+  }
+
+  /** Strip fences / boilerplate and cap the synthetic document size. */
   private clean(text: string): string {
-    let t = text.trim();
-    // Remove triple-fenced blocks but keep their contents.
-    const fenced = t.match(/```(?:[a-zA-Z]+)?\n?([\s\S]*?)```/);
-    if (fenced) t = fenced[1].trim();
-    // Collapse excessive whitespace.
-    t = t.replace(/\n{3,}/g, '\n\n').trim();
-    // Cap to ~500 chars — embeddings are insensitive to length beyond that.
-    return t.slice(0, 500);
+    let value = text.trim();
+    const fenced = value.match(/```(?:[a-zA-Z]+)?\n?([\s\S]*?)```/);
+    if (fenced) value = fenced[1].trim();
+    value = value.replace(/\n{3,}/g, '\n\n').trim();
+    return value.slice(0, 500);
   }
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 /**
- * Build the one-shot prompt. Short, concrete, and primed toward
- * code-shaped output (comments + signatures) rather than natural language
- * essays — the goal is to land in the same embedding neighborhood as the
- * actual source code.
+ * Prime the model toward code-shaped output rather than an explanatory essay,
+ * which places the generated text nearer to indexed source-code embeddings.
  */
-function buildHyDEPrompt(query: string, ctx?: { language?: string; concepts?: string[] }): string {
+function buildHyDEPrompt(
+  query: string,
+  ctx?: { language?: string; concepts?: string[] },
+): string {
   const contextHint = ctx
     ? `\nProject context: ${ctx.language ? `primary language: ${ctx.language}` : ''}${ctx.concepts?.length ? `, key concepts: ${ctx.concepts.slice(0, 8).join(', ')}` : ''}\n`
     : '';

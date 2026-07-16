@@ -17,7 +17,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Record constructor args so definition-level tests can inspect them.
 const openAICalls: Array<Record<string, unknown>> = [];
 const geminiCalls: Array<Record<string, unknown>> = [];
-const zaiIndexerCalls: Array<Record<string, unknown>> = [];
 
 vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   OpenAIChatProvider: vi.fn().mockImplementation(function (
@@ -36,18 +35,6 @@ vi.mock('@mcp/code-agent/providers/gemini.js', () => ({
   ) {
     geminiCalls.push(opts);
     Object.assign(this, opts, { name: 'gemini' });
-  }),
-}));
-
-vi.mock('@mcp/indexer/indexer/providers/zai.js', () => ({
-  ZAIProvider: vi.fn().mockImplementation(function (
-    this: Record<string, unknown>,
-    apiKey?: string,
-    model?: string,
-    baseURL?: string,
-  ) {
-    zaiIndexerCalls.push({ apiKey, model, baseURL });
-    Object.assign(this, { apiKey, model, baseURL });
   }),
 }));
 
@@ -93,7 +80,6 @@ const googleOAuth = buildProviderDefinition(googleOAuthSpec);
 beforeEach(() => {
   openAICalls.length = 0;
   geminiCalls.length = 0;
-  zaiIndexerCalls.length = 0;
 });
 
 // ─── parseModelWithMode ──────────────────────────────────────────────────
@@ -171,23 +157,6 @@ describe('zai.createCoder — URL switching', () => {
   it('picks default model glm-5.1 when model is undefined', () => {
     zai.createCoder!(creds, undefined);
     expect(openAICalls[0].model).toBe('glm-5.1');
-  });
-});
-
-// ─── Z.AI definition: createIndexer parity with legacy ─────────────────
-describe('zai.createIndexer — parity with legacy', () => {
-  const creds: ResolvedCreds = { apiKey: 'test-key', baseURL: 'https://api.z.ai/api/paas/v4' };
-
-  it('strips "::mode" suffix from the model passed to ZAIProvider', () => {
-    zai.createIndexer!(creds, 'glm-5.1::coding');
-    expect(zaiIndexerCalls[0].model).toBe('glm-5.1');
-  });
-
-  it('respects creds.baseURL (legacy: always used cfg.base_url directly)', () => {
-    zai.createIndexer!(creds, 'glm-5.1');
-    // Legacy indexer path passed cfg.base_url through unchanged — mode heuristic
-    // was coder-only. This keeps single-shot analysis hitting the general URL.
-    expect(zaiIndexerCalls[0].baseURL).toBe('https://api.z.ai/api/paas/v4');
   });
 });
 

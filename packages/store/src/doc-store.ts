@@ -1,7 +1,9 @@
 /**
  * DocStore — CRUD over the documentation-corpus tables introduced by
- * migration 086 (`doc_collections`, `doc_sources`, `doc_chunks`,
- * `doc_chunk_vectors`) + the FTS5 helpers needed by `DocHybridSearch`.
+ * migration 086 (`doc_collections`, `doc_sources`, `doc_chunks`) + the FTS5
+ * helpers needed by `DocHybridSearch`. Vector identity and lifecycle are
+ * recorded exclusively in `semantic_items`; migration 233 removes the
+ * historical `doc_chunk_vectors` mirror.
  *
  * Tables are GLOBAL (no `project_id`) — collections are shared across all
  * projects. LLM model selection for ingestion/search lives in
@@ -49,7 +51,6 @@ export type {
   DocFtsHit,
   DocSourceHealth,
   DocVectorRef,
-  DocVectorTombstoneRow,
   DocSuggestionStatus,
   DocSourceSuggestion,
   DocProjectLinkOrigin,
@@ -79,7 +80,6 @@ import type {
   DocSourceSuggestion,
   DocSuggestionStatus,
   DocVectorRef,
-  DocVectorTombstoneRow,
   DocEnrichmentMode,
   DocIngestPerformanceProfile,
   DocIngestRun,
@@ -120,8 +120,11 @@ export class DocStore {
   getChunksByIds(ids: readonly number[]): DocChunk[] { return chunks.getByIds(this.db, ids); }
   getChunkNeighbors(chunkId: number, window: number = 1): DocChunk[] { return chunks.getNeighbors(this.db, chunkId, window); }
   listChunksBySource(sourceId: number): DocChunk[] { return chunks.listBySource(this.db, sourceId); }
+  listChunksByCollection(collectionId: number): DocChunk[] { return chunks.listByCollection(this.db, collectionId); }
   listChunksBySourceHeading(sourceId: number, headingPath: string | null, sourceUri: string | null): DocChunk[] { return chunks.listBySourceHeading(this.db, sourceId, headingPath, sourceUri); }
   clearEmbeddingsForSource(sourceId: number): { cleared: number } { return chunks.clearEmbeddingsForSource(this.db, sourceId); }
+  clearEmbeddingsForCollection(collectionId: number): { cleared: number } { return chunks.clearEmbeddingsForCollection(this.db, collectionId); }
+  clearAllEmbeddings(): { cleared: number } { return chunks.clearAllEmbeddings(this.db); }
   listChunksMissingEmbedding(opts: { sourceId?: number; collectionId?: number; limit?: number; fingerprint?: string } = {}): DocChunk[] { return chunks.listMissingEmbedding(this.db, opts); }
   updateChunkEmbedding(chunkId: number, embeddingHash: string, providerId: string): void { chunks.updateEmbedding(this.db, chunkId, embeddingHash, providerId); }
   updateChunkEmbeddingState(chunkId: number, embeddingHash: string, fingerprint: string): void { chunks.updateEmbeddingState(this.db, chunkId, embeddingHash, fingerprint); }
@@ -145,18 +148,14 @@ export class DocStore {
   // ─── Vector mapping ───────────────────────────────────────────
   listVectorIdsForSource(sourceId: number): DocVectorRef[] { return vectorMapping.listForSource(this.db, sourceId); }
   listVectorIdsForCollection(collectionId: number): DocVectorRef[] { return vectorMapping.listForCollection(this.db, collectionId); }
-  recordChunkVector(chunkId: number, vectorId: string, provider: string): void { vectorMapping.record(this.db, chunkId, vectorId, provider); }
-  getChunkIdForVector(vectorId: string, provider: string): number | null { return vectorMapping.getChunkIdForVector(this.db, vectorId, provider); }
-  getChunksByVectorIds(vectorIds: readonly string[], provider: string): DocChunk[] { return vectorMapping.getChunksByVectorIds(this.db, vectorIds, provider); }
   countVectorMappings(): number { return vectorMapping.countMappings(this.db); }
-
-  // ─── Vector tombstones (retry queue) ──────────────────────────
-  recordTombstones(items: ReadonlyArray<DocVectorRef & { error?: string | null }>): number { return vectorMapping.recordTombstones(this.db, items); }
-  listPendingTombstones(limit: number = 500): DocVectorTombstoneRow[] { return vectorMapping.listPendingTombstones(this.db, limit); }
-  markTombstoneRetried(id: number, error?: string | null): void { vectorMapping.markTombstoneRetried(this.db, id, error); }
-  deleteTombstone(id: number): void { vectorMapping.deleteTombstone(this.db, id); }
-  dropExhaustedTombstones(maxRetries: number): { dropped: number } { return vectorMapping.dropExhaustedTombstones(this.db, maxRetries); }
-  countPendingTombstones(): number { return vectorMapping.countPendingTombstones(this.db); }
+  countIndexedVectorsByCollection(collectionId: number): number { return vectorMapping.countIndexedForCollection(this.db, collectionId); }
+  deleteSemanticItemsByVectorIds(namespace: string, vectorIds: readonly string[]): number {
+    return vectorMapping.deleteSemanticItemsByVectorIds(this.db, namespace, vectorIds);
+  }
+  deleteSemanticItemsByItemKeys(namespace: string, itemKeys: readonly string[]): number {
+    return vectorMapping.deleteSemanticItemsByItemKeys(this.db, namespace, itemKeys);
+  }
 
   // ─── Incremental ingest runs + source manifest ───────────────
   createIngestRun(sourceId: number, options: unknown, performanceProfile?: string, workerCount?: number): DocIngestRun {

@@ -17,9 +17,6 @@ import { mountSnapshotsRoutes } from './server/routes/snapshots.js';
 import { mountMemoryDiagnosticsRoutes } from './server/routes/memory-diagnostics.js';
 import { mountAgentMemoryRoutes } from './server/routes/agent-memory.js';
 import { mountUserMemoryRoutes } from './server/routes/user-memory.js';
-import { mountRunsRoutes } from './server/routes/runs.js';
-import { mountDiffRoutes } from './server/routes/diff.js';
-import { mountCostsRoutes } from './server/routes/costs.js';
 import { mountWebhooksRoutes } from './server/routes/webhooks.js';
 import { mountExportRoutes } from './server/routes/export.js';
 import { mountModelsRoutes } from './server/routes/models.js';
@@ -136,7 +133,7 @@ import {
   coderWorkerEnabled,
   getCoderWorkerPool,
 } from './sse/coderWorkerPoolSingleton.js';
-import { createIndexerExecutor } from './sse/IndexerWorkerClient.js';
+import { createStructuralIndexerExecutor } from './sse/IndexerWorkerClient.js';
 import { startPerfSampler } from './server/perf/perf-sampler.js';
 import { startFreezeWatchdog } from './server/perf/freeze-log.js';
 import { getMemoryLedger } from './server/perf/memory-ledger.js';
@@ -612,12 +609,13 @@ export function createApp() {
   // GC orphan global-session virtual workspaces (synthetic union projects with
   // no session, + stray junction dirs) left by a crash or uncovered delete path.
   // SAFE: only unlinks junctions, never the real projects' files.
-  try {
-    const swept = sweepOrphanGlobalWorkspaces(deps);
-    if (swept > 0) console.log(`[coder] Startup sweep: ${swept} orphan global workspace(s) cleaned`);
-  } catch (e) {
-    console.warn(`[coder] Global-workspace sweep failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  void sweepOrphanGlobalWorkspaces(deps)
+    .then((swept) => {
+      if (swept > 0) console.log(`[coder] Startup sweep: ${swept} orphan global workspace(s) cleaned`);
+    })
+    .catch((e) => {
+      console.warn(`[coder] Global-workspace sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+    });
 
   // Frente E — periodic watchdog. The boot sweep above catches every
   // active session after a restart; this catches sessions that hang IN
@@ -656,6 +654,7 @@ export function createApp() {
         sessionStore: deps.sessionStore,
         db: deps.db,
         runEndMemory: deps.runEndMemory,
+        agentMemoryService: deps.agentMemoryService,
       });
     } catch (e) {
       console.warn(`[memory/sweeper] failed to start: ${e instanceof Error ? e.message : String(e)}`);
@@ -740,27 +739,6 @@ export function createApp() {
   } catch (e) {
     console.warn(`[doc-indexer] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-
-  // Best-effort drain of the vector tombstone retry queue (migration 088).
-  // Tombstones accumulate when a DELETE source/collection couldn't reach
-  // the remote vector store. This runs OFF the boot critical path via
-  // `setImmediate` — failures don't block startup and any leftovers will
-  // be retried on the next boot.
-  setImmediate(() => {
-    void deps.indexDocsUseCase.sweepTombstones(500)
-      .then(({ drained, still_pending }) => {
-        if (drained > 0 || still_pending > 0) {
-          console.log(
-            `[doc-indexer] Boot: drained ${drained} vector tombstone(s), ${still_pending} still pending`,
-          );
-        }
-      })
-      .catch((e) => {
-        console.warn(
-          `[doc-indexer] Boot tombstone sweep failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      });
-  });
 
   // Verdaccio auto-start: same idempotent pattern as chrome-service.
   void verdaccioService.recoverOnBoot().catch((e) => {
@@ -861,9 +839,6 @@ export function createApp() {
   mountMemoryDiagnosticsRoutes(app, deps);
   mountAgentMemoryRoutes(app, deps);
   mountUserMemoryRoutes(app, deps);
-  mountRunsRoutes(app, deps);
-  mountDiffRoutes(app, deps);
-  mountCostsRoutes(app, deps);
   mountWebhooksRoutes(app, deps);
   mountExportRoutes(app, deps);
   mountModelsRoutes(app, deps);
@@ -878,7 +853,38 @@ export function createApp() {
   mountPerfRoutes(app);
   mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
   mountNotificationRoutes(app, deps);
-  app.route('/api/admin', createAdminRouter(deps.providerStore));
+  app.post('/api/semantic/namespaces/reconcile', async (c) => {
+    const body: { namespace?: unknown } = await c.req.json<{ namespace?: unknown }>()
+      .catch(() => ({}));
+    const namespace = body.namespace;
+    if (typeof namespace !== 'string'
+      || !/^(?:snapshot:p\d+|memory:project:p\d+|memory:user)$/.test(namespace)) {
+      return c.json({ error: 'unsupported semantic namespace' }, 400);
+    }
+    const state = deps.semanticStore.listNamespaceGenerations({ namespace })[0];
+    if (!state?.active_generation_id && !state?.building_generation_id) {
+      return c.json({
+        ok: true,
+        namespace,
+        scheduled: false,
+        reason: 'first_generation_requires_explicit_reindex',
+      }, 202);
+    }
+    queueMicrotask(() => {
+      void deps.semanticCoordinator.catchUpKnowledgeNamespace(namespace).catch((error) =>
+        console.warn(`[semantic] targeted reconcile paused for ${namespace}: ${error instanceof Error ? error.message : String(error)}`));
+    });
+    return c.json({ ok: true, namespace, scheduled: true }, 202);
+  });
+  app.route('/api/admin', createAdminRouter(deps.providerStore, {
+    store: deps.semanticStore,
+    reindex: (purpose) => deps.semanticCoordinator.reindex(purpose, true),
+    cleanupUnusedVectors: () => deps.semanticCoordinator.cleanupUnusedVectors(),
+    namespaceStatus: (namespace) => deps.localVectorRouter.getNamespaceStatus(namespace),
+    probeEmbeddingTarget: (target) => deps.semanticProfileRuntime.probeEmbeddingTarget(target),
+    probeRerankerTarget: (target) => deps.semanticProfileRuntime.probeRerankerTarget(target),
+    rerankerDiagnostics: (purpose) => deps.semanticProfileRuntime.rerankerDiagnostics(purpose),
+  }));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
   mountEditorRoutes(app, deps);
@@ -982,6 +988,7 @@ export function createApp() {
     memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
     runEndMemory: deps.runEndMemory,
     projectMemory: deps.projectMemory,
+    investigationSemantic: deps.investigationSemantic,
   });
   // Same wire-up for the COMPANY worker pool — master + subordinates run
   // inside `company-worker.ts`, which installs the matching RPC shims. Without
@@ -998,6 +1005,7 @@ export function createApp() {
     memoryRetriever: deps.memoryRetriever,
     runEndMemory: deps.runEndMemory,
     projectMemory: deps.projectMemory,
+    investigationSemantic: deps.investigationSemantic,
   });
   mountDocsAgentRoutes(app, deps, docsResearchBridge);
 
@@ -1012,7 +1020,7 @@ export function createApp() {
     maxFileSizeKB: deps.config.maxFileSize,
     concurrency: deps.config.concurrency,
   };
-  const indexer = createIndexerExecutor(
+  const indexer = createStructuralIndexerExecutor(
     { dbPath: deps.config.dbPath, ...indexerExecutorCfg },
     createInProcessStructuralExecutor(deps.db, indexerExecutorCfg),
   );

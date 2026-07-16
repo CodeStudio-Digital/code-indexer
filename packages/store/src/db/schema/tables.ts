@@ -12,6 +12,7 @@ export function createBaseTables(db: DB): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_indexed TEXT,
+      structural_last_checked_at TEXT,
       file_count INTEGER NOT NULL DEFAULT 0,
       symbol_count INTEGER NOT NULL DEFAULT 0,
       index_ignore_patterns TEXT NOT NULL DEFAULT '[]',
@@ -27,21 +28,17 @@ export function createBaseTables(db: DB): void {
       size INTEGER NOT NULL DEFAULT 0,
       line_count INTEGER NOT NULL DEFAULT 0,
       content_hash TEXT NOT NULL,
-      summary TEXT NOT NULL DEFAULT '',
-      concepts TEXT NOT NULL DEFAULT '[]',
       dependencies TEXT NOT NULL DEFAULT '[]',
       internal_deps TEXT NOT NULL DEFAULT '[]',
       external_deps TEXT NOT NULL DEFAULT '[]',
-      notes TEXT NOT NULL DEFAULT '[]',
-      complexity TEXT NOT NULL DEFAULT 'low',
+      is_entry_point INTEGER NOT NULL DEFAULT 0,
+      is_test INTEGER NOT NULL DEFAULT 0,
+      is_generated INTEGER NOT NULL DEFAULT 0,
+      index_tier TEXT,
+      mapper_reason TEXT,
+      mtime_ms INTEGER,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      -- Also added by migration 012 (purely additive there). Declared in the base
-      -- table so a FRESH DB has the column before idx_files_project_embedding is
-      -- created below; on existing DBs migration 012 already added it and this
-      -- CREATE TABLE IF NOT EXISTS is a no-op. Column order matches 012's ALTER
-      -- (appended right after updated_at), so fresh and migrated DBs are identical.
-      embedding_hash TEXT,
       UNIQUE(project_id, path)
     );
 
@@ -72,13 +69,7 @@ export function createBaseTables(db: DB): void {
       total_files INTEGER NOT NULL DEFAULT 0,
       indexed_files INTEGER NOT NULL DEFAULT 0,
       skipped_files INTEGER NOT NULL DEFAULT 0,
-      error_count INTEGER NOT NULL DEFAULT 0,
-      provider TEXT,
-      model TEXT,
-      input_tokens INTEGER NOT NULL DEFAULT 0,
-      output_tokens INTEGER NOT NULL DEFAULT 0,
-      embedding_tokens INTEGER NOT NULL DEFAULT 0,
-      estimated_cost_usd REAL NOT NULL DEFAULT 0
+      error_count INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS snapshots (
@@ -157,38 +148,11 @@ export function createBaseTables(db: DB): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS file_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      file_path TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      summary TEXT NOT NULL DEFAULT '',
-      concepts TEXT NOT NULL DEFAULT '[]',
-      symbols TEXT NOT NULL DEFAULT '[]'
-    );
-
-    CREATE TABLE IF NOT EXISTS vector_ids (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      vector_id TEXT NOT NULL,
-      file_path TEXT,
-      type TEXT NOT NULL DEFAULT 'file',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
     CREATE TABLE IF NOT EXISTS models_cache (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       provider TEXT NOT NULL UNIQUE,
       models TEXT NOT NULL DEFAULT '[]',
       fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS file_concepts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-      concept TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS file_dependencies (
@@ -234,9 +198,7 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
     CREATE INDEX IF NOT EXISTS idx_files_project_path ON files(project_id, path);
     CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
-    -- Embedding coverage COUNT(*)/COUNT(embedding_hash) per project becomes an
-    -- index-only scan (no table row reads) — see embeddings.coverage().
-    CREATE INDEX IF NOT EXISTS idx_files_project_embedding ON files(project_id, embedding_hash);
+    CREATE INDEX IF NOT EXISTS idx_files_tier ON files(project_id, index_tier);
     CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -255,11 +217,6 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_agent_memory_events_project ON agent_memory_events(project_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_costs_project ON costs(project_id);
     CREATE INDEX IF NOT EXISTS idx_costs_run ON costs(run_id);
-    CREATE INDEX IF NOT EXISTS idx_file_snapshots_run ON file_snapshots(run_id);
-    CREATE INDEX IF NOT EXISTS idx_vector_ids_project ON vector_ids(project_id);
-
-    CREATE INDEX IF NOT EXISTS idx_file_concepts_project_concept ON file_concepts(project_id, concept);
-    CREATE INDEX IF NOT EXISTS idx_file_concepts_file ON file_concepts(file_id);
     CREATE INDEX IF NOT EXISTS idx_file_deps_source ON file_dependencies(source_file_id);
     CREATE INDEX IF NOT EXISTS idx_file_deps_target ON file_dependencies(target_file_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_refs_name ON symbol_references(symbol_name);

@@ -6,19 +6,19 @@
  *
  * Spec grammar (colon-separated; model may itself contain colons, e.g.
  * `…:free`, so everything after the id is the model):
- *   reranker:  null | local[:model] | default | provider:<id>[:model]
- *   embedding: live | local[:model] | provider:<id>:<model>
+ *   reranker:  null | local[:model] | provider:<id>[:model]
+ *   embedding: local[:model] | provider:<id>:<model>
+ * `default`/`live` are resolved by the benchmark entrypoint from the active
+ * semantic generation and profile, never from the retired config tables.
  */
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import {
-  createReranker,
   NullReranker,
   CohereReranker,
   type RerankerService,
 } from '@mcp/indexer/search/reranker.js';
 import { LocalReranker } from '@mcp/indexer/search/local-reranker.js';
 import {
-  createEmbeddingService,
   OpenAICompatEmbeddingService,
   type EmbeddingService,
 } from '@mcp/indexer/search/embeddings.js';
@@ -52,9 +52,6 @@ export function buildReranker(
       return { label: 'null', reranker: new NullReranker() };
     case 'local':
       return { label: spec, reranker: new LocalReranker({ model }) };
-    case 'default':
-    case 'store':
-      return { label: 'default', reranker: createReranker(store) };
     case 'provider': {
       const ep = resolveProviderEndpoint(store.getProvider(id ?? ''));
       if (!ep) throw new Error(`benchmark: reranker provider '${id}' has no API key or isn't OpenAI-compatible`);
@@ -84,10 +81,6 @@ export function buildEmbedding(
 ): { label: string; service: EmbeddingService; needsScratch: boolean } {
   const { kind, id, model } = parseSpec(spec);
   switch (kind) {
-    case 'live':
-    case 'default':
-    case 'store':
-      return { label: 'live', service: createEmbeddingService(store), needsScratch: false };
     case 'local':
       return { label: spec, service: new LocalEmbeddingService({ model }), needsScratch: true };
     case 'provider': {

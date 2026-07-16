@@ -97,30 +97,20 @@ export async function indexFilesStructural(
 }
 
 /**
- * Remove files from the structural index. Remote vector deletion is NOT
- * attempted here (the structural path owns no vector store — by design, so
- * it runs in the indexer worker with zero wiring); ids are tombstoned for
- * the hygiene queue / next full run instead. files_ad + FK cascades +
- * files_contents_ad clear every derived row.
+ * Remove files from the structural index. This worker owns no vector handles;
+ * the semantic catch-up reconciles semantic_items against the remaining
+ * source ids after the structural transaction. files_ad + FK cascades +
+ * files_contents_ad clear every derived relational row.
  */
 export function removeFilesStructural(
   db: CodeIndexDB,
   projectId: number,
   relPaths: readonly string[],
 ): { removed: number } {
-  const projectName = db.getProject(projectId)?.name ?? null;
   let removed = 0;
   for (const raw of relPaths) {
     const rel = raw.replace(/\\/g, '/');
     if (!db.getFile(projectId, rel)) continue;
-    const vectorIds = db.deleteVectorIdsByFile(projectId, rel);
-    if (vectorIds.length > 0) {
-      db.enqueuePendingVectorDeletes(vectorIds.map((vid) => ({
-        vector_id: vid,
-        project_name: projectName,
-        error: 'structural remove — remote delete deferred to hygiene retry',
-      })));
-    }
     db.deleteFile(projectId, rel);
     removed++;
   }

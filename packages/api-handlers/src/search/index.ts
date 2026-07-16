@@ -7,6 +7,7 @@
 import { ApiError, type SearchApi, type SymbolHit } from '@mcp/api-bus';
 import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { HandlerDeps } from '../types.js';
 import { grepProject } from './text-grep.js';
 import { replaceInProject } from './text-replace.js';
@@ -25,7 +26,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
   const { db, hybridSearch } = deps;
 
   return {
-    async project({ projectId, query, mode, type, limit }) {
+    async project({ projectId, query, mode, type, limit, supersessionKey }, ctx) {
       const project = db.getProject(projectId);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
       const effectiveMode = (mode ?? project.search_mode ?? 'hybrid') as SearchMode;
@@ -37,23 +38,52 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
           mode: effectiveMode,
           type: (type ?? 'all') as SearchType,
           limit: limit ?? 20,
+          supersessionKey: supersessionKey?.trim()
+            ? `project:${projectId}:${ctx.clientInfo?.sourceType ?? 'unknown'}:${supersessionKey.trim().slice(0, 128)}`
+            : undefined,
+          signal: ctx.signal,
         },
       );
-      return { results: results as never, diagnostics: diagnostics as never };
+      const activeGeneration = deps.semanticStore.getActiveGeneration(codeNamespace(projectId));
+      const embeddingTarget = activeGeneration?.embedding_target;
+      const resolvedReranker = diagnostics.plannedMode === 'hybrid'
+        ? await deps.semanticProfileRuntime.rerankerDiagnostics('code')
+        : null;
+      const resolvedRerankerModel = resolvedReranker && typeof resolvedReranker === 'object'
+        && 'resolved_model' in resolvedReranker
+        ? String((resolvedReranker as { resolved_model: unknown }).resolved_model)
+        : null;
+      return {
+        results: results as never,
+        diagnostics: {
+          ...diagnostics,
+          generationUsed: diagnostics.generationUsed
+            ?? (diagnostics.effectiveMode !== 'fts' ? activeGeneration?.id : undefined),
+          embedder: embeddingTarget && embeddingTarget.kind !== 'disabled'
+            ? `${embeddingTarget.kind}:${embeddingTarget.model}`
+            : diagnostics.embedder,
+          reranker: resolvedRerankerModel ?? diagnostics.reranker,
+        } as never,
+      };
     },
 
-    async global({ query, limit }) {
+    async global({ query, mode, type, limit, supersessionKey }, ctx) {
       const cap = limit ?? 20;
       const projects = db.listProjects();
-      const allResults: Array<Record<string, unknown> & { score: number; project: string }> = [];
-      for (const p of projects) {
-        const results = await hybridSearch.search(p.id, p.name, query, { limit: cap });
-        allResults.push(
-          ...results.map((r) => ({ ...(r as object), project: p.name } as never)),
-        );
-      }
-      allResults.sort((a, b) => b.score - a.score);
-      return allResults.slice(0, cap) as never;
+      const results = await hybridSearch.searchGlobal(projects, query, {
+        mode: (mode ?? 'auto') as SearchMode,
+        type: (type ?? 'all') as SearchType,
+        limit: cap,
+        supersessionKey: supersessionKey?.trim()
+          ? `global:${ctx.clientInfo?.sourceType ?? 'unknown'}:${supersessionKey.trim().slice(0, 128)}`
+          : undefined,
+        signal: ctx.signal,
+      });
+      return results.map(({ projectId, projectName, result }) => ({
+        ...(result as object),
+        project_id: projectId,
+        project: projectName,
+      })) as never;
     },
 
     async symbols({ projectId, query, limit }) {

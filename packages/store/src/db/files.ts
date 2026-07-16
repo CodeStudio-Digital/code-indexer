@@ -1,4 +1,4 @@
-import type { DBFile, FileSnapshot, LLMSymbol } from '@mcp/shared/types.js';
+import type { DBFile } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
 export interface UpsertFileData {
@@ -7,18 +7,12 @@ export interface UpsertFileData {
   size: number;
   lineCount: number;
   contentHash: string;
-  summary: string;
-  concepts: string[];
-  dependencies: string[];
-  internalDeps: string[];
-  externalDeps: string[];
-  notes: string[];
-  complexity: string;
-  layer?: string;
+  dependencies?: string[];
+  internalDeps?: string[];
+  externalDeps?: string[];
   isEntryPoint?: boolean;
   isTest?: boolean;
   isGenerated?: boolean;
-  /** Mapper tier persisted by migration 071. Optional for backwards compat. */
   indexTier?: 'core' | 'support' | 'on_demand';
   mapperReason?: string;
   /**
@@ -32,24 +26,22 @@ export interface UpsertFileData {
 export function upsert(db: DB, projectId: number, data: UpsertFileData): number {
   const tx = db.transaction(() => {
     const existing = db.prepare(
-      'SELECT id, path, summary, concepts FROM files WHERE project_id = ? AND path = ?'
-    ).get(projectId, data.path) as { id: number; path: string; summary: string; concepts: string } | undefined;
+      'SELECT id FROM files WHERE project_id = ? AND path = ?'
+    ).get(projectId, data.path) as { id: number } | undefined;
 
     let fileId: number;
 
     if (existing) {
       fileId = existing.id;
-      db.prepare(
-        "INSERT INTO files_fts(files_fts, rowid, path, summary, concepts) VALUES ('delete', ?, ?, ?, ?)"
-      ).run(existing.id, existing.path, existing.summary, existing.concepts);
-
       db.prepare(`
         UPDATE files SET
           language = ?, size = ?, line_count = ?, content_hash = ?,
-          summary = ?, concepts = ?, dependencies = ?,
-          internal_deps = ?, external_deps = ?,
-          notes = ?, complexity = ?,
-          layer = ?, is_entry_point = ?, is_test = ?, is_generated = ?,
+          dependencies = COALESCE(?, dependencies),
+          internal_deps = COALESCE(?, internal_deps),
+          external_deps = COALESCE(?, external_deps),
+          is_entry_point = COALESCE(?, is_entry_point),
+          is_test = COALESCE(?, is_test),
+          is_generated = COALESCE(?, is_generated),
           index_tier = COALESCE(?, index_tier),
           mapper_reason = COALESCE(?, mapper_reason),
           mtime_ms = COALESCE(?, mtime_ms),
@@ -57,41 +49,30 @@ export function upsert(db: DB, projectId: number, data: UpsertFileData): number 
         WHERE id = ?
       `).run(
         data.language, data.size, data.lineCount, data.contentHash,
-        data.summary, JSON.stringify(data.concepts), JSON.stringify(data.dependencies),
-        JSON.stringify(data.internalDeps), JSON.stringify(data.externalDeps),
-        JSON.stringify(data.notes), data.complexity,
-        data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
+        data.dependencies ? JSON.stringify(data.dependencies) : null,
+        data.internalDeps ? JSON.stringify(data.internalDeps) : null,
+        data.externalDeps ? JSON.stringify(data.externalDeps) : null,
+        data.isEntryPoint === undefined ? null : Number(data.isEntryPoint),
+        data.isTest === undefined ? null : Number(data.isTest),
+        data.isGenerated === undefined ? null : Number(data.isGenerated),
         data.indexTier ?? null, data.mapperReason ?? null,
         data.mtimeMs ?? null,
         existing.id
       );
-
-      db.prepare(
-        'INSERT INTO files_fts(rowid, path, summary, concepts) VALUES (?, ?, ?, ?)'
-      ).run(existing.id, data.path, data.summary, JSON.stringify(data.concepts));
     } else {
       const result = db.prepare(`
         INSERT INTO files (project_id, path, language, size, line_count, content_hash,
-          summary, concepts, dependencies, internal_deps, external_deps, notes, complexity,
-          layer, is_entry_point, is_test, is_generated, index_tier, mapper_reason, mtime_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          dependencies, internal_deps, external_deps,
+          is_entry_point, is_test, is_generated, index_tier, mapper_reason, mtime_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         projectId, data.path, data.language, data.size, data.lineCount, data.contentHash,
-        data.summary, JSON.stringify(data.concepts), JSON.stringify(data.dependencies),
-        JSON.stringify(data.internalDeps), JSON.stringify(data.externalDeps),
-        JSON.stringify(data.notes), data.complexity,
-        data.layer ?? 'unknown', data.isEntryPoint ? 1 : 0, data.isTest ? 1 : 0, data.isGenerated ? 1 : 0,
+        JSON.stringify(data.dependencies ?? []), JSON.stringify(data.internalDeps ?? []),
+        JSON.stringify(data.externalDeps ?? []), Number(data.isEntryPoint ?? false),
+        Number(data.isTest ?? false), Number(data.isGenerated ?? false),
         data.indexTier ?? null, data.mapperReason ?? null, data.mtimeMs ?? null
       );
       fileId = result.lastInsertRowid as number;
-    }
-
-    db.prepare('DELETE FROM file_concepts WHERE file_id = ?').run(fileId);
-    const insertConcept = db.prepare(
-      'INSERT INTO file_concepts (project_id, file_id, concept) VALUES (?, ?, ?)'
-    );
-    for (const concept of data.concepts) {
-      insertConcept.run(projectId, fileId, concept);
     }
 
     return fileId;
@@ -127,8 +108,7 @@ export interface FileScanMeta {
 
 /**
  * Slim per-file metadata for the stat-first scanner — 4 columns instead of
- * the full row (the old scan dragged summary/concepts/notes of EVERY file
- * into memory on every scan just to read content_hash).
+ * the full row; reconciliation needs only filesystem identity metadata.
  */
 export function listScanMeta(db: DB, projectId: number): FileScanMeta[] {
   return db.prepare(
@@ -162,29 +142,4 @@ export function search(db: DB, projectId: number, query: string, limit: number =
     ORDER BY rank
     LIMIT ?
   `).all(query, projectId, limit) as DBFile[];
-}
-
-export interface FileSnapshotData {
-  runId: number;
-  projectId: number;
-  filePath: string;
-  contentHash: string;
-  summary: string;
-  concepts: string[];
-  symbols: LLMSymbol[];
-}
-
-export function saveSnapshot(db: DB, data: FileSnapshotData): void {
-  db.prepare(`
-    INSERT INTO file_snapshots (run_id, project_id, file_path, content_hash, summary, concepts, symbols)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    data.runId, data.projectId, data.filePath, data.contentHash,
-    data.summary, JSON.stringify(data.concepts), JSON.stringify(data.symbols)
-  );
-}
-
-export function listSnapshots(db: DB, runId: number): FileSnapshot[] {
-  return db.prepare('SELECT * FROM file_snapshots WHERE run_id = ? ORDER BY file_path')
-    .all(runId) as FileSnapshot[];
 }

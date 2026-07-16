@@ -2,9 +2,8 @@
  * Repository Map generator — Aider-style structural summary.
  *
  * Produces a compact (~2000 token) map of the project: file tree annotated
- * with key symbols, weighted by importance (entry points, high-complexity,
- * hub files with many dependents). Uses a simplified PageRank-like score
- * based on the dependency graph.
+ * with key symbols, weighted by dependency hubs, entrypoint-like filenames
+ * and exported-symbol richness. It uses structural data only.
  *
  * The agent gets this on turn 1 via `get_repo_map`, eliminating 2-3
  * exploratory turns that would otherwise be spent understanding the codebase.
@@ -14,12 +13,10 @@ import type { DBFile, DBSymbol } from '@mcp/shared/types.js';
 
 interface FileScore {
   path: string;
-  language: string;
   score: number;
   symbols: Array<{ name: string; kind: string; signature: string }>;
-  layer: string;
-  complexity: string;
   isEntryPoint: boolean;
+  dependentCount: number;
 }
 
 /**
@@ -73,8 +70,7 @@ export function buildRepoMap(
       const fileName = f.path.split('/').pop() ?? f.path;
       const badges: string[] = [];
       if (f.isEntryPoint) badges.push('entry');
-      if (f.complexity === 'high' || f.complexity === 'very-high') badges.push(f.complexity);
-      if (f.layer && f.layer !== 'unknown') badges.push(f.layer);
+      if (f.dependentCount > 0) badges.push(`hub:${f.dependentCount}`);
       const badgeStr = badges.length > 0 ? ` [${badges.join(', ')}]` : '';
 
       const fileLine = `  ${fileName}${badgeStr}`;
@@ -101,8 +97,7 @@ export function buildRepoMap(
  *
  * Score components:
  *   - Dependent count (files that import this file) — strongest signal
- *   - Entry point flag (main, index, app)
- *   - Complexity (high/very-high files are more important for understanding)
+ *   - Entrypoint-like filename (main, index, app, server, CLI)
  *   - Symbol count (files with many exports are architectural hubs)
  */
 function computeScores(
@@ -119,13 +114,12 @@ function computeScores(
     const dependents = db.getDependents(projectId, file.id);
     score += dependents.length * 3;
 
-    // Entry point bonus
-    if (file.is_entry_point) score += 10;
-
-    // Complexity bonus
-    if (file.complexity === 'very-high') score += 5;
-    else if (file.complexity === 'high') score += 3;
-    else if (file.complexity === 'medium') score += 1;
+    // The structural pass persists the same deterministic path classification;
+    // keep a path fallback for rows created before that backfill.
+    const isEntryPoint = file.is_entry_point === 1
+      || /(^|\/)(?:index|main|app|server|cli)\.[^/]+$/i.test(file.path)
+      || /(^|\/)(?:package\.json|pyproject\.toml|cargo\.toml|go\.mod)$/i.test(file.path);
+    if (isEntryPoint) score += 10;
 
     // Symbol count (architectural richness)
     const symbols = db.getSymbolsByFile(projectId, file.path);
@@ -134,22 +128,16 @@ function computeScores(
     );
     score += Math.min(exportedSymbols.length, 10); // Cap at 10
 
-    // Layer bonuses
-    if (file.layer === 'business') score += 2;
-    if (file.layer === 'infrastructure') score += 1;
-
     results.push({
       path: file.path,
-      language: file.language,
       score,
       symbols: exportedSymbols.slice(0, 5).map(s => ({
         name: s.name,
         kind: s.kind,
         signature: s.signature ?? s.name,
       })),
-      layer: file.layer,
-      complexity: file.complexity,
-      isEntryPoint: !!file.is_entry_point,
+      isEntryPoint,
+      dependentCount: dependents.length,
     });
   }
 

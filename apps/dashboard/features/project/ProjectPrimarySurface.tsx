@@ -17,6 +17,7 @@ interface ProjectPrimarySurfaceProps {
   surface: string;
   projectId: number;
   projectName: string;
+  onOpenFile: (path: string) => void;
   initialSessionId?: number;
   contribWindows: ContribToolWindow[];
   builderJson: { stack: string; port: number } | null;
@@ -108,6 +109,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
             tab="ssh"
             projectId={props.projectId}
             projectName={props.projectName}
+            onOpenFile={props.onOpenFile}
             contribWindows={props.contribWindows}
             builderJson={props.builderJson}
             framework={props.framework}
@@ -120,6 +122,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
             tab="api"
             projectId={props.projectId}
             projectName={props.projectName}
+            onOpenFile={props.onOpenFile}
             contribWindows={props.contribWindows}
             builderJson={props.builderJson}
             framework={props.framework}
@@ -133,6 +136,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
             tab={props.surface}
             projectId={props.projectId}
             projectName={props.projectName}
+            onOpenFile={props.onOpenFile}
             contribWindows={props.contribWindows}
             builderJson={props.builderJson}
             framework={props.framework}

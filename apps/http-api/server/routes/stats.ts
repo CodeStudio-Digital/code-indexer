@@ -1,12 +1,13 @@
 import type { Hono } from 'hono';
-import { NullVectorStore } from '@mcp/store/vectors.js';
-import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { generationMatchesEmbeddingFingerprint, NullVectorStore } from '@mcp/store/vectors.js';
+import { embedQueryForNamespace } from '@mcp/indexer/search/embeddings.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
 import { timeSection } from '../perf/breakdown.js';
 
 export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
-  const { db, embeddingService, vectorStore, embeddingKind, vectorStoreKind } = deps;
+  const { db, vectorStore, vectorStoreKind } = deps;
 
   app.get('/api/projects/:id/stats', (c) => {
     return c.json(db.getStats(parseIdParam(c)));
@@ -37,10 +38,9 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
    * file samples moved to `/embeddings/samples` (loaded lazily by the panel)
    * so opening the panel no longer waits on two full-table random scans.
    *
-   * NOT cached: several callers (EmbeddingsCard, useEmbeddingRetry) refetch
-   * this immediately after a reindex/retry to show the NEW coverage, so a TTL
-   * cache here would make those refreshes look like no-ops. The composite
-   * index already makes the counts cheap.
+   * NOT cached: the diagnostics panel may refetch immediately after an
+   * explicit semantic build, and stale coverage would make that build look
+   * ineffective. The indexed ledger counts are already cheap.
    */
   app.get('/api/projects/:id/embeddings/stats', async (c) => {
     const projectId = parseIdParam(c);
@@ -59,13 +59,18 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
       }
     } catch { /* unavailable */ }
 
-    // Stored = what the project's vectors were built with; live = what the
-    // configured service produces now. A mismatch means the next index run
-    // will clear hashes and re-embed the whole project.
-    const storedFingerprint = timeSection('embeddings.stats', 'fingerprint', () =>
-      db.getProjectEmbeddingFingerprint(projectId),
+    // Compare the immutable active semantic generation with the desired Code
+    // profile. The legacy projects.embedding_fingerprint belongs to the old
+    // direct-index path and can otherwise report false mismatches here.
+    const activeGeneration = timeSection('embeddings.stats', 'fingerprint', () =>
+      deps.semanticStore.getActiveGeneration(codeNamespace(projectId)),
     );
-    const liveFingerprint = embeddingService.fingerprint?.() ?? null;
+    const codeProfile = deps.semanticStore.getProfile('code');
+    const storedFingerprint = activeGeneration?.fingerprint ?? null;
+    let liveFingerprint: string | null = null;
+    try {
+      liveFingerprint = deps.semanticProfileRuntime.embedding('code').fingerprint?.() ?? null;
+    } catch { /* an unavailable desired target is reported by health/probe */ }
 
     return c.json({
       coverage,
@@ -73,10 +78,11 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
       fingerprint: {
         stored: storedFingerprint,
         live: liveFingerprint,
-        mismatch: !!(storedFingerprint && liveFingerprint && storedFingerprint !== liveFingerprint),
+        mismatch: !!(storedFingerprint && liveFingerprint
+          && !generationMatchesEmbeddingFingerprint(storedFingerprint, liveFingerprint)),
       },
       health: {
-        embeddingService: embeddingKind,
+        embeddingService: codeProfile?.embedding_target.kind ?? 'disabled',
         vectorStore: vectorStoreKind,
         vectorStoreAvailable,
       },
@@ -115,6 +121,7 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
     const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
     if (!project) return notFound(c);
+    const namespace = codeNamespace(projectId);
 
     const body = await c.req.json<{ query: string }>();
     const query = body.query?.trim();
@@ -134,37 +141,49 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
 
     // Step 1: embed
     let vector: number[] = [];
+    let generationId: number | null = null;
     try {
-      if (embeddingService instanceof NullEmbeddingService) {
-        steps.push({ step: 'embed', ok: false, error: 'NullEmbeddingService — no embedding backend configured' });
-      } else {
-        const result = await embeddingService.embedQuery(query);
-        vector = result.vector;
-        steps.push({
-          step: 'embed',
-          ok: vector.length > 0,
-          detail: `vector length: ${vector.length}, tokens: ${result.tokens}`,
-          error: vector.length === 0 ? 'embedding returned empty vector' : undefined,
-        });
+      const queryEmbedding = deps.semanticProfileRuntime.queryEmbedding('code');
+      const result = await embedQueryForNamespace(queryEmbedding, namespace, query);
+      if (!Number.isSafeInteger(result.generationId) || result.generationId! < 1) {
+        throw new Error(`active query embedding did not return a generation for ${namespace}`);
       }
+      vector = result.vector;
+      generationId = result.generationId!;
+      steps.push({
+        step: 'embed',
+        ok: vector.length > 0,
+        detail: `namespace: ${namespace}, generation: ${generationId}, vector length: ${vector.length}, tokens: ${result.tokens}`,
+        error: vector.length === 0 ? 'embedding returned empty vector' : undefined,
+      });
     } catch (err) {
       steps.push({ step: 'embed', ok: false, error: err instanceof Error ? err.message : String(err) });
     }
 
     // Step 2: search vector store
-    if (vector.length > 0 && !(vectorStore instanceof NullVectorStore)) {
+    if (vector.length > 0 && generationId !== null && !(vectorStore instanceof NullVectorStore)) {
       try {
-        // Step 2a: unfiltered search (diagnostic — detects missing metadata indexes)
-        const unfilteredRaw = await vectorStore.search(vector, { topK: 3 });
+        // Step 2a: metadata-unfiltered, but still isolated inside this project's
+        // immutable namespace generation.
+        const unfilteredRaw = await vectorStore.search(vector, {
+          topK: 3,
+          namespace,
+          generationId,
+        });
         steps.push({
           step: 'search_unfiltered',
           ok: unfilteredRaw.length > 0,
-          detail: `unfiltered matches: ${unfilteredRaw.length}`,
+          detail: `namespace matches: ${unfilteredRaw.length}`,
         });
 
-        // Step 2b: filtered search
-        const filter: Record<string, string> = { project_name: project.name };
-        const raw = await vectorStore.search(vector, { topK: 10, filter });
+        // Step 2b: full namespace search for rehydration. Project names are
+        // descriptive metadata and may still contain the pre-rename value;
+        // code:p<ID> is the isolation boundary.
+        const raw = await vectorStore.search(vector, {
+          topK: 10,
+          namespace,
+          generationId,
+        });
         steps.push({ step: 'search', ok: raw.length > 0, detail: `raw matches: ${raw.length}` });
 
         // Step 3: rehydrate
@@ -208,6 +227,6 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
       steps.push({ step: 'search', ok: false, error: 'NullVectorStore — no vector store configured' });
     }
 
-    return c.json({ steps, matches });
+    return c.json({ namespace, generationId, steps, matches });
   });
 }

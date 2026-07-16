@@ -1,4 +1,5 @@
 import type { DocChunkInput, DocCollection, DocSource } from '@mcp/store/doc-store.js';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 import { chunkMarkdown } from '../section-chunker.js';
 import { extractApiSignature } from '../api-signature.js';
 import { enrichChunks } from '../enricher.js';
@@ -6,6 +7,7 @@ import { gatePages, heuristicAccepts } from '../relevance-gate.js';
 import { DocError } from '../errors.js';
 import type { RawPage } from '../types.js';
 import { embedAndUpsert } from './embed-upsert.js';
+import { deleteLocalVectors } from './delete.js';
 import { hashContent } from './utils.js';
 import {
   HARD_MAX_CHUNKS_PER_SOURCE,
@@ -15,10 +17,11 @@ import {
 import type { DocIngestResult } from '../types.js';
 
 /**
- * Core ingestion orchestrator: drives the 7-phase pipeline for one source.
+ * Core ingestion orchestrator: drives the 8-phase pipeline for one source.
  *
  *   1. acquire (lock)  2. fetch  3. gate (skippable)
- *   4. chunk           5. enrich 6. embed+upsert         7. finalize
+ *   4. chunk           5. persist 6. embed+upsert
+ *   7. optional enrich 8. finalize
  *
  * Each phase emits a progress frame via `IndexDocStreamCallbacks`. Wraps the
  * caller's callbacks to ALSO push every frame into the optional
@@ -85,7 +88,7 @@ export async function runIngest(
     // ── Phase 2: gate (skippable) ──────────────────────────────────
     const { accepted, rejected } = await runGate(deps, source, rawPages, tracked, runOpts?.skipGate ?? false);
 
-    // ── Phase 3-5: chunk + enrich + persist ────────────────────────
+    // ── Phase 3-5: chunk + persist ─────────────────────────────────
     docStore.updateSourceStatus(source.id, 'indexing');
     const chunkInputs = buildChunks(collection, source, accepted);
     await tracked.onProgress?.({
@@ -96,21 +99,57 @@ export async function runIngest(
       pages_accepted: accepted.length,
       pages_rejected: rejected,
     });
-    console.log(`[doc-indexer] phase=enriching source=${source.id} chunks=${chunkInputs.length}`);
-    await enrichChunkInputs(deps, chunkInputs, accepted.length, rejected, tracked);
     console.log(`[doc-indexer] persisting ${chunkInputs.length} chunk(s) source=${source.id}`);
-    docStore.replaceChunksForSource(source.id, chunkInputs);
+    const obsoleteVectors = docStore.listVectorIdsForSource(source.id);
+    const chunkIds = docStore.replaceChunksForSource(source.id, chunkInputs);
+    await deleteLocalVectors(docStore, vectorStore, obsoleteVectors, docNamespace(collection.id));
 
     // ── Phase 6: embed + vector upsert ─────────────────────────────
+    // Embedding deliberately precedes optional LLM enrichment. A slow or
+    // unavailable scorer must never keep the source out of semantic search.
     console.log(`[doc-indexer] phase=embedding source=${source.id}`);
     if (embeddingService && vectorStore) {
-      const embedTokens = await embedAndUpsert(
-        { docStore, embeddingService, vectorStore }, collection, source.id, tracked,
-      );
-      console.log(`[doc-indexer] embedded ${embedTokens} tokens source=${source.id}`);
+      try {
+        const embedTokens = await embedAndUpsert(
+          { docStore, embeddingService, vectorStore }, collection, source.id, tracked,
+        );
+        console.log(`[doc-indexer] embedded ${embedTokens} tokens source=${source.id}`);
+      } catch (error) {
+        // Corpus + FTS are already durable. Leave missing/failed semantic_items
+        // retryable and publish the source as lexical-ready instead of turning
+        // an embedding-provider outage into a failed documentation ingestion.
+        console.warn(
+          `[doc-indexer] semantic embedding paused source=${source.id}; FTS remains available: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
-    // ── Phase 7: finalize ──────────────────────────────────────────
+    // ── Phase 7: optional LLM enrichment ───────────────────────────
+    console.log(`[doc-indexer] phase=enriching source=${source.id} chunks=${chunkInputs.length}`);
+    try {
+      await enrichChunkInputs(deps, chunkInputs, accepted.length, rejected, tracked);
+      for (let index = 0; index < chunkInputs.length; index++) {
+        const chunkId = chunkIds[index];
+        const input = chunkInputs[index];
+        if (!chunkId || !input) continue;
+        docStore.updateChunkEnrichment(
+          chunkId,
+          input.summary ?? null,
+          input.concepts ?? [],
+          'llm:doc-ingest:v1',
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `[doc-indexer] optional enrichment skipped source=${source.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    // ── Phase 8: finalize ──────────────────────────────────────────
     docStore.updateSourceStats(source.id, {
       chunk_count: chunkInputs.length,
       page_count: rawPages.length,

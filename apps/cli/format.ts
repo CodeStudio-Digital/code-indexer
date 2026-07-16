@@ -3,13 +3,12 @@ import type { HybridSearchResult } from '@mcp/shared/types.js';
 export function printSearchResults(results: HybridSearchResult[]): void {
   for (const r of results) {
     const d = r.data as unknown as Record<string, unknown>;
+    const project = String((r as unknown as Record<string, unknown>).project ?? '');
+    const scope = project ? `[${project}] ` : '';
     if (r.type === 'file') {
-      const concepts = (() => { try { return JSON.parse(d.concepts as string ?? '[]').join(', '); } catch { return ''; } })();
-      console.log(`  [file] ${r.score.toFixed(4)} | ${d.path} (${d.language}, ${d.line_count} lines, ${d.complexity})`);
-      console.log(`         ${d.summary ?? ''}`);
-      if (concepts) console.log(`         Concepts: ${concepts}`);
+      console.log(`  [file] ${r.score.toFixed(4)} | ${scope}${d.path} (${d.language}, ${d.line_count} lines)`);
     } else {
-      console.log(`  [symbol] ${r.score.toFixed(4)} | ${d.kind} ${d.name} — ${d.file_path}:${d.line ?? '?'}`);
+      console.log(`  [symbol] ${r.score.toFixed(4)} | ${scope}${d.kind} ${d.name} — ${d.file_path}:${d.line ?? '?'}`);
       console.log(`           ${d.signature ?? ''}`);
       if (d.comment) console.log(`           ${d.comment}`);
     }

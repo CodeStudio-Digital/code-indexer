@@ -14,12 +14,16 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { safeJsonArray } from '@mcp/shared/utils/safe-json.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 
-import { buildEmbeddingCandidates, type CandidateFile } from './embedding-candidates.js';
+import {
+  buildEmbeddingCandidates,
+  semanticItemKeysForCandidateFiles,
+  type CandidateFile,
+} from './embedding-candidates.js';
 import { executeEmbedding, type EmbedExecutorDeps } from './embed-executor.js';
 import { EMBED_CHUNK_SIZE, resolveEmbedConcurrency, runEmbedChunks } from './embed-parallel.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 
 export interface EmbeddingProgress { current: number; total: number; percent: number }
 
@@ -31,7 +35,25 @@ export interface EmbeddingRetryResult {
   failedBatches: number;
 }
 
-const DEFAULT_WAVE_FILES = 100;
+export class EmbeddingPauseRequestedError extends Error {
+  constructor() {
+    super('semantic backfill paused because the project is no longer active');
+    this.name = 'EmbeddingPauseRequestedError';
+  }
+}
+
+const FALLBACK_WAVE_FILES = 25;
+const MIN_WAVE_FILES = 1;
+const MAX_WAVE_FILES = 100;
+
+function clampWaveFiles(value: number, fallback = FALLBACK_WAVE_FILES): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(MAX_WAVE_FILES, Math.max(MIN_WAVE_FILES, Math.trunc(value)));
+}
+
+function configuredWaveFiles(): number {
+  return clampWaveFiles(Number(process.env.MCP_EMBED_WAVE_FILES));
+}
 
 export async function retryEmbeddings(
   deps: EmbedExecutorDeps,
@@ -42,6 +64,12 @@ export async function retryEmbeddings(
     runId?: number | null;
     /** Files per wave — test hook; default in code. */
     waveFiles?: number;
+    /** Project-relative paths for a watcher/editor delta. Omitted means the
+     * explicit full-generation sweep. */
+    paths?: readonly string[];
+    /** Cooperative lifecycle fence checked only between bounded file waves.
+     * The currently-running native ONNX batch always finishes cleanly. */
+    shouldPause?: () => boolean;
   },
 ): Promise<EmbeddingRetryResult> {
   const vectorsAvailable = deps.vectorStore && !(deps.embeddingService instanceof NullEmbeddingService)
@@ -52,8 +80,17 @@ export async function retryEmbeddings(
   }
 
   const project = deps.db.resolveProject(undefined, projectNameOrPath) ?? deps.db.resolveProject(projectNameOrPath);
-  const dbFiles = deps.db.listFiles(project.id);
-  const waveFiles = options?.waveFiles ?? DEFAULT_WAVE_FILES;
+  const requestedPaths = options?.paths
+    ? [...new Set(options.paths.map((path) => path.replace(/\\/g, '/')))]
+    : null;
+  const dbFiles = requestedPaths
+    ? requestedPaths.flatMap((path) => {
+        const file = deps.db.getFile(project.id, path);
+        return file ? [file] : [];
+      })
+    : deps.db.listFiles(project.id);
+  const requestedWaveFiles = options?.waveFiles ?? configuredWaveFiles();
+  const waveFiles = clampWaveFiles(requestedWaveFiles);
   const concurrency = resolveEmbedConcurrency(deps.embeddingService);
 
   let filesDone = 0;
@@ -75,6 +112,7 @@ export async function retryEmbeddings(
   console.error(`[indexer] Retry embedding: ${total} file(s) in waves of ${waveFiles}`);
 
   for (let start = 0; start < dbFiles.length; start += waveFiles) {
+    if (options?.shouldPause?.()) throw new EmbeddingPauseRequestedError();
     const waveRows = dbFiles.slice(start, start + waveFiles);
     const files: CandidateFile[] = [];
     for (const dbFile of waveRows) {
@@ -87,14 +125,30 @@ export async function retryEmbeddings(
         path: dbFile.path,
         fileId: dbFile.id,
         language: dbFile.language,
-        summary: dbFile.summary,
-        concepts: safeJsonArray<string>(dbFile.concepts),
-        symbols: dbSymbols.map((s) => ({ name: s.name, kind: s.kind, signature: s.signature, comment: s.comment, line: s.line })),
+        symbols: dbSymbols.map((s) => ({
+          id: s.id,
+          stable_id: s.stable_id,
+          name: s.name,
+          kind: s.kind,
+          signature: s.signature,
+          comment: s.comment,
+          line: s.line,
+          end_line: s.end_line,
+          parent: s.parent,
+        })),
         content,
       });
     }
 
-    const candidates = buildEmbeddingCandidates(deps.db, project, files);
+    const keys = semanticItemKeysForCandidateFiles(deps.db, project.id, files);
+    const currentItems = await deps.vectorStore.listItems?.(codeNamespace(project.id), keys) ?? [];
+    const candidates = buildEmbeddingCandidates(
+      deps.db,
+      project,
+      files,
+      currentItems,
+      deps.embeddingService.fingerprint?.() ?? 'embedding:unknown',
+    );
     if (candidates.length > 0) {
       const res = await runEmbedChunks(candidates, {
         chunkSize: EMBED_CHUNK_SIZE,
@@ -114,6 +168,7 @@ export async function retryEmbeddings(
 
     filesDone += files.length;
     reportProgress();
+    if (options?.shouldPause?.()) throw new EmbeddingPauseRequestedError();
     // `files`/`candidates` go out of scope here — the wave's content is GC-able.
   }
 

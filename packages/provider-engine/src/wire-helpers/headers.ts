@@ -3,8 +3,8 @@ import { readSource } from './values.js';
 
 /**
  * Default request headers. When `headerSources` is set (openrouter attribution),
- * build each header from the first non-empty of its sources (extra/env),
- * returning undefined if none resolve — matching `buildOpenRouterHeaders`.
+ * build each header from the first non-empty of its sources (extra/env), then
+ * use its declared default when none resolve.
  * Otherwise pass through `creds.extraHeaders` (copilot editor headers; undefined
  * for plain api-key shapes).
  */
@@ -17,12 +17,17 @@ export function resolveHeaders(
 
   const out: Record<string, string> = {};
   for (const hs of sources) {
+    let resolved = false;
     for (const src of hs.sources) {
       const got = readSource(src, creds);
       if (got !== undefined) {
         out[hs.header] = got;
+        resolved = true;
         break;
       }
+    }
+    if (!resolved && hs.defaultValue !== undefined) {
+      out[hs.header] = hs.defaultValue;
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;

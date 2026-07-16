@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../../lib/datetime.js';
 import { Activity, AlertTriangle, DollarSign, Loader2, Scissors } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
@@ -531,7 +532,7 @@ function TelemetryOverview() {
                       <td className="px-3 py-2 text-right tabular-nums">{formatPct(s.cache_hit_ratio)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatUsd(s.estimated_cost_usd)}</td>
                       <td className="px-3 py-2 text-muted-foreground text-[11px]">
-                        {s.last_turn_at ? new Date(s.last_turn_at).toLocaleString() : '—'}
+                        {formatDateTime(s.last_turn_at, undefined, undefined, '—')}
                       </td>
                     </tr>
                   ))}

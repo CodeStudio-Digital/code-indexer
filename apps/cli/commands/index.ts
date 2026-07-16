@@ -4,7 +4,6 @@ import { register as indexCmd } from './index-cmd.js';
 import { register as search } from './search.js';
 import { register as inspect } from './inspect.js';
 import { register as snapshots } from './snapshots.js';
-import { register as diff } from './diff.js';
 import { register as costs } from './costs.js';
 import { register as exportCmd } from './export.js';
 import { register as watch } from './watch.js';
@@ -23,7 +22,6 @@ const registrars: Array<(program: Command) => void> = [
   search,
   inspect,
   snapshots,
-  diff,
   costs,
   exportCmd,
   watch,

@@ -90,9 +90,24 @@ export interface SubagentDeps {
   /**
    * When set, subagents use this provider (possibly from a different
    * provider family) instead of the parent's. Created from admin
-   * subagent config.
+   * subagent config. This is the DEFAULT target (single control); per-profile
+   * overrides go through `resolveProviderForProfile`.
    */
   subagentProvider?: ChatProvider;
+  /**
+   * When set, resolves the subagent provider for a specific micro-agent
+   * profile (implement vs explore vs …). Returns `undefined` when that
+   * profile inherits the parent provider. Built from admin per-profile
+   * subagent config — see `subagent-provider.ts`. Prefer the
+   * `providerForProfile()` helper over reading this directly.
+   */
+  resolveProviderForProfile?: (profileId?: string) => Promise<ChatProvider | undefined>;
+  /**
+   * When set, resolves the reasoning-effort override for a profile. `undefined`
+   * means the subagent inherits the parent session's effort. Prefer the
+   * `effortForProfile()` helper over reading this directly.
+   */
+  resolveEffortForProfile?: (profileId?: string) => string | undefined;
 }
 
 export function describeProvider(provider: ChatProvider): { provider: string; model: string; label: string } {

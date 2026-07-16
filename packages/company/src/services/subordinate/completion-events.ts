@@ -14,7 +14,7 @@
  *
  * **Why a bus and not more ports**: ports require an extra interface,
  * an implementation class, and constructor wiring per consumer. The
- * bus pattern (used by `IndexAgent.onFilesUpdated` in I3) lets new
+ * bus pattern lets new
  * listeners attach without changing the orchestrator's deps shape.
  * Direct port from `home-mixer/side_effects/*` in xai-org/x-algorithm.
  *

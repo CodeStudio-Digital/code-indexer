@@ -2,28 +2,38 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { buildFtsMatch, ftsTokens } from '@mcp/store/db/fts-query.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import {
+  embedQueryForNamespace,
+  NullEmbeddingService,
+} from '@mcp/indexer/search/embeddings.js';
 import type { HyDEService } from '@mcp/indexer/search/hyde.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { planQuery } from '@mcp/indexer/search/planner.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
-import { codeNamespace } from '@mcp/shared/vector-namespace.js';
-import { rrfMerge as cpRrfMerge } from '@mcp/candidate-pipeline/scorers/rrf.js';
+import { codeNamespace, snapshotNamespace } from '@mcp/shared/vector-namespace.js';
 import type { CandidatePipeline, TelemetrySink } from '@mcp/candidate-pipeline';
 import {
   createHybridSearchPipeline,
+  rerankDocumentText,
   runHybridSearchPipeline,
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
 } from '@mcp/indexer/search/hybrid-pipeline.js';
-import { expandGraph } from '@mcp/indexer/search/graph-expansion-source.js';
 
 /** Diagnostic info returned alongside search results. */
 export interface SearchDiagnostics {
   vectorAvailable: boolean;
   embeddingAvailable: boolean;
+  requestedMode?: SearchMode;
+  plannedMode?: 'fts' | 'vector' | 'hybrid';
+  effectiveMode?: 'fts' | 'vector' | 'hybrid';
+  generationUsed?: number;
+  embedder?: string;
+  reranker?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
   queryVariants?: string[];
   vectorRawMatches?: number;
   vectorRehydrated?: number;
@@ -33,15 +43,13 @@ export interface SearchDiagnostics {
   plannerMode?: 'fts' | 'vector' | 'hybrid';
   plannerReason?: string;
   /**
-   * Number of results contributed by the I2 RecentFilesSource stream
-   * (in hybrid mode, when `MCP_PIPELINES_RECENT_FILES_SOURCE=1` and a
-   * source is wired). Unset when the stream is off — preserves the
-   * shape for downstream JSON consumers.
+   * Number of results contributed by the RecentFilesSource stream in hybrid
+   * mode. Unset when no source is wired.
    */
   recentFilesCount?: number;
   /**
    * Number of neighbors contributed by the 1-hop graph-expansion stream
-   * (hybrid mode, `MCP_PIPELINES_GRAPH_EXPANSION=1`). Unset when off.
+   * (hybrid mode; `MCP_PIPELINES_GRAPH_EXPANSION=0` disables it).
    */
   graphExpansionCount?: number;
   /**
@@ -51,6 +59,22 @@ export interface SearchDiagnostics {
    * Unset when the stream is off (`MCP_FTS_CONTENT_STREAM=0`) or empty.
    */
   contentCount?: number;
+}
+
+export interface HybridSearchOptions {
+  mode?: SearchMode;
+  type?: SearchType;
+  limit?: number;
+  /** Stable latest-wins identity for an interactive caller. */
+  supersessionKey?: string;
+  /** Abort signal owned by the transport/request lifecycle. */
+  signal?: AbortSignal;
+}
+
+export interface GlobalHybridSearchResult {
+  projectId: number;
+  projectName: string;
+  result: HybridSearchResult;
 }
 
 const RRF_K = 60;
@@ -89,29 +113,30 @@ function buildQueryVariants(query: string): string[] {
 
 export class HybridSearch {
   private reranker: RerankerService;
+  private knowledgeEmbeddingService: EmbeddingService;
   /**
-   * Optional "Thunder-style" in-memory hot cache of recently-touched files
-   * (I2 — Sprint 1). Behind `MCP_PIPELINES_RECENT_FILES_SOURCE=1` and only
-   * consulted in `mode='hybrid'`. When the flag is unset OR the source is
-   * not provided, `runRecentSearch()` short-circuits to empty and the
-   * downstream RRF merge runs with just FTS + Vector — bit-identical to
-   * the pre-I2 behavior.
+   * Optional in-memory hot cache of recently-touched files. When wired, it is
+   * one normal source in the canonical hybrid pipeline.
    */
   private recentFilesSource: RecentFilesSource | null;
   /**
-   * Optional telemetry sink for the I1 pipeline path. When wired, the
-   * V2 pipeline emits per-stage rows to `pipeline_telemetry`. Unset →
+   * Optional telemetry sink. When wired, the pipeline emits per-stage rows
+   * to `pipeline_telemetry`. Unset →
    * pipeline still works, just no observability writes.
    */
   private pipelineTelemetry: TelemetrySink | null;
   /**
-   * Lazy-instantiated I1 pipeline. Built on first V2 invocation; reused
+   * Lazy-instantiated hybrid pipeline. Built on first invocation; reused
    * across calls. The factory is cheap (no I/O), but constructing it
    * once amortizes some closure setup across many searches.
    */
-  private v2Pipeline: CandidatePipeline<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> | null = null;
+  private hybridPipeline: CandidatePipeline<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> | null = null;
+  /** Retrieval-only twin used by global search. It performs the complete
+   * source/RRF path but deliberately omits per-project reranking so one
+   * cross-encoder call can compare candidates across every project. */
+  private globalRetrievalPipeline: CandidatePipeline<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> | null = null;
 
-  /** LRU query cache: key = `${projectId}:${query}:${mode}:${type}` → results + the diagnostics of the run that produced them */
+  /** LRU query cache. Semantic revisions in the key prevent cross-generation/target hits. */
   private queryCache = new Map<string, { results: HybridSearchResult[]; diagnostics: SearchDiagnostics; ts: number }>();
   private readonly queryCacheMax = 128;
   private readonly queryCacheTtlMs = 5 * 60 * 1000; // 5 min
@@ -124,22 +149,15 @@ export class HybridSearch {
     reranker?: RerankerService | null,
     recentFilesSource?: RecentFilesSource | null,
     pipelineTelemetry?: TelemetrySink | null,
+    knowledgeEmbeddingService?: EmbeddingService | null,
   ) {
     this.reranker = reranker ?? new NullReranker();
     this.recentFilesSource = recentFilesSource ?? null;
     this.pipelineTelemetry = pipelineTelemetry ?? null;
+    this.knowledgeEmbeddingService = knowledgeEmbeddingService ?? embeddingService;
   }
 
-  /**
-   * I1 — V2 path through `@mcp/candidate-pipeline`. Returns the same
-   * `HybridSearchResult[]` shape as the legacy hybrid branch but runs
-   * through the framework stages so per-stage telemetry and Decider
-   * gating come for free. Gated by `MCP_PIPELINES_INDEXER_SEARCH_V2=1`.
-   *
-   * The legacy path keeps its caching, planner, and dual-stream RRF.
-   * V2 is only entered for `mode='hybrid'` AND when the flag is set —
-   * default OFF behavior is bit-identical to pre-I1.
-   */
+  /** Single production path for hybrid retrieval. */
   private async searchViaPipeline(
     projectId: number,
     projectName: string,
@@ -147,33 +165,38 @@ export class HybridSearch {
     type: SearchType,
     limit: number,
     overFetch: number,
-    cacheSetter: (results: HybridSearchResult[]) => void,
     diagAccum: SearchDiagnostics,
+    includeReranker = true,
+    requestOptions: Pick<HybridSearchOptions, 'supersessionKey' | 'signal'> = {},
   ): Promise<HybridSearchResult[]> {
-    if (!this.v2Pipeline) {
-      this.v2Pipeline = createHybridSearchPipeline({
+    let pipeline = includeReranker ? this.hybridPipeline : this.globalRetrievalPipeline;
+    if (!pipeline) {
+      pipeline = createHybridSearchPipeline({
         db: this.db,
         vectorStore: this.vectorStore,
         embeddingService: this.embeddingService,
         hyde: this.hydeService,
-        reranker: this.reranker,
+        reranker: includeReranker ? this.reranker : new NullReranker(),
         recentFilesSource: this.recentFilesSource,
         ftsSanitize: (q, connector) => this.sanitizeFtsQuery(q, connector),
         telemetry: this.pipelineTelemetry ?? undefined,
-        cacheWrite: cacheSetter,
       });
+      if (includeReranker) this.hybridPipeline = pipeline;
+      else this.globalRetrievalPipeline = pipeline;
     }
     const pipelineQuery: HybridSearchPipelineQuery = {
-      queryId: `hybrid_v2:${projectId}:${query}:${type}:${limit}`,
+      queryId: `hybrid:${projectId}:${query}:${type}:${limit}`,
       projectId,
       projectName,
       query,
       type,
       overFetch,
       limit,
+      supersessionKey: requestOptions.supersessionKey,
+      signal: requestOptions.signal,
       diag: {},
     };
-    const results = await runHybridSearchPipeline(this.v2Pipeline, pipelineQuery);
+    const results = await runHybridSearchPipeline(pipeline, pipelineQuery);
     // Propagate diagnostic fields the legacy code populates so the
     // user-facing SearchDiagnostics surface stays identical.
     if (pipelineQuery.diag.ftsCount !== undefined) diagAccum.ftsCount = pipelineQuery.diag.ftsCount;
@@ -182,7 +205,125 @@ export class HybridSearch {
     if (pipelineQuery.diag.vectorError !== undefined) diagAccum.vectorError = pipelineQuery.diag.vectorError;
     if (pipelineQuery.diag.queryVariants !== undefined) diagAccum.queryVariants = pipelineQuery.diag.queryVariants;
     if (pipelineQuery.diag.recentFilesCount !== undefined) diagAccum.recentFilesCount = pipelineQuery.diag.recentFilesCount;
+    if (pipelineQuery.diag.contentCount !== undefined) diagAccum.contentCount = pipelineQuery.diag.contentCount;
+    if (pipelineQuery.diag.graphExpansionCount !== undefined) diagAccum.graphExpansionCount = pipelineQuery.diag.graphExpansionCount;
+    if (pipelineQuery.diag.generationUsed !== undefined) diagAccum.generationUsed = pipelineQuery.diag.generationUsed;
+    if (pipelineQuery.diag.rerankerError !== undefined) {
+      diagAccum.fallback = true;
+      diagAccum.fallbackReason = pipelineQuery.diag.rerankerError;
+    }
     return results;
+  }
+
+  /**
+   * Search several projects with bounded physical-DB fan-out and one global
+   * reranker pass. Per-project retrieval stops after RRF; the cross-encoder
+   * then compares real source text across project boundaries before top-K.
+   */
+  async searchGlobal(
+    projects: ReadonlyArray<{ id: number; name: string }>,
+    query: string,
+    options?: HybridSearchOptions,
+  ): Promise<GlobalHybridSearchResult[]> {
+    if (projects.length === 0) return [];
+    const requestedMode = options?.mode ?? 'auto';
+    const type = options?.type ?? 'all';
+    const limit = Math.max(1, options?.limit ?? 20);
+    const mode: 'fts' | 'vector' | 'hybrid' = requestedMode === 'auto'
+      ? planQuery(query).mode
+      : requestedMode;
+    // Keep the global cross-encoder batch bounded. This is also the high-tier
+    // adaptive policy ceiling; smaller worker policies may further reduce it.
+    const requestedRerankDepth = this.reranker.candidatePoolSize?.(limit) ?? limit * 2;
+    const rerankDepth = Math.max(limit, requestedRerankDepth);
+    const gathered: GlobalHybridSearchResult[] = [];
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (cursor < projects.length) {
+        const project = projects[cursor++];
+        let results: HybridSearchResult[];
+        if (mode === 'hybrid') {
+          const diagnostics: SearchDiagnostics = {
+            vectorAvailable: !!this.vectorStore,
+            embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
+          };
+          results = await this.searchViaPipeline(
+            project.id,
+            project.name,
+            query,
+            type,
+            rerankDepth,
+            rerankDepth * envInt('MCP_SEARCH_OVERFETCH_MULT', 3),
+            diagnostics,
+            false,
+            options,
+          );
+        } else {
+          results = await this.search(project.id, project.name, query, {
+            mode,
+            type,
+            limit: rerankDepth,
+          });
+        }
+        gathered.push(...results.map((result) => ({
+          projectId: project.id,
+          projectName: project.name,
+          result,
+        })));
+      }
+    };
+
+    await Promise.all(Array.from(
+      { length: Math.min(4, projects.length) },
+      () => worker(),
+    ));
+    gathered.sort((left, right) => right.result.score - left.result.score);
+
+    const candidates = gathered.slice(0, Math.min(gathered.length, rerankDepth));
+    let finalCandidates = candidates;
+    if (mode === 'hybrid' && candidates.length > 0 && this.reranker.name !== 'null') {
+      const rerankInput = candidates.map((candidate) => ({
+        id: `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
+        text: rerankDocumentText(candidate.result, this.db, candidate.projectId),
+        originalScore: candidate.result.score,
+      }));
+      try {
+        const expected = Math.min(limit, rerankInput.length);
+        const reranked = await this.reranker.rerank(query, rerankInput, expected, {
+          supersessionKey: options?.supersessionKey,
+          signal: options?.signal,
+        });
+        const allowed = new Set(rerankInput.map((candidate) => candidate.id));
+        const received = new Set<string>();
+        if (reranked.length !== expected || reranked.some((row) => {
+          if (!allowed.has(row.id) || received.has(row.id) || !Number.isFinite(row.score)) return true;
+          received.add(row.id);
+          return false;
+        })) {
+          throw new Error(`${this.reranker.name} returned an incomplete or invalid global result set`);
+        }
+        const byId = new Map(candidates.map((candidate) => [
+          `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
+          candidate,
+        ]));
+        finalCandidates = reranked.map((row) => {
+          const candidate = byId.get(row.id)!;
+          return {
+            ...candidate,
+            result: { ...candidate.result, score: row.score },
+          };
+        });
+      } catch (error) {
+        console.warn(`[hybrid-search] ${this.reranker.name} global rerank unavailable; preserving RRF order: ${
+          error instanceof Error ? error.message : String(error)
+        }`);
+      }
+    }
+
+    return finalCandidates
+      .sort((left, right) => right.result.score - left.result.score)
+      .slice(0, limit);
   }
 
   /** Invalidate query cache (call after indexing). */
@@ -190,11 +331,44 @@ export class HybridSearch {
     this.queryCache.clear();
   }
 
+  /**
+   * Build a cache key without doing inference. A revision resolver failure
+   * disables caching for this request: serving a fresh result is safer than
+   * guessing which semantic generation or reranker target produced a hit.
+   */
+  private queryCacheKey(
+    projectId: number,
+    query: string,
+    mode: 'fts' | 'vector' | 'hybrid',
+    type: SearchType,
+    limit: number,
+  ): string | null {
+    try {
+      const embeddingRevision = mode === 'fts'
+        ? 'not-used'
+        : this.embeddingService.cacheRevisionForNamespace?.(codeNamespace(projectId)) ?? 'legacy';
+      const rerankerRevision = mode === 'hybrid'
+        ? this.reranker.cacheRevision?.() ?? 'legacy'
+        : 'not-used';
+      return JSON.stringify([
+        projectId,
+        query,
+        mode,
+        type,
+        limit,
+        embeddingRevision,
+        rerankerRevision,
+      ]);
+    } catch {
+      return null;
+    }
+  }
+
   async search(
     projectId: number,
     projectName: string,
     query: string,
-    options?: { mode?: SearchMode; type?: SearchType; limit?: number }
+    options?: HybridSearchOptions,
   ): Promise<HybridSearchResult[]> {
     const { results } = await this.searchWithDiag(projectId, projectName, query, options);
     return results;
@@ -205,7 +379,7 @@ export class HybridSearch {
     projectId: number,
     projectName: string,
     query: string,
-    options?: { mode?: SearchMode; type?: SearchType; limit?: number }
+    options?: HybridSearchOptions,
   ): Promise<{ results: HybridSearchResult[]; diagnostics: SearchDiagnostics }> {
     const requestedMode = options?.mode ?? 'auto';
     const type = options?.type ?? 'all';
@@ -229,8 +403,8 @@ export class HybridSearch {
 
     // Check cache (key includes resolved mode so `auto` and `hybrid`
     // share a result row when the planner picks `hybrid`).
-    const cacheKey = `${projectId}:${query}:${mode}:${type}:${limit}`;
-    const cached = this.queryCache.get(cacheKey);
+    const cacheKey = this.queryCacheKey(projectId, query, mode, type, limit);
+    const cached = cacheKey ? this.queryCache.get(cacheKey) : undefined;
     if (cached && Date.now() - cached.ts < this.queryCacheTtlMs) {
       // Return the diagnostics of the run that produced the entry — a
       // stripped object here made consumers (e.g. the agent-facing
@@ -242,25 +416,43 @@ export class HybridSearch {
     const diag: SearchDiagnostics = {
       vectorAvailable: !!this.vectorStore,
       embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
+      requestedMode,
+      plannedMode: mode,
+      effectiveMode: mode,
+      ...(mode !== 'fts'
+        ? { embedder: this.embeddingService.cacheRevisionForNamespace?.(codeNamespace(projectId))
+            ?? this.embeddingService.fingerprint?.()
+            ?? 'unknown' }
+        : {}),
+      ...(mode === 'hybrid'
+        ? { reranker: this.reranker.cacheRevision?.() ?? this.reranker.name }
+        : {}),
       ...(plannerReason ? { plannerMode: mode, plannerReason } : {}),
     };
 
     const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {
-      // Evict oldest if full
-      if (this.queryCache.size >= this.queryCacheMax) {
-        const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-        if (oldest) this.queryCache.delete(oldest[0]);
+      // A transient semantic failure must not pin an FTS-only fallback for the
+      // full cache TTL. No-active/disabled namespace-aware services surface
+      // through vectorError as well, and their revision changes when serving
+      // becomes available again.
+      const degradedSemanticResult = mode !== 'fts'
+        && (!!r.diagnostics.vectorError || r.diagnostics.fallback === true);
+      if (cacheKey && !degradedSemanticResult) {
+        // Evict oldest if full
+        if (this.queryCache.size >= this.queryCacheMax) {
+          const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+          if (oldest) this.queryCache.delete(oldest[0]);
+        }
+        this.queryCache.set(cacheKey, { results: r.results, diagnostics: r.diagnostics, ts: Date.now() });
       }
-      this.queryCache.set(cacheKey, { results: r.results, diagnostics: r.diagnostics, ts: Date.now() });
       return r;
     };
 
     if (mode === 'fts') {
       const results = await this.ftsSearch(projectId, query, type, limit);
       diag.ftsCount = results.length;
-      // Top-up from the raw-content index: on structural-only projects
-      // files_fts has empty summaries/concepts, so identifier queries that
-      // live in code bodies would otherwise return nothing.
+      // Top-up from the raw-content index so identifier queries that live in
+      // code bodies are available from the structural baseline alone.
       if (results.length < limit) {
         const seen = new Set(results.filter((r) => r.type === 'file').map((r) => r.id));
         const extra = this.runContentSearch(projectId, query, type, limit)
@@ -276,97 +468,37 @@ export class HybridSearch {
 
     if (mode === 'vector') {
       const results = await this.vectorSearchExpanded(projectId, projectName, query, type, limit, diag);
+      if (results.length === 0 && diag.vectorError) {
+        const fallback = await this.ftsSearch(projectId, query, type, limit);
+        diag.ftsCount = fallback.length;
+        diag.effectiveMode = 'fts';
+        diag.fallback = true;
+        diag.fallbackReason = diag.vectorError;
+        return cacheAndReturn({ results: fallback, diagnostics: diag });
+      }
       return cacheAndReturn({ results, diagnostics: diag });
     }
 
-    // Hybrid: merge FTS + Vector (+ optional RecentFilesSource) using RRF.
-    // The recent-files stream is gated by `MCP_PIPELINES_RECENT_FILES_SOURCE=1`
-    // and the constructor receiving a RecentFilesSource instance. Both
-    // checks happen inside runRecentSearch — when off, it returns [] and
-    // the 3-stream merge degrades to 2-stream identical to legacy behavior.
+    // Hybrid has one canonical candidate-pipeline: lexical, vector, content,
+    // recent and graph sources -> RRF -> reranker -> final top-K.
     const hybridDiag: SearchDiagnostics = { ...diag };
-
-    // I1 — V2 path through @mcp/candidate-pipeline. Gated by env flag,
-    // default OFF. When ON, the search routes through the framework
-    // (same Sources/Scorer/Hydrator/SideEffect contract) and emits
-    // per-stage rows to pipeline_telemetry. Legacy path remains for
-    // bit-identical fallback when the flag is unset.
-    if (process.env.MCP_PIPELINES_INDEXER_SEARCH_V2 === '1') {
-      const v2Results = await this.searchViaPipeline(
-        projectId,
-        projectName,
-        query,
-        type,
-        limit,
-        overFetch,
-        (results) => cacheAndReturn({ results, diagnostics: hybridDiag }),
-        hybridDiag,
-      );
-      return { results: v2Results, diagnostics: hybridDiag };
+    const results = await this.searchViaPipeline(
+      projectId,
+      projectName,
+      query,
+      type,
+      limit,
+      overFetch,
+      hybridDiag,
+      true,
+      options,
+    );
+    if (hybridDiag.vectorError) {
+      hybridDiag.effectiveMode = 'fts';
+      hybridDiag.fallback = true;
+      hybridDiag.fallbackReason = hybridDiag.vectorError;
     }
-
-    const [ftsResults, vectorResults, recentResults, contentResults] = await Promise.allSettled([
-      this.ftsSearch(projectId, query, type, overFetch),
-      this.vectorSearchExpanded(projectId, projectName, query, type, overFetch, hybridDiag),
-      this.runRecentSearch(projectId, query, type, Math.max(5, limit)),
-      Promise.resolve(this.runContentSearch(projectId, query, type, Math.max(10, limit))),
-    ]);
-
-    const fts = ftsResults.status === 'fulfilled' ? ftsResults.value : [];
-    const vec = vectorResults.status === 'fulfilled' ? vectorResults.value : [];
-    const recent = recentResults.status === 'fulfilled' ? recentResults.value : [];
-    const content = contentResults.status === 'fulfilled' ? contentResults.value : [];
-    hybridDiag.ftsCount = fts.length;
-    if (recent.length > 0) hybridDiag.recentFilesCount = recent.length;
-    if (content.length > 0) hybridDiag.contentCount = content.length;
-
-    // 1-hop graph expansion (flag-gated, default OFF) — seeds from the primary
-    // FTS+vector union and surfaces callers/importers/imports as an extra stream.
-    const graph = this.runGraphSearch(projectId, [...fts, ...vec], type);
-    if (graph.length > 0) hybridDiag.graphExpansionCount = graph.length;
-
-    // How many fused candidates the reranker scores (cross-encoder cost is
-    // linear in this). Default keeps the historical limit*2.
-    const rerankDepth = envInt('MCP_RERANK_DEPTH', limit * 2);
-    const merged = recent.length > 0 || graph.length > 0 || content.length > 0
-      ? this.rrfMergeStreams(
-          [
-            { name: 'fts', results: fts },
-            { name: 'vector', results: vec },
-            ...(recent.length > 0 ? [{ name: 'recent', results: recent }] : []),
-            ...(graph.length > 0 ? [{ name: 'graph', results: graph }] : []),
-            ...(content.length > 0 ? [{ name: 'content', results: content }] : []),
-          ],
-          rerankDepth,
-        )
-      : this.rrfMerge(fts, vec, rerankDepth); // Over-fetch for re-ranking
-
-    // Re-rank if a cross-encoder is configured
-    if (merged.length > 0 && !(this.reranker instanceof NullReranker)) {
-      const reranked = await this.reranker.rerank(
-        query,
-        merged.map(r => {
-          const d = r.data as unknown as Record<string, unknown>;
-          const text = r.type === 'file'
-            ? `${d.path ?? ''}\n${d.summary ?? ''}\n${Array.isArray(d.concepts) ? d.concepts.join(', ') : ''}`
-            : `${d.name ?? ''} (${d.kind ?? ''})\n${d.signature ?? ''}\n${d.comment ?? ''}`;
-          return { id: `${r.type}:${r.id}`, text, originalScore: r.score };
-        }),
-        limit,
-      );
-
-      // Map reranked results back
-      const idToScore = new Map(reranked.map(r => [r.id, r.score]));
-      const rerankedResults = merged
-        .filter(r => idToScore.has(`${r.type}:${r.id}`))
-        .map(r => ({ ...r, score: idToScore.get(`${r.type}:${r.id}`)! }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
-
-      return cacheAndReturn({ results: rerankedResults, diagnostics: hybridDiag });
-    }
-
-    return cacheAndReturn({ results: merged.slice(0, limit), diagnostics: hybridDiag });
+    return cacheAndReturn({ results, diagnostics: hybridDiag });
   }
 
   /**
@@ -471,6 +603,12 @@ export class HybridSearch {
     limit: number,
     diag: SearchDiagnostics,
   ): Promise<HybridSearchResult[]> {
+    const namespace = codeNamespace(projectId);
+    const blocked = this.embeddingService.queryBlockReasonForNamespace?.(namespace) ?? null;
+    if (blocked) {
+      diag.vectorError = blocked;
+      return [];
+    }
     if (!this.vectorStore || this.embeddingService instanceof NullEmbeddingService) {
       diag.vectorError = !this.vectorStore
         ? 'No vector store configured'
@@ -502,10 +640,11 @@ export class HybridSearch {
 
       // Project isolation rides on the namespace now; `type` stays a metadata
       // filter to pick files vs symbols within the project.
-      const namespace = codeNamespace(projectName);
       const filter: Record<string, string> = {};
       if (type === 'files') filter.type = 'file';
-      else if (type === 'symbols') filter.type = 'symbol';
+      // Do not filter symbol queries to metadata.type='symbol': body and
+      // sibling-group vectors carry the same structural ref_id and must be
+      // eligible for semantic_neighbors and natural-language symbol search.
 
       const perVariant = Math.max(limit, 10);
       let totalRawMatches = 0;
@@ -513,9 +652,14 @@ export class HybridSearch {
       // Run each variant in parallel
       const runs = await Promise.all(
         variants.map(async (v) => {
-          const { vector } = await this.embeddingService.embedQuery(v);
+          const { vector, generationId } = await embedQueryForNamespace(this.embeddingService, namespace, v);
           if (vector.length === 0) return [];
-          const matches = await this.vectorStore!.search(vector, { topK: perVariant, filter, namespace });
+          const matches = await this.vectorStore!.search(vector, {
+            topK: perVariant,
+            filter,
+            namespace,
+            generationId,
+          });
           totalRawMatches += matches.length;
           return this.rehydrateVectorMatches(matches, projectId);
         }),
@@ -579,166 +723,6 @@ export class HybridSearch {
         score: match.score,
         fts_rank: null,
         vector_score: match.score,
-        data,
-      });
-    }
-    return results;
-  }
-
-  /**
-   * RRF merge of two ranked lists, delegating the scoring math to the
-   * canonical `rrfMerge` in `@mcp/candidate-pipeline/scorers/rrf`. We layer
-   * the indexer-specific per-source metadata (`fts_rank`, `vector_score`)
-   * on top so diagnostics keep working.
-   *
-   * Paridade: `K = RRF_K = 60` matches the framework's `RRF_DEFAULT_K`.
-   * See `packages/candidate-pipeline/src/__tests__/scorers.test.ts` for
-   * the canonical formula.
-   */
-  private rrfMerge(
-    ftsResults: HybridSearchResult[],
-    vectorResults: HybridSearchResult[],
-    limit: number
-  ): HybridSearchResult[] {
-    // Side channel: track first-occurrence metadata per (type, id) key.
-    type Meta = { fts_rank: number | null; vector_score: number | null; original: HybridSearchResult };
-    const meta = new Map<string, Meta>();
-    for (let rank = 0; rank < ftsResults.length; rank++) {
-      const r = ftsResults[rank];
-      const key = `${r.type}:${r.id}`;
-      if (!meta.has(key)) meta.set(key, { fts_rank: rank + 1, vector_score: null, original: r });
-      else meta.get(key)!.fts_rank = rank + 1;
-    }
-    for (let rank = 0; rank < vectorResults.length; rank++) {
-      const r = vectorResults[rank];
-      const key = `${r.type}:${r.id}`;
-      const existing = meta.get(key);
-      if (!existing) meta.set(key, { fts_rank: null, vector_score: r.vector_score, original: r });
-      else existing.vector_score = r.vector_score;
-    }
-
-    // Frame each source as a Rankable<candidateId=`type:id`> for cpRrfMerge.
-    const ftsRankable = ftsResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
-    const vecRankable = vectorResults.map((r) => ({ candidateId: `${r.type}:${r.id}` }));
-    const merged = cpRrfMerge(
-      [
-        { name: 'fts', items: ftsRankable },
-        { name: 'vector', items: vecRankable },
-      ],
-      { k: RRF_K, limit },
-    );
-
-    // Reconstruct HybridSearchResult preserving original payload + metadata.
-    return merged.map(({ candidateId, rrfScore }) => {
-      const m = meta.get(candidateId)!;
-      return { ...m.original, score: rrfScore, fts_rank: m.fts_rank, vector_score: m.vector_score };
-    });
-  }
-
-  /**
-   * I2 — RRF merge with the optional 3rd "recent files" stream. Mirrors
-   * `rrfMerge` but adds a third ranked input. Each list contributes a
-   * `1 / (K + rank)` weight per the canonical RRF; the cpRrfMerge sums
-   * across all sources where a candidate appears, naturally rewarding
-   * items that show up in MULTIPLE streams (FTS hit + just-edited file).
-   *
-   * Behavior when `recentResults` is empty matches `rrfMerge` exactly —
-   * verified by reusing the cpRrfMerge path. Diagnostics retain `fts_rank`
-   * and `vector_score`; we don't add a per-result `recent_rank` field on
-   * `HybridSearchResult` yet (it would touch shared types). The `recent`
-   * stream's contribution is reflected in `diag.recentFilesCount`.
-   */
-  private rrfMergeStreams(
-    streams: Array<{ name: string; results: HybridSearchResult[] }>,
-    limit: number,
-  ): HybridSearchResult[] {
-    type Meta = { fts_rank: number | null; vector_score: number | null; original: HybridSearchResult };
-    const meta = new Map<string, Meta>();
-    // First stream to mention a candidate owns its `original` (richer metadata);
-    // fts/vector contribute their rank/score, other streams (recent, graph) just
-    // ensure the Meta exists so the merged candidate keeps its `data` reference.
-    for (const { name, results } of streams) {
-      for (let rank = 0; rank < results.length; rank++) {
-        const r = results[rank];
-        const key = `${r.type}:${r.id}`;
-        const existing = meta.get(key);
-        if (!existing) {
-          meta.set(key, {
-            fts_rank: name === 'fts' ? rank + 1 : null,
-            vector_score: name === 'vector' ? r.vector_score : null,
-            original: r,
-          });
-        } else {
-          if (name === 'fts' && existing.fts_rank === null) existing.fts_rank = rank + 1;
-          if (name === 'vector' && existing.vector_score === null) existing.vector_score = r.vector_score;
-        }
-      }
-    }
-
-    const merged = cpRrfMerge(
-      streams.map((s) => ({ name: s.name, items: s.results.map((r) => ({ candidateId: `${r.type}:${r.id}` })) })),
-      { k: RRF_K, limit },
-    );
-
-    return merged.map(({ candidateId, rrfScore }) => {
-      const m = meta.get(candidateId)!;
-      return { ...m.original, score: rrfScore, fts_rank: m.fts_rank, vector_score: m.vector_score };
-    });
-  }
-
-  /**
-   * 1-hop graph-expansion stream (flag-gated). Short-circuits to empty unless
-   * `MCP_PIPELINES_GRAPH_EXPANSION=1`, so the merge stays bit-identical to the
-   * pre-graph path when off. Seeds from the primary FTS+vector union; pure SQL;
-   * best-effort (any error → empty, never breaks search).
-   */
-  private runGraphSearch(
-    projectId: number,
-    primary: HybridSearchResult[],
-    type: SearchType,
-  ): HybridSearchResult[] {
-    if (process.env.MCP_PIPELINES_GRAPH_EXPANSION !== '1') return [];
-    if (primary.length === 0) return [];
-    try {
-      return expandGraph(this.db, projectId, primary, type);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * I2 — consults the in-memory hot cache of recently-touched files.
-   * Short-circuits to empty unless both:
-   *   1. `MCP_PIPELINES_RECENT_FILES_SOURCE=1` is set, AND
-   *   2. A `RecentFilesSource` was passed to the constructor.
-   *
-   * Both checks here mean the hybrid mode branch can call this
-   * unconditionally — the flag/source absence keeps the merge identical
-   * to the legacy 2-stream path.
-   */
-  private async runRecentSearch(
-    projectId: number,
-    query: string,
-    type: SearchType,
-    limit: number,
-  ): Promise<HybridSearchResult[]> {
-    if (process.env.MCP_PIPELINES_RECENT_FILES_SOURCE !== '1') return [];
-    if (!this.recentFilesSource) return [];
-    // The hot cache only knows about files. When the caller asked for
-    // symbols-only there's nothing to contribute.
-    if (type === 'symbols') return [];
-
-    const matches = this.recentFilesSource.match(projectId, query, limit);
-    const results: HybridSearchResult[] = [];
-    for (const m of matches) {
-      const data = this.db.getFileById(m.fileId, projectId);
-      if (!data || data.project_id !== projectId) continue;
-      results.push({
-        id: data.id,
-        type: 'file',
-        score: m.score,
-        fts_rank: null,
-        vector_score: null,
         data,
       });
     }
@@ -822,22 +806,29 @@ export class HybridSearch {
 
     // Vector side: only runs if embeddings + vector store are available.
     let vectorSnaps: ContextSnapshot[] = [];
-    if (this.vectorStore && !(this.embeddingService instanceof NullEmbeddingService)) {
+    if (this.vectorStore && !(this.knowledgeEmbeddingService instanceof NullEmbeddingService)) {
       try {
-        const { vector } = await this.embeddingService.embedQuery(query);
+        const namespace = snapshotNamespace(projectId);
+        if (this.knowledgeEmbeddingService.queryBlockReasonForNamespace?.(namespace)) {
+          return ftsSnaps.slice(0, limit);
+        }
+        const { vector, generationId } = await embedQueryForNamespace(
+          this.knowledgeEmbeddingService,
+          namespace,
+          query,
+        );
         if (vector.length > 0) {
           // Snapshots are now chunked, so several matches can share a ref_id.
           // Over-fetch (×4) and keep the first (best-scored) chunk per
           // snapshot — dedup here keeps RRF ranks one-per-snapshot.
-          // Snapshot vectors are upserted WITHOUT a namespace (they live wholly
-          // on the central store), so scope them by the project_name metadata —
-          // NOT the code: namespace. The old `namespace: code:<name>` never
-          // matched (stored namespace is '') so semantic snapshot recall silently
-          // returned nothing (FTS masked it); under per-project vector routing it
-          // would also wrongly target the project store, which holds no snapshots.
+          // Snapshot vectors share the project's physical vectors.db but keep
+          // their own ID-based namespace and active generation. Project names
+          // are descriptive metadata only and may predate a rename.
           const matches = await this.vectorStore.search(vector, {
             topK: limit * 4,
-            filter: { type: 'snapshot', project_name: projectName },
+            filter: { type: 'snapshot' },
+            namespace,
+            generationId,
           });
           const seen = new Set<number>();
           for (const m of matches) {

@@ -417,6 +417,37 @@ export function appendStaticPromptSection(prompt: string, section: string): stri
   return `${prefix}\n\n${trimmed}\n\n${suffix}`;
 }
 
+/**
+ * Promote a prompt that was created while the structural index was still
+ * building. A single {@link CoderRunner} can execute several model turns, so
+ * waiting for the next `runCoder()` call would leave the live run with the
+ * `INDEX_NOT_READY` guidance even after the baseline became available.
+ *
+ * The repo map is deliberately appended at the very end. It is the volatile
+ * portion of the prompt and must not invalidate the stable prefix. The caller
+ * owns the one-shot readiness check; the duplicate guard makes retries safe.
+ */
+export function promoteIndexReadySystemPrompt(
+  prompt: string,
+  opts: {
+    mcpAvailable?: boolean;
+    sessionDrive?: boolean;
+    repoMap?: string;
+  },
+): string {
+  const waitingSection = mcpSection(opts.mcpAvailable, false, opts.sessionDrive);
+  const readySection = mcpSection(opts.mcpAvailable, true, opts.sessionDrive);
+  let promoted = waitingSection !== readySection && prompt.includes(waitingSection)
+    ? prompt.replace(waitingSection, readySection)
+    : prompt;
+
+  const repoMap = opts.repoMap?.trim();
+  if (repoMap && !promoted.includes(repoMap)) {
+    promoted = `${promoted.trimEnd()}\n\n${repoMap}\n`;
+  }
+  return promoted;
+}
+
 export function buildSystemPrompt(ctx: PromptContext): string {
   // ─── STATIC PREFIX ─────────────────────────────────────────────────
   // Everything in this block is determined entirely by inputs that are
@@ -774,7 +805,7 @@ You started in the **bootstrap** tier — the essential read/search, workflow, a
   }
   // navigate
   return `# Tool tiers
-You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible (including \`save_memory\` to persist durable project memory). Admin tools (git_commit, index_project, costs/models, diff) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
+You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible (including \`save_memory\` to persist durable project memory). Admin tools (git_commit, index_project, provider-cost history, model catalog) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
 `;
 }
 
@@ -846,14 +877,12 @@ Use native tools for all code exploration:
 `;
   }
   if (isIndexed === false) {
-    // Category-level stripped list — the per-tool refusal error already
-    // names the exact tool when the model hits one.
-    return `# Tool strategy — project NOT indexed
-The MCP bridge is connected, but this project was never indexed. Tools that strictly need the symbol DB were stripped — DB-backed search/overview/graph tools (\`search*\`, \`get_project_*\`, \`get_hierarchy\`, \`semantic_neighbors\`, \`get_dependencies\`/\`get_dependents\`, ...) are NOT callable; the error names the tool if you hit one.
+    return `# Tool strategy — index starting
+Every navigation/search tool remains registered. Until the automatic structural baseline is ready, a DB-backed call may return \`INDEX_NOT_READY\` or use disk/FTS. Retry semantic/graph calls on a later turn; the tools are not permanently absent.
 
-Still available with automatic tree-sitter / disk-grep fallbacks: \`mcp__read_file\`, \`mcp__list_directory\`, \`mcp__grep_code\`, \`mcp__get_file_skeleton\`, \`mcp__get_symbol_body\`, \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1), \`mcp__prepare_edit\` (no imports/tests).
+Available immediately with automatic tree-sitter / disk-grep fallbacks: \`mcp__read_file\`, \`mcp__list_directory\`, \`mcp__grep_code\`, \`mcp__get_file_skeleton\`, \`mcp__get_symbol_body\`, \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1), \`mcp__prepare_edit\` (no imports/tests).
 Native always works: \`read_file\` (pass \`symbol\` or a \`start_line\`/\`end_line\` range), \`glob\`, \`run_command\` with \`rg\`.
-For full caller graphs / scored search / vector neighbors, ask the user to index the project via the admin panel.
+Do not ask the user to run a full index because an early probe failed; the opened project indexes automatically.
 `;
   }
   const searchMemoryParagraph = sessionDrive

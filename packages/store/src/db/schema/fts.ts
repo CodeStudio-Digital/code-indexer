@@ -4,7 +4,7 @@ import { createFileContentsFts, repairFileContentsFts } from './content-fts.js';
 export function createFtsTables(db: DB): void {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
-      path, summary, concepts, content='files', content_rowid='id',
+      path, content='files', content_rowid='id',
       tokenize='unicode61 remove_diacritics 2'
     );
 
@@ -17,13 +17,12 @@ export function createFtsTables(db: DB): void {
 
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-      INSERT INTO files_fts(rowid, path, summary, concepts)
-      VALUES (new.id, new.path, new.summary, new.concepts);
+      INSERT INTO files_fts(rowid, path) VALUES (new.id, new.path);
     END;
 
     CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-      INSERT INTO files_fts(files_fts, rowid, path, summary, concepts)
-      VALUES ('delete', old.id, old.path, old.summary, old.concepts);
+      INSERT INTO files_fts(files_fts, rowid, path)
+      VALUES ('delete', old.id, old.path);
     END;
 
     CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN

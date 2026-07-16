@@ -110,6 +110,7 @@ import {
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
+import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
@@ -358,6 +359,7 @@ setGlobalSpriteStudioHost(spriteHostShim);
 // per-turn memory injection and run-end distillation instead of silently
 // dropping them. Degrades to no-op when main has no memory deps wired.
 const memoryShims = buildWorkerMemoryShims(bridge);
+setInvestigationSemanticIndex(memoryShims.investigationSemantic);
 
 // Multi-language LSP nav for agent tools (lsp_definition/references/hover on
 // non-TS files) — RPC to the main-process router (external servers + index

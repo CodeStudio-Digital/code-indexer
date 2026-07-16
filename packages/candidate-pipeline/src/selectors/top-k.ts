@@ -15,11 +15,18 @@ import type {
   SelectResult,
 } from '../types.js';
 
-export interface TopKSelectorOptions<C extends PipelineCandidate> {
+export interface TopKSelectorOptions<
+  C extends PipelineCandidate,
+  Q extends PipelineQuery = PipelineQuery,
+> {
   /** Public name used in telemetry. */
   name?: string;
-  /** Number of candidates to keep. Required (use Infinity for no cap). */
-  k: number;
+  /**
+   * Number of candidates to keep, or a per-query resolver. Use Infinity for
+   * no cap. Dynamic sizing is useful for pipelines whose public limit is part
+   * of the query (for example, a rerank-depth selector followed by final K).
+   */
+  k: number | ((query: Q) => number);
   /** Score function; higher is better. */
   scoreOf: (candidate: C) => number;
   /** Optional gate — defaults to always-on. */
@@ -30,15 +37,18 @@ export class TopKSelector<Q extends PipelineQuery, C extends PipelineCandidate>
   implements Selector<Q, C>
 {
   readonly name: string;
-  constructor(private opts: TopKSelectorOptions<C>) {
+  constructor(private opts: TopKSelectorOptions<C, Q>) {
     this.name = opts.name ?? 'top_k';
   }
   enable(query: Q): boolean { return this.opts.enable ? this.opts.enable(query) : true; }
-  size(): number { return this.opts.k; }
+  size(): number | undefined {
+    return typeof this.opts.k === 'number' ? this.opts.k : undefined;
+  }
   score(candidate: C): number { return this.opts.scoreOf(candidate); }
-  select(_query: Q, candidates: C[]): SelectResult<C> {
+  select(query: Q, candidates: C[]): SelectResult<C> {
     const sorted = [...candidates].sort((a, b) => this.opts.scoreOf(b) - this.opts.scoreOf(a));
-    const cap = Number.isFinite(this.opts.k) ? Math.max(0, this.opts.k) : sorted.length;
+    const requestedK = typeof this.opts.k === 'function' ? this.opts.k(query) : this.opts.k;
+    const cap = Number.isFinite(requestedK) ? Math.max(0, requestedK) : sorted.length;
     return {
       selected: sorted.slice(0, cap),
       nonSelected: sorted.slice(cap),

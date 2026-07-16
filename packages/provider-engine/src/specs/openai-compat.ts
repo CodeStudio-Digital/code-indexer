@@ -18,6 +18,13 @@ export const openaiSpec: ProviderSpec = {
     'gpt-4-turbo': { inputPer1M: 10.0, outputPer1M: 30.0 },
   },
   capabilities: { supportsVision: true, supportsImageGen: true, fileInput: 'native' },
+  semantic: {
+    embedding: {
+      protocol: 'openai-embeddings',
+      defaultModels: ['text-embedding-3-small', 'text-embedding-3-large'],
+      modelPatterns: ['embedding', 'embed'],
+    },
+  },
   wire: 'openai-compat',
   wireOpts: { summaryModelDefault: 'gpt-4o-mini' },
   discovery: { from: 'openai-models' },
@@ -154,6 +161,18 @@ export const cloudflareSpec: ProviderSpec = {
     '@cf/baai/bge-base-en-v1.5': { inputPer1M: 0.067, outputPer1M: 0 },
     '@cf/baai/bge-small-en-v1.5': { inputPer1M: 0.02, outputPer1M: 0 },
   },
+  semantic: {
+    embedding: {
+      protocol: 'cloudflare',
+      defaultModels: ['@cf/baai/bge-m3', '@cf/qwen/qwen3-embedding-0.6b'],
+      modelPatterns: ['embedding', 'bge-m3', 'qwen3-embedding'],
+    },
+    rerank: {
+      protocol: 'cloudflare',
+      defaultModels: ['@cf/baai/bge-reranker-base'],
+      modelPatterns: ['rerank'],
+    },
+  },
   wire: 'openai-compat',
   wireOpts: {
     baseUrlTemplate: CF_BASE_URL_TEMPLATE,
@@ -214,6 +233,17 @@ export const openrouterSpec: ProviderSpec = {
     'google/gemini-2.5-pro',
     'deepseek/deepseek-chat',
   ],
+  semantic: {
+    embedding: {
+      protocol: 'openai-embeddings',
+      modelPatterns: ['embedding', 'embed'],
+    },
+    rerank: {
+      protocol: 'cohere-rerank',
+      defaultModels: ['nvidia/llama-nemotron-rerank-vl-1b-v2:free'],
+      modelPatterns: ['rerank'],
+    },
+  },
   pricing: {},
   capabilities: { supportsVision: true, supportsThinking: true, fileInput: 'native' },
   wire: 'openai-compat',
@@ -223,6 +253,7 @@ export const openrouterSpec: ProviderSpec = {
     headerSources: [
       {
         header: 'HTTP-Referer',
+        defaultValue: 'https://codestudio.digital',
         sources: [
           { from: 'extra', key: 'http_referer' },
           { from: 'extra', key: 'referer' },
@@ -233,6 +264,7 @@ export const openrouterSpec: ProviderSpec = {
       },
       {
         header: 'X-OpenRouter-Title',
+        defaultValue: 'MegaBrain',
         sources: [
           { from: 'extra', key: 'app_title' },
           { from: 'extra', key: 'title' },

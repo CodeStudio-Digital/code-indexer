@@ -49,6 +49,10 @@ export interface SubagentSpec {
   initialMessages: AgentMessage[];
   maxTurns: number;
   profile?: string;
+  /** Per-spec provider override — resolved from the profile's subagent model config; falls back to `parent.provider`. */
+  provider?: ChatProvider;
+  /** Per-spec reasoning-effort override; falls back to the parent session's effort. */
+  reasoningEffort?: string;
   spawnId?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
@@ -363,8 +367,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     'CODER_SUBAGENT_TELEMETRY_ROLLOUT_PERCENT',
     telemetryRolloutKey,
   );
+  const subProvider = spec.provider ?? parent.provider;
   const subRunner = new CoderRunner({
-    provider: parent.provider,
+    provider: subProvider,
     registry: subRegistry,
     systemPrompt: finalSystemPrompt,
     toolContext: subContext,
@@ -384,11 +389,12 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     // instead of the default 12 KB when the parent session elevates it.
     // Coherent with the user intent: "this whole session is free."
     toolOutputCapLevel: parent.ctx.toolOutputCapLevel,
-    // The app/company operator configures effort once on the parent session;
-    // every ephemeral specialist inherits that exact provider request level.
-    reasoningEffort: typeof parent.ctx.runner?.getReasoningEffort === 'function'
-      ? parent.ctx.runner.getReasoningEffort()
-      : undefined,
+    // Per-profile effort override (admin subagent config) wins; otherwise the
+    // specialist inherits the exact effort configured on the parent session.
+    reasoningEffort: spec.reasoningEffort
+      ?? (typeof parent.ctx.runner?.getReasoningEffort === 'function'
+        ? parent.ctx.runner.getReasoningEffort()
+        : undefined),
   });
 
   const abortRunner = () => subRunner.abort();
@@ -415,8 +421,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   });
   subRunner.on('auto_continue', (count) => { autoContinues = Math.max(autoContinues, count); });
   subRunner.on('provider_call', (payload: { provider?: string; model?: string }) => {
-    const provider = payload.provider ?? parent.provider.name;
-    const model = payload.model ?? parent.provider.model;
+    const provider = payload.provider ?? subProvider.name;
+    const model = payload.model ?? subProvider.model;
     monitor.recordProviderCall(provider, model);
   });
   subRunner.on('text_delta', () => {
@@ -641,7 +647,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     const reason = phaseToReason(watchdogPhase);
     if (watchdogFailed) {
       const salvaged = await buildSubagentSalvageSummary({
-        provider: parent.provider,
+        provider: subProvider,
         label: spec.label,
         reason: e instanceof Error ? e.message : String(e),
         messages: subRunner.messages,
@@ -1157,6 +1163,10 @@ export interface ParallelAgentSpec {
    */
   systemPrompt?: string;
   allowlist?: SubagentAllowlist;
+  /** Per-agent provider override — resolved from the agent's profile; falls back to `parent.provider`. */
+  provider?: ChatProvider;
+  /** Per-agent reasoning-effort override; falls back to the parent session's effort. */
+  reasoningEffort?: string;
   pathScope?: string[];
   pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
@@ -1242,6 +1252,8 @@ export async function runParallelAgents(
         initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
         maxTurns: spec.maxTurns,
         profile: spec.profile,
+        provider: spec.provider,
+        reasoningEffort: spec.reasoningEffort,
         spawnId: spec.spawnId,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,

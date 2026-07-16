@@ -43,8 +43,7 @@ function persist(file: { relativePath: string; hash: string; sizeBytes: number; 
   db.upsertFile(targetProjectId, {
     path: file.relativePath, language: 'typescript', size: file.sizeBytes,
     lineCount: file.lineCount, contentHash: file.hash,
-    summary: 's', concepts: [], dependencies: [], internalDeps: [], externalDeps: [],
-    notes: [], complexity: 'low', mtimeMs: file.mtimeMs ?? null,
+    dependencies: [], internalDeps: [], externalDeps: [], mtimeMs: file.mtimeMs ?? null,
   });
 }
 

@@ -43,7 +43,6 @@ export function providersRouter(store: ProviderStore): Hono {
         // so the dashboard renders each provider's config screen with no per-kind code.
         config: def.config ?? null,
         auth: def.auth ?? null,
-        supportsIndexer: !!(def.createIndexer || def.createIndexerAsync),
         supportsCoder: !!def.createCoder,
       })),
     );

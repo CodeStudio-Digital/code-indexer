@@ -70,7 +70,7 @@ describe('trimProjectSchema (C2)', () => {
       const leftover = after.filter((n) => !keep.has(n) && !isFtsShadow(n));
       expect(leftover, `central tables missing from drop-list: ${leftover.join(', ')}`).toEqual([]);
       // 3) Core project tables + code FTS survive (FTS5 vtabs list as type='table').
-      for (const t of ['files', 'symbols', 'vector_ids', 'api_collections', 'files_fts', 'symbols_fts', 'file_contents_fts']) {
+      for (const t of ['files', 'symbols', 'api_collections', 'files_fts', 'symbols_fts', 'file_contents_fts']) {
         expect(after).toContain(t);
       }
       // 4) FK integrity intact (no dangling cross-DB FK).
@@ -140,6 +140,45 @@ describe('central-table migration on a trimmed project DB (mig 175 regression)',
       db.close();
     }
   });
+
+  it('upgrades a v1-trimmed project DB with newly classified central tables', () => {
+    const { db } = buildFullSchema();
+    try {
+      db.exec(`CREATE TABLE IF NOT EXISTS project_db_meta (key TEXT PRIMARY KEY, value TEXT)`);
+      db.prepare(`INSERT OR REPLACE INTO project_db_meta (key, value) VALUES ('trim_version', '1')`).run();
+      expect(userTables(db)).toContain('agent_memory');
+      expect(userTables(db)).toContain('doc_ingest_runs');
+
+      trimProjectSchema(db);
+
+      expect(userTables(db)).not.toContain('agent_memory');
+      expect(userTables(db)).not.toContain('doc_ingest_runs');
+      expect(db.prepare(
+        `SELECT value FROM project_db_meta WHERE key = 'trim_version'`,
+      ).get()).toEqual({ value: '2' });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('removes central base tables recreated by the shared bootstrap on reopen', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      expect(userTables(db)).not.toContain('agent_memory');
+
+      // initProjectSchema calls initSchema before trim on every writable open.
+      initSchema(db);
+      expect(userTables(db)).toContain('agent_memory');
+
+      trimProjectSchema(db);
+      expect(userTables(db)).not.toContain('agent_memory');
+      expect(userTables(db)).not.toContain('runs');
+    } finally {
+      db.close();
+    }
+  });
+
 });
 
 describe('App Studio migration on a trimmed project DB (mig 218 regression)', () => {

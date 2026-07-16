@@ -6,7 +6,7 @@
  *   - types.ts          — public input/callback shapes + tunable constants
  *   - utils.ts          — hashing, URL/file normalisation, embedding text builder
  *   - source-helpers.ts — requireCollection / ensureSource / estimateFromPages
- *   - delete.ts         — deleteAndCleanup + sweepTombstones
+ *   - delete.ts         — deleteAndCleanup
  *   - embed-upsert.ts   — worker-pool embed+upsert + retryEmbeddings
  *   - run-ingest.ts     — 7-phase pipeline orchestrator (fetch→gate→chunk→…)
  *   - strategies.ts     — PDF / URL / folder entry points
@@ -17,9 +17,8 @@
  */
 import {
   deleteAndCleanup,
-  sweepTombstones as sweepTombstonesFn,
+  deleteCollectionAndCleanup,
   type DeleteResult,
-  type SweepResult,
 } from './index-doc-use-case/delete.js';
 import {
   retryEmbeddings as retryEmbeddingsFn,
@@ -60,12 +59,103 @@ export { normalizeSeedUrl } from './index-doc-use-case/utils.js';
 /** Exported for tests — they pin the value. */
 export const DRY_RUN_TOKEN_COST_USD_PER_1K = DEFAULT_DRY_RUN_TOKEN_COST_USD_PER_1K;
 
+export interface DocumentationSemanticMutationFence {
+  job_id: number;
+  token: string;
+}
+
+export interface DocumentationSemanticHooks {
+  prepareCollection(collectionId: number): Promise<void>;
+  ensureCollection(collectionId: number): Promise<void>;
+  beginCollectionMutation?(
+    collectionId: number,
+    operation: 'upsert' | 'delete',
+  ): DocumentationSemanticMutationFence | null | Promise<DocumentationSemanticMutationFence | null>;
+  endCollectionMutation?(
+    fence: DocumentationSemanticMutationFence | null,
+    mutationError?: unknown,
+  ): void | Promise<void>;
+  runCollectionExclusive?<T>(collectionId: number, operation: () => Promise<T>): Promise<T>;
+}
+
 export class IndexDocumentationUseCase {
+  private semanticHooks: DocumentationSemanticHooks | null = null;
+
   constructor(private deps: IndexDocUseCaseDeps) {}
+
+  setSemanticHooks(hooks: DocumentationSemanticHooks | null): void {
+    this.semanticHooks = hooks;
+  }
+
+  /** Wrap custom ingestion entrypoints (for example Company Docs) in the same
+   * durable collection fence as the built-in URL/PDF/folder strategies. */
+  runWithSemanticCollection<T>(
+    collectionId: number,
+    run: () => Promise<T>,
+    operation: 'upsert' | 'delete' = 'upsert',
+  ): Promise<T> {
+    return this.withSemanticNamespace(collectionId, run, operation);
+  }
+
+  private async withSemanticNamespace<T>(
+    collectionId: number,
+    run: () => Promise<T>,
+    operation: 'upsert' | 'delete' = 'upsert',
+  ): Promise<T> {
+    const hooks = this.semanticHooks;
+    let fence: DocumentationSemanticMutationFence | null = null;
+    let mutationError: unknown = null;
+    if (hooks) {
+      if (!hooks.beginCollectionMutation || !hooks.endCollectionMutation) {
+        throw new Error('Documentation semantic mutation fence hooks are required');
+      }
+      // With Knowledge embeddings enabled this is the durability boundary,
+      // not a best-effort optimization. Continuing after it fails would let
+      // relational writes race activation without a persistent watermark.
+      fence = await hooks.beginCollectionMutation(collectionId, operation);
+    }
+    try {
+      await hooks?.prepareCollection(collectionId);
+    } catch (error) {
+      // FTS ingestion is authoritative and must remain available while the
+      // semantic worker/provider is down. The embed phase is independently
+      // fail-open and the durable backfill will retry later.
+      console.warn(`[doc-indexer] semantic namespace prepare paused c${collectionId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`);
+    }
+    try {
+      return await run();
+    } catch (error) {
+      mutationError = error;
+      throw error;
+    } finally {
+      // Settle before scheduling catch-up. The durable delta stays pending
+      // until an exact logical + physical pass acknowledges its watermark.
+      try {
+        await hooks?.endCollectionMutation?.(fence, mutationError);
+      } catch (error) {
+        console.warn(`[doc-indexer] semantic mutation fence settle paused c${collectionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`);
+      }
+      // Always publish the post-ingestion catch-up, including partial corpus
+      // failures. Relational writes may have landed before the strategy threw.
+      if (hooks) {
+        try {
+          await hooks.ensureCollection(collectionId);
+        } catch (error) {
+          console.warn(`[doc-indexer] semantic namespace activation paused c${collectionId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`);
+        }
+      }
+    }
+  }
 
   // ─── PDF ─────────────────────────────────────────────────────────
   async indexPdf(input: IndexPdfInput, callbacks?: IndexDocStreamCallbacks): Promise<DocIngestResult> {
-    return indexPdfFn(this.deps, input, callbacks);
+    return this.withSemanticNamespace(input.collectionId, () => indexPdfFn(this.deps, input, callbacks));
   }
   async dryRunPdf(input: IndexPdfInput): Promise<DocIngestEstimate> {
     return dryRunPdfFn(input);
@@ -73,7 +163,7 @@ export class IndexDocumentationUseCase {
 
   // ─── URL ─────────────────────────────────────────────────────────
   async indexUrl(input: IndexUrlInput, callbacks?: IndexDocStreamCallbacks): Promise<DocIngestResult> {
-    return indexUrlFn(this.deps, input, callbacks);
+    return this.withSemanticNamespace(input.collectionId, () => indexUrlFn(this.deps, input, callbacks));
   }
   async dryRunUrl(input: IndexUrlInput): Promise<DocIngestEstimate> {
     return dryRunUrlFn(input);
@@ -81,53 +171,47 @@ export class IndexDocumentationUseCase {
 
   // ─── Folder (migration 103) ──────────────────────────────────────
   async indexFolder(input: IndexFolderInput, callbacks?: IndexDocStreamCallbacks): Promise<DocIngestResult> {
-    return indexFolderFn(this.deps, input, callbacks);
+    return this.withSemanticNamespace(input.collectionId, () => indexFolderFn(this.deps, input, callbacks));
   }
 
-  // ─── Delete + remote vector cleanup ──────────────────────────────
+  // ─── Delete + local vector cleanup ───────────────────────────────
   /**
-   * Delete a source row, cascade-wipe its chunks + chunk_vectors in SQLite,
-   * and try to remove the corresponding embeddings from the remote vector
-   * store. If the remote call fails, the leftover ids are written to
-   * `doc_vector_tombstones` so a future sweep can retry — user intent
-   * (source gone) is always fulfilled even when the remote store is down.
+   * Delete a source row, cascade-wipe its chunks and remove deterministic
+   * ids from the collection's local semantic namespace.
    */
   async deleteSource(sourceId: number): Promise<DeleteResult> {
-    // Resolve the collection BEFORE the delete cascades it away — its namespace
-    // lets backends with namespace-scoped ids (Pinecone) target the right one.
+    // Resolve the collection before the delete cascades it away.
     const collectionId = this.deps.docStore.getSource(sourceId)?.collection_id;
-    return deleteAndCleanup(
+    const remove = () => deleteAndCleanup(
       this.deps.docStore,
       this.deps.vectorStore,
       () => this.deps.docStore.listVectorIdsForSource(sourceId),
       () => { this.deps.docStore.deleteSource(sourceId); },
       collectionId != null ? docNamespace(collectionId) : undefined,
     );
+    return collectionId == null
+      ? remove()
+      : this.withSemanticNamespace(collectionId, remove, 'delete');
   }
 
   /** Same as `deleteSource` but for an entire collection (two-hop FK cascade). */
   async deleteCollection(collectionId: number): Promise<DeleteResult> {
-    return deleteAndCleanup(
+    const remove = () => deleteCollectionAndCleanup(
       this.deps.docStore,
       this.deps.vectorStore,
-      () => this.deps.docStore.listVectorIdsForCollection(collectionId),
+      collectionId,
       () => { this.deps.docStore.deleteCollection(collectionId); },
       docNamespace(collectionId),
     );
-  }
-
-  /**
-   * Drain pending tombstones — try `vectorStore.deleteByIds` for the batch,
-   * remove succeeding rows, bump retry_count on the rest. Called best-effort
-   * at boot from `server.ts` and exposed via `POST /api/docs/vectors/sweep`.
-   */
-  async sweepTombstones(limit: number = 500): Promise<SweepResult> {
-    return sweepTombstonesFn(this.deps.docStore, this.deps.vectorStore, limit);
+    return this.semanticHooks?.runCollectionExclusive
+      ? this.semanticHooks.runCollectionExclusive(collectionId, remove)
+      : remove();
   }
 
   // ─── Re-embed missing ────────────────────────────────────────────
   /**
-   * Re-embed chunks whose `embedding_hash IS NULL`. Scope is explicit:
+   * Reconcile chunks missing from the current semantic_items generation (or
+   * whose content hash changed). Scope is explicit:
    * `sourceId` (preferred for stuck-source recovery), `collectionId`, or
    * nothing (entire corpus — used by `POST /api/docs/embeddings/retry`).
    *
@@ -135,6 +219,60 @@ export class IndexDocumentationUseCase {
    * with 5000 missing chunks doesn't take 15 minutes sequentially.
    */
   async retryEmbeddings(
+    scope: RetryEmbeddingsScope = {},
+    callbacks?: RetryEmbeddingsCallbacks,
+  ): Promise<RetryEmbeddingsResult> {
+    const exclusive = this.semanticHooks?.runCollectionExclusive;
+    if (this.semanticHooks && !exclusive) {
+      throw new Error('Documentation semantic namespace lock hook is required');
+    }
+    if (!exclusive) return this.retryEmbeddingsUnlocked(scope, callbacks);
+
+    let collectionIds: number[];
+    if (scope.sourceId != null) {
+      const source = this.deps.docStore.getSource(scope.sourceId);
+      if (!source) return { embedded: 0, tokens: 0, total: 0 };
+      collectionIds = [source.collection_id];
+    } else if (scope.collectionId != null) {
+      collectionIds = [scope.collectionId];
+    } else {
+      collectionIds = this.deps.docStore.listCollections().map((collection) => collection.id);
+    }
+
+    const aggregate: RetryEmbeddingsResult = { embedded: 0, tokens: 0, total: 0 };
+    for (const collectionId of [...new Set(collectionIds)]) {
+      const scoped = scope.sourceId != null
+        ? scope
+        : { collectionId, ...(scope.force === undefined ? {} : { force: scope.force }) };
+      const result = await exclusive(collectionId, async () => {
+        // A collection/source can disappear while this retry waits behind a
+        // build or delete checkpoint. Revalidate under the namespace lock so
+        // no vector upsert can resurrect a removed docs namespace.
+        if (!this.deps.docStore.getCollection(collectionId)) {
+          return { embedded: 0, tokens: 0, total: 0 };
+        }
+        if (scope.sourceId != null) {
+          const currentSource = this.deps.docStore.getSource(scope.sourceId);
+          if (!currentSource || currentSource.collection_id !== collectionId) {
+            return { embedded: 0, tokens: 0, total: 0 };
+          }
+        }
+        return this.retryEmbeddingsUnlocked(scoped, callbacks);
+      });
+      aggregate.embedded += result.embedded;
+      aggregate.tokens += result.tokens;
+      aggregate.total += result.total;
+      if (result.stopped) {
+        aggregate.stopped = result.stopped;
+        break;
+      }
+    }
+    return aggregate;
+  }
+
+  /** Coordinator-only primitive. Its caller already owns the namespace lock;
+   * public/manual retries must use `retryEmbeddings` above. */
+  retryEmbeddingsUnlocked(
     scope: RetryEmbeddingsScope = {},
     callbacks?: RetryEmbeddingsCallbacks,
   ): Promise<RetryEmbeddingsResult> {

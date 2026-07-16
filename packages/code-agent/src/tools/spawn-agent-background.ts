@@ -17,6 +17,7 @@ import {
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { MICRO_AGENT_PROFILES } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { describeProvider, type SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import { providerForProfile, effortForProfile } from '@mcp/code-agent/tools/subagent-provider.js';
 import {
   type NormalizedAgent,
   limitsForAgent,
@@ -45,8 +46,15 @@ export async function runBackgroundEphemeral(
   if (sessionId == null) {
     return err('spawn_agent: background:true needs an active session. Run without background for a one-shot.');
   }
-  const provider = deps.subagentProvider ?? deps.provider;
-  const info = describeProvider(provider);
+  // Resolve each agent's provider from its profile (memoized in the resolver);
+  // a batch can mix profiles, so `info` is a representative label for the
+  // group-level slots/events while each spec carries its own provider.
+  const agentProviders = await Promise.all(agents.map((a) => providerForProfile(deps, a.profile)));
+  const agentInfos = agentProviders.map((p) => describeProvider(p));
+  const distinctLabels = [...new Set(agentInfos.map((i) => i.label))];
+  const info = distinctLabels.length <= 1
+    ? (agentInfos[0] ?? describeProvider(deps.provider))
+    : { provider: 'mixed', model: distinctLabels.join(', '), label: distinctLabels.join(', ') };
   const jobId = `job-${randomUUID().slice(0, 8)}`;
   const groupId = randomUUID().slice(0, 8);
   const manager = getSubagentJobManager();
@@ -61,7 +69,7 @@ export async function runBackgroundEphemeral(
 
   ctx.runner?.emit('agents_group_start', {
     groupId, jobId, background: true, provider: info.provider, model: info.model,
-    agents: agents.map((a, i) => ({ index: i, label: a.label, provider: info.provider, model: info.model, task: a.task, status: 'pending' })),
+    agents: agents.map((a, i) => ({ index: i, label: a.label, provider: agentInfos[i]?.provider, model: agentInfos[i]?.model, task: a.task, status: 'pending' })),
   });
 
   // Detached context: job-owned signal + non-interactive gate.
@@ -70,11 +78,13 @@ export async function runBackgroundEphemeral(
     signal: job.abort.signal,
     permissionGate: ctx.permissionGate?.forBackground(),
   };
-  const specs: ParallelAgentSpec[] = agents.map((a) => ({
+  const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
     task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
     maxTurns: a.maxTurns,
     profile: a.profile.id,
+    provider: agentProviders[i],
+    reasoningEffort: effortForProfile(deps, a.profile),
     spawnId: groupId,
     systemPrompt: a.profile.systemPrompt,
     allowlist: a.profile.allowlist,
@@ -108,7 +118,7 @@ async function runBackgroundJob(
   const manager = getSubagentJobManager();
   try {
     const { results, totalUsage } = await runParallelAgents(
-      { provider: deps.subagentProvider ?? deps.provider, tools: deps.parentTools, ctx: jobCtx, sessionId, sessionStore: deps.sessionStore, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
+      { provider: deps.provider, tools: deps.parentTools, ctx: jobCtx, sessionId, sessionStore: deps.sessionStore, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
       specs,
       MICRO_AGENT_PROFILES.explore.systemPrompt,
       MICRO_AGENT_PROFILES.explore.allowlist,
@@ -119,7 +129,9 @@ async function runBackgroundJob(
           deadlineMs: progress.deadlineMs, lastToolName: progress.lastToolName,
           summary: progress.summary,
         });
-        ctx.runner?.emit('agent_progress', { groupId: job.groupId, provider: info.provider, model: info.model, ...progress });
+        const specProvider = specs[progress.agentIndex]?.provider;
+        const pinfo = specProvider ? describeProvider(specProvider) : info;
+        ctx.runner?.emit('agent_progress', { groupId: job.groupId, provider: pinfo.provider, model: pinfo.model, ...progress });
       },
     );
 

@@ -18,7 +18,10 @@ import { CENTRAL_DROP_TABLES, CENTRAL_FTS_VTABS, assertDisjointFromProject } fro
 import { recreateFkEdgeTables } from './fk-recreate.js';
 
 const MARKER_KEY = 'trim_version';
-const TRIM_VERSION = '1';
+// v2 adds central tables introduced by migrations 181-217 and removes the
+// retired semantic vector ledgers. Existing project DBs stamped with v1 must
+// run the expanded trim once on reopen.
+const TRIM_VERSION = '2';
 
 function ensureMetaTable(db: DB): void {
   db.exec(`CREATE TABLE IF NOT EXISTS project_db_meta (key TEXT PRIMARY KEY, value TEXT)`);
@@ -28,7 +31,16 @@ function alreadyTrimmed(db: DB): boolean {
   const row = db.prepare(`SELECT value AS v FROM project_db_meta WHERE key = ?`).get(MARKER_KEY) as
     | { v?: string }
     | undefined;
-  return row?.v === TRIM_VERSION;
+  if (row?.v !== TRIM_VERSION) return false;
+
+  // initProjectSchema runs the shared central bootstrap before this function.
+  // On reopen that bootstrap can recreate central base tables even though the
+  // project DB was trimmed previously, so the marker alone is not sufficient.
+  const present = new Set((db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table'`,
+  ).all() as Array<{ name: string }>).map((entry) => entry.name));
+  return !CENTRAL_DROP_TABLES.some((table) => present.has(table))
+    && !CENTRAL_FTS_VTABS.some((table) => present.has(table));
 }
 
 /** Drop the central FTS vtabs first (removes their shadow tables) so the base

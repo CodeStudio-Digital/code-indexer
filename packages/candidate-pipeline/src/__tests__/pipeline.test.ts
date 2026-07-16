@@ -9,7 +9,7 @@
  *   - Hydrators preserve order
  *   - Filters run sequentially; kept feeds next
  *   - Scorers run sequentially; accumulate fields on candidates
- *   - Selector picks top-K
+ *   - Selector picks top-K; an optional final selector runs after post-hydration
  *   - Side effects fire AFTER response is built, not blocking
  *   - `enable(query)` is honored at every stage
  */
@@ -192,6 +192,54 @@ describe('CandidatePipeline', () => {
     expect(result.selected.every((c) => c.scoredBy.join('-') === 'A-B')).toBe(true);
   });
 
+  it('can filter scorer output before selector capacity is applied', async () => {
+    const events: string[] = [];
+    const src: Source<TestQuery, TestCandidate> = {
+      name: 'duplicated',
+      enable: () => true,
+      async source() {
+        return [makeCandidate('same', 'first'), makeCandidate('same', 'second')];
+      },
+    };
+    const scorer: Scorer<TestQuery, TestCandidate> = {
+      name: 'fusion',
+      enable: () => true,
+      async score(_q, candidates) {
+        events.push('score');
+        return candidates.map((candidate) => ({
+          ok: true as const,
+          candidate: { ...candidate, score: 2 },
+        }));
+      },
+      update(candidate, scored) { candidate.score = scored.score; },
+    };
+    const dedup: Filter<TestQuery, TestCandidate> = {
+      name: 'dedup_after_score',
+      enable: () => true,
+      filter(_q, candidates) {
+        events.push(`filter:${candidates.map((candidate) => candidate.score).join(',')}`);
+        return { kept: candidates.slice(0, 1), removed: candidates.slice(1) };
+      },
+    };
+    const sink = new InMemoryTelemetrySink();
+    const pipeline = new CandidatePipeline<TestQuery, TestCandidate>(
+      { name: 'p_post_score_filter', telemetry: sink },
+      {
+        sources: [src],
+        scorers: [scorer],
+        postScoringFilters: [dedup],
+        selector: new IdentitySelector(),
+      },
+    );
+
+    const result = await pipeline.execute(makeQuery());
+
+    expect(events).toEqual(['score', 'filter:2,2']);
+    expect(result.selected).toHaveLength(1);
+    expect(result.nonSelected).toHaveLength(1);
+    expect(sink.events.some((event) => event.stage === 'post_score_filter')).toBe(true);
+  });
+
   it('runs query hydrators before sources', async () => {
     const events: string[] = [];
     const qh: QueryHydrator<TestQuery> = {
@@ -264,5 +312,60 @@ describe('CandidatePipeline', () => {
     const result = await pipeline.execute(makeQuery());
     expect(result.selected.map((c) => c.candidateId)).toEqual(order);
     expect(result.selected.every((c) => c.hydratedBy.includes('h'))).toBe(true);
+  });
+
+  it('applies a final selector after post-selection hydration', async () => {
+    const src: Source<TestQuery, TestCandidate> = {
+      name: 'src',
+      enable: () => true,
+      async source() {
+        return [
+          { ...makeCandidate('a', 'A'), score: 3 },
+          { ...makeCandidate('b', 'B'), score: 2 },
+          { ...makeCandidate('c', 'C'), score: 1 },
+        ];
+      },
+    };
+    const promoteC: Hydrator<TestQuery, TestCandidate> = {
+      name: 'promote_c',
+      enable: () => true,
+      async hydrate(_q, candidates) {
+        return candidates.map((candidate) => ({
+          ok: true as const,
+          candidate: {
+            ...candidate,
+            score: candidate.candidateId === 'c' ? 10 : candidate.score,
+          },
+        }));
+      },
+      update(candidate, hydrated) { candidate.score = hydrated.score; },
+    };
+    const initialSelector = new IdentitySelector();
+    const finalSelector: Selector<TestQuery, TestCandidate> = {
+      name: 'final_top_k',
+      enable: () => true,
+      size: () => 2,
+      score: (candidate) => candidate.score,
+      select(_q, candidates) {
+        const sorted = [...candidates].sort((a, b) => b.score - a.score);
+        return { selected: sorted.slice(0, 2), nonSelected: sorted.slice(2) };
+      },
+    };
+    const sink = new InMemoryTelemetrySink();
+    const pipeline = new CandidatePipeline<TestQuery, TestCandidate>(
+      { name: 'p_post_selector', telemetry: sink },
+      {
+        sources: [src],
+        selector: initialSelector,
+        postSelectionHydrators: [promoteC],
+        postSelectionSelector: finalSelector,
+      },
+    );
+
+    const result = await pipeline.execute(makeQuery());
+    expect(result.selected.map((c) => c.candidateId)).toEqual(['c', 'a']);
+    expect(result.selected.map((c) => c.score)).toEqual([10, 3]);
+    expect(result.nonSelected.map((c) => c.candidateId)).toContain('b');
+    expect(sink.events.some((event) => event.stage === 'post_selector')).toBe(true);
   });
 });

@@ -14,6 +14,8 @@ export interface ToolSelectionQuery extends PipelineQuery {
   taskText: string;
   /** Pre-computed embedding of taskText (set by TaskEmbeddingHydrator). */
   taskEmbedding?: Float32Array;
+  /** Vector-space identity pinned together with taskEmbedding. */
+  embeddingFingerprint?: string;
   /**
    * Tool-call history for the current session, used by FrequencyBoostScorer
    * to bump tools the agent has called recently with success.

@@ -27,6 +27,21 @@ describe('TopKSelector', () => {
     expect(result.selected.map((x) => x.candidateId)).toEqual(['b', 'c']);
     expect(result.nonSelected.map((x) => x.candidateId)).toEqual(['a']);
   });
+
+  it('resolves K from the query when configured dynamically', () => {
+    const sel = new TopKSelector<Q & { limit: number }, C>({
+      k: (query) => query.limit,
+      scoreOf: (c) => c.score,
+    });
+    const result = sel.select({ ...q, limit: 3 }, [
+      { candidateId: 'a', group: 'g', score: 1 },
+      { candidateId: 'b', group: 'g', score: 4 },
+      { candidateId: 'c', group: 'g', score: 2 },
+      { candidateId: 'd', group: 'g', score: 3 },
+    ]);
+    expect(result.selected.map((x) => x.candidateId)).toEqual(['b', 'd', 'c']);
+    expect(sel.size()).toBeUndefined();
+  });
 });
 
 describe('DiversitySelector', () => {

@@ -54,6 +54,8 @@ export interface RolePipelineQuery extends PipelineQuery {
   taskText: string;
   /** Pre-computed task embedding (set by QueryHydrator). */
   taskEmbedding?: Float32Array;
+  /** Vector-space identity pinned together with taskEmbedding. */
+  embeddingFingerprint?: string;
   /** All roles available in the current template. */
   availableRoles: RoleDescriptor[];
   /** Idle subordinates that could be reactivated. */

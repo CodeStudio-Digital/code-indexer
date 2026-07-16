@@ -16,6 +16,51 @@ import type { GitTab } from './GitTabNav.js';
 
 export type { GitStatus, GitStatusFile } from '@mcp/api-bus';
 
+const STATUS_PAGE_SIZE = 1_000;
+const MUTATION_BATCH_SIZE = 2_000; // Matches the server-side safety bound.
+
+/**
+ * The API keeps an immutable snapshot, but UI pagination makes group counts and
+ * bulk selection misleading. Fetch the remaining snapshot slices in parallel;
+ * the virtualized view will only mount the visible rows.
+ */
+async function loadCompleteStatus(projectId: number, repoPath?: string): Promise<GitWorkspaceSnapshot> {
+  const first = await apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', {
+    projectId,
+    repoPath,
+    pageSize: STATUS_PAGE_SIZE,
+  });
+  if (!first.snapshotId || !first.nextCursor) return first;
+
+  const offsets: number[] = [];
+  for (let offset = first.files.length; offset < first.counts.total; offset += STATUS_PAGE_SIZE) {
+    offsets.push(offset);
+  }
+  const remaining = await Promise.all(offsets.map((offset) => apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', {
+    projectId,
+    repoPath,
+    snapshotId: first.snapshotId!,
+    cursor: String(offset),
+    pageSize: STATUS_PAGE_SIZE,
+  })));
+  return {
+    ...first,
+    files: [first, ...remaining].flatMap((page) => page.files),
+    nextCursor: null,
+  };
+}
+
+async function mutatePaths(
+  method: 'projectGit.stage' | 'projectGit.unstage' | 'projectGit.discard',
+  projectId: number,
+  repoPath: string | undefined,
+  paths: string[],
+): Promise<void> {
+  for (let offset = 0; offset < paths.length; offset += MUTATION_BATCH_SIZE) {
+    await apiCall(method, { projectId, repoPath, paths: paths.slice(offset, offset + MUTATION_BATCH_SIZE) });
+  }
+}
+
 interface OpenSections {
   staged: boolean;
   unstaged: boolean;
@@ -32,11 +77,8 @@ export interface GitWindowModel {
   setTab: Dispatch<SetStateAction<GitTab>>;
   mergeState: GitMergeState | null;
   statusCounts: GitWorkspaceSnapshot['counts'] | null;
-  hasMoreStatus: boolean;
-  loadingMoreStatus: boolean;
   groups: { staged: GitStatusFile[]; unstaged: GitStatusFile[]; untracked: GitStatusFile[] };
   reload: (silent?: boolean) => Promise<void>;
-  loadMoreStatus: () => Promise<void>;
   showDiff: (file: GitStatusFile) => Promise<void>;
   onStage: (paths: string[]) => Promise<void>;
   onUnstage: (paths: string[]) => Promise<void>;
@@ -69,9 +111,6 @@ export function useGitWindow(
   const [tab, setTab] = useState<GitTab>('changes');
   const [mergeState, setMergeState] = useState<GitMergeState | null>(null);
   const [statusCounts, setStatusCounts] = useState<GitWorkspaceSnapshot['counts'] | null>(null);
-  const [statusSnapshotId, setStatusSnapshotId] = useState<string | null>(null);
-  const [statusCursor, setStatusCursor] = useState<string | null>(null);
-  const [loadingMoreStatus, setLoadingMoreStatus] = useState(false);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
   const staleWhileHidden = useRef(false);
   const reloadRequest = useRef(0);
@@ -84,9 +123,6 @@ export function useGitWindow(
     setError(null);
     setLoading(true);
     setStatusCounts(null);
-    setStatusSnapshotId(null);
-    setStatusCursor(null);
-    setLoadingMoreStatus(false);
   }, [projectId, repoPath]);
 
   const showDiff = useCallback(
@@ -140,7 +176,7 @@ export function useGitWindow(
     try {
       const [s, ms] = await Promise.all([
         (includeFiles
-          ? apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', { projectId, repoPath, pageSize: 250 })
+          ? loadCompleteStatus(projectId, repoPath)
           : apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles: false }))
           .then((value) => {
             finishStatusSpan({ status: 'ok' });
@@ -164,12 +200,8 @@ export function useGitWindow(
       setStatus(s);
       if ('counts' in s) {
         setStatusCounts(s.counts);
-        setStatusSnapshotId(s.snapshotId);
-        setStatusCursor(s.nextCursor);
       } else {
         setStatusCounts(null);
-        setStatusSnapshotId(null);
-        setStatusCursor(null);
       }
       setMergeState(ms);
       staleWhileHidden.current = false;
@@ -190,32 +222,6 @@ export function useGitWindow(
       if (requestId === reloadRequest.current) setLoading(false);
     }
   }, [active, ready, projectId, repoPath, repoPrefix, tab]);
-
-  const loadMoreStatus = useCallback(async () => {
-    if (!active || !statusSnapshotId || !statusCursor || loadingMoreStatus) return;
-    const requestId = reloadRequest.current;
-    setLoadingMoreStatus(true);
-    try {
-      const page = await apiCall<GitWorkspaceSnapshot>('projectGit.statusPage', {
-        projectId,
-        repoPath,
-        snapshotId: statusSnapshotId,
-        cursor: statusCursor,
-        pageSize: 250,
-      });
-      if (requestId !== reloadRequest.current) return;
-      setStatus((current) => current ? { ...current, files: [...(current.files ?? []), ...page.files] } : page);
-      setStatusCursor(page.nextCursor);
-      setStatusCounts(page.counts);
-    } catch (cause) {
-      if (requestId !== reloadRequest.current) return;
-      const err = cause as Error & { status?: number };
-      if (err.status === 410) await reload(true);
-      else setError(err.message);
-    } finally {
-      if (requestId === reloadRequest.current) setLoadingMoreStatus(false);
-    }
-  }, [active, loadingMoreStatus, projectId, reload, repoPath, statusCursor, statusSnapshotId]);
 
   useEffect(() => {
     if (active) void reload(staleWhileHidden.current);
@@ -264,7 +270,7 @@ export function useGitWindow(
 
   const onStage = async (paths: string[]) => {
     try {
-      await apiCall('projectGit.stage', { projectId, repoPath, paths });
+      await mutatePaths('projectGit.stage', projectId, repoPath, paths);
       await reload();
     } catch (err) {
       toast.error(t('git.stageFailed'), { description: err instanceof Error ? err.message : String(err) });
@@ -272,7 +278,7 @@ export function useGitWindow(
   };
   const onUnstage = async (paths: string[]) => {
     try {
-      await apiCall('projectGit.unstage', { projectId, repoPath, paths });
+      await mutatePaths('projectGit.unstage', projectId, repoPath, paths);
       await reload();
     } catch (err) {
       toast.error(t('git.unstageFailed'), { description: err instanceof Error ? err.message : String(err) });
@@ -296,7 +302,7 @@ export function useGitWindow(
         });
     if (!ok) return;
     try {
-      await apiCall('projectGit.discard', { projectId, repoPath, paths });
+      await mutatePaths('projectGit.discard', projectId, repoPath, paths);
       await reload();
       toast.success(t('git.discarded'), {
         description: paths.length === 1 ? paths[0] : t('git.filesReverted', { count: paths.length }),
@@ -308,7 +314,6 @@ export function useGitWindow(
 
   return {
     status, loading, error, openSections, setOpenSections, tab, setTab, mergeState,
-    statusCounts, hasMoreStatus: !!statusCursor, loadingMoreStatus,
-    groups, reload, loadMoreStatus, showDiff, onStage, onUnstage, onDiscard,
+    statusCounts, groups, reload, showDiff, onStage, onUnstage, onDiscard,
   };
 }

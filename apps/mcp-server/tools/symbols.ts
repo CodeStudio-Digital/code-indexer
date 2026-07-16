@@ -677,57 +677,72 @@ const semantic_neighbors = defineTool({
     },
     required: ['symbol_id'],
   },
-  handler: async (args, { db, embeddingService, vectorStore }) => {
+  handler: async (args, { db, hybridSearch, semanticSearchClient }) => {
     // Resolve the owning project DB for the surrogate id (central when absent).
     const seedProject = args.project_name ? db.getProjectByName(args.project_name as string) : undefined;
     const sym = db.getSymbolById(args.symbol_id as number, seedProject?.id);
     if (!sym) throw new Error(`Symbol with id ${args.symbol_id} not found. Use search or get_file_skeleton to find valid symbol IDs. Do not retry with the same symbol_id.`);
 
-    if (!vectorStore || (embeddingService as { constructor: { name: string } }).constructor.name === 'NullEmbeddingService') {
-      return `[unavailable] Vector search is not configured for this project. Use grep_code or find_references instead for ${sym.kind} \`${sym.name}\`.`;
-    }
-
     const project = db.getProject(sym.project_id);
     if (!project) return 'Project not found for this symbol.';
 
-    // Build the query text using the same template the indexer uses for
-    // body embeddings — maximizes vector-space proximity to the seed.
-    const queryText = `${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n${sym.comment ?? ''}`;
-    const { vector } = await embeddingService.embedQuery(queryText);
-    if (vector.length === 0) return 'Failed to embed seed symbol.';
-
-    const limit = (args.limit as number) ?? 10;
-    // Over-fetch by 2 so we can drop the seed itself and still return `limit`.
-    const matches = await vectorStore.search(vector, {
-      topK: limit + 2,
-      filter: { project_name: project.name, type: 'symbol_body' },
-    });
-
-    // If symbol_body coverage is thin, fall back to signature-level matches.
-    let usable = matches;
-    if (usable.length === 0) {
-      usable = await vectorStore.search(vector, {
-        topK: limit + 2,
-        filter: { project_name: project.name, type: 'symbol' },
-      });
+    // Query with the same real structural/body material used by code vectors.
+    // Falling back to the signature keeps the tool useful for deleted or
+    // temporarily unreadable files.
+    let seedBody = '';
+    if (sym.line) {
+      try {
+        seedBody = extractSymbolBody(project.root_path, sym.file_path, sym.line).body;
+      } catch { /* structural signature below remains sufficient */ }
     }
+    const queryText = [
+      `File: ${sym.file_path}`,
+      `${sym.kind} ${sym.name}`,
+      sym.signature ?? '',
+      sym.comment ?? '',
+      seedBody,
+    ].filter(Boolean).join('\n');
+    const limit = (args.limit as number) ?? 10;
+    // Out-of-process query: embedding + sqlite-vec stay in the http-api
+    // worker owner. Over-fetch so the seed can be removed below.
+    const remote = await semanticSearchClient.searchProject(project.id, queryText, {
+      mode: 'hybrid',
+      type: 'symbols',
+      limit: limit + 2,
+    });
+    const searched = remote.ok && remote.value
+      ? remote.value
+      : await hybridSearch.searchWithDiag(project.id, project.name, queryText, {
+          mode: 'fts', type: 'symbols', limit: limit + 2,
+        });
+    const diag = searched.diagnostics;
+    const degraded = !remote.ok
+      || !diag.vectorAvailable
+      || !diag.embeddingAvailable
+      || !!diag.vectorError;
 
     const neighbors: string[] = [];
-    for (const m of usable) {
-      const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
-      if (!refId || refId === sym.id) continue;
-      const n = db.getSymbolById(refId, sym.project_id);
+    for (const result of searched.results) {
+      if (result.type !== 'symbol' || result.id === sym.id) continue;
+      const n = db.getSymbolById(result.id, sym.project_id)
+        ?? (result.data as DBSymbol);
       if (!n) continue;
-      neighbors.push(`${m.score.toFixed(3)} ${n.file_path}:${n.line ?? '?'} ${n.kind} ${n.name}`);
+      neighbors.push(`${result.score.toFixed(3)} ${n.file_path}:${n.line ?? '?'} ${n.kind} ${n.name}`);
       if (neighbors.length >= limit) break;
     }
 
     if (neighbors.length === 0) {
-      return `No semantic neighbors found for ${sym.kind} ${sym.name}. Vector coverage may be incomplete — try reindexing.`;
+      const reason = remote.ok ? diag.vectorError : remote.error;
+      return degraded
+        ? `No related symbols found using the FTS fallback (${reason ?? 'semantic search unavailable'}). Use grep_code or find_references instead.`
+        : `No semantic neighbors found for ${sym.kind} ${sym.name}. Vector coverage may be incomplete — try reindexing.`;
     }
 
     return [
       `# Semantic neighbors of ${sym.kind} \`${sym.name}\` (${sym.file_path}:${sym.line ?? '?'})`,
+      ...(degraded
+        ? ['', `[note: semantic owner unavailable; showing lexical fallback: ${remote.error ?? diag.vectorError ?? 'vector backend unavailable'}]`]
+        : []),
       '',
       ...neighbors,
     ].join('\n');

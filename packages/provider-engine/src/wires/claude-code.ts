@@ -1,6 +1,5 @@
 import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
-import { AnthropicProvider } from '@mcp/indexer/indexer/providers/anthropic.js';
 import { getStore } from '@mcp/services/providers/shared/store.js';
 import {
   getClaudeCodeSystemPrefixBlocks,
@@ -12,7 +11,7 @@ import {
 
 type WireParts = Pick<
   ProviderDefinition,
-  'createCoder' | 'createIndexer' | 'createIndexerAsync' | 'fetchModels' | 'testConnection'
+  'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
 const CLAUDE_CODE_VALID_EFFORTS: readonly ClaudeCodeEffort[] = ['low', 'medium', 'high', 'xhigh'];
@@ -80,26 +79,6 @@ function claudeCodeAccountInfo(creds: { extra?: Record<string, unknown> }): Clau
  */
 export function buildClaudeCode(_spec: ProviderSpec): WireParts {
   return {
-    createIndexer: (creds: ResolvedCreds, model?: string) => {
-      const resolved = resolveClaudeCodeModel(model ?? 'haiku', claudeCodeAccountInfo(creds), {
-        includeOAuth: !!creds.authToken,
-        thinking: false,
-      });
-      return new AnthropicProvider(creds.apiKey, resolved.apiModel, creds.baseURL, {
-        authToken: creds.authToken,
-        defaultHeaders: claudeCodeMessageHeaders(creds),
-        defaultMetadata: creds.extra?.metadata as { user_id?: string } | undefined,
-        defaultBetas: resolved.betas,
-        defaultTemperature: 1,
-        systemPrefixBlocks: creds.authToken ? getClaudeCodeSystemPrefixBlocks() : undefined,
-        fetch: creds.fetch,
-        name: 'claude-code',
-        dangerouslyAllowBrowser: true,
-        useBetaMessages: true,
-        maxRetries: 0,
-      });
-    },
-
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const accountInfo = claudeCodeAccountInfo(creds);
       const providerId = opts?.providerId;

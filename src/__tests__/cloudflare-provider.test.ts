@@ -9,7 +9,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const openAIChatCalls: Array<Record<string, unknown>> = [];
-const openAIIndexerCalls: Array<{ apiKey?: string; model?: string; baseURL?: string }> = [];
 
 vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   OpenAIChatProvider: vi.fn().mockImplementation(function (
@@ -18,18 +17,6 @@ vi.mock('@mcp/code-agent/providers/openai.js', () => ({
   ) {
     openAIChatCalls.push(opts);
     Object.assign(this, opts, { name: opts.name ?? 'openai' });
-  }),
-}));
-
-vi.mock('@mcp/indexer/indexer/providers/openai.js', () => ({
-  OpenAIProvider: vi.fn().mockImplementation(function (
-    this: Record<string, unknown>,
-    apiKey?: string,
-    model?: string,
-    baseURL?: string,
-  ) {
-    openAIIndexerCalls.push({ apiKey, model, baseURL });
-    Object.assign(this, { apiKey, model, baseURL });
   }),
 }));
 
@@ -42,7 +29,6 @@ const cloudflare = buildProviderDefinition(cloudflareSpec);
 
 beforeEach(() => {
   openAIChatCalls.length = 0;
-  openAIIndexerCalls.length = 0;
   delete process.env.CLOUDFLARE_ACCOUNT_ID;
   delete process.env.CF_ACCOUNT_ID;
 });
@@ -57,12 +43,11 @@ describe('cloudflare provider definition', () => {
   });
 
   it('is registered in the central registry', async () => {
-    const { getDefinition, listCoderKinds, listIndexerKinds } = await import(
+    const { getDefinition, listCoderKinds } = await import(
       '@mcp/services/providers/registry.js'
     );
     expect(getDefinition('cloudflare')).toBeDefined();
     expect(listCoderKinds()).toContain('cloudflare');
-    expect(listIndexerKinds()).toContain('cloudflare');
   });
 });
 
@@ -101,21 +86,6 @@ describe('cloudflare.createCoder', () => {
     expect(() => cloudflare.createCoder!({ apiKey: 'cf-token' }, '@cf/meta/llama-3.1-8b-instruct-fp8')).toThrow(
       /account[_ ]id/i,
     );
-  });
-});
-
-describe('cloudflare.createIndexer', () => {
-  it('builds the same baseURL and forwards apiKey/model', () => {
-    const creds: ResolvedCreds = {
-      apiKey: 'cf-token',
-      extra: { account_id: 'xyz789' },
-    };
-    cloudflare.createIndexer!(creds, '@cf/baai/bge-m3');
-    expect(openAIIndexerCalls[0].baseURL).toBe(
-      'https://api.cloudflare.com/client/v4/accounts/xyz789/ai/v1',
-    );
-    expect(openAIIndexerCalls[0].apiKey).toBe('cf-token');
-    expect(openAIIndexerCalls[0].model).toBe('@cf/baai/bge-m3');
   });
 });
 

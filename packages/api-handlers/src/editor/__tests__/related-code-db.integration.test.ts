@@ -24,8 +24,8 @@ describe.runIf(electronNativeAbi)('context v3 temporary DB integration', () => {
       const add = (path: string, content: string, generated = false) => {
         const id = db.upsertFile(project.id, {
           path, language: 'php', size: content.length, lineCount: content.split('\n').length,
-          contentHash: path, summary: '', concepts: [], dependencies: [], internalDeps: [],
-          externalDeps: [], notes: [], complexity: 'low', isGenerated: generated,
+          contentHash: path, dependencies: [], internalDeps: [], externalDeps: [],
+          isGenerated: generated,
         });
         db.upsertFileContent(id, content, undefined, project.id);
       };

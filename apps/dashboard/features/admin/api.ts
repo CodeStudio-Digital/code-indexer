@@ -134,11 +134,28 @@ export async function setSubagentTarget(
   providerId: string,
   subagentProviderId: string | null,
   modelId: string | null,
+  profile?: string,
 ): Promise<void> {
   const r = await fetch(`/api/admin/providers/${providerId}/subagent-model`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider_id: subagentProviderId, model_id: modelId }),
+    body: JSON.stringify({ provider_id: subagentProviderId, model_id: modelId, profile }),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
+export async function setSubagentEffort(
+  providerId: string,
+  effort: string | null,
+  profile?: string,
+): Promise<void> {
+  const r = await fetch(`/api/admin/providers/${providerId}/subagent-model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ effort, profile }),
   });
   if (!r.ok) {
     const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };

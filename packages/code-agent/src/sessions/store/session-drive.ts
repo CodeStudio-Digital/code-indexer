@@ -171,8 +171,9 @@ function resolveProjectId(db: DB, sessionId: number): number | null {
   return row?.project_id ?? null;
 }
 
-// Explicit column list — keeps the `embedding` BLOB out of rows returned to
-// the panel/agent (it would bloat JSON and isn't needed downstream).
+// Explicit column list keeps the relational investigation ledger independent
+// from the distributed semantic index. Vector state lives in semantic_items +
+// the project's vectors.db and is never projected from this central table.
 const INV_COLS = 'id, project_id, session_id, topic, summary, body, source_label, agent_type, tokens, created_at';
 
 /** Persist a sub-agent investigation digest. Resolves project scope from the session. */
@@ -188,12 +189,6 @@ export function recordInvestigation(db: DB, input: RecordInvestigationInput): In
   );
   return db.prepare(`SELECT ${INV_COLS} FROM coder_investigations WHERE id = ?`)
     .get(Number(r.lastInsertRowid)) as InvestigationRow;
-}
-
-/** Store the embedding for an investigation digest (best-effort, background). */
-export function setInvestigationEmbedding(db: DB, id: number, embedding: Float32Array): void {
-  const buf = Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-  db.prepare('UPDATE coder_investigations SET embedding = ? WHERE id = ?').run(buf, id);
 }
 
 /** Scope filter: project-wide when the session has a project, else session-local. */
@@ -221,45 +216,41 @@ export function recallInvestigations(db: DB, sessionId: number, query: string, l
   ).all(param, like, like, limit) as InvestigationRow[];
 }
 
-const MIN_SIMILARITY = 0.25;
-
-function cosine(a: Float32Array, b: Float32Array): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+/**
+ * Resolve semantic search ids back to central relational rows while enforcing
+ * the same project/session boundary as lexical recall. The vector index is
+ * derivable and may contain stale ids after a crash; missing/foreign rows are
+ * ignored and caller-provided rank order is preserved.
+ */
+export function recallInvestigationsByIds(
+  db: DB,
+  sessionId: number,
+  ids: readonly number[],
+  limit = 8,
+): InvestigationRow[] {
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (uniqueIds.length === 0 || limit <= 0) return [];
+  const { where, param } = scopeClause(db, sessionId);
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const rows = db.prepare(
+    `SELECT ${INV_COLS} FROM coder_investigations
+     WHERE ${where} AND id IN (${placeholders})`,
+  ).all(param, ...uniqueIds) as InvestigationRow[];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return uniqueIds.flatMap((id) => byId.get(id) ?? []).slice(0, limit);
 }
 
-/**
- * Semantic recall: rank embedded investigations in the session's project by
- * cosine to the query vector, above a relevance floor. Brute-force is fine at
- * this scale (a few hundred rows/project). Returns [] when no embedded row
- * clears the floor — the caller then falls back to keyword recall.
- */
-export function recallInvestigationsByVector(db: DB, sessionId: number, queryVec: Float32Array, limit = 8): InvestigationRow[] {
-  const { where, param } = scopeClause(db, sessionId);
-  const rows = db.prepare(
-    `SELECT ${INV_COLS}, embedding FROM coder_investigations WHERE ${where} AND embedding IS NOT NULL`,
-  ).all(param) as Array<InvestigationRow & { embedding: Buffer }>;
-  const scored: Array<{ row: InvestigationRow; score: number }> = [];
-  for (const r of rows) {
-    const buf = r.embedding;
-    // Copy into a fresh, 4-byte-aligned ArrayBuffer — a Buffer from SQLite may
-    // have a non-aligned byteOffset, which would make the Float32Array view throw.
-    const vec = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-    const score = cosine(queryVec, vec);
-    if (score >= MIN_SIMILARITY) {
-      const { embedding: _e, ...rest } = r;
-      scored.push({ row: rest as InvestigationRow, score });
-    }
-  }
-  scored.sort((x, y) => y.score - x.score);
-  return scored.slice(0, limit).map((s) => s.row);
+/** All durable investigation text belonging to one project semantic scope. */
+export function listInvestigationsForSemanticIndex(db: DB, projectId: number): InvestigationRow[] {
+  return db.prepare(
+    `SELECT ${INV_COLS} FROM coder_investigations
+     WHERE project_id = ? ORDER BY id`,
+  ).all(projectId) as InvestigationRow[];
+}
+
+/** Project id used by distributed semantic routing; null remains lexical-only. */
+export function investigationProjectId(db: DB, sessionId: number): number | null {
+  return resolveProjectId(db, sessionId);
 }
 
 /**

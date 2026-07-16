@@ -1,37 +1,27 @@
 /**
- * Structural pipeline (dumb mode) + dumb→smart reuse.
+ * Structural pipeline and incremental reconciliation.
  *
  * Central contracts under test:
  *  - structural run: $0, no provider, symbols + content FTS populated,
- *    structural_indexed_at stamped, last_indexed untouched, runs.kind.
- *  - structural after full PRESERVES the semantic layer and marks staleness.
- *  - the next full run processes exactly the stale set (semantic catch-up).
+ *    structural_indexed_at stamped, last_indexed untouched, structural run recorded.
  *  - watcher-grade indexFilesStructural: hash short-circuit + delete handling.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeHarness, smallFileFixture, FakeProvider, type Harness } from './index-agent-harness.js';
+import {
+  makeStructuralHarness,
+  smallFileFixture,
+  type StructuralHarness,
+} from './structural-test-harness.js';
 import { runStructuralIndex } from '../structural.js';
 import { indexFilesStructural, removeFilesStructural } from '../structural-incremental.js';
-import { IndexAgent } from '../indexer.js';
-import { CostTracker } from '@mcp/services/services/costs.js';
-import type { AnalysisResult } from '@mcp/shared/types.js';
-import type { IndexerConfig } from '@mcp/shared/utils/config.js';
-
-class CountingProvider extends FakeProvider {
-  analyzed: string[] = [];
-  override async analyzeFile(filePath: string, content: string): Promise<AnalysisResult> {
-    this.analyzed.push(filePath);
-    return super.analyzeFile(filePath, content);
-  }
-}
 
 describe('structural index pipeline', () => {
-  let h: Harness;
+  let h: StructuralHarness;
 
   beforeEach(() => {
-    h = makeHarness();
+    h = makeStructuralHarness();
     h.writeFile('alpha.ts', smallFileFixture('alphaFn'));
     h.writeFile('beta.ts', smallFileFixture('betaFn'));
   });
@@ -51,18 +41,21 @@ describe('structural index pipeline', () => {
     expect(project.symbol_count).toBeGreaterThan(0);
 
     const alpha = h.db.getFile(h.projectId, 'alpha.ts')!;
-    expect(alpha.summary).toBe('');                    // no LLM ran
+    expect(alpha.is_entry_point).toBe(0);
     expect(h.db.getSymbolsByFile(h.projectId, 'alpha.ts').map((s) => s.name)).toContain('alphaFn');
     expect(h.db.countFileContents(h.projectId)).toBe(2);
     expect(h.db.searchFileContents(h.projectId, 'betaFn').map((m) => m.path)).toEqual(['beta.ts']);
 
-    expect(h.db.getRun(result.runId!)!.kind).toBe('structural');
+    expect(h.db.getRun(result.runId!)).toMatchObject({
+      project_id: h.projectId,
+      status: 'completed',
+    });
     const costs = h.db.raw().prepare('SELECT COUNT(*) as c FROM costs WHERE project_id = ?')
       .get(h.projectId) as { c: number };
     expect(costs.c).toBe(0);
 
-    // Everything is semantically stale — nothing has seen the LLM yet.
-    expect(h.db.countSemanticStale(h.projectId)).toBe(2);
+    // Semantic coverage is tracked independently by semantic_items.
+    expect(h.db.countSemanticStale(h.projectId)).toBe(0);
   });
 
   it('too_large gate bails without touching the project', async () => {
@@ -70,6 +63,27 @@ describe('structural index pipeline', () => {
     expect(result.aborted).toBe('too_large');
     expect(h.db.getProject(h.projectId)!.structural_indexed_at).toBeNull();
     expect(h.db.listFiles(h.projectId)).toHaveLength(0);
+  });
+
+  it('records no history item for a stat-first reconciliation with no changes', async () => {
+    const first = await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
+    const stamp = h.db.getProject(h.projectId)!.structural_indexed_at;
+    const runsBefore = h.db.getRuns(h.projectId, 20).map((run) => run.id);
+    h.db.raw().prepare(
+      `UPDATE projects SET updated_at = 'sentinel', structural_last_checked_at = NULL WHERE id = ?`,
+    ).run(h.projectId);
+
+    const noop = await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
+
+    expect(first.runId).toBeTypeOf('number');
+    expect(noop.runId).toBeUndefined();
+    expect(noop.indexed).toBe(0);
+    expect(noop.removed).toBe(0);
+    expect(noop.skipped).toBe(2);
+    expect(h.db.getRuns(h.projectId, 20).map((run) => run.id)).toEqual(runsBefore);
+    expect(h.db.getProject(h.projectId)!.structural_indexed_at).toBe(stamp);
+    expect(h.db.getProject(h.projectId)!.structural_last_checked_at).not.toBeNull();
+    expect(h.db.getProject(h.projectId)!.updated_at).toBe('sentinel');
   });
 
   it('empty scan over a populated index: anti-wipe guard + no ready stamp', async () => {
@@ -92,41 +106,6 @@ describe('structural index pipeline', () => {
     expect(manual.aborted).toBeUndefined();
     expect(manual.removed).toBe(2);
     expect(h.db.listFiles(h.projectId)).toHaveLength(0);
-  });
-
-  it('structural after full preserves semantics; next full catches up exactly the stale set', async () => {
-    const provider = new CountingProvider();
-    const config = {
-      dbPath: join(h.dir, 'index.db'), concurrency: 1, maxFileSize: 200,
-      ignorePatterns: [], indexProfile: 'balanced',
-    } as unknown as IndexerConfig;
-    const agent = new IndexAgent(h.db, provider, h.embedding, h.vectorStore, new CostTracker(h.db), null, config);
-
-    // 1. Full index — both files get summaries, semantic_hash stamped.
-    await agent.indexProject(h.projectRoot);
-    expect(provider.analyzed).toHaveLength(2);
-    expect(h.db.countSemanticStale(h.projectId)).toBe(0);
-    expect(h.db.getFile(h.projectId, 'alpha.ts')!.summary).toContain('Summary of');
-
-    // 2. Structure-changing edit + STRUCTURAL pass.
-    h.writeFile('alpha.ts', `${smallFileFixture('alphaFn')}\nexport function extraFn(): number { return 42; }\n`);
-    const structural = await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
-    expect(structural.indexed).toBe(1);                // only the edited file
-
-    const alpha = h.db.getFile(h.projectId, 'alpha.ts')!;
-    expect(alpha.summary).toContain('Summary of');     // semantic layer SURVIVED
-    expect(h.db.getSymbolsByFile(h.projectId, 'alpha.ts').map((s) => s.name)).toContain('extraFn');
-    expect(h.db.countSemanticStale(h.projectId)).toBe(1);
-    expect(h.db.searchFileContents(h.projectId, 'extraFn').map((m) => m.path)).toEqual(['alpha.ts']);
-
-    // 3. Next FULL run: scanner says "unchanged" (structural advanced the
-    //    hash) — the semantic catch-up set must re-process EXACTLY alpha.ts,
-    //    and the structure change must reach the LLM (structure_hash was not
-    //    poisoned by the structural pass).
-    provider.analyzed = [];
-    await agent.indexProject(h.projectRoot);
-    expect(provider.analyzed).toEqual(['alpha.ts']);
-    expect(h.db.countSemanticStale(h.projectId)).toBe(0);
   });
 
   it('watcher-grade: hash short-circuit, re-index, delete', async () => {

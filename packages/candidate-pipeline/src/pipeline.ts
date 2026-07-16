@@ -11,10 +11,12 @@
  *   4. Hydrator*                — parallel enrichment
  *   5. Filter*                  — sequential; kept feeds next
  *   6. Scorer*                  — sequential async; order-preserving
- *   7. Selector                 — top-K
- *   8. PostSelectionHydrator*   — parallel; enrichment on the small set
- *   9. PostSelectionFilter*     — sequential; safety / visibility checks
- *  10. SideEffect*              — `setImmediate` (off the response path)
+ *   7. PostScoringFilter*       — sequential; fusion-aware dedup/filtering
+ *   8. Selector                 — top-K
+ *   9. PostSelectionHydrator*   — parallel; enrichment on the small set
+ *  10. PostSelectionFilter*     — sequential; safety / visibility checks
+ *  11. PostSelectionSelector?   — optional final ordering / top-K
+ *  12. SideEffect*              — `setImmediate` (off the response path)
  *
  * Filter `removed` and Selector `nonSelected` candidates are passed to the
  * side effects (and accumulated in the diagnostic envelope) so observers
@@ -54,9 +56,23 @@ export interface PipelineStages<Q extends PipelineQuery, C extends PipelineCandi
   hydrators?: ReadonlyArray<Hydrator<Q, C>>;
   filters?: ReadonlyArray<Filter<Q, C>>;
   scorers?: ReadonlyArray<Scorer<Q, C>>;
+  /**
+   * Filters that must observe scorer output and still run before the initial
+   * selector. This is intentionally distinct from `postSelectionFilters`:
+   * fusion pipelines need to sum all source contributions before deduping,
+   * without allowing duplicate rows to consume selector capacity.
+   */
+  postScoringFilters?: ReadonlyArray<Filter<Q, C>>;
   selector: Selector<Q, C>;
   postSelectionHydrators?: ReadonlyArray<Hydrator<Q, C>>;
   postSelectionFilters?: ReadonlyArray<Filter<Q, C>>;
+  /**
+   * Optional second selector after post-selection hydration/filtering. This
+   * allows an initial selector to bound expensive work (for example reranking
+   * depth) while the final selector orders the hydrated scores and applies the
+   * caller's actual result limit.
+   */
+  postSelectionSelector?: Selector<Q, C>;
   sideEffects?: ReadonlyArray<SideEffect<Q, C>>;
 }
 
@@ -109,20 +125,63 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
     // 6. Scorers — sequential async.
     candidates = await this.runScorers(query, candidates, stageDiags, skipped, collectedErrors);
 
-    // 7. Selector.
-    const selectorResult = await this.runSelector(query, candidates, stageDiags, skipped);
-    let { selected } = selectorResult;
-    const { nonSelected } = selectorResult;
+    // 7. Post-scoring filters. Fusion-aware dedup belongs here: every source
+    // contribution reaches the scorer, while duplicates are removed before
+    // they can consume selector/reranker capacity.
+    const postScoreRemoved: C[] = [];
+    candidates = await this.runFilters(
+      query,
+      candidates,
+      'post_score_filter',
+      this.stages.postScoringFilters,
+      stageDiags,
+      skipped,
+      postScoreRemoved,
+    );
 
-    // 8. Post-selection hydrators (on the small set).
+    // 8. Selector.
+    const selectorResult = await this.runSelector(
+      query,
+      candidates,
+      this.stages.selector,
+      'selector',
+      stageDiags,
+      skipped,
+    );
+    let { selected } = selectorResult;
+    const nonSelected = [...selectorResult.nonSelected];
+
+    // 9. Post-selection hydrators (on the small set).
     selected = await this.runHydrators(query, selected, 'post_hydrator', this.stages.postSelectionHydrators, stageDiags, skipped, collectedErrors);
 
-    // 9. Post-selection filters.
+    // 10. Post-selection filters.
     const postRemoved: C[] = [];
     selected = await this.runFilters(query, selected, 'post_filter', this.stages.postSelectionFilters, stageDiags, skipped, postRemoved);
 
-    // 10. Side effects — fire-and-forget after the response is computed.
-    this.runSideEffectsBackground(query, selected, [...nonSelected, ...removedAll, ...postRemoved]);
+    // 11. Optional final selector — e.g. sort scores produced by a reranker,
+    // then apply the public top-K only after the expensive stage has run.
+    if (this.stages.postSelectionSelector) {
+      const finalSelection = await this.runSelector(
+        query,
+        selected,
+        this.stages.postSelectionSelector,
+        'post_selector',
+        stageDiags,
+        skipped,
+      );
+      selected = finalSelection.selected;
+      nonSelected.push(...finalSelection.nonSelected);
+    }
+
+    const allNonSelected = [
+      ...nonSelected,
+      ...removedAll,
+      ...postScoreRemoved,
+      ...postRemoved,
+    ];
+
+    // 12. Side effects — fire-and-forget after the response is computed.
+    this.runSideEffectsBackground(query, selected, allNonSelected);
 
     const diag: PipelineDiagnostics = {
       durationMs: performance.now() - start,
@@ -133,7 +192,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
 
     return {
       selected,
-      nonSelected: [...nonSelected, ...removedAll, ...postRemoved],
+      nonSelected: allNonSelected,
       diag,
     };
   }
@@ -382,19 +441,20 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
   private async runSelector(
     query: Q,
     candidates: C[],
+    sel: Selector<Q, C>,
+    stage: 'selector' | 'post_selector',
     diags: StageDiagnostic[],
     skipped: string[],
   ): Promise<{ selected: C[]; nonSelected: C[] }> {
-    const sel = this.stages.selector;
     if (!sel.enable(query)) {
-      skipped.push(`selector/${sel.name}`);
+      skipped.push(`${stage}/${sel.name}`);
       return { selected: candidates, nonSelected: [] };
     }
     const t0 = performance.now();
     const result = sel.select(query, candidates);
     this.emit({
       pipelineName: this.cfg.name,
-      stage: 'selector',
+      stage,
       component: sel.name,
       durationMs: performance.now() - t0,
       durationBucket: durationToBucket(performance.now() - t0),

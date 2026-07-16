@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { parseDbDate } from '../../lib/datetime.js';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -66,9 +67,9 @@ export function GoogleQuotaPanel({ providerId }: GoogleQuotaPanelProps) {
   const formatReset = (iso: string | null) => {
     if (!iso) return '';
     try {
-      const d = new Date(iso);
-      const now = new Date();
-      const diffMs = d.getTime() - now.getTime();
+      const d = parseDbDate(iso);
+      if (!d) return '';
+      const diffMs = d.getTime() - Date.now();
       if (diffMs <= 0) return 'now';
       const mins = Math.round(diffMs / 60000);
       if (mins < 60) return `${mins}m`;

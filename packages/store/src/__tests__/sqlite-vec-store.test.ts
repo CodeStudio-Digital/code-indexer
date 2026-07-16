@@ -3,15 +3,56 @@
  * sqlite-vec (vec0) under Node — verifies the version-specific KNN + metadata
  * filter SQL actually behaves, not just that it type-checks.
  */
-import { describe, it, expect } from 'vitest';
-import { SqliteVecVectorStore } from '../sqlite-vec-store.js';
+import { afterEach, describe, it, expect } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SqliteVecDatabase, SqliteVecVectorStore } from '../sqlite-vec-store.js';
 import type { VectorRecord } from '@mcp/shared/types.js';
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 function rec(id: string, values: number[], meta: Record<string, string>): VectorRecord {
   return { id, values, metadata: meta };
 }
 
+function freshDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-vec-'));
+  dirs.push(dir);
+  return dir;
+}
+
 describe('SqliteVecVectorStore', () => {
+  it('discards the pre-generation default table when a generation table opens', async () => {
+    const path = join(freshDir(), 'vectors.db');
+    const legacy = new SqliteVecVectorStore({ path });
+    await legacy.upsert([{
+      id: 'legacy', values: [1, 0], metadata: { type: 'file', ref_id: '1' },
+    }], 'code:p1');
+    legacy.close();
+
+    const generation = new SqliteVecVectorStore({ path, tableName: 'code_g_12' });
+    try {
+      await generation.upsert([{
+        id: 'fresh', values: [0, 1], metadata: { type: 'file', ref_id: '2' },
+      }], 'code:p1');
+    } finally {
+      generation.close();
+    }
+    const inspect = new SqliteVecDatabase(path);
+    try {
+      const tables = inspect.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>;
+      expect(tables.map((row) => row.name)).not.toContain('vectors');
+      expect(tables.map((row) => row.name)).toContain('code_g_12');
+    } finally {
+      inspect.close();
+    }
+  });
   it('upserts, KNN-searches with a metadata filter, overwrites, and deletes', async () => {
     const store = new SqliteVecVectorStore({ path: ':memory:' });
     await store.upsert([
@@ -85,5 +126,43 @@ describe('SqliteVecVectorStore', () => {
 
     expect((await store.search([1, 0, 0], { topK: 10, namespace: 'code:A' })).length).toBe(0);
     expect((await store.search([0, 1, 0], { topK: 10, namespace: 'code:B' })).map((r) => r.id)).toEqual(['b']);
+  });
+
+  it('supports safe generation tables with independent dimensions', async () => {
+    const three = new SqliteVecVectorStore({ path: ':memory:', tableName: 'code_g_1' });
+    await three.upsert([rec('a', [1, 0, 0], { type: 'file' })], 'code:p1');
+    expect((await three.search([1, 0, 0], { namespace: 'code:p1' }))[0].id).toBe('a');
+    three.close();
+
+    expect(() => new SqliteVecVectorStore({ path: ':memory:', tableName: 'vectors; DROP TABLE vectors' }))
+      .toThrow(/Unsafe sqlite-vec table name/);
+  });
+
+  it('normalizes stored and query vectors and rejects invalid embeddings', async () => {
+    const store = new SqliteVecVectorStore({ path: ':memory:', tableName: 'code_g_2' });
+    await store.upsert([
+      rec('scaled', [100, 0], { type: 'file' }),
+      rec('other', [0, 1], { type: 'file' }),
+    ], 'code:p1');
+    expect((await store.search([5, 0], { namespace: 'code:p1' }))[0].id).toBe('scaled');
+    await expect(store.upsert([rec('zero', [0, 0], { type: 'file' })], 'code:p1'))
+      .rejects.toThrow(/non-zero norm/);
+    store.close();
+  });
+
+  it('configures WAL, NORMAL sync, busy timeout and truncates WAL on close', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-vec-pragmas-'));
+    dirs.push(dir);
+    const path = join(dir, 'vectors.db');
+    const database = new SqliteVecDatabase(path, { manualCheckpoint: true });
+    expect(database.db.pragma('journal_mode', { simple: true })).toBe('wal');
+    expect(database.db.pragma('synchronous', { simple: true })).toBe(1);
+    expect(Number(database.db.pragma('busy_timeout', { simple: true }))).toBeGreaterThan(0);
+    expect(database.db.pragma('wal_autocheckpoint', { simple: true })).toBe(0);
+    const store = new SqliteVecVectorStore({ database, tableName: 'code_g_1' });
+    await store.upsert([rec('a', [1, 0], { type: 'file' })], 'code:p1');
+    database.close();
+    expect(!existsSync(`${path}-wal`) || statSync(`${path}-wal`).size === 0)
+      .toBe(true);
   });
 });

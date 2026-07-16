@@ -172,7 +172,7 @@ export const indexerFallbackStats = {
  * given in-process executor on worker errors. Returns the fallback alone
  * when the worker can't exist in this environment.
  */
-export function createIndexerExecutor(
+export function createStructuralIndexerExecutor(
   opts: IndexerWorkerClientOpts,
   fallback: StructuralExecutor,
 ): { executor: StructuralExecutor; client: IndexerWorkerClient | null } {

@@ -75,6 +75,7 @@ export function registerEditorCommands(): () => void {
     'editor.unfoldAll': 'editor.unfoldAll',
     'editor.addSelectionToChat': 'mcp.addSelectionToChat',
     'editor.addFileToChat': 'mcp.addFileToChat',
+    'editor.semanticSearch': 'mcp.semanticSearch',
     'run.file': 'mcp.runFile',
   };
   const unregister = registerCommandHandlers([

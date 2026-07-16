@@ -20,8 +20,6 @@ export interface WizardBucket { kind: CapabilityKind; required: boolean }
 /** Required = can't be switched off. text_llm is the only hard requirement. */
 export const WIZARD_BUCKETS: WizardBucket[] = [
   { kind: 'text_llm', required: true },
-  { kind: 'embeddings', required: false },
-  { kind: 'reranking', required: false },
   { kind: 'vision', required: false },
   { kind: 'voice', required: false },
   { kind: 'autocomplete', required: false },

@@ -1,15 +1,8 @@
 import type { Command } from 'commander';
+import { randomUUID } from 'node:crypto';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { createProviderAsync } from '@mcp/services/providers/factory.js';
-import { IndexAgent } from '@mcp/indexer/indexer/indexer.js';
-import { CostTracker } from '@mcp/services/services/costs.js';
-import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
-import { FileWatcherService } from '@mcp/services/services/watcher.js';
-import { getEmbeddingService, getVectorStore } from '../helpers.js';
-import { createAndSeedProviderStore } from '@mcp/indexer/bootstrap/index.js';
-import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
-import type { ProviderName } from '@mcp/shared/types.js';
+import { requestLocalServer } from '../semantic-control.js';
 
 export function register(program: Command): void {
   program.command('watch [project]').description('Watch for file changes')
@@ -18,15 +11,6 @@ export function register(program: Command): void {
     .action(async (projectName: string | undefined, opts: { all?: boolean; daemon?: boolean }) => {
       const config = loadConfig();
       const db = new CodeIndexDB(config.dbPath);
-      const watcher = new FileWatcherService();
-      const providerStore = createAndSeedProviderStore(config.dbPath);
-      const defaults = providerStore.getDefaultProviderAndModel();
-      const provider = await createProviderAsync(defaults.kind as ProviderName, defaults.model);
-      const embeddingService = getEmbeddingService(config.dbPath);
-      const vectorStore = getVectorStore(config.dbPath);
-      const costTracker = new CostTracker(db);
-      const webhookDispatcher = new WebhookDispatcher(db);
-      const agent = new IndexAgent(db, provider, embeddingService, vectorStore, costTracker, webhookDispatcher, config);
 
       const projectsToWatch = opts.all ? db.listProjects() : (() => {
         if (!projectName) { console.error('Specify project or --all'); process.exit(1); }
@@ -34,27 +18,42 @@ export function register(program: Command): void {
         if (!p) { console.error('Project not found'); process.exit(1); }
         return [p];
       })();
+      if (projectsToWatch.length === 0) {
+        console.log('No projects registered.');
+        db.close();
+        return;
+      }
 
+      const clientId = `cli-watch:${process.pid}:${randomUUID()}`;
+      const activations: Array<{ projectId: number; activationId: string }> = [];
       for (const project of projectsToWatch) {
-        watcher.startWatching(project.id, {
-          rootPath: project.root_path,
-          debounce: 2000,
-        }, {
-          onFileChanged: async (events) => {
-            console.log(`[watch] ${project.name}: ${events.length} files changed, re-indexing...`);
-            await agent.indexProject(project.root_path);
-            try {
-              await webhookDispatcher.dispatch('watch.changed', project, { files: events.map((e) => e.path) });
-            } catch { /* ignore */ }
-          },
+        const activationId = randomUUID();
+        const response = await requestLocalServer(`/api/projects/${project.id}/activation`, {
+          method: 'POST',
+          body: JSON.stringify({ activationId, clientId }),
         });
+        if (!response.ok) {
+          await Promise.allSettled(activations.map(({ projectId, activationId: activeId }) =>
+            requestLocalServer(`/api/projects/${projectId}/activation`, {
+              method: 'DELETE',
+              body: JSON.stringify({ activationId: activeId, clientId }),
+            })));
+          db.close();
+          throw new Error(
+            `The local server must own project watchers: ${response.error ?? 'server unavailable'}`,
+          );
+        }
+        activations.push({ projectId: project.id, activationId });
         console.log(`Watching ${project.name} (${project.root_path})`);
       }
 
       const shutdown = async () => {
         console.log('\nStopping watchers...');
-        await watcher.stopAll();
-        await disposeIndexerProcessResources();
+        await Promise.allSettled(activations.map(({ projectId, activationId }) =>
+          requestLocalServer(`/api/projects/${projectId}/activation`, {
+            method: 'DELETE',
+            body: JSON.stringify({ activationId, clientId }),
+          })));
         db.close();
         process.exit(0);
       };

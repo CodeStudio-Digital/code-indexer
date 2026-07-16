@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '../../lib/datetime.js';
 import { Trash2, Plus, Copy } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -118,7 +119,7 @@ export function ApiTokensPanel() {
                     are the meaningful gate to surface; scopes become an
                     internal implementation detail. */}
                 {!tok.tier && <span>{tok.scopes.join(' ')}</span>}
-                {tok.last_used_at && <span>{lastUsedLabel}: {new Date(tok.last_used_at).toLocaleString()}</span>}
+                {tok.last_used_at && <span>{lastUsedLabel}: {formatDateTime(tok.last_used_at)}</span>}
               </div>
             </div>
             {!tok.revoked_at && (

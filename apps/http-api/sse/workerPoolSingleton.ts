@@ -118,6 +118,7 @@ export function setCompanyWorkerDocDeps(
     memoryRetriever?: CoderWorkerDocDeps['memoryRetriever'];
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
     projectMemory?: CoderWorkerDocDeps['projectMemory'];
+    investigationSemantic?: CoderWorkerDocDeps['investigationSemantic'];
   },
 ): void {
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
@@ -127,6 +128,7 @@ export function setCompanyWorkerDocDeps(
   if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
   if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;
+  if (deps.investigationSemantic !== undefined) docDeps.investigationSemantic = deps.investigationSemantic;
 }
 
 /** Force-shutdown the pool — called from process shutdown hooks. */

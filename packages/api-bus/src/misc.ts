@@ -69,9 +69,50 @@ export interface TelemetryApi {
 // ─── hygiene.ts ──────────────────────────────────────────
 // apps/http-api/server/routes/hygiene.ts
 
+export interface HygieneProjectStatus {
+  id: number;
+  name: string;
+  root_path: string;
+  file_count: number;
+  vector_count: number;
+  orphan_semantic_items: number;
+  stale_runs: number;
+  mixed_case_languages: number;
+  missing_on_disk: boolean;
+  tiers: Partial<Record<'core' | 'support' | 'on_demand' | 'untagged', number>>;
+}
+
+export interface HygieneCleanupResult {
+  ok: true;
+  orphan_semantic_items: number;
+  vectors_deleted_local: number;
+  local_deleted: number;
+  languages_normalized: number;
+  stale_runs_closed: number;
+  vector_error: string | null;
+}
+
+export interface HygienePurgeSummary {
+  project_id: number;
+  vectors_known: number;
+  vectors_deleted: number;
+  vector_error: string | null;
+}
+
 export interface HygieneApi {
-  status(input: void, ctx: ApiContext): Promise<{ pending_vector_deletes: number; orphan_files: number; orphan_symbols: number }>;
-  retryVectorDeletes(input: { max?: number }, ctx: ApiContext): Promise<{ drained: number; failed: number }>;
+  status(
+    input: void,
+    ctx: ApiContext,
+  ): Promise<{ projects: HygieneProjectStatus[]; vector_store_available: boolean }>;
+  cleanupProject(input: { id: number }, ctx: ApiContext): Promise<HygieneCleanupResult>;
+  purgeProjects(
+    input: { projectIds: number[]; confirm: boolean },
+    ctx: ApiContext,
+  ): Promise<{ ok: true; purged: number; summaries: HygienePurgeSummary[] }>;
+  globalSqlCleanup(
+    input: void,
+    ctx: ApiContext,
+  ): Promise<{ ok: true; languages_normalized: number; stale_runs_closed: number }>;
 }
 
 // ─── export.ts ───────────────────────────────────────────

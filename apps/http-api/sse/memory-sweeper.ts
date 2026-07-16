@@ -23,6 +23,7 @@ import { buildHarvestInput } from '@mcp/code-agent/core/runner/compaction/memory
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
 import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 
 const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_SWEEP_INTERVAL_MS ?? 5 * 60 * 1000);
 const DEFAULT_IDLE_AFTER_MS = Number(process.env.MCP_MEMORY_IDLE_AFTER_MS ?? 10 * 60 * 1000);
@@ -52,6 +53,7 @@ export interface StartMemorySweeperArgs {
   sessionStore: SessionStore;
   db: CodeIndexDB;
   runEndMemory: RunEndMemory;
+  agentMemoryService?: AgentMemoryService;
   intervalMs?: number;
   idleAfterMs?: number;
   maxPerSweep?: number;
@@ -74,7 +76,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   const idleAfterMs = args.idleAfterMs ?? DEFAULT_IDLE_AFTER_MS;
   const maxPerSweep = args.maxPerSweep ?? DEFAULT_MAX_PER_SWEEP;
   const makeProvider = args.providerFactory ?? createCoderProvider;
-  const { sessionStore, db, runEndMemory } = args;
+  const { sessionStore, db, runEndMemory, agentMemoryService } = args;
 
   let stopped = false;
   let inFlight = false;
@@ -188,12 +190,26 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
         let archived = 0;
         let decayed = 0;
         for (const pid of projects) {
-          archived += db.consolidateAgentMemory('project', pid).archived;
-          // Reversible decay of cold, never-accessed, low-importance `note`s
-          // (>60d) — project scope only; user-scope preferences never decay.
-          decayed += db.decayColdAgentMemoryNotes('project', pid);
+          const result = agentMemoryService?.runScopeMutation('project', pid, () => ({
+            consolidated: db.consolidateAgentMemory('project', pid).archived,
+            // Reversible decay of cold, never-accessed, low-importance `note`s
+            // (>60d) — project scope only; user-scope preferences never decay.
+            decayed: db.decayColdAgentMemoryNotes('project', pid),
+          })) ?? {
+            consolidated: db.consolidateAgentMemory('project', pid).archived,
+            decayed: db.decayColdAgentMemoryNotes('project', pid),
+          };
+          const consolidated = result.consolidated;
+          archived += consolidated;
+          const projectDecayed = result.decayed;
+          decayed += projectDecayed;
         }
-        archived += db.consolidateAgentMemory('user', 0).archived;
+        const userArchived = agentMemoryService?.runScopeMutation(
+          'user',
+          0,
+          () => db.consolidateAgentMemory('user', 0).archived,
+        ) ?? db.consolidateAgentMemory('user', 0).archived;
+        archived += userArchived;
         const prunedEvents = db.pruneAgentMemoryEvents();
         if (archived > 0 || decayed > 0 || prunedEvents > 0) {
           console.log(`[memory/sweeper] hygiene — archived=${archived} dup memories, decayed=${decayed} cold notes, pruned=${prunedEvents} events`);

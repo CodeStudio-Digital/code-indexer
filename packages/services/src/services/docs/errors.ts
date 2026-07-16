@@ -1,7 +1,7 @@
 /**
  * Typed errors for the documentation pipeline. Mirrors the `ProjectError`
- * shape used by `IndexProjectUseCase` so HTTP routes can map kinds → status
- * codes uniformly.
+ * shape used by project/domain services so HTTP routes can map kinds to
+ * status codes uniformly.
  */
 export type DocErrorKind =
   | 'not_found'

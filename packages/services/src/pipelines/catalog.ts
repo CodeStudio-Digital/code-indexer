@@ -110,20 +110,29 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'indexer_search',
     bindingRole: 'embedder',
-    description: 'Embeddings used by the hybrid search vector stage.',
+    description:
+      'INFORMATIONAL ONLY — code embeddings are governed by the Code semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1',
   },
   {
     pipelineName: 'indexer_search',
     bindingRole: 'reranker',
-    description: 'Cross-encoder reranker for hybrid search top-K.',
-    setupEligible: false, // cross-encoder, not an LLM-as-reranker
+    description:
+      'INFORMATIONAL ONLY — code-search reranking is governed by the Code semantic profile. Disabled preserves the RRF ordering; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1',
   },
   {
     pipelineName: 'indexer_search',
     bindingRole: 'hyde',
-    description: 'Hypothetical Document Embeddings synthesizer (optional).',
+    description:
+      'Optional query expansion for semantic code search. This single binding selects the provider and model used by HyDE; leave it unconfigured or disabled to make no LLM call.',
+    recommendedDefault: {
+      providerKind: 'openai',
+      modelHint: 'gpt-4o-mini',
+      config: { temperature: 0.2, max_tokens: 180, timeout_ms: 20000 },
+    },
     introducedInPhase: '1',
   },
 
@@ -135,29 +144,33 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'tool_selection',
     bindingRole: 'embedder',
-    description: 'Embeds task + tool descriptions to pick the top-K tools per turn.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — task and tool embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1.5',
   },
   {
     pipelineName: 'context_relevance',
     bindingRole: 'embedder',
-    description: 'Embeds session messages to rank by relevance during compaction.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — session-message embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1.6',
   },
   {
     pipelineName: 'todo_priority',
     bindingRole: 'embedder',
-    description: 'Optional — only used if semantic dependency detection is enabled.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — semantic dependency detection uses the Knowledge semantic profile when enabled. Setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1.7',
   },
   {
     pipelineName: 'sub_agent_cache',
     bindingRole: 'embedder',
-    description: 'Fuzzy-match cache lookup for Explore/Plan agent invocations.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — semantic cache lookup uses the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '1.8',
   },
 
@@ -165,15 +178,17 @@ const CATALOG_SEED: CatalogSeed[] = [
   {
     pipelineName: 'role_pipeline',
     bindingRole: 'embedder',
-    description: 'Embeds task + role descriptions for role recommendation (two-tower).',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — task and role embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '2',
   },
   {
     pipelineName: 'kanban_priority',
     bindingRole: 'embedder',
-    description: 'Optional — semantic similarity for kanban card grouping.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-base-en-v1.5' },
+    description:
+      'INFORMATIONAL ONLY — semantic grouping uses the Knowledge semantic profile when enabled. Setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '3',
   },
 
@@ -269,10 +284,10 @@ const CATALOG_SEED: CatalogSeed[] = [
   // ─── Documentação (RAG) pipelines (Phase 9) ──────────────────────────────
   // Backs the "Documentação" sidebar feature: per-collection RAG over
   // user-curated docs (PDF + URL crawls). The crawl gate uses a cheap
-  // classifier to keep/drop pages before paying for enrichment; the
-  // enricher writes summary + concepts onto each chunk; the embedder
-  // is shared with the existing indexer_search but kept separate so an
-  // admin can pick a different embedding model for docs vs code.
+  // classifier to keep/drop pages before paying for enrichment.
+  // The classifier and enricher remain ordinary LLM pipeline bindings.
+  // Embeddings and reranking are intentionally absent from pipeline setup:
+  // their only source of truth is the Code/Knowledge semantic profile.
   {
     pipelineName: 'doc_ingest',
     bindingRole: 'classifier',
@@ -299,8 +314,7 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'doc_ingest',
     bindingRole: 'embedder',
     description:
-      'INFORMATIONAL ONLY — not consumed by code. The docs embedder is governed by the shared embedding_configs default (the worker emits @cf/baai/bge-m3, 1024-dim, multilingual) for BOTH corpus and queries. This row is reserved for future per-corpus embedder selection; setting it today has no effect.',
-    recommendedDefault: { providerKind: 'cloudflare', modelHint: '@cf/baai/bge-m3' },
+      'INFORMATIONAL ONLY — not consumed by code. Documentation embeddings are governed by the global Knowledge semantic profile and persisted in the local docs-vectors.db. Configure that profile under Semantic Indexing; setting this pipeline binding has no effect.',
     setupEligible: false, // informational only — no runtime effect
     introducedInPhase: '9',
   },
@@ -308,12 +322,8 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'doc_search',
     bindingRole: 'reranker',
     description:
-      'Optional reranker for the top-K chunks before they are returned to the agent. Default is an LLM-as-reranker that scores each (query, chunk) pair; a cross-encoder model can be swapped in via the admin panel. Caches verdicts in doc_rerank_cache (24h TTL).',
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.1-8b-instruct',
-      config: { temperature: 0, max_tokens: 600 },
-    },
+      'INFORMATIONAL ONLY — documentation reranking is governed by the Knowledge semantic profile. Disabled preserves the RRF ordering; setting this pipeline binding has no effect.',
+    setupEligible: false,
     introducedInPhase: '10',
   },
   {
@@ -389,7 +399,7 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'memory_recall',
     bindingRole: 'reranker',
     description:
-      'Selective-recall filter (Claude-Code pattern): a cheap LLM pass that keeps only the retrieved project ' +
+      'Independent LLM selective-recall filter (not the semantic-profile cross-encoder): keeps only the retrieved project ' +
       'memories CLEARLY about the current task (aboutness, not keyword overlap; ≤5; conservative with user-profile). ' +
       'Gated by CODER_MEMORY_LLM_FILTER. Unset → no LLM filtering (the structural relevance floor still applies).',
     recommendedDefault: {

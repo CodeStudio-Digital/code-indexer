@@ -10,6 +10,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
 import { WorkBoardBadge, WorkBoardDetailDialog } from '../../components/work-board/index.js';
+import { formatDateTime } from '../../lib/datetime.js';
 import type {
   KanbanCardFull,
   KanbanTag,
@@ -89,7 +90,7 @@ export function KanbanCardModal({
           className="text-lg font-semibold"
         />
       ) : <button type="button" className="text-left transition-colors hover:text-primary" onClick={() => setEditingTitle(true)}>{card.title}</button>}
-      footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: new Date(card.created_at).toLocaleString() })}</span><Button size="sm" variant="destructive" onClick={async () => { if (await confirm({ title: t('agents:kanban.card.deleteCard'), description: t('agents:kanban.card.deleteConfirm', { title: card.title }), confirmLabel: t('agents:kanban.card.deleteCard'), tone: 'destructive' })) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
+      footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: formatDateTime(card.created_at) })}</span><Button size="sm" variant="destructive" onClick={async () => { if (await confirm({ title: t('agents:kanban.card.deleteCard'), description: t('agents:kanban.card.deleteConfirm', { title: card.title }), confirmLabel: t('agents:kanban.card.deleteCard'), tone: 'destructive' })) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
     >
 
         {/* Tag selector */}
@@ -326,8 +327,8 @@ export function KanbanCardModal({
                   </span>
                   <span className="text-muted-foreground text-xs ml-auto flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    {new Date(a.assigned_at).toLocaleString()}
-                    {a.unassigned_at && ` - ${new Date(a.unassigned_at).toLocaleString()}`}
+                    {formatDateTime(a.assigned_at)}
+                    {a.unassigned_at && ` - ${formatDateTime(a.unassigned_at)}`}
                   </span>
                 </div>
               ))}
@@ -356,7 +357,7 @@ export function KanbanCardModal({
                     </span>
                   )}
                   <span className="text-[10px] text-muted-foreground ml-auto">
-                    {new Date(comment.created_at).toLocaleString()}
+                    {formatDateTime(comment.created_at)}
                   </span>
                 </div>
                 <p className="text-sm whitespace-pre-wrap">{comment.content}</p>

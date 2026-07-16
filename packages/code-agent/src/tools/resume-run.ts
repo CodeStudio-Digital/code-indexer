@@ -18,6 +18,7 @@ import {
   type MicroAgentProfile,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { describeProvider, type SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import { providerForProfile, effortForProfile } from '@mcp/code-agent/tools/subagent-provider.js';
 import {
   renderParallelHeader,
   renderParallelBody,
@@ -76,40 +77,55 @@ export async function relaunchResumedAgents(
   targets: ResumableAgentState[],
   guidance: string | undefined,
 ): Promise<{ text: string; usage: ChatUsage; stillFailed: number }> {
-  const provider = deps.subagentProvider ?? deps.provider;
-  const info = describeProvider(provider);
   const sessionId = group.sessionId;
   const profiles = targets.map(profileFor);
   const targetIdx = new Set(targets.map((t) => t.agentIndex));
+  // Per-target provider resolved from each retained agent's profile (memoized).
+  const targetProviders = await Promise.all(profiles.map((p) => providerForProfile(deps, p)));
+  const agentInfos = targetProviders.map((p) => describeProvider(p));
+  const providerByIndex = new Map<number, { provider: string; model: string }>();
+  targets.forEach((t, i) => providerByIndex.set(t.agentIndex, agentInfos[i]));
+  const distinctLabels = [...new Set(agentInfos.map((i) => i.label))];
+  const info = distinctLabels.length <= 1
+    ? (agentInfos[0] ?? describeProvider(deps.provider))
+    : { provider: 'mixed', model: distinctLabels.join(', '), label: distinctLabels.join(', ') };
 
   ctx.runner?.emit('agents_group_start', {
     groupId: group.spawnId,
     provider: info.provider,
     model: info.model,
     resumed: true,
-    agents: group.agents.map((a) => ({
-      index: a.agentIndex,
-      label: a.label,
-      provider: info.provider,
-      model: info.model,
-      task: a.task,
-      status: targetIdx.has(a.agentIndex) ? 'pending' : reasonToStatus(a.reason),
-      attempt: targetIdx.has(a.agentIndex) ? a.attempt + 1 : a.attempt,
-    })),
+    agents: group.agents.map((a) => {
+      const pinfo = providerByIndex.get(a.agentIndex) ?? info;
+      return {
+        index: a.agentIndex,
+        label: a.label,
+        provider: pinfo.provider,
+        model: pinfo.model,
+        task: a.task,
+        status: targetIdx.has(a.agentIndex) ? 'pending' : reasonToStatus(a.reason),
+        attempt: targetIdx.has(a.agentIndex) ? a.attempt + 1 : a.attempt,
+      };
+    }),
   });
 
-  const specs = targets.map((state, i) => specFor(state, profiles[i], guidance));
+  const specs = targets.map((state, i) => ({
+    ...specFor(state, profiles[i], guidance),
+    provider: targetProviders[i],
+    reasoningEffort: effortForProfile(deps, profiles[i]),
+  }));
   const { results, totalUsage } = await runParallelAgents(
-    { provider, tools: deps.parentTools, ctx, sessionId, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
+    { provider: deps.provider, tools: deps.parentTools, ctx, sessionId, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
     specs,
     MICRO_AGENT_PROFILES.explore.systemPrompt,
     MICRO_AGENT_PROFILES.explore.allowlist,
     (progress) => {
       const original = targets[progress.agentIndex];
+      const pinfo = agentInfos[progress.agentIndex] ?? info;
       ctx.runner?.emit('agent_progress', {
         groupId: group.spawnId,
-        provider: info.provider,
-        model: info.model,
+        provider: pinfo.provider,
+        model: pinfo.model,
         ...progress,
         agentIndex: original ? original.agentIndex : progress.agentIndex,
         attempt: original ? original.attempt + 1 : undefined,

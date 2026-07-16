@@ -17,7 +17,7 @@ import type { ApiClientWorkbenchSlots } from '../../api-client/workbench-slots.j
 
 // Abas pesadas → chunks LAZY (W2/P3): só baixam quando a aba é clicada.
 const SnapshotEditor = lazy(() => import('../../snapshots/index.js'));
-// Index — aba unificada (Indexed/Runs/Dependencies/Architecture/Diff/Costs).
+// Index — visão operacional do índice estrutural e semântico, arquivos e dependências.
 const IndexWorkspace = lazy(() => import('./index-workspace/IndexWorkspace.js').then((m) => ({ default: m.IndexWorkspace })));
 const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then((m) => ({ default: m.ApiClientTab })));
 const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
@@ -84,13 +84,14 @@ export interface TransientSurfaceProps {
   tab: ProjectTabId;
   projectId: number;
   projectName: string;
+  onOpenFile: (path: string) => void;
   contribWindows: ContribToolWindow[];
   builderJson: { stack: string; port: number } | null;
   framework?: PreviewFramework;
   apiWorkbenchSlots?: ApiClientWorkbenchSlots;
 }
 
-export function TransientSurface({ tab, projectId, projectName, contribWindows, builderJson, framework, apiWorkbenchSlots }: TransientSurfaceProps) {
+export function TransientSurface({ tab, projectId, projectName, onOpenFile, contribWindows, builderJson, framework, apiWorkbenchSlots }: TransientSurfaceProps) {
   // Snapshots owns its own master/detail layout (full height, inner scroll).
   // key={projectId} → remount per project (matches ProjectPreview/DiagramsView)
   // so an open create/edit SnapshotForm can't carry the previous project's
@@ -163,18 +164,22 @@ export function TransientSurface({ tab, projectId, projectName, contribWindows, 
   return (
     <div className="h-full overflow-auto">
       <Suspense fallback={<TabSpinner />}>
-        <ToolSurface tab={tab} projectId={projectId} projectName={projectName} />
+        <ToolSurface tab={tab} projectId={projectId} projectName={projectName} onOpenFile={onOpenFile} />
       </Suspense>
     </div>
   );
 }
 
-function ToolSurface({ tab, projectId, projectName }: { tab: ProjectTabId; projectId: number; projectName: string }) {
+function ToolSurface({ tab, projectId, projectName, onOpenFile }: {
+  tab: ProjectTabId;
+  projectId: number;
+  projectName: string;
+  onOpenFile: (path: string) => void;
+}) {
   switch (tab) {
     case 'index':
       // Owns its own full-height layout (header strip + sub-tabs + inner scroll).
-      // Search migrou para dentro do Index (busca é uso do índice).
-      return <IndexWorkspace projectId={projectId} projectName={projectName} />;
+      return <IndexWorkspace projectId={projectId} projectName={projectName} onOpenFile={onOpenFile} />;
     case 'memory':
       return <div className="px-4 py-3"><UserMemoryPanel /></div>;
     default:

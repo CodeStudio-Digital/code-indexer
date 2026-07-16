@@ -110,25 +110,31 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
       const collection = ensureBridgeCollection(deps, scopeKey);
       // Idempotent: re-linking an already linked pair is a no-op.
       deps.docStore.linkProjectCollection(projectId, collection.id, 'auto');
-      const source =
-        findSource(deps, collection.id, uri) ??
-        deps.docStore.createSource({
-          collection_id: collection.id,
-          type: 'url',
-          uri,
-          title: `${svc}/${path}`,
-        });
-      const page: RawPage = {
-        candidateId: uri,
-        uri,
-        title: `${svc}/${path}`,
-        markdown: doc.content,
-        source: 'folder',
-      };
-      // skipGate: these docs are agent-curated ADRs/runbooks — same
-      // rationale as folder sources bypassing the LLM relevance gate.
-      const result = await runIngest(
-        ingestDeps(deps, id), collection, source, async () => [page], undefined, { skipGate: true },
+      const { source, result } = await deps.indexDocsUseCase.runWithSemanticCollection(
+        collection.id,
+        async () => {
+          const source =
+            findSource(deps, collection.id, uri) ??
+            deps.docStore.createSource({
+              collection_id: collection.id,
+              type: 'url',
+              uri,
+              title: `${svc}/${path}`,
+            });
+          const page: RawPage = {
+            candidateId: uri,
+            uri,
+            title: `${svc}/${path}`,
+            markdown: doc.content,
+            source: 'folder',
+          };
+          // skipGate: these docs are agent-curated ADRs/runbooks — same
+          // rationale as folder sources bypassing the LLM relevance gate.
+          const result = await runIngest(
+            ingestDeps(deps, id), collection, source, async () => [page], undefined, { skipGate: true },
+          );
+          return { source, result };
+        },
       );
       return c.json({
         ok: true,

@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
-import { parseIdParam, notFound } from './_helpers.js';
+import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
 
 /**
  * Agent-memory curation — the human feedback loop over the LIVE store
@@ -11,6 +11,20 @@ import { parseIdParam, notFound } from './_helpers.js';
  */
 export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
   const { db, agentMemoryService } = deps;
+
+  /** Query endpoint for out-of-process agents. The http-api process owns the
+   * knowledge embedder and vector worker; callers never open sqlite-vec. The
+   * service itself preserves FTS results when semantic retrieval is offline. */
+  app.get('/api/projects/:id/agent-memory/search', async (c) => {
+    const projectId = parseIdParam(c);
+    const project = db.getProject(projectId);
+    if (!project) return notFound(c);
+    const query = (c.req.query('q') ?? '').trim();
+    if (!query) return c.json({ results: [] });
+    const limit = Math.min(50, Math.max(1, parseIntQuery(c, 'limit', 5)));
+    const results = await agentMemoryService.search('project', projectId, query, limit);
+    return c.json({ results });
+  });
 
   app.get('/api/projects/:id/agent-memory', (c) => {
     const projectId = parseIdParam(c);
@@ -42,7 +56,7 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const row = db.getAgentMemoryById(id);
     if (!row) return notFound(c);
     if (row.archived_at) return c.json({ ok: true, alreadyArchived: true });
-    db.archiveAgentMemory(id, 'forgotten:user');
+    agentMemoryService.archive(id, 'forgotten:user');
     await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
     try {
       db.recordAgentMemoryEvent({
@@ -54,15 +68,14 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/agent-memory/:id/restore', async (c) => {
     const id = parseIdParam(c);
-    const restored = db.restoreAgentMemory(id);
-    if (!restored) {
+    const row = agentMemoryService.restore(id);
+    if (!row) {
       return c.json({ ok: false, error: 'not restorable (unknown, live, or a live row holds the same name)' }, 409);
     }
-    const row = db.getAgentMemoryById(id);
-    if (row) await agentMemoryService.embedAndUpsert(row).catch(() => undefined);
+    await agentMemoryService.embedAndUpsert(row).catch(() => undefined);
     try {
       db.recordAgentMemoryEvent({
-        eventType: 'restore', scope: row?.scope, projectId: row?.project_id, memoryId: id,
+        eventType: 'restore', scope: row.scope, projectId: row.project_id, memoryId: id,
       });
     } catch { /* best-effort */ }
     return c.json({ ok: true });

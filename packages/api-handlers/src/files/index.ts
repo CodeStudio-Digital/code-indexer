@@ -376,13 +376,5 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       if (!sym) throw new ApiError('not_found', 404, 'symbol not found');
       return db.getClassMembers(sym.name, sym.project_id);
     },
-
-    async listConcepts({ projectId }) {
-      return db.listConcepts(projectId);
-    },
-
-    async conceptFiles({ projectId, concept }) {
-      return db.getFilesByConcept(projectId, concept);
-    },
   };
 }

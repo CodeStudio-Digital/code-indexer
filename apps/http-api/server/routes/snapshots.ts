@@ -87,7 +87,7 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
   // re-embeds it (vectors were dropped on archive). Reverses a consolidation GC.
   app.post('/api/snapshots/:id/unarchive', (c) => {
     const id = parseIdParam(c);
-    deps.db.unarchiveSnapshot(id);
+    deps.snapshotService.unarchive(id);
     return c.json({ ok: true });
   });
 

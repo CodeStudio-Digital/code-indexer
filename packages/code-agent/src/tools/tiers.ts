@@ -459,16 +459,14 @@ export const ADMIN_TOOLS: ReadonlySet<string> = new Set([
   'git_branch',
   'enter_worktree',
   'exit_worktree',
-  // MCP — indexing + cost/model/diff admin. delete_project and the snapshot
+  // MCP — indexing + provider cost/model admin. delete_project and snapshot
   // CRUD tools were retired from the server (see plan
   // essa-fun-o-poderia-ser-cozy-scone): destructive project lifecycle belongs
   // to the host, and snapshot CRUD is 0-call + superseded by agent memory.
   'mcp__index_project',
   'mcp__get_costs',
-  'mcp__estimate_cost',
   'mcp__list_models',
   'mcp__export_docs',
-  'mcp__get_diff',
 ]);
 
 /** Options for {@link getToolTier}. */
@@ -725,11 +723,9 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   exit_worktree: 'Leave the current worktree',
   // ─── Admin MCP ────────────────────────────────────────────────
   mcp__index_project: 'Index or reindex a project',
-  mcp__get_costs: 'View indexing costs',
-  mcp__estimate_cost: 'Estimate cost of indexing',
+  mcp__get_costs: 'View provider cost history',
   mcp__list_models: 'List available LLM models',
   mcp__export_docs: 'Export project documentation',
-  mcp__get_diff: 'Diff between indexing runs',
   // ─── DB client (Databases tab) ────────────────────────────────
   db_list: 'List registered database connections (never credentials; does not connect)',
   db_schema: 'Progressively list tables or inspect one table without loading the full schema',

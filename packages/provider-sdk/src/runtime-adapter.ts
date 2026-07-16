@@ -1,6 +1,5 @@
 import type { ChatProvider } from './adapter.js';
 import type { ResolvedCreds } from './credentials.js';
-import type { LLMProvider } from './indexer.js';
 import type { ProviderAuthHandlers } from './auth.js';
 import type {
   CreateCoderOpts,
@@ -39,7 +38,6 @@ export interface ProviderRuntimeAdapter {
   fetchModels?(ctx: ProviderAdapterClientContext): Promise<string[]>;
   discoverModels?(ctx: ProviderDiscoverModelsContext): Promise<ProviderDiscoveryResult>;
   testConnection?(ctx: ProviderTestContext): Promise<void>;
-  createIndexer?(ctx: ProviderAdapterClientContext): MaybePromise<LLMProvider>;
   createCoder?(ctx: ProviderAdapterCoderContext): MaybePromise<ChatProvider>;
 }
 

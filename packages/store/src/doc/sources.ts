@@ -207,19 +207,27 @@ export function updateEnrichmentMode(db: DB, id: number, mode: string): void {
 
 /**
  * One-shot health snapshot: status + actual counts of persisted chunks and
- * embedded vectors. `chunks_persisted` reads `doc_chunks` directly (truth)
- * rather than the cached `doc_sources.chunk_count` which lags during/after
- * a hang. `chunks_embedded` joins `doc_chunk_vectors` so a chunk that lost
- * its vector_id mapping (boot recovery wiped tombstones, crash etc.) shows
- * up as missing.
+ * embedded vectors. `chunks_persisted` reads `doc_chunks` directly; accepted
+ * coverage comes from semantic_items in the generation currently receiving
+ * writes (building, otherwise active).
  */
 export function getHealth(db: DB, sourceId: number): DocSourceHealth | null {
   const row = db
     .prepare(
       `SELECT s.id AS source_id, s.status, s.last_indexed_at, s.embedding_fingerprint,
               (SELECT COUNT(*) FROM doc_chunks WHERE source_id = s.id) AS chunks_persisted,
-              (SELECT COUNT(*) FROM doc_chunk_vectors v
-                 JOIN doc_chunks c ON c.id = v.chunk_id
+              (SELECT COUNT(DISTINCT c.id)
+                 FROM doc_chunks c
+                 JOIN semantic_namespace_generations ng
+                   ON ng.namespace = 'docs:c' || c.collection_id
+                 JOIN semantic_items si
+                   ON si.namespace = ng.namespace
+                  AND si.generation_id = COALESCE(
+                    ng.building_generation_id, ng.active_generation_id
+                  )
+                  AND si.item_key = 'doc_chunk:' || c.id
+                  AND si.status = 'indexed'
+                  AND si.vector_id IS NOT NULL
                 WHERE c.source_id = s.id) AS chunks_embedded,
               (SELECT COUNT(*) FROM doc_chunks c
                 WHERE c.source_id=s.id AND c.enrichment_fingerprint='pending:llm') AS chunks_unenriched,

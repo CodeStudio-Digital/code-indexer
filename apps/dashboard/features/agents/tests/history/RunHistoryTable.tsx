@@ -9,6 +9,7 @@ import {
   formatDurationMs,
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
+import { formatDateTime } from '../../../../lib/datetime.js';
 import { summariseRunI18n } from '../shared/qa-i18n.js';
 import type { QaRun } from '../shared/types.js';
 import { useRunHistory } from './useRunHistory.js';
@@ -88,7 +89,7 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
 
 function RunRow({ run, onClick }: { run: QaRun; onClick: () => void }) {
   const { t } = useTranslation('agents');
-  const startedShort = new Date(run.started_at + 'Z').toLocaleString(undefined, {
+  const startedShort = formatDateTime(run.started_at, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

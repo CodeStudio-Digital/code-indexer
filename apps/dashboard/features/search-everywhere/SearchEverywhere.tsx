@@ -6,9 +6,10 @@
  * from the registry. Enter opens / runs; symbols reveal line:col.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
-import { Braces, FileCode2, History, SquareTerminal, Text } from 'lucide-react';
+import { Braces, FileCode2, History, Sparkles, SquareTerminal, Text } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
 import { rankPath } from '../../lib/fuzzy.js';
 import { FileIcon } from '../../components/FileIcon.js';
@@ -24,42 +25,122 @@ interface SymbolHitDTO {
   line: number | null; col: number | null; signature: string; exported: number;
 }
 
+interface SemanticHitDTO {
+  id: number;
+  type: 'file' | 'symbol';
+  score: number;
+  fts_rank: number | null;
+  vector_score: number | null;
+  data: {
+    path?: string;
+    file_path?: string;
+    name?: string;
+    kind?: string;
+    line?: number | null;
+    col?: number | null;
+  };
+}
+
 type Item =
   | { kind: 'file'; path: string }
   | { kind: 'recent'; path: string }
   | { kind: 'symbol'; hit: SymbolHitDTO }
   | { kind: 'text'; path: string }
+  | { kind: 'semantic'; hit: SemanticHitDTO }
   | { kind: 'command'; id: string; title: string; category: string };
+
+interface ComputeResult {
+  items: Item[];
+  semanticNotice: string | null;
+}
+
+export function isNaturalLanguageSearch(query: string): boolean {
+  const trimmed = query.trim();
+  if (trimmed.length < 3) return false;
+  if (/^(?:how|what|where|why|when|which|find|show|explain|como|onde|porque|qual|encontre|mostre)\b/i.test(trimmed)) {
+    return true;
+  }
+  // Paths, qualified names and identifier-like tokens stay on the immediate
+  // lexical path. A phrase with whitespace is a useful semantic signal.
+  return /\s/.test(trimmed) && !/^[\w$.-]+(?:[\\/:.][\w$.-]+)+$/.test(trimmed);
+}
+
+export function searchEverywhereSupersessionKey(projectId: number): string {
+  return `search-everywhere:p${projectId}`;
+}
+
+function semanticKey(item: Item): string | null {
+  if (item.kind === 'file' || item.kind === 'recent' || item.kind === 'text') return `file:${item.path}`;
+  if (item.kind === 'symbol') return `symbol:${item.hit.file_path}:${item.hit.name}:${item.hit.line ?? ''}`;
+  if (item.kind === 'semantic') {
+    const path = item.hit.data.file_path ?? item.hit.data.path ?? '';
+    return item.hit.type === 'file'
+      ? `file:${path}`
+      : `symbol:${path}:${item.hit.data.name ?? ''}:${item.hit.data.line ?? ''}`;
+  }
+  return null;
+}
+
+function mergeSemantic(semantic: Item[], lexical: Item[]): Item[] {
+  const seen = new Set(semantic.map(semanticKey).filter((key): key is string => !!key));
+  return [...semantic, ...lexical.filter((item) => {
+    const key = semanticKey(item);
+    if (!key || !seen.has(key)) return true;
+    return false;
+  })];
+}
 
 const TABS: Array<{ id: SeTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'files', label: 'Files' },
   { id: 'symbols', label: 'Symbols' },
   { id: 'text', label: 'Text' },
+  { id: 'semantic', label: 'Semantic' },
   { id: 'commands', label: 'Commands' },
 ];
 
 export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number; onOpenFile: (path: string) => void }) {
-  const { open, tab, close, setTab } = useSeStore();
+  const { t } = useTranslation('search');
+  const { open, tab, initialQuery, close, setTab, consumeInitialQuery } = useSeStore();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Item[]>([]);
+  const [semanticNotice, setSemanticNotice] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
   const allPaths = useRef<string[] | null>(null);
-  const seq = useRef(0);
+  const lexicalSeq = useRef(0);
+  const semanticSeq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    setQuery('');
+    if (!open) {
+      wasOpen.current = false;
+      return;
+    }
+    // A command can close and reopen this dialog inside one React batch. The
+    // one-shot seed therefore participates in the effect instead of relying
+    // only on an `open: false -> true` render transition.
+    if (initialQuery !== null) {
+      setQuery(initialQuery);
+      consumeInitialQuery();
+    } else if (!wasOpen.current) {
+      setQuery('');
+    }
+    wasOpen.current = true;
     setHighlight(0);
+    setSemanticNotice(null);
     allPaths.current = null;
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [open]);
+  }, [open, initialQuery, consumeInitialQuery]);
 
-  const compute = useCallback(async (q: string, activeTab: SeTab): Promise<Item[]> => {
+  const computeLexical = useCallback(async (
+    q: string,
+    activeTab: SeTab,
+    signal: AbortSignal,
+  ): Promise<Item[]> => {
     const trimmed = q.trim();
-    const wantFiles = activeTab === 'all' || activeTab === 'files';
-    const wantSymbols = (activeTab === 'all' || activeTab === 'symbols') && trimmed.length >= 2;
+    const wantFiles = activeTab === 'all' || activeTab === 'files' || activeTab === 'semantic';
+    const wantSymbols = (activeTab === 'all' || activeTab === 'symbols' || activeTab === 'semantic') && trimmed.length >= 2;
     const wantText = activeTab === 'text' && trimmed.length >= 3;
     const wantCommands = activeTab === 'all' || activeTab === 'commands';
 
@@ -78,11 +159,12 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     }
     if (wantFiles && trimmed) {
       if (!allPaths.current) {
-        allPaths.current = await apiCall<Array<{ path: string }>>('files.list', { projectId })
+        const paths = await apiCall<Array<{ path: string }>>('files.list', { projectId }, { signal })
           .then((rows) => rows.map((r) => r.path))
           .catch(() => []);
+        if (!signal.aborted) allPaths.current = paths;
       }
-      const ranked = allPaths.current
+      const ranked = (allPaths.current ?? [])
         .map((path) => ({ path, score: rankPath(path, trimmed) }))
         .filter((x): x is { path: string; score: number } => x.score !== null)
         .sort((a, b) => a.score - b.score)
@@ -92,32 +174,97 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     if (wantSymbols) {
       const hits = await apiCall<SymbolHitDTO[]>('search.symbols', {
         projectId, query: trimmed, limit: activeTab === 'symbols' ? 50 : 10,
-      }).catch(() => []);
+      }, { signal }).catch(() => []);
       out.push(...hits.map<Item>((hit) => ({ kind: 'symbol', hit })));
     }
     if (wantText) {
       const hits = await apiCall<Array<{ path: string }>>('search.text', {
         projectId, query: trimmed, limit: 50,
-      }).catch(() => []);
+      }, { signal }).catch(() => []);
       out.push(...hits.map<Item>((h) => ({ kind: 'text', path: h.path })));
     }
     return out;
   }, [projectId]);
 
-  // Debounced recompute (120ms) with stale-result discard.
+  const computeSemantic = useCallback(async (
+    q: string,
+    signal: AbortSignal,
+  ): Promise<ComputeResult> => {
+    const response = await apiCall<{
+        results: SemanticHitDTO[];
+        diagnostics: {
+          vectorAvailable?: boolean;
+          embeddingAvailable?: boolean;
+          vectorError?: string;
+        };
+      }>('search.project', {
+        projectId,
+        query: q.trim(),
+        // The server planner keeps identifiers on FTS and runs the complete
+        // vector/RRF/reranker pipeline only for natural-language queries.
+        mode: 'auto',
+        type: 'all',
+        limit: 50,
+        supersessionKey: searchEverywhereSupersessionKey(projectId),
+      }, { signal }).catch(() => ({ results: [], diagnostics: { vectorError: 'unavailable' } }));
+    const semanticNotice = (
+      response.diagnostics.vectorAvailable === false
+      || response.diagnostics.embeddingAvailable === false
+      || response.diagnostics.vectorError
+    ) ? t('everywhere.semanticFallback') : null;
+    return {
+      items: response.results.map<Item>((hit) => ({ kind: 'semantic', hit })),
+      semanticNotice,
+    };
+  }, [projectId, t]);
+
+  // Stage 1: lexical files/symbols/text/commands start immediately. Abortable
+  // calls plus a sequence guard cover both HTTP and Electron IPC transports.
   useEffect(() => {
     if (!open) return;
-    const mySeq = ++seq.current;
-    const timer = setTimeout(() => {
-      void compute(query, tab).then((result) => {
-        if (seq.current === mySeq) {
-          setItems(result);
+    const mySeq = ++lexicalSeq.current;
+    const controller = new AbortController();
+    setSemanticNotice(null);
+    // Remove semantic rows from the previous query immediately. If the new
+    // semantic stage wins the race, the lexical response merges around it.
+    setItems((current) => current.filter((item) => item.kind !== 'semantic'));
+    void computeLexical(query, tab, controller.signal).then((next) => {
+      if (!controller.signal.aborted && lexicalSeq.current === mySeq) {
+        setItems((current) => mergeSemantic(
+          current.filter((item) => item.kind === 'semantic'),
+          next,
+        ));
+        setHighlight(0);
+      }
+    });
+    return () => controller.abort();
+  }, [open, query, tab, computeLexical]);
+
+  // Stage 2: after 400ms idle, explicit Semantic queries and natural-language
+  // queries in All use the owner hybrid pipeline. A new keystroke aborts or
+  // discards the previous inference, so reranks never queue per character.
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = query.trim();
+    const shouldRun = (tab === 'semantic' && trimmed.length >= 2)
+      || (tab === 'all' && isNaturalLanguageSearch(trimmed));
+    const mySeq = ++semanticSeq.current;
+    const controller = new AbortController();
+    if (!shouldRun) return () => controller.abort();
+    const timer = window.setTimeout(() => {
+      void computeSemantic(trimmed, controller.signal).then((result) => {
+        if (!controller.signal.aborted && semanticSeq.current === mySeq) {
+          setItems((current) => mergeSemantic(result.items, current));
+          setSemanticNotice(result.semanticNotice);
           setHighlight(0);
         }
       });
-    }, 120);
-    return () => clearTimeout(timer);
-  }, [open, query, tab, compute]);
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query, tab, computeSemantic]);
 
   const pick = useCallback((item: Item) => {
     close();
@@ -125,11 +272,21 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
       executeCommand(item.id);
       return;
     }
-    const path = item.kind === 'symbol' ? item.hit.file_path : item.path;
+    const path = item.kind === 'symbol'
+      ? item.hit.file_path
+      : item.kind === 'semantic'
+        ? (item.hit.data.file_path ?? item.hit.data.path ?? '')
+        : item.path;
+    if (!path) return;
     onOpenFile(path);
-    if (item.kind === 'symbol' && item.hit.line) {
-      const { line } = item.hit;
-      const column = item.hit.col ?? 1;
+    const target = item.kind === 'symbol'
+      ? { line: item.hit.line, col: item.hit.col }
+      : item.kind === 'semantic' && item.hit.type === 'symbol'
+        ? { line: item.hit.data.line, col: item.hit.data.col }
+        : null;
+    if (target?.line) {
+      const { line } = target;
+      const column = target.col ?? 1;
       // The tab mounts async — give Monaco a beat, then reveal.
       setTimeout(() => {
         const editor = getActiveEditor();
@@ -158,17 +315,17 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     <Dialog open={open} onOpenChange={(v) => { if (!v) close(); }}>
       <DialogContent className="p-0 gap-0 max-w-xl top-[18%] translate-y-0">
         <div className="flex items-center gap-1 border-b px-2 pt-2">
-          {TABS.map((t) => (
+          {TABS.map((tabSpec) => (
             <button
-              key={t.id}
+              key={tabSpec.id}
               type="button"
-              onClick={() => setTab(t.id)}
+              onClick={() => setTab(tabSpec.id)}
               className={cn(
                 'px-2 pb-1.5 text-[11.5px] border-b-2 -mb-px transition-colors',
-                tab === t.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+                tab === tabSpec.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
               )}
             >
-              {t.label}
+              {tabSpec.id === 'semantic' ? t('everywhere.semanticTab') : tabSpec.label}
             </button>
           ))}
           <span className="ml-auto pr-1 pb-1 text-[10px] text-muted-foreground/70">Tab to switch</span>
@@ -179,9 +336,14 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Type to search files, symbols, text and actions…"
+            placeholder={tab === 'semantic'
+              ? t('everywhere.semanticPlaceholder')
+              : 'Type to search files, symbols, text and actions…'}
             className="h-8 text-[12.5px]"
           />
+          {(tab === 'semantic' || tab === 'all') && semanticNotice && (
+            <p className="px-1 pt-1.5 text-[10.5px] text-amber-500/90">{semanticNotice}</p>
+          )}
         </div>
         <div className="max-h-[420px] overflow-y-auto py-1">
           {rows.length === 0 && (
@@ -199,6 +361,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
 }
 
 function SeRow({ item, active, onPick, onHover }: { item: Item; active: boolean; onPick: () => void; onHover: () => void }) {
+  const { t } = useTranslation('search');
   const base = cn(
     'w-full text-left px-3 py-1 flex items-center gap-2 text-[12px]',
     active ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/40',
@@ -221,6 +384,23 @@ function SeRow({ item, active, onPick, onHover }: { item: Item; active: boolean;
         <Braces className="h-3.5 w-3.5 shrink-0 text-sky-400" />
         <span className="truncate">{h.name}</span>
         <span className="text-[10px] text-muted-foreground/70 truncate">{h.kind} · {h.file_path}:{h.line ?? '?'}</span>
+      </button>
+    );
+  }
+  if (item.kind === 'semantic') {
+    const h = item.hit;
+    const path = h.data.file_path ?? h.data.path ?? '';
+    const label = h.data.name ?? path;
+    return (
+      <button type="button" className={base} onClick={onPick} onMouseMove={onHover}>
+        <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-400" />
+        <span className="truncate">{label}</span>
+        <span className="text-[10px] text-muted-foreground/70 truncate">
+          {path}{h.data.line ? `:${h.data.line}` : ''}
+        </span>
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">
+          {h.vector_score === null ? t('everywhere.ftsFallback') : h.score.toFixed(3)}
+        </span>
       </button>
     );
   }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { parseDbDate } from '../../../lib/datetime.js';
 import {
   ArrowUpRight,
   BookOpen,
@@ -50,8 +51,8 @@ function safeJson<T extends object>(value: string | T | null | undefined): T | n
 }
 
 function formatChapterDate(value: string, formatter: Intl.DateTimeFormat): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : formatter.format(date);
+  const date = parseDbDate(value);
+  return date ? formatter.format(date) : '';
 }
 
 export function resolvedChapterKind(

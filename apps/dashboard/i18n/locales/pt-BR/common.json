@@ -199,11 +199,11 @@
   "onboarding.project.createFailed": "Não foi possível criar o projeto",
   "onboarding.project.titleExisting": "Abrir ou criar projeto",
   "onboarding.project.titleFirst": "Abrir seu primeiro projeto",
-  "onboarding.project.description": "Aponte o MCP para uma pasta no disco. Vamos indexar em background para que o agente e a busca funcionem assim que o Workspace montar.",
+  "onboarding.project.description": "Aponte o MCP para uma pasta no disco. O Workspace cria apenas o índice estrutural e textual do projeto ativo; embeddings ficam desligados até você solicitá-los em Indexação semântica.",
   "onboarding.project.folder": "Pasta do projeto",
   "onboarding.project.browse": "Procurar",
   "onboarding.project.name": "Nome do projeto",
-  "onboarding.project.indexingHelp": "A primeira indexação roda em background. Você pode começar a digitar no chat e explorar arquivos imediatamente — os resultados de busca aparecem conforme o índice termina (geralmente alguns segundos por mil arquivos).",
+  "onboarding.project.indexingHelp": "Símbolos e FTS são atualizados em segundo plano com baixo consumo. Nenhum modelo local é carregado e nenhum índice semântico é criado automaticamente; você pode iniciá-lo depois, por projeto.",
   "onboarding.project.pickLater": "Escolher depois pela lista",
   "onboarding.project.open": "Abrir projeto",
   "commandPalette.open": "Buscar em todo lugar"

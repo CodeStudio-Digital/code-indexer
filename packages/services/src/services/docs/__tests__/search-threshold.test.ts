@@ -11,8 +11,12 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { DocHybridSearch } from '../search.js';
+import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { DocStore } from '@mcp/store/doc-store.js';
+import type { VectorStore } from '@mcp/store/vectors.js';
 import type { Reranker } from '../reranker.js';
+import type { RerankerService } from '@mcp/indexer/search/reranker.js';
+import { CrossEncoderReranker } from '../cross-encoder-reranker.js';
 
 interface FakeChunk {
   id: number;
@@ -107,5 +111,96 @@ describe('DocHybridSearch relevance + threshold', () => {
     expect(results[0]!.relevance_source).toBe('rrf');
     expect(diag.no_good_match).toBe(false);
     expect(diag.top_relevance).toBeNull();
+  });
+
+  it('does not apply the calibrated threshold when the strict cross-encoder fails', async () => {
+    const strictFailure: RerankerService = {
+      name: 'strict-local',
+      rerank: async () => { throw new Error('reranker unavailable'); },
+    };
+    const search = new DocHybridSearch(
+      fakeDocStore(fakeChunks()),
+      null,
+      null,
+      undefined,
+      { reranker: new CrossEncoderReranker(strictFailure) },
+    );
+
+    const { results, diag } = await search.search({
+      query: 'q',
+      limit: 5,
+      enhancements: { rerank: true },
+      min_relevance: 0.45,
+    });
+
+    expect(results.map((result) => result.chunk_id)).toEqual([1, 2, 3]);
+    expect(results.every((result) => result.relevance_source === 'rrf')).toBe(true);
+    expect(diag.rerank_used).toBe(false);
+    expect(diag.no_good_match).toBe(false);
+    expect(diag.top_relevance).toBeNull();
+  });
+
+  it('does not truncate an explicit result limit to the legacy fixed 20', async () => {
+    const chunks = Array.from({ length: 35 }, (_, index) => ({
+      id: index + 1,
+      collection_id: 1,
+      source_id: 1,
+      source_uri: `u${index + 1}`,
+      heading_path: `H${index + 1}`,
+      content: `content ${index + 1}`,
+      summary: null,
+      concepts: [],
+    }));
+    const search = new DocHybridSearch(fakeDocStore(chunks), null, null);
+
+    const { results } = await search.search({ query: 'q', limit: 35 });
+
+    expect(results).toHaveLength(35);
+  });
+
+  it('embeds each collection query in its active namespace model space', async () => {
+    const chunks = [
+      { ...fakeChunks()[0]!, id: 11, collection_id: 1 },
+      { ...fakeChunks()[1]!, id: 22, collection_id: 2 },
+    ];
+    const namespaceCalls: string[] = [];
+    const embeddingService = {
+      embed: vi.fn(),
+      embedQuery: vi.fn(async () => ({ vector: [99, 99], tokens: 0 })),
+      embedQueryForNamespace: vi.fn(async (namespace: string) => {
+        namespaceCalls.push(namespace);
+        if (namespace === 'docs:c1') return { vector: [1, 0], tokens: 1, generationId: 41 };
+        if (namespace === 'docs:c2') return { vector: [0, 1], tokens: 1, generationId: 42 };
+        throw new Error('collection target unavailable');
+      }),
+      fingerprint: () => 'knowledge',
+    } as unknown as EmbeddingService;
+    const vectorStore = {
+      search: vi.fn(async (vector: number[], options: { namespace?: string }) => {
+        if (options.namespace === 'docs:c1' && vector[0] === 1) {
+          return [{ id: 'doc_chunk:11', score: 0.9, metadata: { chunk_id: '11' } }];
+        }
+        if (options.namespace === 'docs:c2' && vector[1] === 1) {
+          return [{ id: 'doc_chunk:22', score: 0.8, metadata: { chunk_id: '22' } }];
+        }
+        return [];
+      }),
+      upsert: vi.fn(), deleteByIds: vi.fn(), isAvailable: vi.fn(async () => true),
+    } as unknown as VectorStore;
+    const store = {
+      ...fakeDocStore(chunks),
+      listCollections: () => [{ id: 1 }, { id: 2 }, { id: 3 }],
+      getCollection: (id: number) => ({ id, name: `docs-${id}` }),
+    } as unknown as DocStore;
+    const search = new DocHybridSearch(store, embeddingService, vectorStore);
+
+    const { results, diag } = await search.search({ query: 'q', mode: 'vector', limit: 5 });
+
+    expect(namespaceCalls.sort()).toEqual(['docs:c1', 'docs:c2', 'docs:c3']);
+    expect(embeddingService.embedQuery).not.toHaveBeenCalled();
+    expect(vectorStore.search).toHaveBeenCalledWith([1, 0], expect.objectContaining({ generationId: 41 }));
+    expect(vectorStore.search).toHaveBeenCalledWith([0, 1], expect.objectContaining({ generationId: 42 }));
+    expect(results.map((result) => result.chunk_id).sort()).toEqual([11, 22]);
+    expect(diag.vector_hits).toBe(2);
   });
 });

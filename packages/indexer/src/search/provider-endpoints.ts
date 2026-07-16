@@ -4,7 +4,7 @@
  * Reranker and embedding configs can opt into `kind: 'provider'`, which stores
  * only `{ providerId, model }` and reuses the credentials the user already
  * entered for a chat provider (OpenRouter, OpenAI, …) — no duplicated API key.
- * Both factories (`createReranker`, `createEmbeddingService`) call
+ * Both semantic-target factories call
  * `resolveProviderEndpoint()` to turn a provider row into `{ baseURL, apiKey }`,
  * then append `/rerank` or `/embeddings`.
  *

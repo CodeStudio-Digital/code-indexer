@@ -1,9 +1,0 @@
-{
-  "loading": "Loading costs…",
-  "noData": "No cost data.",
-  "totalCost": "Total Cost",
-  "inputTokens": "Input Tokens",
-  "outputTokens": "Output Tokens",
-  "runs": "Runs",
-  "costByProvider": "Cost by Provider"
-}

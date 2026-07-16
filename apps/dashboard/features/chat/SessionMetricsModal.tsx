@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
+import { formatClock } from '../../lib/datetime.js';
 import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, MessageSquare, PiggyBank, Scissors, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { useApi } from '../../hooks/useApi.js';
@@ -924,7 +925,7 @@ function TurnRowView({
             {row.provider ?? '—'}
             {row.model ? ` / ${row.model}` : ''}
             {' · '}
-            {row.created_at ? new Date(row.created_at).toLocaleTimeString() : ''}
+            {formatClock(row.created_at)}
           </div>
         </div>
       )}

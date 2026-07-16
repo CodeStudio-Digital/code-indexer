@@ -452,6 +452,18 @@ export class CoderRunner extends EventEmitter {
   readonly messages: AgentMessage[];
   private opts: RunnerOptions;
 
+  /**
+   * Replace the prompt used by the next provider request without rebuilding
+   * the runner or its tool registry. `turn_start` listeners run synchronously
+   * before request assembly, making this safe for one-shot live context such
+   * as a structural index that became ready while the run was active.
+   */
+  setSystemPromptForNextTurn(systemPrompt: string): void {
+    // Mutate the existing options object: the behavior-tree RunContext keeps
+    // this exact reference for the lifetime of run(), including internal turns.
+    this.opts.systemPrompt = systemPrompt;
+  }
+
   /** Effective sticky reasoning effort inherited by delegated subagents. */
   getReasoningEffort(): string | undefined {
     return this.opts.reasoningEffort;

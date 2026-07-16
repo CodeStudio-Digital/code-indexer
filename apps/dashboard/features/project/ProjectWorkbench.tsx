@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import { Brain } from 'lucide-react';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
@@ -51,6 +52,7 @@ function pluginTab(window: ContribToolWindow): TabDef {
 }
 
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
+  const { t } = useTranslation('projects');
   const layout = useWorkspaceLayout();
   const [sessionsHost, setSessionsHost] = useState<HTMLDivElement | null>(null);
   const [databaseHost, setDatabaseHost] = useState<HTMLDivElement | null>(null);
@@ -213,7 +215,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       return (
         <div className="flex h-full min-h-0 flex-col">
           <WorkbenchPanelHeader
-            title="Memory"
+            title={t('snapshotEditor.tab.memory')}
             icon={Brain}
             onClose={() => layout.setActiveRight(null)}
           />
@@ -222,6 +224,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
               tab="memory"
               projectId={props.projectId}
               projectName={props.projectName}
+              onOpenFile={props.onOpenFile}
               contribWindows={props.contribWindows}
               builderJson={props.builderJson}
               framework={props.framework}
@@ -309,6 +312,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                       surface={layout.primarySurface}
                       projectId={props.projectId}
                       projectName={props.projectName}
+                      onOpenFile={props.onOpenFile}
                       initialSessionId={props.initialSessionId}
                       contribWindows={props.contribWindows}
                       builderJson={props.builderJson}

@@ -9,15 +9,15 @@
  * `DocSearchResult.relevance` (see relevance-policy), so the "no good match"
  * threshold and confidence bands get sharper.
  *
- * Reuse: wraps the indexer's existing `RerankerService` (CloudflareReranker
- * / CohereReranker / NullReranker) — the same client code-search already
- * uses — rather than reimplementing the worker protocol. Build one via the
- * indexer's `createReranker(providerStore)` and pass it in.
+ * Reuse: wraps the indexer's existing `RerankerService` (local/provider/null)
+ * rather than reimplementing each protocol. The server passes the Knowledge
+ * profile's strict `SemanticProfileRuntime` proxy so failures remain visible
+ * to this calibration boundary.
  *
- * Selection is opt-in at the wiring site (DOCS_RERANK_CROSS_ENCODER=1); the
- * LLM `Reranker` stays the default. A `null` service (none configured)
- * degrades to `reranked=false` so search treats scores as uncalibrated
- * rather than silently trusting RRF order.
+ * The wiring site always uses this adapter with the Knowledge semantic
+ * profile. A disabled profile supplies a `null` service and degrades to
+ * `reranked=false`, preserving the incoming RRF order without switching to a
+ * different model or vector space.
  *
  * No cache/telemetry here: the underlying worker call is a single fast
  * round-trip, and the LLM-path cache existed only to dodge expensive chat
@@ -35,9 +35,9 @@ export class CrossEncoderReranker implements DocReranker {
     opts: RerankOpts = {},
   ): Promise<RerankResult<T>> {
     const started = Date.now();
-    // Trivial input or no real reranker → don't claim a rerank happened, so
-    // the search layer marks scores uncalibrated instead of trusting them.
-    if (candidates.length <= 1 || this.service.name === 'null') {
+    // Trivial input → don't claim a rerank happened, so the search layer marks
+    // scores uncalibrated instead of trusting them.
+    if (candidates.length <= 1) {
       return degraded(candidates, started);
     }
 
@@ -48,7 +48,13 @@ export class CrossEncoderReranker implements DocReranker {
     }));
 
     let ranked: Array<{ id: string; score: number }>;
+    let serviceName: string;
     try {
+      // The live semantic proxy resolves the current target from the profile
+      // here. Credential/config rotation can make that resolution fail, which
+      // is the same degraded condition as an inference failure.
+      serviceName = this.service.name;
+      if (serviceName === 'null') return degraded(candidates, started);
       ranked = await this.service.rerank(query, docs, candidates.length);
     } catch {
       return degraded(candidates, started);
@@ -68,7 +74,7 @@ export class CrossEncoderReranker implements DocReranker {
       reranked: true,
       cacheHit: false,
       dropped: candidates.length - reordered.length,
-      modelId: this.service.name,
+      modelId: serviceName,
       durationMs: Date.now() - started,
     };
   }

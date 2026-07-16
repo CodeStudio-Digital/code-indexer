@@ -142,7 +142,7 @@ regress.
 - **Decider** (`@mcp/services/pipelines/decider`) — `ConfigJsonDecider` / `EnvVarDecider` / `ConstantDecider` / `CompositeDecider` (read order: session config → env → constant). Mirrors `PipelineQuery.params()/decider()` from `candidate-pipeline/candidate_pipeline.rs`.
 - **SqliteTelemetrySink** (`@mcp/store/pipeline-telemetry-store`) — every pipeline writes per-stage traces to `pipeline_telemetry`. Histogram + cache-hit queries power the admin panel.
 - **Shadow traffic** (`@mcp/services/shadow-traffic`) — sample requests run against variants for A/B comparison. Used by `tool_selection` today.
-- **`IndexAgent.onFilesUpdated()` listener bus** (I3) — fire-and-forget after each `indexProject()` completes. Wired to `makeHybridSearchCacheInvalidator(hybridSearch)` in `api-handlers/projects` so the LRU clears automatically.
+- **Structural/semantic mutation sinks** — watcher deltas invalidate the hybrid-search LRU and enqueue only the affected semantic items; no LLM-per-file index agent or full scan is involved.
 - **`coder_turn_telemetry` table** — input/output tokens, history chars, tools called, compaction triggers per turn. Read by `src/benchmarks/runner-baseline.ts`.
 - **Baseline benches** — `bench/README.md` documents the workflow. Capture before any pipeline change, diff after, revert if metrics regress per the criteria in `plans/https-github-com-xai-org-x-algorithm-clo-shimmying-oasis.md`.
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDown, ArrowRight, ArrowUp, CheckSquare, CirclePause, CirclePlay, Clock, FileCode2, Link2, RotateCcw, ShieldCheck, Users, X } from 'lucide-react';
+import { formatDateTime } from '../../../lib/datetime.js';
 import { Button } from '../../../components/ui/button.js';
 import { WorkBoardBadge, WorkBoardDetailDialog, WorkBoardProgress, WorkBoardSection, type WorkBoardTone } from '../../../components/work-board/index.js';
 import type { AppWorkItemView } from '../app-studio-api.js';
@@ -21,7 +22,7 @@ export function AppWorkItemDialog({ item, allItems, index, count, busy, onClose,
 
   const footer = (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-1 text-[10px] text-muted-foreground"><Clock className="h-3 w-3" /><span className="truncate">{t('workflow.revision', { number: item.revision })} · {new Date(item.updated_at).toLocaleString()}</span></div>
+      <div className="flex min-w-0 flex-1 items-center gap-1 text-[10px] text-muted-foreground"><Clock className="h-3 w-3" /><span className="truncate">{t('workflow.revision', { number: item.revision })} · {formatDateTime(item.updated_at)}</span></div>
       {item.status === 'running' || item.status === 'ready' ? <Button variant="outline" size="sm" disabled={busy} onClick={() => onAction('pause')}><CirclePause className="mr-1 h-3.5 w-3.5" />{t('workflow.pause')}</Button> : item.status === 'blocked' ? <Button variant="outline" size="sm" disabled={busy} onClick={() => onAction('resume')}><CirclePlay className="mr-1 h-3.5 w-3.5" />{t('workflow.resume')}</Button> : null}
       {item.status !== 'cancelled' && <Button variant="outline" size="sm" disabled={busy} onClick={() => setChanging((value) => !value)}><RotateCcw className="mr-1 h-3.5 w-3.5" />{t('workflow.requestChanges')}</Button>}
       {!['done', 'cancelled'].includes(item.status) && <Button variant="ghost" size="sm" className="text-destructive" disabled={busy} onClick={() => onAction('cancel')}><X className="mr-1 h-3.5 w-3.5" />{t('workflow.cancel')}</Button>}
@@ -61,7 +62,7 @@ export function AppWorkItemDialog({ item, allItems, index, count, busy, onClose,
       </WorkBoardSection>
 
       <WorkBoardSection icon={ShieldCheck} title={t('workflow.evidence')} count={item.evidence.length}>
-        <div className="space-y-1.5">{item.evidence.map((evidence, evidenceIndex) => <div key={`${evidence.kind}:${evidenceIndex}`} className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2"><div className="flex items-center gap-2"><WorkBoardBadge tone="green">{evidence.kind}</WorkBoardBadge>{evidence.recorded_at && <span className="ml-auto text-[9px] text-muted-foreground">{new Date(evidence.recorded_at).toLocaleString()}</span>}</div><p className="mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground">{evidence.value}</p></div>)}{item.evidence.length === 0 && <p className="text-xs text-muted-foreground">{t('workflow.noEvidence')}</p>}</div>
+        <div className="space-y-1.5">{item.evidence.map((evidence, evidenceIndex) => <div key={`${evidence.kind}:${evidenceIndex}`} className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2"><div className="flex items-center gap-2"><WorkBoardBadge tone="green">{evidence.kind}</WorkBoardBadge>{evidence.recorded_at && <span className="ml-auto text-[9px] text-muted-foreground">{formatDateTime(evidence.recorded_at)}</span>}</div><p className="mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground">{evidence.value}</p></div>)}{item.evidence.length === 0 && <p className="text-xs text-muted-foreground">{t('workflow.noEvidence')}</p>}</div>
       </WorkBoardSection>
 
       <WorkBoardSection icon={FileCode2} title={t('workflow.traceability')}>

@@ -77,7 +77,7 @@ export const ragSearchDocsTool: CoderTool = {
       },
       limit: {
         type: 'number',
-        description: 'Max results to return. Default 5; clamped to [1, 20].',
+        description: 'Max results to return. Default 5; clamped to [1, 100].',
       },
       scope: {
         type: 'string',
@@ -101,7 +101,7 @@ export const ragSearchDocsTool: CoderTool = {
       );
     }
     const rawLimit = Number(args.limit);
-    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(20, rawLimit)) : 5;
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, Math.floor(rawLimit))) : 5;
     const collection = typeof args.collection === 'string' ? args.collection.trim() : undefined;
     const scope = args.scope === 'all' ? 'all' : 'project';
 

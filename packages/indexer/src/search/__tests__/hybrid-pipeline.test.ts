@@ -6,20 +6,32 @@
  *   - `DedupFilter`: drops duplicate (type,id) rows from fan-out sources
  *   - `RerankerHydrator`: cross-encoder integration
  *
- * The full pipeline integration (FtsSource + VectorSource + RecentFilesSourceStage
- * orchestrated by CandidatePipeline) needs a real DB and goes through the
- * search-quality bench (`pnpm tsx src/benchmarks/search-quality.ts`).
+ * Full storage integration still goes through the search-quality bench
+ * (`pnpm tsx src/benchmarks/search-quality.ts`); focused tests below use a
+ * small FTS-only DB double to exercise the production stage wiring.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { HybridSearchResult } from '@mcp/shared/types.js';
 import {
+  createHybridSearchPipeline,
   DedupFilter,
+  rerankDocumentText,
   RerankerHydrator,
   RrfFusionScorer,
+  runHybridSearchPipeline,
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
 } from '../hybrid-pipeline.js';
-import type { RerankerService } from '../reranker.js';
+import { NullEmbeddingService } from '../embeddings.js';
+import type { EmbeddingService } from '../embeddings.js';
+import type { RerankCandidate, RerankerService } from '../reranker.js';
+import { NullReranker } from '../reranker.js';
+import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { VectorStore } from '@mcp/store/vectors.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function makeResult(id: number, type: 'file' | 'symbol' = 'file'): HybridSearchResult {
   return {
@@ -135,6 +147,112 @@ describe('RrfFusionScorer', () => {
   });
 });
 
+describe('hybrid pipeline source fusion', () => {
+  it('sums FTS and vector ranks for the same candidate before deduplication', async () => {
+    const file = {
+      id: 7,
+      project_id: 1,
+      path: 'shared-result.ts',
+    };
+    const db = {
+      searchFiles: () => [file],
+      searchSymbols: () => [],
+      getFileById: (id: number) => id === file.id ? file : undefined,
+      getSymbolById: () => undefined,
+    } as unknown as CodeIndexDB;
+    const search = vi.fn(async () => [{
+      id: 'vec-7',
+      score: 0.91,
+      metadata: { type: 'file', ref_id: String(file.id) },
+    }]);
+    const vectorStore = { search } as unknown as VectorStore;
+    const embeddingService: EmbeddingService = {
+      async embed() { return { vectors: [[1, 0]], tokens: 1 }; },
+      async embedQuery() { return { vector: [1, 0], tokens: 1 }; },
+      async embedQueryForNamespace() {
+        return { vector: [1, 0], tokens: 1, generationId: 12 };
+      },
+    };
+    const pipeline = createHybridSearchPipeline({
+      db,
+      vectorStore,
+      embeddingService,
+      hyde: null,
+      reranker: new NullReranker(),
+      recentFilesSource: null,
+      ftsSanitize: (query) => query,
+    });
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      query: 'sharedResult',
+      type: 'files',
+      overFetch: 10,
+      limit: 10,
+      diag: {},
+    };
+
+    const results = await runHybridSearchPipeline(pipeline, query);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      id: file.id,
+      fts_rank: 1,
+      vector_score: 0.91,
+    });
+    expect(results[0].score).toBeCloseTo(1 / 61 + 1 / 61);
+    expect(search).toHaveBeenCalledWith(
+      [1, 0],
+      expect.objectContaining({ namespace: 'code:p1', generationId: 12 }),
+    );
+  });
+
+  it('rehydrates symbol_body and symbol_group vectors for symbol searches', async () => {
+    const symbol = {
+      id: 44,
+      project_id: 1,
+      file_path: 'src/cache.ts',
+      kind: 'function',
+      name: 'invalidateCache',
+      signature: 'invalidateCache(key: string): void',
+    };
+    const search = vi.fn(async () => [
+      { id: 'body', score: 0.9, metadata: { type: 'symbol_body', ref_id: '44' } },
+      { id: 'group', score: 0.8, metadata: { type: 'symbol_group', ref_id: '44' } },
+    ]);
+    const pipeline = createHybridSearchPipeline({
+      db: {
+        searchFiles: () => [],
+        searchSymbols: () => [],
+        getSymbolById: (id: number) => id === 44 ? symbol : undefined,
+      } as unknown as CodeIndexDB,
+      vectorStore: { search } as unknown as VectorStore,
+      embeddingService: {
+        async embed() { return { vectors: [[1, 0]], tokens: 1 }; },
+        async embedQuery() { return { vector: [1, 0], tokens: 1 }; },
+        async embedQueryForNamespace() { return { vector: [1, 0], tokens: 1, generationId: 3 }; },
+      },
+      hyde: null,
+      reranker: new NullReranker(),
+      recentFilesSource: null,
+      ftsSanitize: (query) => query,
+    });
+
+    const results = await runHybridSearchPipeline(pipeline, {
+      ...emptyQuery,
+      query: 'related invalidation behavior',
+      type: 'symbols',
+      diag: {},
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ id: 44, type: 'symbol' });
+    expect(search).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ filter: {}, namespace: 'code:p1', generationId: 3 }),
+    );
+  });
+});
+
 describe('DedupFilter', () => {
   const filter = new DedupFilter();
 
@@ -201,7 +319,7 @@ describe('RerankerHydrator', () => {
     expect(out[0].candidate.result.score).toBe(100);
   });
 
-  it('preserves score on candidates the reranker did not score', async () => {
+  it('preserves the complete RRF ordering when the reranker returns a partial set', async () => {
     const reranker: RerankerService = {
       name: 'mock',
       async rerank(_q, candidates) {
@@ -221,9 +339,37 @@ describe('RerankerHydrator', () => {
     const q: HybridSearchPipelineQuery = { ...emptyQuery, limit: 2 };
     const out = await hydrator.hydrate(q, candidates);
     if (!out[0].ok || !out[1].ok) return;
-    // First got the rerank score; second kept its RRF score.
-    expect(out[0].candidate.score).toBe(0.99);
+    // Partial output is malformed: mixing cross-encoder and RRF score scales
+    // would corrupt ordering, so the whole batch falls back atomically.
+    expect(out[0].candidate.score).toBe(0.5);
     expect(out[1].candidate.score).toBe(0.4);
+  });
+
+  it('passes public topK to the reranker and keeps only its calibrated final set', async () => {
+    const rerank = vi.fn(async (_q: string, candidates: RerankCandidate[], topK = 10) =>
+      candidates.slice(1, 1 + topK).map((candidate, index) => ({
+        id: candidate.id,
+        score: 0.9 - index * 0.1,
+        originalScore: candidate.originalScore,
+      })));
+    const hydrator = new RerankerHydrator({ name: 'adaptive', rerank });
+    const candidates = [1, 2, 3, 4].map((id) => ({
+      ...makeCandidate(id),
+      score: 0.6 - id * 0.01,
+    }));
+    const q: HybridSearchPipelineQuery = { ...emptyQuery, limit: 2 };
+
+    const out = await hydrator.hydrate(q, candidates);
+
+    expect(rerank).toHaveBeenCalledWith(q.query, expect.any(Array), 2, {
+      supersessionKey: undefined,
+      signal: undefined,
+    });
+    const scores = out.map((row) => row.ok ? row.candidate.score : Number.NEGATIVE_INFINITY);
+    expect(scores[1]).toBe(0.9);
+    expect(scores[2]).toBe(0.8);
+    expect(scores[0]).toBeLessThan(0.8);
+    expect(scores[3]).toBeLessThan(0.8);
   });
 
   it('handles empty input gracefully', async () => {
@@ -231,5 +377,219 @@ describe('RerankerHydrator', () => {
     const hydrator = new RerankerHydrator(reranker);
     const out = await hydrator.hydrate(emptyQuery, []);
     expect(out).toEqual([]);
+  });
+});
+
+describe('reranker document material', () => {
+  it('uses structural file facts for file candidates', () => {
+    const result = makeResult(1);
+    result.data = {
+      id: 1,
+      path: 'src/cache.ts',
+      language: 'typescript',
+    } as unknown as HybridSearchResult['data'];
+
+    const text = rerankDocumentText(result);
+
+    expect(text).toContain('Path: src/cache.ts');
+    expect(text).toContain('Language: typescript');
+  });
+
+  it('uses structural signature and comment for symbol candidates', () => {
+    const result = makeResult(9, 'symbol');
+    result.data = {
+      id: 9,
+      file_path: 'src/cache.ts',
+      kind: 'function',
+      name: 'invalidateCache',
+      signature: 'invalidateCache(key: string): void',
+      comment: 'Drops one cached entry.',
+    } as unknown as HybridSearchResult['data'];
+
+    const text = rerankDocumentText(result);
+
+    expect(text).toContain('invalidateCache(key: string): void');
+    expect(text).toContain('Drops one cached entry.');
+  });
+});
+
+describe('hybrid pipeline rerank selection', () => {
+  function createFtsOnlyPipeline(
+    fileCount: number,
+    reranker: RerankerService,
+  ) {
+    const files = Array.from({ length: fileCount }, (_, index) => {
+      const id = index + 1;
+      return {
+        id,
+        project_id: 1,
+        path: `file-${id}.ts`,
+      };
+    });
+    const db = {
+      searchFiles: (_projectId: number, _query: string, limit: number) => files.slice(0, limit),
+      searchSymbols: () => [],
+    };
+    return createHybridSearchPipeline({
+      db: db as unknown as CodeIndexDB,
+      vectorStore: null,
+      embeddingService: new NullEmbeddingService(),
+      hyde: null,
+      reranker,
+      recentFilesSource: null,
+      ftsSanitize: (query) => query,
+    });
+  }
+
+  it('reranks the expanded set and promotes a candidate before final top-K', async () => {
+    vi.stubEnv('MCP_RERANK_DEPTH', '4');
+    let candidatesSeen = 0;
+    let requestedTopK = 0;
+    const reranker: RerankerService = {
+      name: 'promote-tail',
+      async rerank(_query, candidates, topK = 10) {
+        candidatesSeen = candidates.length;
+        requestedTopK = topK;
+        const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+        return [
+          { id: 'file:4', score: 0.99, originalScore: byId.get('file:4')!.originalScore },
+          { id: 'file:2', score: 0.8, originalScore: byId.get('file:2')!.originalScore },
+          { id: 'file:1', score: 0.2, originalScore: byId.get('file:1')!.originalScore },
+          { id: 'file:3', score: 0.1, originalScore: byId.get('file:3')!.originalScore },
+        ].slice(0, topK);
+      },
+    };
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      type: 'files',
+      overFetch: 8,
+      limit: 2,
+      diag: {},
+    };
+
+    const results = await runHybridSearchPipeline(createFtsOnlyPipeline(4, reranker), query);
+
+    expect(candidatesSeen).toBe(4);
+    // The reranker sees the whole expanded candidate set, while topK tells
+    // the worker how many calibrated rows must be returned after applying
+    // its adaptive 20/40/64 candidate-depth policy.
+    expect(requestedTopK).toBe(2);
+    expect(results.map((result) => result.id)).toEqual([4, 2]);
+    expect(results.map((result) => result.score)).toEqual([0.99, 0.8]);
+    expect(results.every((result, index) => index === 0 || results[index - 1].score >= result.score)).toBe(true);
+  });
+
+  it('respects requested top-K above the former fixed limit of 20', async () => {
+    vi.stubEnv('MCP_RERANK_DEPTH', '50');
+    let candidatesSeen = 0;
+    const reranker: RerankerService = {
+      name: 'reverse',
+      async rerank(_query, candidates, topK = 10) {
+        candidatesSeen = candidates.length;
+        return [...candidates]
+          .reverse()
+          .slice(0, topK)
+          .map((candidate, index) => ({
+            id: candidate.id,
+            score: 1 - index / 100,
+            originalScore: candidate.originalScore,
+          }));
+      },
+    };
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      type: 'files',
+      overFetch: 30,
+      limit: 25,
+      diag: {},
+    };
+
+    const results = await runHybridSearchPipeline(createFtsOnlyPipeline(30, reranker), query);
+
+    expect(candidatesSeen).toBe(30);
+    expect(results).toHaveLength(25);
+    expect(results[0].id).toBe(30);
+    expect(results[24].id).toBe(6);
+    expect(results.every((result, index) => index === 0 || results[index - 1].score >= result.score)).toBe(true);
+  });
+
+  it('retains the adaptive worker candidate pool before reranking', async () => {
+    let candidatesSeen = 0;
+    const reranker: RerankerService = {
+      name: 'adaptive-worker',
+      candidatePoolSize: () => 40,
+      async rerank(_query, candidates, topK = 10) {
+        candidatesSeen = candidates.length;
+        return candidates.slice(0, topK).map((candidate, index) => ({
+          id: candidate.id,
+          score: 1 - index / 100,
+          originalScore: candidate.originalScore,
+        }));
+      },
+    };
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      type: 'files',
+      overFetch: 50,
+      limit: 10,
+      diag: {},
+    };
+
+    const results = await runHybridSearchPipeline(createFtsOnlyPipeline(50, reranker), query);
+
+    expect(candidatesSeen).toBe(40);
+    expect(results).toHaveLength(10);
+  });
+
+  it('falls back to RRF ordering when reranking fails', async () => {
+    vi.stubEnv('MCP_RERANK_DEPTH', '6');
+    const reranker: RerankerService = {
+      name: 'throws',
+      async rerank() { throw new Error('offline'); },
+    };
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      type: 'files',
+      overFetch: 6,
+      limit: 3,
+      diag: {},
+    };
+
+    const results = await runHybridSearchPipeline(createFtsOnlyPipeline(6, reranker), query);
+
+    expect(results.map((result) => result.id)).toEqual([1, 2, 3]);
+    expect(results.every((result, index) => index === 0 || results[index - 1].score >= result.score)).toBe(true);
+  });
+
+  it('forwards latest-wins identity and request cancellation to the reranker', async () => {
+    let receivedOptions: { supersessionKey?: string; signal?: AbortSignal } | undefined;
+    const controller = new AbortController();
+    const reranker: RerankerService = {
+      name: 'captures-request-options',
+      async rerank(_query, candidates, topK = 10, options) {
+        receivedOptions = options;
+        return candidates.slice(0, topK).map((candidate) => ({
+          id: candidate.id,
+          score: candidate.originalScore,
+          originalScore: candidate.originalScore,
+        }));
+      },
+    };
+    const query: HybridSearchPipelineQuery = {
+      ...emptyQuery,
+      type: 'files',
+      overFetch: 4,
+      limit: 2,
+      supersessionKey: 'project:91:electron:search-everywhere:p91',
+      signal: controller.signal,
+      diag: {},
+    };
+
+    await runHybridSearchPipeline(createFtsOnlyPipeline(4, reranker), query);
+
+    expect(receivedOptions).toEqual({
+      supersessionKey: 'project:91:electron:search-everywhere:p91',
+      signal: controller.signal,
+    });
   });
 });

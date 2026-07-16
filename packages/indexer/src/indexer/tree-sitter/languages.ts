@@ -24,7 +24,7 @@ export async function initTreeSitter(): Promise<void> {
 interface GrammarInfo {
   /** WASM filename inside tree-sitter-wasms/out/ */
   wasmFile: string;
-  /** Canonical language name (matches LLMFileAnalysis.language) */
+  /** Canonical language name persisted in the structural file row. */
   language: string;
 }
 

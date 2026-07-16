@@ -187,4 +187,38 @@ describe('ContextRelevancePipeline', () => {
     expect(embedCalls).toBe(1);
     expect(firstRunCalls).toBeGreaterThanOrEqual(messages.length + 1);
   });
+
+  it('namespaces message embeddings by the dynamic model fingerprint', async () => {
+    const messages: SessionMessage[] = [
+      makeMessage('1', 'user', 'A'),
+      makeMessage('2', 'assistant', 'B'),
+      makeMessage('3', 'user', 'C'),
+    ];
+    let model = 'model-a';
+    let embedCalls = 0;
+    const dynamicEmbed: EmbeddingFn = Object.assign(
+      async () => {
+        embedCalls++;
+        return Float32Array.from(model === 'model-a' ? [1, 0] : [0, 1]);
+      },
+      { fingerprint: () => model },
+    );
+    const pipeline = createContextRelevancePipeline({
+      getMessages: () => messages,
+      embed: dynamicEmbed,
+      messageEmbeddingStore: new InMemoryMessageEmbeddingStore(),
+    });
+
+    await compactSession(pipeline, { queryId: 'a', taskText: 'task', tokenBudget: 1000 });
+    expect(embedCalls).toBe(messages.length + 1);
+
+    model = 'model-b';
+    embedCalls = 0;
+    await compactSession(pipeline, { queryId: 'b', taskText: 'task', tokenBudget: 1000 });
+    expect(embedCalls).toBe(messages.length + 1);
+
+    embedCalls = 0;
+    await compactSession(pipeline, { queryId: 'c', taskText: 'task', tokenBudget: 1000 });
+    expect(embedCalls).toBe(1);
+  });
 });

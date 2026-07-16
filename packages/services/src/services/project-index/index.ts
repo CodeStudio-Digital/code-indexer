@@ -1,4 +1,4 @@
-export { ProjectIndexService, type EnsureFreshReason } from './service.js';
+export { ProjectIndexService, type EnsureFreshReason, type SemanticCatchupHooks } from './service.js';
 export { createInProcessStructuralExecutor } from './in-process-executor.js';
 export {
   readProjectIndexSettings,

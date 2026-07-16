@@ -5,12 +5,11 @@
  * import/export references, and file dependencies — replacing the LLM for
  * structural analysis while being free, deterministic, and fast (<15ms/file).
  *
- * Produces output compatible with LLMFileAnalysis so it plugs directly into
- * the existing IndexAgent pipeline.
+ * Produces the normalized structural analysis persisted by the indexer.
  */
 import Parser from 'web-tree-sitter';
 import { basename, extname, dirname } from 'node:path';
-import type { LLMSymbol, LLMReference, LLMFileAnalysis, SymbolKind } from '@mcp/shared/types.js';
+import type { LLMSymbol, LLMReference, StructuralFileAnalysis, SymbolKind } from '@mcp/shared/types.js';
 import {
   getGrammarForExtension,
   isExtractable,
@@ -23,9 +22,9 @@ import { extractNamespace, extractPhpTraitUses } from '@mcp/indexer/indexer/tree
 // ─── Types ───────────────────────────────────────────────────────
 
 export interface TreeSitterResult {
-  /** Structural analysis (symbols, refs, deps). No summary/concepts — those need LLM. */
-  analysis: Partial<LLMFileAnalysis>;
-  /** True if tree-sitter handled the language. False = fall back to LLM. */
+  /** Structural analysis (symbols, references and dependencies). */
+  analysis: Partial<StructuralFileAnalysis>;
+  /** True if tree-sitter handled the language. */
   supported: boolean;
   /** Language detected from extension. */
   language: string;
@@ -200,7 +199,7 @@ export class TreeSitterExtractor {
   /**
    * Extract structural information from a source file.
    * Returns { supported: false } if the file extension isn't recognized,
-   * allowing the caller to fall back to LLM analysis.
+   * allowing the caller to keep the file searchable by path/content only.
    */
   async extract(filePath: string, content: string): Promise<TreeSitterResult> {
     const ext = extname(filePath).replace(/^\./, '').toLowerCase();
@@ -240,15 +239,13 @@ export class TreeSitterExtractor {
       for (const r of references) knownNames.add(r.symbol_name);
       const callRefs = extractCalls(tree.rootNode, language, knownNames);
 
-      const analysis: Partial<LLMFileAnalysis> = {
+      const analysis: Partial<StructuralFileAnalysis> = {
         language,
         symbols,
         references: references.concat(callRefs),
         dependencies: allDeps,
         internal_deps: internalDeps,
         external_deps: externalDeps,
-        // Fields that still need LLM:
-        // summary, concepts, notes, complexity, layer, is_entry_point, is_test, is_generated
       };
 
       return { supported: true, language, analysis };

@@ -154,6 +154,18 @@ export const cloudflareSpec: ProviderSpec = {
     '@cf/baai/bge-base-en-v1.5': { inputPer1M: 0.067, outputPer1M: 0 },
     '@cf/baai/bge-small-en-v1.5': { inputPer1M: 0.02, outputPer1M: 0 },
   },
+  semantic: {
+    embedding: {
+      protocol: 'cloudflare',
+      defaultModels: ['@cf/baai/bge-m3', '@cf/qwen/qwen3-embedding-0.6b'],
+      modelPatterns: ['embedding', 'bge-m3', 'qwen3-embedding'],
+    },
+    rerank: {
+      protocol: 'cloudflare',
+      defaultModels: ['@cf/baai/bge-reranker-base'],
+      modelPatterns: ['rerank'],
+    },
+  },
   wire: 'openai-compat',
   wireOpts: {
     baseUrlTemplate: CF_BASE_URL_TEMPLATE,

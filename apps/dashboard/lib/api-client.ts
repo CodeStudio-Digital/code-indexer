@@ -444,6 +444,7 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       const qp = new URLSearchParams({ q: String(ip!.query), limit: String(Number(ip!.limit ?? 50)) });
       if (ip!.mode) qp.set('mode', String(ip!.mode));
       if (ip!.type) qp.set('type', String(ip!.type));
+      if (ip!.supersessionKey) qp.set('supersessionKey', String(ip!.supersessionKey));
       return { url: `/api/projects/${ip!.projectId}/search?${qp.toString()}`, init: {} };
     }
     case 'search.grep':

@@ -17,7 +17,6 @@ import {
   Package,
   Plug,
   Plus,
-  Search,
   Settings2,
   Wand2,
   Wrench,
@@ -54,8 +53,7 @@ import { AppSettingsPanel } from './AppSettingsPanel.js';
 import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { PluginsPanel } from './PluginsPanel.js';
-import { StoragePanel } from './StoragePanel.js';
-import { HydePanel } from './HydePanel.js';
+import { SemanticIndexingPanel } from './SemanticIndexingPanel.js';
 import { HygienePanel } from './HygienePanel.js';
 import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
@@ -155,10 +153,8 @@ export default function Admin() {
     { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
       hint: 'Quality watchdog, intervention policies' },
     // Busca & Conhecimento
-    { id: 'storage',           label: t('admin:tabs.embeddings'), icon: Database,      group: 'knowledge',
-      hint: 'Embeddings, vector store, índices' },
-    { id: 'search',            label: t('admin:tabs.search'),     icon: Search,        group: 'knowledge',
-      hint: 'HyDE, reranking, configuração de busca' },
+    { id: 'semantic',          label: t('admin:tabs.semanticIndexing'), icon: Database, group: 'knowledge',
+      hint: t('admin:semantic.navHint') },
     { id: 'hygiene',           label: 'Higiene',                  icon: Wand2,         group: 'knowledge',
       hint: 'Limpeza de dados órfãos, reconciliação' },
     // Ferramentas & Extensões
@@ -353,9 +349,8 @@ export default function Admin() {
 
           {section === 'capabilities'      && <CapabilityFallbacksPanel />}
           {section === 'app-settings'      && <AppSettingsPanel />}
-          {section === 'storage'           && <StoragePanel />}
+          {section === 'semantic'          && <SemanticIndexingPanel />}
           {section === 'hygiene'           && <HygienePanel />}
-          {section === 'search'            && <HydePanel />}
           {section === 'tools'             && <ToolsPanel />}
           {section === 'mcp-servers'       && <McpServersPanel />}
           {section === 'mcp-http'          && <McpHttpStatusPanel />}

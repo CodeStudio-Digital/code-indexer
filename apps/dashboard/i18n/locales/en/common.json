@@ -199,11 +199,11 @@
   "onboarding.project.createFailed": "Could not create project",
   "onboarding.project.titleExisting": "Open or create a project",
   "onboarding.project.titleFirst": "Open your first project",
-  "onboarding.project.description": "Point MCP at a folder on disk. We'll index it in the background so the agent and search work the moment the Workspace mounts.",
+  "onboarding.project.description": "Point MCP at a folder on disk. The Workspace creates only the active project's structural and text index; embeddings stay off until you request them under Semantic indexing.",
   "onboarding.project.folder": "Project folder",
   "onboarding.project.browse": "Browse",
   "onboarding.project.name": "Project name",
-  "onboarding.project.indexingHelp": "First-time indexing runs in the background. You can start typing in the chat and exploring files right away — search results will fill in as the index finishes (usually a few seconds per thousand files).",
+  "onboarding.project.indexingHelp": "Symbols and FTS update in the background with low overhead. No local model is loaded and no semantic index is created automatically; you can start it later for an individual project.",
   "onboarding.project.pickLater": "Pick later from the list",
   "onboarding.project.open": "Open project",
   "commandPalette.open": "Search Everywhere"

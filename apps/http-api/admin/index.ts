@@ -13,9 +13,7 @@ import { Hono } from 'hono';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { providersRouter } from './providers.routes.js';
 import { modelsRouter } from './models.routes.js';
-import { embeddingsRouter } from './embeddings.routes.js';
-import { vectorStoresRouter } from './vector-stores.routes.js';
-import { rerankersRouter } from './rerankers.routes.js';
+import { semanticRouter, type SemanticAdminRuntime } from './semantic.routes.js';
 import { oauthRouter } from './oauth.routes.js';
 import { copilotOAuthRouter } from './oauth-copilot.routes.js';
 import { openaiOAuthRouter } from './oauth-openai.routes.js';
@@ -32,14 +30,12 @@ import { verdaccioRouter } from './verdaccio.routes.js';
 import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
 import { capabilitiesRouter } from './capabilities.routes.js';
 
-export function createAdminRouter(store: ProviderStore): Hono {
+export function createAdminRouter(store: ProviderStore, semantic: SemanticAdminRuntime): Hono {
   const app = new Hono();
 
   app.route('/', providersRouter(store));
   app.route('/', modelsRouter(store));
-  app.route('/', embeddingsRouter(store));
-  app.route('/', vectorStoresRouter(store));
-  app.route('/', rerankersRouter(store));
+  app.route('/', semanticRouter(store, semantic));
   app.route('/', oauthRouter(store));
   app.route('/', copilotOAuthRouter(store));
   app.route('/', openaiOAuthRouter(store));

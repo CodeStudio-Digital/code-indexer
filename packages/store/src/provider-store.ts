@@ -1,6 +1,6 @@
 /**
  * ProviderStore — persists the admin-configurable LLM providers, their API
- * keys, live/hardcoded model lists, OAuth tokens and embedding backends.
+ * keys, live/hardcoded model lists and OAuth tokens.
  *
  * Public API. Bodies live in sub-modules under `./provider/` so this file
  * stays under the 250-LOC ceiling. Schema is owned by migration 006.
@@ -15,9 +15,6 @@ import * as appSettings from './provider/app-settings.js';
 import * as catalogEtag from './provider/catalog-etag.js';
 import * as subagent from './provider/subagent.js';
 import * as oauth from './provider/oauth.js';
-import * as embedding from './provider/embedding.js';
-import * as vectorStore from './provider/vector-store.js';
-import * as reranker from './provider/reranker.js';
 import * as globalTools from './provider/global-tools.js';
 import { seedFromEnvIfEmpty } from './provider/seed.js';
 
@@ -33,12 +30,6 @@ export type {
   ProviderConfig,
   ProviderModel,
   OAuthTokenRow,
-  EmbeddingKind,
-  EmbeddingConfigRow,
-  VectorStoreKind,
-  VectorStoreConfigRow,
-  RerankerKind,
-  RerankerConfigRow,
   UpsertProviderInput,
   UpsertModelInput,
   ModelPriceRow,
@@ -51,9 +42,6 @@ import type {
   UpsertProviderInput,
   UpsertModelInput,
   OAuthTokenRow,
-  EmbeddingConfigRow,
-  VectorStoreConfigRow,
-  RerankerConfigRow,
   ModelPriceRow,
   UpsertModelPriceInput,
 } from './provider/types.js';
@@ -115,26 +103,17 @@ export class ProviderStore {
   getSubagentModel(providerId: string): string | null { return subagent.getModel(this.db, providerId); }
   setSubagentModel(providerId: string, modelId: string | null): void { subagent.setModel(this.db, providerId, modelId); }
   setSubagentTarget(providerId: string, targetProviderId: string | null, modelId: string | null): void { subagent.setTarget(this.db, providerId, targetProviderId, modelId); }
+  getSubagentProfileTarget(providerId: string, profileId: string): { providerId: string; modelId: string | null } | null { return subagent.getProfileTarget(this.db, providerId, profileId); }
+  setSubagentProfileTarget(providerId: string, profileId: string, targetProviderId: string | null, modelId: string | null): void { subagent.setProfileTarget(this.db, providerId, profileId, targetProviderId, modelId); }
+  getSubagentEffort(providerId: string): string | null { return subagent.getSubagentEffort(this.db, providerId); }
+  setSubagentEffort(providerId: string, effort: string | null): void { subagent.setSubagentEffort(this.db, providerId, effort); }
+  getSubagentProfileEffort(providerId: string, profileId: string): string | null { return subagent.getProfileEffort(this.db, providerId, profileId); }
+  setSubagentProfileEffort(providerId: string, profileId: string, effort: string | null): void { subagent.setProfileEffort(this.db, providerId, profileId, effort); }
 
   // ─── OAuth ─────────────────────────────────────────────────────
   getOAuth(providerId: string): OAuthTokenRow | null { return oauth.get(this.db, providerId); }
   setOAuth(input: oauth.SetOAuthInput): void { oauth.set(this.db, input); }
   deleteOAuth(providerId: string): void { oauth.del(this.db, providerId); }
-
-  // ─── Embeddings ────────────────────────────────────────────────
-  listEmbeddingConfigs(): EmbeddingConfigRow[] { return embedding.list(this.db); }
-  getDefaultEmbedding(): EmbeddingConfigRow | null { return embedding.getDefault(this.db); }
-  upsertEmbeddingConfig(input: embedding.UpsertEmbeddingInput): EmbeddingConfigRow { return embedding.upsert(this.db, input); }
-
-  // ─── Vector Stores ─────────────────────────────────────────────
-  listVectorStoreConfigs(): VectorStoreConfigRow[] { return vectorStore.list(this.db); }
-  getDefaultVectorStore(): VectorStoreConfigRow | null { return vectorStore.getDefault(this.db); }
-  upsertVectorStoreConfig(input: vectorStore.UpsertVectorStoreInput): VectorStoreConfigRow { return vectorStore.upsert(this.db, input); }
-
-  // ─── Rerankers ─────────────────────────────────────────────────
-  listRerankerConfigs(): RerankerConfigRow[] { return reranker.list(this.db); }
-  getDefaultReranker(): RerankerConfigRow | null { return reranker.getDefault(this.db); }
-  upsertRerankerConfig(input: reranker.UpsertRerankerInput): RerankerConfigRow { return reranker.upsert(this.db, input); }
 
   // ─── Global Disabled Tools ─────────────────────────────────────
   listGlobalDisabledTools(): string[] { return globalTools.listDisabled(this.db); }

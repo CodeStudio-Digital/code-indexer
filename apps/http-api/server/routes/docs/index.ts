@@ -39,6 +39,8 @@ import {
   type DocIngestProgress,
 } from '@mcp/services/services/docs/index.js';
 import { coerceDocType } from '@mcp/store/doc-store.js';
+import { embedQueryForNamespace } from '@mcp/indexer/search/embeddings.js';
+import { docNamespace } from '@mcp/shared/vector-namespace.js';
 
 /**
  * Set the response headers proxies need to pass `text/event-stream`
@@ -619,10 +621,10 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     const srcId = parseIdParam(c, 'srcId');
     const src = docStore.getSource(srcId);
     if (!src) return notFound(c);
-    // `?force=1` wipes existing embedding state first. Used when the
-    // remote vector store silently rejected previous upserts (badge
-    // still says embedded but the search returns 0). Without force,
-    // we only target chunks where `embedding_hash IS NULL`.
+    // `?force=1` wipes accepted embedding state first. Used when local
+    // vectors need to be rebuilt despite a previously accepted hash.
+    // Without force, semantic_items selects only chunks missing from the
+    // current generation (or whose content hash changed).
     const force = c.req.query('force') === '1';
     console.log(`[doc-indexer] route: SSE retry-embed source=${srcId} force=${force}`);
     markUnbuffered(c);
@@ -662,8 +664,8 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
-  // Per-collection retry. Same shape as per-source but scopes the
-  // listChunksMissingEmbedding query to a collection_id.
+  // Per-collection retry. Same shape as per-source, scoped through the
+  // collection namespace's semantic_items ledger.
   app.post('/api/docs/collections/:id/embeddings/retry', async (c) => {
     const collectionId = parseIdParam(c);
     const collection = docStore.getCollection(collectionId);
@@ -841,7 +843,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
 
   // ─── Health snapshot (post-completion stats) ────────────────────
   //
-  // Read-only join over `doc_chunks` + `doc_chunk_vectors`. UI uses
+  // Read-only snapshot over the active semantic_items generation. UI uses
   // this to show "✓ 6331/6331 embedded" or "⚠ 50 missing → [Re-embed]"
   // after a run completes. Cheap (3 small SELECTs); poll on demand,
   // not on a timer.
@@ -852,60 +854,33 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
     return c.json(health);
   });
 
-  // ─── Vector tombstone sweep (admin / debug) ─────────────────────
-  //
-  // Drains the `doc_vector_tombstones` retry queue — the boot path
-  // already does this opportunistically; this endpoint exists so the
-  // admin can force a drain after fixing whatever broke the vector
-  // store, without restarting the server.
-  app.get('/api/docs/vectors/pending', (c) => {
-    return c.json({ pending: docStore.countPendingTombstones() });
-  });
-
-  app.post('/api/docs/vectors/sweep', async (c) => {
-    try {
-      const result = await indexDocsUseCase.sweepTombstones();
-      return c.json(result);
-    } catch (err) {
-      return mapDocError(c, err);
-    }
-  });
-
   // ─── Diagnose vector pipeline ───────────────────────────────────
   //
-  // The single-shot answer to "why is VECTOR:0 even though the badge
-  // says embedded?". Probes the vector store end-to-end:
-  //   - is the store wired and responding to isAvailable?
-  //   - does embedQuery actually return a vector?
-  //   - does search() return ANY hit with no filter?
-  //   - does the corpus filter narrow it correctly?
-  //   - does adding collection filter zero out (= Cloudflare metadata
-  //     index wasn't declared at provisioning time)?
-  //
-  // Pass `?collection=NAME` to test the collection filter; otherwise
-  // probes only corpus+type.
+  // Probes each collection's active immutable namespace generation. A docs
+  // collection may still serve an older model while another collection has
+  // already activated the replacement, so both embedding and search must be
+  // pinned independently per `docs:c<ID>`. "No filter" below means no metadata
+  // filter; it never means a cross-namespace vector search.
   app.post('/api/docs/vectors/diagnose', async (c) => {
-    const body = await parseJsonBody<{ query?: string; collection?: string }>(c);
-    const probeQuery = body.query ?? 'rigidbody physics raycast collider';
-    const probeCollection = body.collection ?? undefined;
-    const { embeddingService, vectorStore, docStore } = deps;
+    const body = await parseJsonBody<{ query?: string; collection?: string | number }>(c);
+    const probeQuery = body.query?.trim() || 'rigidbody physics raycast collider';
+    const selector = body.collection == null ? null : String(body.collection).trim();
+    const { vectorStore, docStore, semanticProfileRuntime } = deps;
 
     type Step = { name: string; ok: boolean; detail?: unknown; error?: string };
     const steps: Step[] = [];
-
-    // (1) Local mapping count.
-    try {
-      const count = docStore.countVectorMappings();
-      steps.push({ name: 'sqlite_vector_mappings', ok: true, detail: { count } });
-    } catch (e) {
-      steps.push({ name: 'sqlite_vector_mappings', ok: false, error: (e as Error).message });
+    const selected = selector
+      ? [(/^\d+$/.test(selector)
+          ? docStore.getCollection(Number(selector))
+          : docStore.getCollectionByName(selector))]
+          .filter((collection): collection is NonNullable<typeof collection> => collection !== null)
+      : docStore.listCollections();
+    if (selector && selected.length === 0) {
+      return c.json({ error: `documentation collection not found: ${selector}` }, 404);
     }
 
-    // (2) Vector store availability probe.
-    if (!vectorStore) {
-      steps.push({ name: 'vector_store', ok: false, error: 'no vectorStore wired (NullVectorStore?)' });
-      return c.json({ probeQuery, probeCollection, steps });
-    }
+    // Store availability is process-wide; embeddings and searches below are
+    // still collection-specific because their generations/dimensions may differ.
     try {
       const alive = await vectorStore.isAvailable();
       steps.push({ name: 'vector_store_available', ok: alive, detail: { kind: deps.vectorStoreKind } });
@@ -913,56 +888,94 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
       steps.push({ name: 'vector_store_available', ok: false, error: (e as Error).message });
     }
 
-    // (3) Embed the probe query.
-    if (!embeddingService) {
-      steps.push({ name: 'embedder', ok: false, error: 'no embeddingService wired' });
-      return c.json({ probeQuery, probeCollection, steps });
-    }
-    let queryVec: number[] = [];
-    try {
-      const r = await embeddingService.embedQuery(probeQuery);
-      queryVec = r.vector;
-      steps.push({
-        name: 'embed_query',
-        ok: queryVec.length > 0,
-        detail: { dim: queryVec.length, kind: deps.embeddingKind },
-      });
-    } catch (e) {
-      steps.push({ name: 'embed_query', ok: false, error: (e as Error).message });
-      return c.json({ probeQuery, probeCollection, steps });
-    }
-    if (queryVec.length === 0) {
-      return c.json({ probeQuery, probeCollection, steps });
-    }
+    const queryEmbedding = semanticProfileRuntime.queryEmbedding('knowledge');
+    const namespaces: Array<{
+      namespace: string;
+      collection: { id: number; name: string };
+      generationId: number | null;
+      steps: Step[];
+    }> = [];
+    for (const collection of selected) {
+      const namespace = docNamespace(collection.id);
+      const namespaceSteps: Step[] = [];
+      const diagnostic = {
+        namespace,
+        collection: { id: collection.id, name: collection.name },
+        generationId: null as number | null,
+        steps: namespaceSteps,
+      };
+      namespaces.push(diagnostic);
 
-    // (4-6) Three searches with progressively narrower filters.
-    const trySearch = async (label: string, filter: Record<string, string> | undefined) => {
+      // Active-generation logical coverage comes from semantic_items, not the
+      // retired doc_chunk_vectors/embedding mirror columns.
       try {
-        const matches = await vectorStore.search(queryVec, { topK: 5, filter });
-        steps.push({
-          name: label,
+        const count = docStore.countIndexedVectorsByCollection(collection.id);
+        namespaceSteps.push({
+          name: 'semantic_items_active',
           ok: true,
-          detail: {
-            count: matches.length,
-            sample: matches.slice(0, 3).map((m) => ({
-              id: m.id,
-              score: m.score,
-              metadata: m.metadata,
-            })),
-          },
+          detail: { count },
         });
       } catch (e) {
-        steps.push({ name: label, ok: false, error: (e as Error).message });
+        namespaceSteps.push({ name: 'semantic_items_active', ok: false, error: (e as Error).message });
       }
-    };
-    await trySearch('search_no_filter', undefined);
-    await trySearch('search_corpus_only', { corpus: 'docs' });
-    await trySearch('search_corpus_type', { corpus: 'docs', type: 'doc_chunk' });
-    if (probeCollection) {
-      await trySearch('search_with_collection', { corpus: 'docs', type: 'doc_chunk', collection: probeCollection });
+
+      let queryVec: number[];
+      let generationId: number;
+      try {
+        const result = await embedQueryForNamespace(queryEmbedding, namespace, probeQuery);
+        if (!Number.isSafeInteger(result.generationId) || result.generationId! < 1) {
+          throw new Error(`active query embedding did not return a generation for ${namespace}`);
+        }
+        queryVec = result.vector;
+        generationId = result.generationId!;
+        diagnostic.generationId = generationId;
+        namespaceSteps.push({
+          name: 'embed_query',
+          ok: queryVec.length > 0,
+          detail: { dim: queryVec.length, generationId, kind: deps.embeddingKind },
+          error: queryVec.length === 0 ? 'embedding returned empty vector' : undefined,
+        });
+      } catch (e) {
+        namespaceSteps.push({ name: 'embed_query', ok: false, error: (e as Error).message });
+        continue;
+      }
+      if (queryVec.length === 0) continue;
+
+      const trySearch = async (label: string, filter?: Record<string, string>) => {
+        try {
+          const matches = await vectorStore.search(queryVec, {
+            topK: 5,
+            filter,
+            namespace,
+            generationId,
+          });
+          namespaceSteps.push({
+            name: label,
+            ok: true,
+            detail: {
+              count: matches.length,
+              sample: matches.slice(0, 3).map((m) => ({
+                id: m.id,
+                score: m.score,
+                metadata: m.metadata,
+              })),
+            },
+          });
+        } catch (e) {
+          namespaceSteps.push({ name: label, ok: false, error: (e as Error).message });
+        }
+      };
+      await trySearch('search_no_filter');
+      await trySearch('search_corpus_only', { corpus: 'docs' });
+      await trySearch('search_corpus_type', { corpus: 'docs', type: 'doc_chunk' });
+      await trySearch('search_with_collection', {
+        corpus: 'docs',
+        type: 'doc_chunk',
+        collection: collection.name,
+      });
     }
 
-    return c.json({ probeQuery, probeCollection, steps });
+    return c.json({ probeQuery, probeCollection: selector, steps, namespaces });
   });
 
   // ─── Search ──────────────────────────────────────────────────────

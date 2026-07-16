@@ -9,10 +9,9 @@ export interface BackfillResult {
 }
 
 /**
- * Embed and upsert any snapshots whose `embedding_hash` is NULL — covers the
- * boot-time auto-backfill, the CLI subcommand, and recovery after a vector
- * backend outage. Always safe to call: snapshots already embedded short-circuit
- * inside `SnapshotService.embedAndUpsert` via the hash check.
+ * Reconcile every live snapshot against semantic_items — covers boot-time
+ * backfill, the CLI subcommand, and recovery after a vector worker outage.
+ * Already-current snapshots short-circuit against their generation ledger.
  *
  * Processes rows in lots of `batchSize` (default 25) using `Promise.allSettled`
  * so a single bad snapshot does not abort the rest. Returns counts and the
@@ -32,7 +31,7 @@ export async function backfillSnapshotEmbeddings(
     return result;
   }
 
-  const pending = db.listSnapshotsMissingEmbedding(projectId);
+  const pending = db.listSnapshotsForSemanticIndex(projectId);
   if (pending.length === 0) return result;
 
   for (let i = 0; i < pending.length; i += batchSize) {

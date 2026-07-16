@@ -149,6 +149,12 @@ export const MICRO_AGENT_PROFILES: Readonly<Record<MicroAgentProfileId, MicroAge
   },
 };
 
+/**
+ * Canonical micro-agent profile ids — the single source of truth for
+ * per-profile subagent model config (HTTP route validation + admin UI).
+ */
+export const SUBAGENT_PROFILE_IDS = Object.keys(MICRO_AGENT_PROFILES) as MicroAgentProfileId[];
+
 const PROFILE_BY_NAME: ReadonlyMap<string, MicroAgentProfile> = (() => {
   const entries: Array<[string, MicroAgentProfile]> = [];
   for (const profile of Object.values(MICRO_AGENT_PROFILES)) {

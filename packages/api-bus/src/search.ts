@@ -10,6 +10,16 @@ export type SearchMode = 'fts' | 'vector' | 'hybrid' | 'auto';
 /** Mirrors `@mcp/shared/types.SearchType`. */
 export type SearchType = 'files' | 'symbols' | 'all';
 
+export interface SearchRequestOptions {
+  projectId: number;
+  query: string;
+  mode?: SearchMode;
+  type?: SearchType;
+  limit?: number;
+  /** Stable latest-wins identity for an interactive search surface. */
+  supersessionKey?: string;
+}
+
 export interface SearchResult {
   id: number;
   type: SearchType;
@@ -19,6 +29,7 @@ export interface SearchResult {
   name?: string;
   snippet?: string;
   project?: string;
+  project_id?: number;
 }
 
 export interface SearchDiagnostics {
@@ -28,6 +39,14 @@ export interface SearchDiagnostics {
   fts_count?: number;
   vector_count?: number;
   merged_count: number;
+  requestedMode?: SearchMode;
+  plannedMode?: 'fts' | 'vector' | 'hybrid';
+  effectiveMode?: 'fts' | 'vector' | 'hybrid';
+  generationUsed?: number;
+  embedder?: string;
+  reranker?: string;
+  fallback?: boolean;
+  fallbackReason?: string;
 }
 
 export interface SymbolHit {
@@ -88,12 +107,15 @@ export interface ReplaceInput extends GrepInput {
 export interface SearchApi {
   /** Project-scoped search. */
   project(
-    input: { projectId: number; query: string; mode?: SearchMode; type?: SearchType; limit?: number },
+    input: SearchRequestOptions,
     ctx: ApiContext,
   ): Promise<{ results: SearchResult[]; diagnostics: SearchDiagnostics }>;
 
-  /** Global search across all projects (concat + sort). */
-  global(input: { query: string; limit?: number }, ctx: ApiContext): Promise<SearchResult[]>;
+  /** Global search across all projects with one owner-side rerank. */
+  global(
+    input: Omit<SearchRequestOptions, 'projectId'>,
+    ctx: ApiContext,
+  ): Promise<SearchResult[]>;
 
   /**
    * Search Everywhere — Symbols tab. Thin FTS over symbols (prefix per

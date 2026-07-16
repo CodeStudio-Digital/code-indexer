@@ -1,4 +1,4 @@
-export type SelectableChangeGroup = 'unstaged' | 'untracked';
+export type SelectableChangeGroup = 'staged' | 'unstaged' | 'untracked';
 
 export type ChangeSelectionState = 'none' | 'partial' | 'all';
 
@@ -75,7 +75,7 @@ export function pruneChangeSelection(
   excluded: ReadonlySet<string>,
 ): Set<string> {
   const validKeys = new Set<string>();
-  for (const group of ['unstaged', 'untracked'] as const) {
+  for (const group of ['staged', 'unstaged', 'untracked'] as const) {
     for (const file of groups[group]) validKeys.add(selectionKey(group, file.path));
   }
   return new Set([...excluded].filter((key) => validKeys.has(key)));

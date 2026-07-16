@@ -1,13 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { useApi } from '../../../hooks/useApi.js';
 import { cn } from '../../../lib/utils.js';
-import { complexityVariant, type DBFile } from '../types.js';
-import { FileDetailModal } from './FileDetailModal.js';
+import type { DBFile } from '../types.js';
 
 /**
  * Indexed-files table for a project. The full file list comes from
@@ -16,25 +14,14 @@ import { FileDetailModal } from './FileDetailModal.js';
  * (b) typical projects are 100-10k files which sort/filter/page just
  * fine in memory at React-render speeds.
  *
- * Sort: click a header to sort by that column (asc → desc → reset).
- * The complexity column uses a custom rank order (LOW < MEDIUM < HIGH
- * < UNKNOWN) so "show me the dangerous files first" picks the right
- * direction; everything else is string/number compare.
+ * Sort: click a header to sort by that structural column
+ * (asc → desc → reset).
  */
 
-type SortKey = 'path' | 'language' | 'line_count' | 'layer' | 'complexity';
+type SortKey = 'path' | 'language' | 'line_count';
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 50;
-
-// Complexity is a string with discrete tiers; sort lexicographic would
-// give the wrong order (HIGH < LOW alphabetically). Map to a rank.
-const COMPLEXITY_RANK: Record<string, number> = {
-  LOW: 0,
-  MEDIUM: 1,
-  HIGH: 2,
-  UNKNOWN: 3,
-};
 
 function compareFiles(a: DBFile, b: DBFile, key: SortKey): number {
   switch (key) {
@@ -44,24 +31,17 @@ function compareFiles(a: DBFile, b: DBFile, key: SortKey): number {
       return a.language.localeCompare(b.language);
     case 'line_count':
       return a.line_count - b.line_count;
-    case 'layer':
-      return a.layer.localeCompare(b.layer);
-    case 'complexity': {
-      const ra = COMPLEXITY_RANK[a.complexity?.toUpperCase()] ?? 999;
-      const rb = COMPLEXITY_RANK[b.complexity?.toUpperCase()] ?? 999;
-      return ra - rb;
-    }
   }
 }
 
 interface FilesTabProps {
   projectId: number;
+  onOpenFile: (path: string) => void;
 }
 
-export function FilesTab({ projectId }: FilesTabProps) {
+export function FilesTab({ projectId, onOpenFile }: FilesTabProps) {
   const { t } = useTranslation(['projects', 'common']);
   const { data: files, loading } = useApi<DBFile[]>(`/projects/${projectId}/files`);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -116,9 +96,6 @@ export function FilesTab({ projectId }: FilesTabProps) {
 
   return (
     <div className="space-y-3">
-      {selectedFile && (
-        <FileDetailModal projectId={projectId} filePath={selectedFile} onClose={() => setSelectedFile(null)} />
-      )}
       <div className="flex items-center gap-2">
         <Input
           type="text"
@@ -138,9 +115,6 @@ export function FilesTab({ projectId }: FilesTabProps) {
               <SortHeader label={t('projects:files.path')}       k="path"       sortKey={sortKey} sortDir={sortDir} onClick={onHeaderClick} />
               <SortHeader label={t('projects:files.lang')}       k="language"   sortKey={sortKey} sortDir={sortDir} onClick={onHeaderClick} />
               <SortHeader label={t('projects:files.lines')}      k="line_count" sortKey={sortKey} sortDir={sortDir} onClick={onHeaderClick} align="right" />
-              <SortHeader label={t('projects:files.layer')}      k="layer"      sortKey={sortKey} sortDir={sortDir} onClick={onHeaderClick} />
-              <SortHeader label={t('projects:files.complexity')} k="complexity" sortKey={sortKey} sortDir={sortDir} onClick={onHeaderClick} />
-              <th className="py-2.5 px-3">{t('projects:files.flags')}</th>
             </tr>
           </thead>
           <tbody>
@@ -148,23 +122,12 @@ export function FilesTab({ projectId }: FilesTabProps) {
               <tr
                 key={f.id}
                 className="border-t hover:bg-accent/40 cursor-pointer transition-colors"
-                onClick={() => setSelectedFile(f.path)}
+                onClick={() => onOpenFile(f.path)}
               >
                 <td className="py-2 px-3 font-mono text-xs text-primary">{f.path}</td>
                 <td className="py-2 px-3 text-xs text-muted-foreground">{f.language}</td>
                 <td className="py-2 px-3 text-right text-xs tabular-nums text-muted-foreground">
                   {f.line_count}
-                </td>
-                <td className="py-2 px-3">
-                  <Badge variant="info">{f.layer}</Badge>
-                </td>
-                <td className="py-2 px-3">
-                  <Badge variant={complexityVariant(f.complexity)}>{f.complexity}</Badge>
-                </td>
-                <td className="py-2 px-3 space-x-1">
-                  {f.is_entry_point === 1 && <Badge variant="default">{t('projects:files.entry')}</Badge>}
-                  {f.is_test === 1 && <Badge variant="warning">{t('projects:files.test')}</Badge>}
-                  {f.is_generated === 1 && <Badge variant="muted">{t('projects:files.gen')}</Badge>}
                 </td>
               </tr>
             ))}

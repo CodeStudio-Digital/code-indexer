@@ -58,12 +58,6 @@ export function defineProviderAdapterFromSpec(
       const def = await definition();
       if (def.testConnection) await def.testConnection({ config, creds });
     },
-    async createIndexer({ creds, model }) {
-      const def = await definition();
-      if (def.createIndexerAsync) return def.createIndexerAsync(creds, model);
-      if (!def.createIndexer) throw new Error(`Provider '${spec.kind}' does not support the indexer`);
-      return def.createIndexer(creds, model);
-    },
     async createCoder({ creds, model, opts: coderOpts }) {
       const def = await definition();
       if (!def.createCoder) throw new Error(`Provider '${spec.kind}' does not support the coder`);

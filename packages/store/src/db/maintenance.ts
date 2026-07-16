@@ -4,13 +4,18 @@ export interface ProjectHygieneRow {
   id: number;
   name: string;
   root_path: string;
-  pending_vector_gc: number;
   file_count: number;
   vector_count: number;
-  orphan_vector_ids: number;
+  orphan_semantic_items: number;
   stale_runs: number;
-  duplicate_vector_ids: number;
   mixed_case_languages: number;
+}
+
+export interface OrphanSemanticItem {
+  generation_id: number;
+  namespace: string;
+  item_key: string;
+  vector_id: string | null;
 }
 
 export function listProjectsHygiene(db: DB): ProjectHygieneRow[] {
@@ -19,33 +24,106 @@ export function listProjectsHygiene(db: DB): ProjectHygieneRow[] {
       p.id,
       p.name,
       p.root_path,
-      COALESCE(p.pending_vector_gc, 0) AS pending_vector_gc,
       (SELECT COUNT(*) FROM files f WHERE f.project_id = p.id) AS file_count,
-      (SELECT COUNT(*) FROM vector_ids v WHERE v.project_id = p.id) AS vector_count,
-      (SELECT COUNT(*) FROM vector_ids v
-        WHERE v.project_id = p.id
-          AND v.file_path IS NOT NULL
-          AND NOT EXISTS (
+      (SELECT COUNT(*) FROM semantic_items i
+        WHERE i.namespace IN (
+          'code:p' || p.id,
+          'snapshot:p' || p.id,
+          'memory:project:p' || p.id
+        )
+      ) AS vector_count,
+      (SELECT COUNT(*) FROM semantic_items i
+        WHERE i.namespace IN (
+          'code:p' || p.id,
+          'snapshot:p' || p.id,
+          'memory:project:p' || p.id
+        ) AND i.generation_id = (
+          SELECT COALESCE(ng.building_generation_id, ng.active_generation_id)
+          FROM semantic_namespace_generations ng
+          WHERE ng.namespace = i.namespace
+        ) AND (
+          (i.item_key LIKE 'file:%' AND NOT EXISTS (
             SELECT 1 FROM files f
-            WHERE f.project_id = v.project_id AND f.path = v.file_path
-          )
-      ) AS orphan_vector_ids,
+            WHERE f.project_id = p.id
+              AND f.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+          )) OR
+          ((i.item_key LIKE 'symbol:%' OR i.item_key LIKE 'symbol_body:%' OR i.item_key LIKE 'symbol_group:%')
+            AND NOT EXISTS (
+              SELECT 1 FROM symbols s
+              WHERE s.project_id = p.id
+                AND s.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+            )) OR
+          (i.item_key LIKE 'snapshot:%' AND NOT EXISTS (
+            SELECT 1 FROM snapshots sn
+            WHERE sn.project_id = p.id AND sn.archived_at IS NULL
+              AND sn.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+          )) OR
+          (i.item_key LIKE 'agent_memory:%' AND NOT EXISTS (
+            SELECT 1 FROM agent_memory m
+            WHERE m.project_id = p.id AND m.archived_at IS NULL
+              AND m.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+          )) OR
+          (i.item_key LIKE 'investigation:%' AND NOT EXISTS (
+            SELECT 1 FROM coder_investigations ci
+            WHERE ci.project_id = p.id
+              AND ci.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+          ))
+        )
+      ) AS orphan_semantic_items,
       (SELECT COUNT(*) FROM runs r
         WHERE r.project_id = p.id
           AND r.status = 'running'
           AND r.started_at < datetime('now', '-2 hours')
       ) AS stale_runs,
-      (SELECT COALESCE(SUM(c - 1), 0) FROM (
-          SELECT COUNT(*) AS c FROM vector_ids v
-           WHERE v.project_id = p.id
-           GROUP BY v.vector_id HAVING COUNT(*) > 1
-      )) AS duplicate_vector_ids,
       (SELECT COUNT(*) FROM files f
         WHERE f.project_id = p.id AND f.language <> LOWER(f.language)
       ) AS mixed_case_languages
     FROM projects p
     ORDER BY p.name
   `).all() as ProjectHygieneRow[];
+}
+
+export function listOrphanSemanticItems(db: DB, projectId: number): OrphanSemanticItem[] {
+  const namespaces = [`code:p${projectId}`, `snapshot:p${projectId}`, `memory:project:p${projectId}`];
+  const rows = db.prepare(`
+    SELECT i.generation_id, i.namespace, i.item_key, i.vector_id
+    FROM semantic_items i
+    WHERE i.namespace IN (?, ?, ?)
+      AND i.generation_id = (
+        SELECT COALESCE(ng.building_generation_id, ng.active_generation_id)
+        FROM semantic_namespace_generations ng
+        WHERE ng.namespace = i.namespace
+      ) AND (
+      (i.item_key LIKE 'file:%' AND NOT EXISTS (
+        SELECT 1 FROM files f
+        WHERE f.project_id = ?
+          AND f.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+      )) OR
+      ((i.item_key LIKE 'symbol:%' OR i.item_key LIKE 'symbol_body:%' OR i.item_key LIKE 'symbol_group:%')
+        AND NOT EXISTS (
+          SELECT 1 FROM symbols s
+          WHERE s.project_id = ?
+            AND s.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+        )) OR
+      (i.item_key LIKE 'snapshot:%' AND NOT EXISTS (
+        SELECT 1 FROM snapshots sn
+        WHERE sn.project_id = ? AND sn.archived_at IS NULL
+          AND sn.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+      )) OR
+      (i.item_key LIKE 'agent_memory:%' AND NOT EXISTS (
+        SELECT 1 FROM agent_memory m
+        WHERE m.project_id = ? AND m.archived_at IS NULL
+          AND m.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+      )) OR
+      (i.item_key LIKE 'investigation:%' AND NOT EXISTS (
+        SELECT 1 FROM coder_investigations ci
+        WHERE ci.project_id = ?
+          AND ci.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+      ))
+    )
+    ORDER BY i.namespace, i.item_key, i.chunk_index
+  `).all(...namespaces, projectId, projectId, projectId, projectId, projectId) as OrphanSemanticItem[];
+  return rows;
 }
 
 /**
@@ -68,10 +146,7 @@ export function getFileIndegrees(db: DB, projectId: number): Map<string, number>
 
 export function getProjectTierBreakdown(db: DB): Array<{ project_id: number; tier: string; count: number }> {
   return db.prepare(`
-    SELECT
-      project_id,
-      COALESCE(index_tier, 'untagged') AS tier,
-      COUNT(*) AS count
+    SELECT project_id, COALESCE(index_tier, 'untagged') AS tier, COUNT(*) AS count
     FROM files
     GROUP BY project_id, tier
   `).all() as Array<{ project_id: number; tier: string; count: number }>;
@@ -103,8 +178,4 @@ export function markStaleRuns(db: DB, olderThanHours = 2, projectId?: number): n
   const stmt = db.prepare(sql);
   const result = projectId != null ? stmt.run(olderThanHours, projectId) : stmt.run(olderThanHours);
   return result.changes;
-}
-
-export function setProjectPendingVectorGc(db: DB, projectId: number, pending: boolean): void {
-  db.prepare('UPDATE projects SET pending_vector_gc = ? WHERE id = ?').run(pending ? 1 : 0, projectId);
 }

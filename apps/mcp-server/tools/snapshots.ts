@@ -51,13 +51,23 @@ const search_memory = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(withMemoryErrorHandling(async (args, { db, agentMemoryService }, project) => {
+  handler: withProject(withMemoryErrorHandling(async (args, {
+    db,
+    agentMemoryService,
+    semanticSearchClient,
+  }, project) => {
     const query = (args.query as string).trim();
     if (!query) return 'search_memory requires a non-empty query.';
     const limit = (args.limit as number) ?? 5;
     // Bridged to Agent Memory (migration 181) — the SAME store the native
     // recall_memory reads, so company/external-MCP writes are recalled (no split-brain).
-    const results = await agentMemoryService.search('project', project.id, query, limit);
+    const remote = await semanticSearchClient.searchProjectMemory(project.id, query, limit);
+    // Local AgentMemoryService is deliberately constructed without an
+    // embedding/vector backend in the MCP process, so this branch is FTS-only
+    // and remains available even when the desktop/http server is stopped.
+    const results = remote.ok && remote.value
+      ? remote.value.results
+      : await agentMemoryService.search('project', project.id, query, limit);
     if (results.length === 0) {
       const total = db.countAgentMemory('project', project.id);
       return total === 0
@@ -68,13 +78,18 @@ const search_memory = defineTool({
       return JSON.stringify({
         query,
         total: results.length,
+        semantic: remote.ok,
+        ...(remote.ok ? {} : { degraded_reason: remote.error }),
         results: results.map((s) => ({
           id: s.id, title: s.name, category: s.type, content: s.content,
           source: s.source, importance: s.importance,
         })),
       });
     }
-    return results.map((s) => `## ${s.name} [${s.type}]\n${s.content}`).join('\n\n---\n\n');
+    const body = results.map((s) => `## ${s.name} [${s.type}]\n${s.content}`).join('\n\n---\n\n');
+    return remote.ok
+      ? body
+      : `${body}\n\n[note: semantic memory owner unavailable; results are FTS-only: ${remote.error ?? 'unknown error'}]`;
   })),
 });
 

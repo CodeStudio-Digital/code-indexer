@@ -8,11 +8,11 @@
  * decisions and can be swapped (in-memory, distributed, sharded by
  * project) without touching the indexer.
  *
- * Entity-id mapping: the vector store uses TEXT vector_ids (e.g.
- * `file::1234`, `sym::5678`). LSH tables use INTEGER entity_id. We hash
- * the vector_id string deterministically via FNV-1a so the same vector_id
+ * Entity-id mapping: vector records use textual IDs (e.g. `file::1234`,
+ * `sym::5678`), while LSH tables use INTEGER entity_id. We hash
+ * the record ID deterministically via FNV-1a so the same ID
  * always maps to the same entity_id. Search-side lookups must apply the
- * SAME hash to reverse-map LSH candidates back to vector_ids.
+ * same hash to reverse-map LSH candidates back to record IDs.
  */
 import type { VectorRecord } from '@mcp/shared/types.js';
 import type { LSHIndex } from '../search/lsh-index.js';

@@ -10,7 +10,6 @@ import {
   clearProjectData,
   fetchHygieneStatus,
   purgeProjects,
-  retryPendingVectorDeletes,
   runGlobalSqlCleanup,
   type CleanupResult,
   type HygieneProject,
@@ -24,17 +23,15 @@ import {
  */
 function countIssues(p: HygieneProject): number {
   return (
-    p.orphan_vector_ids +
-    p.duplicate_vector_ids +
+    p.orphan_semantic_items +
     p.stale_runs +
     p.mixed_case_languages +
-    (p.pending_vector_gc > 0 ? 1 : 0) +
     (p.missing_on_disk ? 1 : 0)
   );
 }
 
 function severity(p: HygieneProject): 'ok' | 'warn' | 'bad' {
-  if (p.missing_on_disk || p.pending_vector_gc > 0) return 'bad';
+  if (p.missing_on_disk) return 'bad';
   if (countIssues(p) > 0) return 'warn';
   return 'ok';
 }
@@ -72,15 +69,13 @@ export function HygienePanel() {
     if (!status) return null;
     return status.projects.reduce(
       (acc, p) => {
-        acc.orphans += p.orphan_vector_ids;
-        acc.dups += p.duplicate_vector_ids;
+        acc.orphans += p.orphan_semantic_items;
         acc.stale += p.stale_runs;
         acc.langs += p.mixed_case_languages;
         if (p.missing_on_disk) acc.missing += 1;
-        if (p.pending_vector_gc > 0) acc.pendingGc += 1;
         return acc;
       },
-      { orphans: 0, dups: 0, stale: 0, langs: 0, missing: 0, pendingGc: 0 },
+      { orphans: 0, stale: 0, langs: 0, missing: 0 },
     );
   }, [status]);
 
@@ -101,12 +96,11 @@ export function HygienePanel() {
 
   function summarizeCleanup(r: CleanupResult): string {
     const parts = [
-      r.remote_deleted > 0 && `${r.remote_deleted} vetores removidos no Cloudflare`,
-      r.local_deleted > 0 && `${r.local_deleted} vector_ids locais removidos`,
-      r.duplicates_removed > 0 && `${r.duplicates_removed} duplicatas`,
+      r.vectors_deleted_local > 0 && `${r.vectors_deleted_local} vetores locais removidos`,
+      r.local_deleted > 0 && `${r.local_deleted} itens semânticos locais removidos`,
       r.languages_normalized > 0 && `${r.languages_normalized} linguagens normalizadas`,
       r.stale_runs_closed > 0 && `${r.stale_runs_closed} runs fechados`,
-      r.remote_error && `erro remoto: ${r.remote_error}`,
+      r.vector_error && `erro vetorial: ${r.vector_error}`,
     ].filter(Boolean) as string[];
     return parts.length > 0 ? parts.join(' · ') : 'Nada para limpar.';
   }
@@ -120,16 +114,16 @@ export function HygienePanel() {
     }
     if (!(await confirm({
       title: `Apagar ${ids.length} projeto(s) ausente(s)?`,
-      description: 'Os diretórios não existem mais no disco e os vetores correspondentes serão removidos do Cloudflare.',
+      description: 'Os diretórios não existem mais no disco e os bancos vetoriais locais correspondentes serão removidos.',
       confirmLabel: 'Apagar projetos',
       tone: 'destructive',
     }))) {
       return;
     }
     await withBusy('purge', () => purgeProjects(ids), (r) => {
-      const remote = r.summaries.reduce((acc, s) => acc + s.vectors_deleted_remote, 0);
-      const errors = r.summaries.filter((s) => s.remote_error).length;
-      return `${r.purged} projeto(s) apagado(s), ${remote} vetores removidos no remoto${errors > 0 ? `, ${errors} com erro` : ''}.`;
+      const vectors = r.summaries.reduce((acc, s) => acc + s.vectors_deleted, 0);
+      const errors = r.summaries.filter((s) => s.vector_error).length;
+      return `${r.purged} projeto(s) apagado(s), ${vectors} vetores locais removidos${errors > 0 ? `, ${errors} com erro` : ''}.`;
     });
   }
 
@@ -152,7 +146,7 @@ export function HygienePanel() {
     }
     await withBusy('clear-all', clearAllProjectData, (r) => {
       const errs = r.errors.length > 0 ? `, ${r.errors.length} com erro` : '';
-      return `${r.projects_cleared} projeto(s) limpo(s), ${r.vectors_deleted_remote} vetores removidos no remoto${errs}. Re-indexe quando quiser.`;
+      return `${r.projects_cleared} projeto(s) limpo(s), ${r.vectors_deleted} vetores locais removidos${errs}. Re-indexe quando quiser.`;
     });
   }
 
@@ -168,8 +162,8 @@ export function HygienePanel() {
       return;
     }
     await withBusy(`clear-${p.id}`, () => clearProjectData(p.id), (r) =>
-      `"${p.name}" limpo: ${r.vectors_deleted_remote} vetores removidos no remoto` +
-      `${r.remote_error ? ` (erro: ${r.remote_error})` : ''}. Re-indexe quando quiser.`,
+      `"${p.name}" limpo: ${r.vectors_deleted} vetores locais removidos` +
+      `${r.vector_error ? ` (erro: ${r.vector_error})` : ''}. Re-indexe quando quiser.`,
     );
   }
 
@@ -181,7 +175,7 @@ export function HygienePanel() {
             <Sparkles className="h-4 w-4" /> Higiene do Indexador
           </h2>
           <p className="text-sm text-muted-foreground">
-            Detecta vetores órfãos, runs travados, duplicatas em <code>vector_ids</code> e projetos
+            Detecta itens semânticos órfãos, runs travados e projetos
             cujo diretório sumiu do disco. Limpezas removem dados; revise antes de confirmar.
           </p>
         </div>
@@ -194,19 +188,13 @@ export function HygienePanel() {
       </div>
 
       {status && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
           <Card>
             <CardContent className="py-3 px-3">
-              <div className="text-muted-foreground">Vector store</div>
+              <div className="text-muted-foreground">Vetores locais</div>
               <div className={`font-medium ${status.vector_store_available ? 'text-emerald-500' : 'text-red-500'}`}>
                 {status.vector_store_available ? 'online' : 'offline'}
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="py-3 px-3">
-              <div className="text-muted-foreground">Pending GC</div>
-              <div className="font-medium">{status.pending_vector_deletes}</div>
             </CardContent>
           </Card>
           <Card>
@@ -219,7 +207,7 @@ export function HygienePanel() {
             <CardContent className="py-3 px-3">
               <div className="text-muted-foreground">Issues totais</div>
               <div className="font-medium">
-                {totals ? totals.orphans + totals.dups + totals.stale + totals.langs + totals.missing + totals.pendingGc : 0}
+                {totals ? totals.orphans + totals.stale + totals.langs + totals.missing : 0}
               </div>
             </CardContent>
           </Card>
@@ -233,32 +221,12 @@ export function HygienePanel() {
           disabled={!!busy || !status}
           onClick={() =>
             void withBusy('global-sql', runGlobalSqlCleanup, (r) =>
-              `SQL cleanup: ${r.duplicates_removed} duplicatas, ${r.languages_normalized} linguagens, ${r.stale_runs_closed} runs fechados.`,
+              `SQL cleanup: ${r.languages_normalized} linguagens, ${r.stale_runs_closed} runs fechados.`,
             )
           }
         >
           {busy === 'global-sql' && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
           SQL cleanup global
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!!busy || !status || status.pending_vector_deletes === 0}
-          onClick={() =>
-            void withBusy('retry', retryPendingVectorDeletes, (r) =>
-              r.ok
-                ? `Retry: ${r.deleted} vetores removidos no remoto, ${r.remaining} ainda na fila.`
-                : `Retry falhou: ${r.remote_error ?? 'erro'}; ${r.remaining} na fila.`,
-            )
-          }
-        >
-          {busy === 'retry' && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-          Reprocessar fila Vectorize
-          {status && status.pending_vector_deletes > 0 && (
-            <Badge variant="secondary" className="ml-2 h-4 text-[10px]">
-              {status.pending_vector_deletes}
-            </Badge>
-          )}
         </Button>
         <Button
           variant="destructive"
@@ -329,11 +297,6 @@ export function HygienePanel() {
                           disco ausente
                         </Badge>
                       )}
-                      {p.pending_vector_gc > 0 && (
-                        <Badge variant="destructive" className="h-4 text-[10px]">
-                          GC pendente
-                        </Badge>
-                      )}
                       {issues === 0 && !p.missing_on_disk && (
                         <Badge variant="secondary" className="h-4 text-[10px]">limpo</Badge>
                       )}
@@ -366,11 +329,10 @@ export function HygienePanel() {
                   <p className="text-[11px] text-muted-foreground font-mono truncate">{p.root_path}</p>
                 </CardHeader>
                 <CardContent className="pt-0 pb-3 space-y-2">
-                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-[11px]">
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-[11px]">
                     <Counter label="files" value={p.file_count} />
                     <Counter label="vectors" value={p.vector_count} />
-                    <Counter label="órfãos" value={p.orphan_vector_ids} warn={p.orphan_vector_ids > 0} />
-                    <Counter label="duplicatas" value={p.duplicate_vector_ids} warn={p.duplicate_vector_ids > 0} />
+                    <Counter label="itens órfãos" value={p.orphan_semantic_items} warn={p.orphan_semantic_items > 0} />
                     <Counter label="runs travados" value={p.stale_runs} warn={p.stale_runs > 0} />
                     <Counter label="lang mix" value={p.mixed_case_languages} warn={p.mixed_case_languages > 0} />
                   </div>

@@ -126,6 +126,9 @@ export function makeIgnored(rootPath: string, extraPatterns: string[] = []): (p:
 
 export class FileWatcherService {
   private watchers = new Map<number, FSWatcher>();
+  private ready = new Map<number, Promise<void>>();
+  private resolveReady = new Map<number, () => void>();
+  private events = new Map<number, WatcherEvents>();
   private pendingChanges = new Map<number, Map<string, { kind: WatcherFileEvent['kind']; isDir: boolean }>>();
   private debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -150,7 +153,24 @@ export class FileWatcherService {
       },
     });
 
+    const ready = new Promise<void>((resolve) => {
+      this.resolveReady.set(projectId, resolve);
+    });
+    this.ready.set(projectId, ready);
+    const settleReady = () => {
+      this.resolveReady.get(projectId)?.();
+      this.resolveReady.delete(projectId);
+    };
+    // `ready` means chokidar completed its initial walk. Structural indexing
+    // waits for this edge so edits made during the full scan are observed and
+    // drained before the baseline is published as ready. An early watcher
+    // error must not leave lifecycle callers waiting forever; the structural
+    // reconciliation remains the authoritative fallback in that case.
+    watcher.once('ready', settleReady);
+    watcher.on('error', settleReady);
+
     this.pendingChanges.set(projectId, new Map());
+    this.events.set(projectId, events);
 
     const handleChange = (kind: WatcherFileEvent['kind'], isDir = false) => (filePath: string) => {
       const pending = this.pendingChanges.get(projectId)!;
@@ -163,11 +183,8 @@ export class FileWatcherService {
       if (existingTimer) clearTimeout(existingTimer);
 
       const timer = setTimeout(async () => {
-        const batch = Array.from(pending, ([path, v]) => ({ path, kind: v.kind, isDir: v.isDir }));
-        pending.clear();
-        if (batch.length > 0) {
-          await events.onFileChanged(batch);
-        }
+        this.debounceTimers.delete(projectId);
+        await this.flushPending(projectId);
       }, options.debounce);
 
       this.debounceTimers.set(projectId, timer);
@@ -182,12 +199,36 @@ export class FileWatcherService {
     this.watchers.set(projectId, watcher);
   }
 
+  /** Resolves after chokidar's initial walk for the project's current handle. */
+  waitUntilReady(projectId: number): Promise<void> {
+    return this.ready.get(projectId) ?? Promise.resolve();
+  }
+
+  /** Deliver the current debounce buffer immediately (used at scan barriers). */
+  async flushPending(projectId: number): Promise<void> {
+    const timer = this.debounceTimers.get(projectId);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceTimers.delete(projectId);
+    }
+    const pending = this.pendingChanges.get(projectId);
+    const sink = this.events.get(projectId);
+    if (!pending || !sink || pending.size === 0) return;
+    const batch = Array.from(pending, ([path, v]) => ({ path, kind: v.kind, isDir: v.isDir }));
+    pending.clear();
+    await sink.onFileChanged(batch);
+  }
+
   async stopWatching(projectId: number): Promise<void> {
     const watcher = this.watchers.get(projectId);
     if (watcher) {
       await watcher.close();
       this.watchers.delete(projectId);
     }
+
+    this.resolveReady.get(projectId)?.();
+    this.resolveReady.delete(projectId);
+    this.ready.delete(projectId);
 
     const timer = this.debounceTimers.get(projectId);
     if (timer) {
@@ -196,6 +237,7 @@ export class FileWatcherService {
     }
 
     this.pendingChanges.delete(projectId);
+    this.events.delete(projectId);
   }
 
   async stopAll(): Promise<void> {

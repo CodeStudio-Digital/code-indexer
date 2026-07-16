@@ -18,7 +18,7 @@
  *   POST   /api/admin/pipeline-bindings/bulk/clear   → wipe matching bindings
  *   POST   /api/admin/pipeline-bindings/bulk/apply   → apply one provider+model to many targets
  */
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import {
   PIPELINE_CATALOG,
@@ -61,6 +61,29 @@ const VALID_CAPABILITIES: CapabilityKind[] = [
 
 function isValidCapability(s: unknown): s is CapabilityKind {
   return typeof s === 'string' && VALID_CAPABILITIES.includes(s as CapabilityKind);
+}
+
+function nonConfigurableCatalogEntry(
+  pipelineName: string | undefined,
+  bindingRole: string | undefined,
+): PipelineCatalogEntry | null {
+  if (!pipelineName || !bindingRole) return null;
+  return PIPELINE_CATALOG.find(
+    (entry) => entry.pipelineName === pipelineName
+      && entry.bindingRole === bindingRole
+      && entry.setupEligible === false,
+  ) ?? null;
+}
+
+function bindingNotConfigurableResponse(
+  c: Context,
+  entry: PipelineCatalogEntry,
+) {
+  return c.json({
+    error: 'binding_not_configurable',
+    details: [entry.description],
+    configure_in: 'semantic_indexing',
+  }, 409);
 }
 
 export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): void {
@@ -135,6 +158,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     }
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
 
+    const nonConfigurable = nonConfigurableCatalogEntry(body.pipeline_name, body.binding_role);
+    if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
+
     if (!providerStore.getProvider(body.provider_id!)) {
       return c.json({ error: 'provider_not_found', provider_id: body.provider_id }, 404);
     }
@@ -173,6 +199,8 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     if (!body.model_id) errors.push('model_id is required');
     if (body.scope_type !== undefined && body.scope_type !== 'global') errors.push('only global scope is supported');
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
+    const nonConfigurable = nonConfigurableCatalogEntry(body.pipeline_name, body.binding_role);
+    if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
     if (!providerStore.getProvider(body.provider_id!)) {
       return c.json({ error: 'provider_not_found', provider_id: body.provider_id }, 404);
     }
@@ -198,6 +226,15 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     } catch {
       return c.json({ error: 'invalid_json' }, 400);
     }
+
+    // Check both legacy rows and a requested target change. Without the
+    // second check, a configurable row could be renamed into an
+    // informational semantic-profile role through PATCH.
+    const nonConfigurable = nonConfigurableCatalogEntry(
+      body.pipeline_name ?? existing.pipeline_name,
+      body.binding_role ?? existing.binding_role,
+    );
+    if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
 
     const scopeType = body.scope_type ?? existing.scope_type;
     if (!isValidScope(scopeType)) return c.json({ error: 'scope_type must be global|template|session' }, 400);
@@ -325,9 +362,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
   //     scope_type?, scope_id?, enabled?, priority?,
   //     targets?: Array<{ pipeline_name, binding_role }> }
   //
-  // When `targets` is omitted, the server fans out to the ENTIRE catalog
-  // (every (pipeline_name, binding_role) pair declared in PIPELINE_CATALOG).
-  // That's the common case ("set ZAI/glm-5 as the model for every pipeline").
+  // When `targets` is omitted, the server fans out only to setup-eligible
+  // catalog roles. Embedding and semantic reranking entries are informational
+  // here: their runtime configuration belongs to Semantic Indexing.
   //
   // The provider is validated first — a typo here would silently fail
   // every upsert if we let it through.
@@ -364,12 +401,13 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
       return c.json({ error: 'provider_not_found', provider_id: body.provider_id }, 404);
     }
 
-    // Default target set is the whole catalog — wiped of `comingSoon` entries
-    // (those are placeholders the operator can't actually bind to yet).
+    // The default set contains only roles this screen is allowed to configure.
+    // `comingSoon` entries are placeholders and `setupEligible:false` entries
+    // are owned by Semantic Indexing, so neither may be bulk-created.
     const targets = (body.targets && body.targets.length > 0)
       ? body.targets
       : PIPELINE_CATALOG
-          .filter((e) => !e.comingSoon)
+          .filter((e) => !e.comingSoon && e.setupEligible !== false)
           .map((e) => ({ pipeline_name: e.pipelineName, binding_role: e.bindingRole }));
 
     if (targets.length === 0) {
@@ -388,6 +426,14 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
         400,
       );
     }
+
+    // Explicit target lists must fail atomically instead of silently applying
+    // their configurable subset. This keeps stale clients from recreating the
+    // old embedder/reranker bindings after the semantic-profile migration.
+    const nonConfigurable = targets
+      .map((target) => nonConfigurableCatalogEntry(target.pipeline_name, target.binding_role))
+      .find((entry): entry is PipelineCatalogEntry => entry !== null);
+    if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
 
     const ids = pipelineBindingsStore.bulkApply({
       targets,

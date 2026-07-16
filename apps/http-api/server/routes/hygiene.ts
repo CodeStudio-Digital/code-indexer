@@ -5,21 +5,20 @@ import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
 /**
  * Hygiene routes — surface the index health that hides in SQLite and
  * give the dashboard one-click cleanups for the most common drift:
- * orphan vector ids, duplicate vector_ids, mixed-case `files.language`,
+ * orphan semantic items, mixed-case `files.language`,
  * stale "running" runs, and projects whose root_path was deleted on disk.
  *
  * The handlers are kept thin: every SQL-side operation lives on
- * `CodeIndexDB`, every remote operation goes through `VectorStore`.
+ * `CodeIndexDB`, every local vector operation goes through the worker facade.
  * That way the same logic can be invoked by a CLI command later
  * without duplicating queries.
  */
 export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
-  const { db, vectorStore } = deps;
+  const { db, vectorStore, semanticCoordinator } = deps;
 
   /** Snapshot of per-project counters used by the Hygiene panel. */
   app.get('/api/hygiene/status', async (c) => {
     const projects = db.getProjectsHygiene();
-    const pendingTotal = db.countPendingVectorDeletes();
     const tierRows = db.getProjectTierBreakdown();
     const tiersByProject = new Map<number, Record<string, number>>();
     for (const r of tierRows) {
@@ -56,14 +55,13 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
 
     return c.json({
       projects: enriched,
-      pending_vector_deletes: pendingTotal,
       vector_store_available: vectorStoreAvailable,
     });
   });
 
   /**
-   * Run every safe cleanup for one project: purge orphan vector_ids
-   * (both remote and local), dedup, normalize languages, close stale
+   * Run every safe cleanup for one project: purge orphan semantic_items
+   * and local vectors, normalize languages, close stale
    * runs. Returns a diff so the panel can surface what actually moved.
    */
   app.post('/api/hygiene/projects/:id/cleanup', async (c) => {
@@ -71,84 +69,38 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
     const project = db.getProject(id);
     if (!project) return notFound(c);
 
-    const orphans = db.getOrphanVectorIds(id);
-    let remoteDeleted = 0;
-    let remoteError: string | null = null;
+    const orphans = db.getOrphanSemanticItems(id);
+    let vectorsDeletedLocal = 0;
+    let vectorError: string | null = null;
 
-    if (orphans.length > 0) {
+    if (orphans.length > 0 && vectorStore.deleteByItemKeys) {
       try {
-        remoteDeleted = await vectorStore.deleteByIds(orphans.map((o) => o.vector_id));
+        const byNamespace = new Map<string, Set<string>>();
+        for (const orphan of orphans) {
+          const keys = byNamespace.get(orphan.namespace) ?? new Set<string>();
+          keys.add(orphan.item_key);
+          byNamespace.set(orphan.namespace, keys);
+        }
+        for (const [namespace, keys] of byNamespace) {
+          vectorsDeletedLocal += await vectorStore.deleteByItemKeys([...keys], namespace);
+        }
       } catch (err) {
-        remoteError = err instanceof Error ? err.message : String(err);
-        db.enqueuePendingVectorDeletes(
-          orphans.map((o) => ({
-            vector_id: o.vector_id,
-            project_name: project.name,
-            error: remoteError,
-          })),
-        );
+        vectorError = err instanceof Error ? err.message : String(err);
       }
     }
 
-    const localDeleted = db.deleteVectorIdRows(
-      id,
-      orphans.map((o) => o.vector_id),
-    );
-    const dedupRemoved = db.dedupVectorIds(id);
+    const localDeleted = vectorError ? 0 : orphans.length;
     const langNormalized = db.normalizeFileLanguages(id);
     const staleRuns = db.markStaleRuns(2, id);
 
-    if (!remoteError) db.setProjectPendingVectorGc(id, false);
-
     return c.json({
       ok: true,
-      orphan_vectors: orphans.length,
-      remote_deleted: remoteDeleted,
+      orphan_semantic_items: orphans.length,
+      vectors_deleted_local: vectorsDeletedLocal,
       local_deleted: localDeleted,
-      duplicates_removed: dedupRemoved,
       languages_normalized: langNormalized,
       stale_runs_closed: staleRuns,
-      remote_error: remoteError,
-    });
-  });
-
-  /**
-   * Drain the pending_vector_deletes queue. Called when the panel's
-   * "Retry pending GC" button is clicked. Batches at the vector store
-   * level — `deleteByIds` already chunks by 1000 internally for
-   * Cloudflare/Pinecone.
-   */
-  app.post('/api/hygiene/vectorize/retry', async (c) => {
-    const batch = db.takePendingVectorDeletes(5000);
-    if (batch.length === 0) {
-      return c.json({ ok: true, attempted: 0, deleted: 0, remaining: 0 });
-    }
-
-    let deleted = 0;
-    let remoteError: string | null = null;
-    try {
-      deleted = await vectorStore.deleteByIds(batch.map((r) => r.vector_id));
-      // On success drop the queue rows we just satisfied.
-      db.deletePendingVectorDeletesByIds(batch.map((r) => r.id));
-    } catch (err) {
-      remoteError = err instanceof Error ? err.message : String(err);
-      // Bump attempt counter on the surviving rows so we can age them out.
-      db.enqueuePendingVectorDeletes(
-        batch.map((r) => ({
-          vector_id: r.vector_id,
-          project_name: r.project_name,
-          error: remoteError,
-        })),
-      );
-    }
-
-    const remaining = db.countPendingVectorDeletes();
-    return c.json({
-      ok: !remoteError,
-      attempted: batch.length,
-      deleted,
-      remaining,
-      remote_error: remoteError,
+      vector_error: vectorError,
     });
   });
 
@@ -168,8 +120,8 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
     const summaries: Array<{
       project_id: number;
       vectors_known: number;
-      vectors_deleted_remote: number;
-      remote_error: string | null;
+      vectors_deleted: number;
+      vector_error: string | null;
     }> = [];
 
     for (const id of ids) {
@@ -178,34 +130,27 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
         summaries.push({
           project_id: id,
           vectors_known: 0,
-          vectors_deleted_remote: 0,
-          remote_error: 'project not found',
+          vectors_deleted: 0,
+          vector_error: 'project not found',
         });
         continue;
       }
-      const vectorIds = db.snapshotVectorIdsForProject(id);
-      let remoteDeleted = 0;
-      let remoteError: string | null = null;
-      if (vectorIds.length > 0) {
-        try {
-          remoteDeleted = await vectorStore.deleteByIds(vectorIds);
-        } catch (err) {
-          remoteError = err instanceof Error ? err.message : String(err);
-          db.enqueuePendingVectorDeletes(
-            vectorIds.map((vid) => ({
-              vector_id: vid,
-              project_name: project.name,
-              error: remoteError,
-            })),
-          );
-        }
+      const known = db.getProjectsHygiene().find((row) => row.id === id)?.vector_count ?? 0;
+      let vectorsDeleted = 0;
+      let vectorError: string | null = null;
+      try {
+        await semanticCoordinator.removeProject(id, {
+          finalize: () => db.deleteProject(id),
+        });
+        vectorsDeleted = known;
+      } catch (err) {
+        vectorError = err instanceof Error ? err.message : String(err);
       }
-      db.deleteProject(id);
       summaries.push({
         project_id: id,
-        vectors_known: vectorIds.length,
-        vectors_deleted_remote: remoteDeleted,
-        remote_error: remoteError,
+        vectors_known: known,
+        vectors_deleted: vectorsDeleted,
+        vector_error: vectorError,
       });
     }
 
@@ -213,17 +158,14 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   /**
-   * Global SQL-only sweep — dedup, normalize languages, close stale
-   * runs across every project. No remote calls. Useful as a fast
-   * "fix obvious things" before deciding what to do about Vectorize.
+   * Global SQL-only sweep — normalize languages and close stale
+   * runs across every project without touching vector databases.
    */
   app.post('/api/hygiene/global/sql-cleanup', (c) => {
-    const dedup = db.dedupVectorIds();
     const lang = db.normalizeFileLanguages();
     const stale = db.markStaleRuns(2);
     return c.json({
       ok: true,
-      duplicates_removed: dedup,
       languages_normalized: lang,
       stale_runs_closed: stale,
     });

@@ -104,6 +104,12 @@ export type { PassthroughSelectorOptions } from './selectors/passthrough.js';
 export { LruCache } from './cache/lru.js';
 export type { LruCacheOptions } from './cache/lru.js';
 
+export {
+  assertEmbeddingFingerprint,
+  resolveEmbeddingFingerprint,
+} from './cache/embedding-fingerprint.js';
+export type { FingerprintedEmbeddingFunction } from './cache/embedding-fingerprint.js';
+
 export { runCachedHydrator } from './cache/cached-hydrator-runner.js';
 export type { CacheHydrationStats } from './cache/cached-hydrator-runner.js';
 

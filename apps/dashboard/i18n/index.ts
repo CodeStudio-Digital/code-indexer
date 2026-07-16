@@ -7,7 +7,6 @@ import adminPtBR from './locales/pt-BR/admin.json';
 import projectsPtBR from './locales/pt-BR/projects.json';
 import chatPtBR from './locales/pt-BR/chat.json';
 import agentsPtBR from './locales/pt-BR/agents.json';
-import costsPtBR from './locales/pt-BR/costs.json';
 import searchPtBR from './locales/pt-BR/search.json';
 import telemetryPtBR from './locales/pt-BR/telemetry.json';
 import docsPtBR from './locales/pt-BR/docs.json';
@@ -28,7 +27,6 @@ import adminEn from './locales/en/admin.json';
 import projectsEn from './locales/en/projects.json';
 import chatEn from './locales/en/chat.json';
 import agentsEn from './locales/en/agents.json';
-import costsEn from './locales/en/costs.json';
 import searchEn from './locales/en/search.json';
 import telemetryEn from './locales/en/telemetry.json';
 import docsEn from './locales/en/docs.json';
@@ -55,7 +53,6 @@ i18n
         projects: projectsPtBR,
         chat: chatPtBR,
         agents: agentsPtBR,
-        costs: costsPtBR,
         search: searchPtBR,
         telemetry: telemetryPtBR,
         docs: docsPtBR,
@@ -77,7 +74,6 @@ i18n
         projects: projectsEn,
         chat: chatEn,
         agents: agentsEn,
-        costs: costsEn,
         search: searchEn,
         telemetry: telemetryEn,
         docs: docsEn,

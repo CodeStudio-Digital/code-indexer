@@ -28,9 +28,15 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { DocStore } from '@mcp/store/doc-store.js';
-import { createEmbeddingService } from '@mcp/indexer/search/embeddings.js';
-import { createVectorStore, NullVectorStore } from '@mcp/store/vectors.js';
-import { createReranker } from '@mcp/indexer/search/reranker.js';
+import { SemanticStore } from '@mcp/store/semantic-store.js';
+import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
+import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-runtime.js';
+import {
+  assertDocsSemanticBenchmarkReady,
+  docsBenchmarkNeedsSemanticIndex,
+  resolveActiveDocsBenchmarkQueryServices,
+} from '@mcp/indexer/benchmarks/active-query.js';
+import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { DocHybridSearch, CrossEncoderReranker } from '@mcp/services/services/docs/index.js';
 import {
   labelRanked,
@@ -137,7 +143,41 @@ async function main(): Promise<void> {
     console.error('Usage: tsx scripts/docs-rag-eval.ts --file <gold-set.jsonl> [--modes fts,hybrid,rerank] [--min-recall 0.7] [--gate-mode rerank]');
     process.exit(1);
   }
-  const modes = (values.modes?.split(',') as Mode[]) ?? ['fts', 'hybrid', 'rerank'];
+  const requestedModes = (values.modes?.split(',') ?? ['fts', 'hybrid', 'rerank'])
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+  const invalidModes = requestedModes.filter((mode) =>
+    mode !== 'fts' && mode !== 'hybrid' && mode !== 'rerank');
+  if (requestedModes.length === 0 || invalidModes.length > 0) {
+    throw new Error(
+      `[docs-eval] invalid modes: ${invalidModes.join(', ') || '(empty)'}; `
+      + 'expected fts, hybrid, and/or rerank',
+    );
+  }
+  const modes = [...new Set(requestedModes)] as Mode[];
+  const minRecallRaw = values['min-recall'];
+  const minRecall = minRecallRaw !== undefined ? Number(minRecallRaw) : NaN;
+  if (
+    minRecallRaw !== undefined
+    && (minRecallRaw.trim() === '' || !Number.isFinite(minRecall) || minRecall < 0 || minRecall > 1)
+  ) {
+    throw new Error(`[docs-eval] --min-recall must be a number in [0, 1], got: ${minRecallRaw}`);
+  }
+  const gateModeRaw = values['gate-mode'];
+  if (
+    gateModeRaw !== undefined
+    && gateModeRaw !== 'fts'
+    && gateModeRaw !== 'hybrid'
+    && gateModeRaw !== 'rerank'
+  ) {
+    throw new Error(`[docs-eval] invalid --gate-mode: ${gateModeRaw}`);
+  }
+  const gateMode = (gateModeRaw as Mode | undefined) ?? modes[modes.length - 1]!;
+  if (Number.isFinite(minRecall) && !modes.includes(gateMode)) {
+    throw new Error(
+      `[docs-eval] --gate-mode ${gateMode} was not requested (modes: ${modes.join(', ')})`,
+    );
+  }
   const gold = parseGold(values.file);
   if (gold.length === 0) {
     console.error('[docs-eval] gold-set is empty');
@@ -149,18 +189,59 @@ async function main(): Promise<void> {
   const providerStore = new ProviderStore(config.dbPath);
   providerStore.seedFromEnvIfEmpty();
   const docStore = new DocStore(db.raw());
-  const embeddingService = createEmbeddingService(providerStore);
-  const vectorStore = createVectorStore(providerStore);
-  // NullVectorStore (no vector backend configured) → null so hybrid skips the
-  // vector leg entirely instead of querying a no-op store (matches the code
-  // bench wiring in src/benchmarks/search-quality.ts).
-  const searchable = vectorStore instanceof NullVectorStore ? null : vectorStore;
-  const reranker = new CrossEncoderReranker(createReranker(providerStore));
+  const collections = docStore.listCollections();
+  const indexedDocChunks = collections.reduce(
+    (sum, collection) => sum + docStore.countChunksByCollection(collection.id),
+    0,
+  );
+  if (indexedDocChunks === 0) {
+    throw new Error('[docs-eval] invalid corpus: zero indexed documentation chunks');
+  }
+  const semanticStore = new SemanticStore(db.raw());
+  const semanticRuntime = new SemanticProfileRuntime(semanticStore, providerStore);
+  const localVectorRouter = new LocalVectorRouter({
+    resolveProject: (projectId) => db.getProject(projectId),
+    semanticStore,
+  });
+  const docsQuery = resolveActiveDocsBenchmarkQueryServices(
+    semanticStore,
+    semanticRuntime,
+    localVectorRouter.asVectorStore(),
+    collections.map((collection) => collection.id),
+  );
+  if (docsBenchmarkNeedsSemanticIndex(modes)) {
+    await assertDocsSemanticBenchmarkReady(
+      docsQuery,
+      (namespace, generationId) => localVectorRouter.listIds(namespace, generationId),
+    );
+  }
+  const embeddingService = docsQuery.embeddingService;
+  // DocHybridSearch already fans out one namespace per collection. The local
+  // router maps every docs:c<ID> namespace to the shared docs-vectors.db while
+  // retaining generation isolation inside that physical database.
+  const searchable = docsQuery.vectorStore;
+  // FTS-only and hybrid-without-rerank runs must not require a configured
+  // reranker merely to construct the evaluator.
+  const rerankerService = (() => {
+    if (!modes.includes('rerank')) return new NullReranker();
+    const rerankerTarget = semanticRuntime.currentRerankerTarget('knowledge');
+    return rerankerTarget.kind === 'disabled'
+      ? new NullReranker()
+      : semanticRuntime.reranker('knowledge');
+  })();
+  const reranker = new CrossEncoderReranker(rerankerService);
   const search = new DocHybridSearch(docStore, embeddingService, searchable, undefined, { reranker });
 
-  console.log(`[docs-eval] queries=${gold.length} modes=${modes.join(',')} reranker=${reranker ? 'cross-encoder' : 'none'}`);
+  console.log(
+    `[docs-eval] queries=${gold.length} modes=${modes.join(',')} `
+    + `indexed_doc_chunks=${indexedDocChunks} `
+    + `active_vector_collections=${docsQuery.activeCollectionIds.length} `
+    + `indexed_semantic_items=${docsQuery.activeCollections.reduce((sum, row) => sum + row.indexedItems, 0)} `
+    + `reranker=${rerankerService.name}`,
+  );
 
   const all: QueryScore[] = [];
+  const unclassifiedErrors: string[] = [];
   for (const mode of modes) {
     process.stdout.write(`  running ${mode}… `);
     const t0 = Date.now();
@@ -168,7 +249,9 @@ async function main(): Promise<void> {
       try {
         all.push(await runOne(search, mode, q));
       } catch (e) {
-        console.error(`\n  [${mode}] "${q.query}" failed: ${(e as Error).message}`);
+        const message = e instanceof Error ? e.message : String(e);
+        unclassifiedErrors.push(`${mode} "${q.query}": ${message}`);
+        console.error(`\n  [${mode}] "${q.query}" failed: ${message}`);
       }
     }
     console.log(`done (${Date.now() - t0}ms)`);
@@ -189,15 +272,30 @@ async function main(): Promise<void> {
     );
   }
 
+  await semanticRuntime.dispose();
+  await localVectorRouter.drainAndClose();
+  providerStore.close();
+  db.close();
+
+  if (unclassifiedErrors.length > 0) {
+    throw new Error(
+      `[docs-eval] unclassified search error(s):\n- ${unclassifiedErrors.join('\n- ')}`,
+    );
+  }
+  const incompleteModes = modes.filter((mode) =>
+    all.filter((row) => row.mode === mode).length !== gold.length);
+  if (incompleteModes.length > 0) {
+    throw new Error(
+      `[docs-eval] invalid benchmark: zero or incomplete evaluated items for ${incompleteModes.join(', ')}`,
+    );
+  }
+
   // Optional CI gate.
-  const minRecall = values['min-recall'] !== undefined ? Number(values['min-recall']) : NaN;
   if (Number.isFinite(minRecall)) {
-    const gateMode = (values['gate-mode'] as Mode) ?? modes[modes.length - 1]!;
     const r5 = aggregate(all.filter((r) => r.mode === gateMode)).recall5;
     console.log(`\n[gate] ${gateMode} R@5=${r5.toFixed(3)} (min ${minRecall})`);
     if (r5 < minRecall) {
-      console.error('[gate] FAILED — retrieval recall below threshold');
-      process.exit(1);
+      throw new Error('[gate] FAILED — retrieval recall below threshold');
     }
   }
 }

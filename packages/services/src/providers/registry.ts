@@ -21,7 +21,7 @@ import { BUILTIN_SPECS } from '@mcp/provider-engine/specs/index.js';
  *   1. Create a `ProviderSpec` in `@mcp/provider-engine/specs/*` and add it to
  *      `BUILTIN_SPECS` (in the documented order).
  * It then surfaces automatically in the CLI wizard, admin picker, model
- * discovery, cost lookup, env auto-seed, and both factories.
+ * discovery, cost lookup, env auto-seed, and the coder factory.
  *
  * NOTE: `BUILTIN_SPECS` order is load-bearing — pricing first-match + env-var
  * fallback iterate the Map in insertion order. The engine's spec list preserves
@@ -97,11 +97,4 @@ export function getDefinition(kind: string): ProviderDefinition | undefined {
  */
 export function listCoderKinds(): string[] {
   return listDefinitions().filter((d) => !!d.createCoder).map((d) => d.kind);
-}
-
-/** List the kinds registered with an indexer builder (sync or async). */
-export function listIndexerKinds(): string[] {
-  return listDefinitions()
-    .filter((d) => !!d.createIndexer || !!d.createIndexerAsync)
-    .map((d) => d.kind);
 }

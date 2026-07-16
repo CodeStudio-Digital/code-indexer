@@ -40,8 +40,4 @@ export function mountGraphRoutes(app: Hono, deps: ServerDeps): void {
     if (!symbol) return c.json({ error: 'symbol query param required' }, 400);
     return c.json(db.getSymbolHierarchy(projectId, symbol));
   });
-
-  app.get('/api/projects/:id/architecture', (c) => {
-    return c.json(db.getArchitectureOverview(parseIdParam(c)));
-  });
 }

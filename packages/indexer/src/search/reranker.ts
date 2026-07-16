@@ -12,14 +12,50 @@
  *   - Null (passthrough, for when no reranker is configured)
  */
 
-import { LocalReranker } from './local-reranker.js';
-import { resolveProviderEndpoint } from './provider-endpoints.js';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 
 // Re-export the contract types so existing importers (`@mcp/indexer/search/reranker.js`)
 // keep working after the extraction to ./reranker-types.ts (avoids an import cycle
 // with ./local-reranker.ts, which implements the interface).
-export type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
+export type {
+  RerankCandidate,
+  RerankRequestOptions,
+  RerankResult,
+  RerankerService,
+} from './reranker-types.js';
+
+function mapIndexedResults(options: {
+  rows: Array<{ index?: number; score?: number }>;
+  candidates: RerankCandidate[];
+  topK: number;
+  name: string;
+  strict: boolean;
+}): RerankResult[] {
+  const { rows, candidates, topK, name, strict } = options;
+  const expected = Math.min(Math.max(0, topK), candidates.length);
+  const seen = new Set<number>();
+  const invalid = rows.length !== expected || rows.some((row) => {
+    const index = row.index;
+    if (!Number.isInteger(index) || index! < 0 || index! >= candidates.length) return true;
+    if (seen.has(index!)) return true;
+    seen.add(index!);
+    return !Number.isFinite(row.score);
+  });
+  if (invalid) {
+    const message = `${name} rerank returned an incomplete or invalid result set`;
+    if (strict) throw new Error(message);
+    console.error(`[reranker] ${message}`);
+    return candidates.slice(0, expected).map((candidate) => ({
+      id: candidate.id,
+      score: candidate.originalScore,
+      originalScore: candidate.originalScore,
+    }));
+  }
+  return rows.map((row) => {
+    const candidate = candidates[row.index!];
+    return { id: candidate.id, score: row.score!, originalScore: candidate.originalScore };
+  });
+}
 
 // ─── Cloudflare Workers AI Reranker ──────────────────────────────
 
@@ -78,30 +114,31 @@ export class CloudflareReranker implements RerankerService {
  * (`{ model, query, documents, top_n }` → `{ results: [{ index,
  * relevance_score }] }`) is shared by OpenRouter's `/api/v1/rerank`, so the
  * `endpoint` is parametrized: the `provider` reranker kind points it at a
- * configured provider's base URL + `/rerank` (see `createReranker`).
+ * configured provider's base URL + `/rerank` (see semantic-targets).
  */
 export class CohereReranker implements RerankerService {
   readonly name: string;
   private apiKey: string;
   private model: string;
   private endpoint: string;
+  private strict: boolean;
 
-  constructor(opts: { apiKey: string; model?: string; endpoint?: string; name?: string }) {
+  constructor(opts: { apiKey: string; model?: string; endpoint?: string; name?: string; strict?: boolean }) {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? 'rerank-v3.5';
     this.endpoint = opts.endpoint ?? 'https://api.cohere.com/v2/rerank';
     this.name = opts.name ?? 'cohere';
+    this.strict = opts.strict ?? false;
   }
 
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
     const response = await fetch(this.endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
+      headers,
       body: JSON.stringify({
         model: this.model,
         query,
@@ -111,7 +148,10 @@ export class CohereReranker implements RerankerService {
     });
 
     if (!response.ok) {
-      console.error(`[reranker] ${this.name} rerank failed: ${response.status}`);
+      const detail = await response.text().catch(() => '');
+      const message = `${this.name} rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      if (this.strict) throw new Error(message);
+      console.error(`[reranker] ${message}`);
       return candidates.slice(0, topK).map(c => ({
         id: c.id,
         score: c.originalScore,
@@ -119,15 +159,164 @@ export class CohereReranker implements RerankerService {
       }));
     }
 
-    const data = await response.json() as { results: Array<{ index: number; relevance_score: number }> };
-
-    return data.results
-      .slice(0, topK)
-      .map(r => ({
-        id: candidates[r.index].id,
-        score: r.relevance_score,
-        originalScore: candidates[r.index].originalScore,
+    const data = await response.json() as { results?: Array<{ index?: number; relevance_score?: number }> };
+    if (!Array.isArray(data.results)) {
+      if (this.strict) throw new Error(`${this.name} rerank returned no results array`);
+      return candidates.slice(0, topK).map(c => ({
+        id: c.id,
+        score: c.originalScore,
+        originalScore: c.originalScore,
       }));
+    }
+
+    return mapIndexedResults({
+      rows: data.results.map((row) => ({ index: row.index, score: row.relevance_score })),
+      candidates,
+      topK,
+      name: this.name,
+      strict: this.strict,
+    });
+  }
+}
+
+// ─── OpenAI-compatible Reranker ─────────────────────────────────
+
+/**
+ * Small compatibility adapter for local/provider `/rerank` endpoints that use
+ * Bearer auth and expose scores as either `data[].score` or
+ * `results[].score`. The request deliberately follows the de-facto rerank
+ * shape (`model`, `query`, `documents`, `top_n`) used alongside OpenAI-style
+ * APIs; Cohere's stricter `relevance_score` response remains handled by
+ * `CohereReranker` above.
+ */
+export class OpenAICompatibleReranker implements RerankerService {
+  readonly name: string;
+
+  constructor(private readonly options: {
+    endpoint: string;
+    apiKey?: string;
+    model: string;
+    name?: string;
+    strict?: boolean;
+  }) {
+    this.name = options.name ?? 'openai-compatible';
+  }
+
+  async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
+    if (candidates.length === 0) return [];
+    const fallback = (): RerankResult[] => candidates.slice(0, topK).map((candidate) => ({
+      id: candidate.id,
+      score: candidate.originalScore,
+      originalScore: candidate.originalScore,
+    }));
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
+    const response = await fetch(this.options.endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: this.options.model,
+        query,
+        documents: candidates.map((candidate) => candidate.text),
+        top_n: Math.min(topK, candidates.length),
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      const message = `${this.name} rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      if (this.options.strict) throw new Error(message);
+      console.error(`[reranker] ${message}`);
+      return fallback();
+    }
+    const payload = await response.json() as {
+      data?: Array<{ index?: number; score?: number; relevance_score?: number }>;
+      results?: Array<{ index?: number; score?: number; relevance_score?: number }>;
+      result?: Array<{ index?: number; score?: number; relevance_score?: number }>;
+    };
+    const rows = payload.data ?? payload.results ?? payload.result;
+    if (!Array.isArray(rows)) {
+      const message = `${this.name} rerank returned no result array`;
+      if (this.options.strict) throw new Error(message);
+      console.error(`[reranker] ${message}`);
+      return fallback();
+    }
+    return mapIndexedResults({
+      rows: rows.map((row) => ({
+        index: row.index,
+        score: row.score ?? row.relevance_score,
+      })),
+      candidates,
+      topK,
+      name: this.name,
+      strict: this.options.strict ?? false,
+    });
+  }
+}
+
+/** Native Cloudflare Workers AI reranker adapter. Embeddings use the OpenAI
+ * compatible `/ai/v1/embeddings` endpoint, while rerank models use `/ai/run`.
+ */
+export class CloudflareWorkersAIReranker implements RerankerService {
+  readonly name = 'cloudflare';
+  constructor(private readonly options: {
+    accountId: string;
+    apiToken: string;
+    model: string;
+    strict?: boolean;
+  }) {}
+
+  async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
+    if (candidates.length === 0) return [];
+    const fallback = (): RerankResult[] => candidates.slice(0, topK).map((candidate) => ({
+      id: candidate.id,
+      score: candidate.originalScore,
+      originalScore: candidate.originalScore,
+    }));
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${this.options.accountId}/ai/run/${this.options.model}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.options.apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          contexts: candidates.map((candidate) => ({ text: candidate.text })),
+          top_k: Math.min(topK, candidates.length),
+        }),
+      },
+    );
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      const message = `Cloudflare rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      if (this.options.strict) throw new Error(message);
+      console.error(`[reranker] ${message}`);
+      return fallback();
+    }
+    const payload = await response.json() as {
+      success?: boolean;
+      result?: { response?: Array<{ id?: number; index?: number; score?: number }> };
+      errors?: Array<{ message?: string }>;
+    };
+    const results = payload.result?.response;
+    if (!payload.success || !Array.isArray(results)) {
+      const message = payload.errors?.map((error) => error.message).filter(Boolean).join('; ')
+        || 'Cloudflare rerank returned an invalid response';
+      if (this.options.strict) throw new Error(message);
+      console.error(`[reranker] ${message}`);
+      return fallback();
+    }
+    return mapIndexedResults({
+      rows: results.map((result) => ({
+        index: result.id ?? result.index,
+        score: result.score,
+      })),
+      candidates,
+      topK,
+      name: this.name,
+      strict: this.options.strict ?? false,
+    });
   }
 }
 
@@ -143,84 +332,4 @@ export class NullReranker implements RerankerService {
       originalScore: c.originalScore,
     }));
   }
-}
-
-// ─── Factory ─────────────────────────────────────────────────────
-
-/**
- * Minimal structural view of the admin ProviderStore. Declared locally so
- * this module stays decoupled from `@mcp/store` (the indexer is imported in
- * contexts — tests, the worker — that don't construct a ProviderStore).
- */
-interface RerankerConfigSource {
-  getDefaultReranker(): {
-    kind: string;
-    config: Record<string, unknown>;
-  } | null;
-  /**
-   * Resolve a configured chat provider's credentials. Used by the `provider`
-   * reranker kind to reuse an existing provider's key + base URL instead of
-   * storing a duplicate one. Optional so callers (CLI/tests) without a full
-   * ProviderStore still satisfy the type.
-   */
-  getProvider?(id: string): { kind: string; base_url: string | null; api_key: string | null } | null;
-}
-
-/**
- * Build a RerankerService.
- *
- * Priority:
- *   1. The admin-managed default in `reranker_configs` (via ProviderStore).
- *   2. Legacy env vars (COHERE_API_KEY / MCP_RERANK_WORKER_URL) — covers
- *      callers that pass no store (CLI/tests before seeding).
- *   3. NullReranker — RRF ordering only (the prior behavior).
- *
- * `seedFromEnvIfEmpty()` migrates the env vars into `reranker_configs` at
- * boot, so case 1 covers env-configured installs after the first run.
- */
-export function createReranker(store?: RerankerConfigSource | null): RerankerService {
-  const cfg = store?.getDefaultReranker?.() ?? null;
-  if (cfg) {
-    if (cfg.kind === 'local') {
-      const c = cfg.config as { model?: string; cacheDir?: string };
-      return new LocalReranker({ model: c.model, cacheDir: c.cacheDir });
-    }
-    if (cfg.kind === 'cohere') {
-      const c = cfg.config as { apiKey?: string; model?: string };
-      if (c.apiKey) return new CohereReranker({ apiKey: c.apiKey, model: c.model });
-    }
-    if (cfg.kind === 'cloudflare') {
-      const c = cfg.config as { workerUrl?: string; workerToken?: string };
-      if (c.workerUrl) return new CloudflareReranker({ workerUrl: c.workerUrl, workerToken: c.workerToken });
-    }
-    // Reuse a configured chat provider's credentials. OpenRouter exposes a
-    // Cohere-shaped `/rerank`; the model defaults to the free Nemotron reranker.
-    if (cfg.kind === 'provider') {
-      const c = cfg.config as { providerId?: string; model?: string };
-      const ep = resolveProviderEndpoint(store?.getProvider?.(c.providerId ?? ''));
-      if (ep) {
-        return new CohereReranker({
-          apiKey: ep.apiKey,
-          model: c.model || 'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
-          endpoint: `${ep.baseURL}/rerank`,
-          name: 'provider',
-        });
-      }
-    }
-  }
-
-  const cohereKey = process.env.COHERE_API_KEY;
-  if (cohereKey) {
-    return new CohereReranker({ apiKey: cohereKey, model: process.env.COHERE_RERANK_MODEL });
-  }
-
-  const cfUrl = process.env.MCP_RERANK_WORKER_URL;
-  if (cfUrl) {
-    return new CloudflareReranker({
-      workerUrl: cfUrl,
-      workerToken: process.env.MCP_RERANK_WORKER_TOKEN,
-    });
-  }
-
-  return new NullReranker();
 }

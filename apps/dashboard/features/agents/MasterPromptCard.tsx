@@ -2,6 +2,7 @@ import React, { memo, useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Crown, HelpCircle, CheckCircle, XCircle, Send, Ban, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
+import { formatClock } from '../../lib/datetime.js';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
@@ -90,7 +91,7 @@ export const MasterPromptCard = memo(function MasterPromptCard({
           </Badge>
         )}
         <span className="text-[10px] text-muted-foreground ml-auto">
-          {new Date(prompt.created_at + 'Z').toLocaleTimeString()}
+          {formatClock(prompt.created_at)}
         </span>
       </div>
 

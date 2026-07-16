@@ -47,7 +47,15 @@ const wireOptsSchema = z
       .strict()
       .optional(),
     headerSources: z
-      .array(z.object({ header: z.string(), sources: z.array(valueSourceSchema) }).strict())
+      .array(
+        z
+          .object({
+            header: z.string(),
+            sources: z.array(valueSourceSchema),
+            defaultValue: z.string().optional(),
+          })
+          .strict(),
+      )
       .optional(),
     thinkingMode: z
       .object({
@@ -254,6 +262,19 @@ const authDescriptorSchema = z
   })
   .strict();
 
+const semanticDescriptorSchema = z.object({
+  embedding: z.object({
+    protocol: z.enum(['openai-embeddings', 'cloudflare', 'bedrock']),
+    defaultModels: z.array(z.string()).optional(),
+    modelPatterns: z.array(z.string()).optional(),
+  }).strict().optional(),
+  rerank: z.object({
+    protocol: z.enum(['cohere-rerank', 'openai-rerank', 'cloudflare', 'bedrock']),
+    defaultModels: z.array(z.string()).optional(),
+    modelPatterns: z.array(z.string()).optional(),
+  }).strict().optional(),
+}).strict();
+
 /** Third-party auth: no `hooks` (host-only), no `pat-exchange` (needs a host hook). */
 const thirdPartyAuthDescriptorSchema = z
   .object({
@@ -284,6 +305,7 @@ function specSchema<
       pricing: z.record(z.string(), pricingEntrySchema),
       pricingPriority: z.number().optional(),
       capabilities: capabilitiesSchema.optional(),
+      semantic: semanticDescriptorSchema.optional(),
       wire: z.enum(['openai-compat', 'anthropic', 'gemini', 'bedrock', 'codex', 'kimi']),
       wireOpts: wireOptsSchema.optional(),
       request: requestDescriptorSchema.optional(),

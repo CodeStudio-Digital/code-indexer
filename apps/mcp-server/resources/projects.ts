@@ -1,6 +1,7 @@
 import { defineResource, type McpResource, type ResourceContent, type ListedResource } from '../resource.js';
 import type { ToolContext } from '../context.js';
 import { buildRepoMap } from '@mcp/services/services/repo-map.js';
+import { buildProjectSummary } from '../project-summary.js';
 
 /**
  * URI matchers for the two project-scoped resources. Strict on purpose: the
@@ -33,7 +34,7 @@ const projectOverview = defineResource({
   uriTemplate: 'mcp://project/{project_name}/overview',
   name: 'project_overview',
   description:
-    'Compact JSON snapshot of an indexed project (file count, languages, layers, top concepts, snapshots, vector coverage, cost). One per indexed project. Mirrors the get_project_pulse tool (format=json).',
+    'Compact JSON snapshot of a project: structural coverage, files, symbols, languages, semantic generation and snapshots. One per indexed project. Mirrors get_project_pulse with format=json.',
   mimeType: 'application/json',
   async list(ctx: ToolContext): Promise<ListedResource[]> {
     return listIndexedProjects(ctx).map(({ name, fileCount }) => ({
@@ -50,54 +51,7 @@ const projectOverview = defineResource({
     const project = ctx.db.listProjects().find((p) => p.name === projectName);
     if (!project) return null;
 
-    const stats = ctx.db.getStats(project.id);
-    const arch = ctx.db.getArchitectureOverview(project.id);
-    const files = ctx.db.listFiles(project.id);
-    const conceptCount = new Map<string, number>();
-    const entryPoints: string[] = [];
-    for (const f of files) {
-      if (f.is_entry_point) entryPoints.push(f.path);
-      try {
-        const cs = JSON.parse(f.concepts || '[]') as string[];
-        for (const c of cs) conceptCount.set(c, (conceptCount.get(c) ?? 0) + 1);
-      } catch {
-        /* ignore malformed concepts JSON */
-      }
-    }
-    const topConcepts = [...conceptCount.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([c]) => c);
-    const snaps = ctx.db.listSnapshots(project.id);
-    const costs = ctx.db.getCostSummary(project.id);
-    const cov = ctx.db.getEmbeddingCoverage(project.id);
-    const filePct = cov.files_total > 0 ? Math.round((cov.files_embedded / cov.files_total) * 100) : 0;
-    const symPct = cov.symbols_total > 0 ? Math.round((cov.symbols_embedded / cov.symbols_total) * 100) : 0;
-    const bodyPct =
-      cov.symbol_bodies_total > 0 ? Math.round((cov.symbol_bodies_embedded / cov.symbol_bodies_total) * 100) : 0;
-
-    const payload = {
-      project: project.name,
-      file_count: stats.file_count,
-      symbol_count: stats.symbol_count,
-      total_lines: stats.total_lines,
-      last_indexed: stats.last_indexed ?? null,
-      languages: stats.languages,
-      layers: arch,
-      top_concepts: topConcepts,
-      entry_points: entryPoints.slice(0, 5),
-      snapshots_count: snaps.length,
-      vector_coverage: {
-        files_pct: filePct,
-        symbols_pct: symPct,
-        bodies_pct: bodyPct,
-      },
-      cost: {
-        total_usd: costs.total_cost_usd,
-        llm_analysis_usd: costs.llm_analysis_cost_usd,
-        embedding_usd: costs.embedding_cost_usd,
-      },
-    };
+    const payload = buildProjectSummary(ctx, project);
     return [{ type: 'text', text: JSON.stringify(payload, null, 2), mimeType: 'application/json' }];
   },
 });

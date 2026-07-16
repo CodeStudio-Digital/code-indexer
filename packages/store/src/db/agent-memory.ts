@@ -390,6 +390,21 @@ export function listMissingEmbedding(db: DB, projectId?: number): AgentMemoryRow
     .all(projectId) as AgentMemoryRow[];
 }
 
+/** All live source rows for a local semantic namespace. The semantic_items
+ * ledger, not embedding_hash/vector_id columns, decides index completion. */
+export function listForSemanticIndex(
+  db: DB,
+  scope: AgentMemoryScope,
+  projectId: number,
+): AgentMemoryRow[] {
+  const pid = normalizeScopeProject(scope, projectId);
+  return db.prepare(
+    `SELECT * FROM agent_memory
+     WHERE scope = ? AND project_id = ? AND archived_at IS NULL
+     ORDER BY id`,
+  ).all(scope, pid) as AgentMemoryRow[];
+}
+
 /** Type weight for the turn-1 index ranking — the memory kinds that make the
  *  agent adhere to user preferences / project style outrank loose notes when
  *  competing for the ~1200-char index budget. (Mirrors the retriever's

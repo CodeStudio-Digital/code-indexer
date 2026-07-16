@@ -32,10 +32,13 @@ export const structuralIndex139: Migration = {
   name: 'structural_index',
   up: (db: DB): void => {
     addColumnIfMissing(db, 'files', 'semantic_hash', 'TEXT');
-    db.exec(`
-      UPDATE files SET semantic_hash = content_hash
-      WHERE semantic_hash IS NULL AND summary IS NOT NULL AND summary <> ''
-    `);
+    const fileColumns = db.prepare('PRAGMA table_info(files)').all() as Array<{ name: string }>;
+    if (fileColumns.some((column) => column.name === 'summary')) {
+      db.exec(`
+        UPDATE files SET semantic_hash = content_hash
+        WHERE semantic_hash IS NULL AND summary IS NOT NULL AND summary <> ''
+      `);
+    }
     addColumnIfMissing(db, 'projects', 'structural_indexed_at', 'TEXT');
     addColumnIfMissing(db, 'runs', 'kind', "TEXT NOT NULL DEFAULT 'full'");
     db.exec('CREATE INDEX IF NOT EXISTS idx_files_semantic ON files(project_id, semantic_hash)');

@@ -7,6 +7,7 @@ import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 import { renderDegradedTrailer, renderZeroResultDiagnostics } from './search-diagnostics.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
+import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 
 const DISK_FALLBACK_MAX_FILES = 2000;
 const DISK_FALLBACK_IGNORE = [
@@ -91,31 +92,52 @@ const search = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(async (args, { db, hybridSearch }, project) => {
+  handler: withProject(async (args, { db, hybridSearch, semanticSearchClient, semanticStore }, project) => {
     // 'auto' lets the planner route: identifier-shaped → FTS (~10ms),
     // natural language → hybrid. Forcing 'hybrid' here made every symbol
     // lookup pay HyDE + multi-variant embedding + rerank for nothing.
     const requestedMode = (args.mode as SearchMode) ?? 'auto';
-    const { results, diagnostics } = await hybridSearch.searchWithDiag(project.id, project.name, args.query as string, {
-      mode: requestedMode,
-      type: (args.type as SearchType) ?? 'all',
-      limit: (args.limit as number) ?? 20,
-    });
+    const type = (args.type as SearchType) ?? 'all';
+    const limit = (args.limit as number) ?? 20;
+    const query = args.query as string;
+    const remote = requestedMode === 'fts'
+      ? null
+      : await semanticSearchClient.searchProject(project.id, query, { mode: requestedMode, type, limit });
+    const searched = remote?.ok && remote.value
+      ? remote.value
+      : await hybridSearch.searchWithDiag(project.id, project.name, query, {
+          // Explicit lexical fallback: the MCP process never owns vector or
+          // ONNX resources, and a stopped desktop app must not break agents.
+          mode: 'fts',
+          type,
+          limit,
+        });
+    const diagnostics = remote && !remote.ok
+      ? {
+          ...searched.diagnostics,
+          vectorAvailable: false,
+          embeddingAvailable: false,
+          vectorError: `localhost semantic owner unavailable: ${remote.error ?? 'unknown error'}`,
+        }
+      : searched.diagnostics;
+    const results = searched.results;
     if (results.length === 0) {
+      const generation = semanticStore.listNamespaceGenerations({
+        namespace: codeNamespace(project.id),
+      })[0];
       return renderZeroResultDiagnostics(requestedMode, diagnostics, () => ({
-        ...db.getEmbeddingCoverage(project.id),
-        files_semantic_stale: db.countSemanticStale(project.id),
+        files_total: db.listFiles(project.id).length,
+        semantic_expected: generation?.expected_items ?? 0,
+        semantic_indexed: generation?.indexed_items ?? 0,
+        pending_delta_items: generation?.delta_items ?? 0,
       }));
     }
     const body = results.map(r => {
       const d = r.data as unknown as Record<string, unknown>;
       if (r.type === 'file') {
-        const concepts = (() => { try { return JSON.parse(d.concepts as string ?? '[]').join(', '); } catch { return ''; } })();
         return [
           `## [file] ${d.path} (score: ${r.score.toFixed(3)})`,
-          `Language: ${d.language} | Lines: ${d.line_count} | Complexity: ${d.complexity}${d.layer && d.layer !== 'unknown' ? ` | Layer: ${d.layer}` : ''}`,
-          `Summary: ${d.summary ?? ''}`,
-          concepts ? `Concepts: ${concepts}` : '',
+          `Language: ${d.language} | Lines: ${d.line_count}`,
         ].filter(Boolean).join('\n');
       }
       return [
@@ -126,7 +148,7 @@ const search = defineTool({
         d.parent ? `Parent: ${d.parent}` : '',
       ].filter(Boolean).join('\n');
     }).join('\n\n');
-    const trailer = renderDegradedTrailer(diagnostics);
+    const trailer = requestedMode === 'fts' ? null : renderDegradedTrailer(diagnostics);
     return trailer ? `${body}\n\n${trailer}` : body;
   }),
 });
@@ -137,7 +159,7 @@ const search = defineTool({
 // covers exact-shape hunts, leaving no niche for the specialized variants.
 const grep_code = defineTool({
   name: 'grep_code',
-  description: 'Textual search across project files with filters (language/layer/glob). Results capped at max_results (default 20). Use literal=true for exact string matching.',
+  description: 'Textual search across project files with language/glob filters. Results capped at max_results (default 20). Use literal=true for exact string matching.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -146,7 +168,6 @@ const grep_code = defineTool({
       literal: { type: 'boolean' },
       case_sensitive: { type: 'boolean' },
       language: { type: 'string' },
-      layer: { type: 'string' },
       glob: { type: 'string' },
       max_results: { type: 'number' },
     },
@@ -157,7 +178,6 @@ const grep_code = defineTool({
     let literal = args.literal === true;
     const ci = !args.case_sensitive;
     const lang = args.language as string | undefined;
-    const layer = args.layer as string | undefined;
     const rawGlob = args.glob as string | undefined;
     // Normalize Windows backslashes — paths in the DB are forward-slash (see
     // scanner normalization), and fast-glob/minimatch expect forward slashes.
@@ -166,7 +186,6 @@ const grep_code = defineTool({
 
     let files = db.listFiles(project.id, lang);
     const totalIndexed = files.length;
-    if (layer) files = files.filter(f => f.layer === layer);
     if (glob) files = files.filter(f => minimatch(f.path, glob));
     const globMatched = files.length;
 
