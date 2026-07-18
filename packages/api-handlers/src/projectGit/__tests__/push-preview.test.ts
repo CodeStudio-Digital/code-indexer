@@ -37,6 +37,20 @@ function setup(): { root: string; remote: string } {
   return { root, remote };
 }
 
+function advanceRemote(remote: string, file: string, contents: string): string {
+  const other = mkdtempSync(join(tmpdir(), 'mcp-push-collaborator-'));
+  dirs.push(other);
+  git(other, 'clone', '--branch', 'main', remote, '.');
+  git(other, 'config', 'user.email', 'collaborator@example.com');
+  git(other, 'config', 'user.name', 'Remote Collaborator');
+  git(other, 'config', 'commit.gpgsign', 'false');
+  writeFileSync(join(other, file), contents);
+  git(other, 'add', file);
+  git(other, 'commit', '-m', 'remote change');
+  git(other, 'push', 'origin', 'main');
+  return git(other, 'rev-parse', 'HEAD');
+}
+
 function handlers(root: string) {
   return createProjectGitHandlers({
     db: { getProject: (id: number) => id === 1 ? { id, name: 'Push repo', root_path: root } : null },
@@ -99,5 +113,57 @@ describe('reviewed project push', () => {
       targetBranch: preview.targetBranch,
       expectedHead: preview.headSha,
     }, {} as never)).rejects.toMatchObject({ code: 'git_push_preview_stale', status: 409 });
+  });
+
+  it('rebases onto a newer remote branch and retries the reviewed push', async () => {
+    const { root, remote } = setup();
+    const remoteHead = advanceRemote(remote, 'remote.txt', 'remote work\n');
+    const api = handlers(root);
+    const preview = await api.pushPreview({ projectId: 1 }, {} as never);
+
+    const pushed = await api.push({
+      projectId: 1,
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+    }, {} as never);
+
+    expect(pushed).toMatchObject({ ok: true, updatedBeforePush: true });
+    expect(git(root, 'merge-base', '--is-ancestor', remoteHead, 'HEAD')).toBe('');
+    expect(git(remote, 'rev-parse', 'refs/heads/main')).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(git(root, 'show', 'HEAD:tracked.txt')).toContain('outgoing');
+  });
+
+  it('stops before push and requests conflict resolution when automatic rebase conflicts', async () => {
+    const { root, remote } = setup();
+    advanceRemote(remote, 'tracked.txt', 'base\nremote version\n');
+    const api = handlers(root);
+    const preview = await api.pushPreview({ projectId: 1 }, {} as never);
+
+    const pushed = await api.push({
+      projectId: 1,
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+    }, {} as never);
+
+    expect(pushed).toMatchObject({ ok: false, pushActionRequired: 'git_push_conflicts' });
+    expect(git(root, 'diff', '--name-only', '--diff-filter=U')).toBe('tracked.txt');
+    expect(git(remote, 'show', 'main:tracked.txt')).toContain('remote version');
+  });
+
+  it('caps a large commit-file preview and marks it as truncated', async () => {
+    const { root } = setup();
+    const api = handlers(root);
+    writeFileSync(join(root, 'large.txt'), `${'changed line\n'.repeat(50_000)}`);
+    git(root, 'add', 'large.txt');
+    git(root, 'commit', '-m', 'large diff');
+    const sha = git(root, 'rev-parse', 'HEAD');
+
+    const diff = await api.commitFileDiff({ projectId: 1, sha, path: 'large.txt' }, {} as never);
+    expect(diff.truncated).toBe(true);
+    expect(diff.patch.length).toBe(500_000);
   });
 });

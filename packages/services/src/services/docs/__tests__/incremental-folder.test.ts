@@ -50,7 +50,7 @@ describe('incremental folder ingestion', () => {
     };
     const semanticStore = new SemanticStore(db.raw());
     const generation = semanticStore.createGeneration({
-      purpose: 'knowledge',
+      purpose: 'docs',
       fingerprint: 'fake:bge-m3:v1',
       embedding_target: { kind: 'disabled' },
       dimension: 3,

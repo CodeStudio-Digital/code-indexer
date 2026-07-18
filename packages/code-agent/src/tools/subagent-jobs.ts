@@ -14,6 +14,7 @@
  * explicit `abortSession`/`abortJob` (user Stop) does.
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { ResearchDepth } from '@mcp/code-agent/tools/subagent-research-policy.js';
 
 export type JobStatus = 'running' | 'done' | 'aborted';
 export type JobDelivery = 'none' | 'notified' | 'collected';
@@ -31,6 +32,9 @@ export interface BackgroundAgentSlot {
   idleMs?: number;
   deadlineMs?: number;
   lastToolName?: string;
+  researchDepth?: ResearchDepth;
+  softToolTarget?: number;
+  softTimeTargetMs?: number;
   /** Short digest of this agent's final summary — shown in the completion notice. */
   summary?: string;
 }

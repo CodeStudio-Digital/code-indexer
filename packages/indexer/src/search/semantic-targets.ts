@@ -10,6 +10,7 @@ import type { ProviderStore } from '@mcp/store/provider-store.js';
 import type {
   EmbeddingTarget,
   RerankerTarget,
+  SemanticPurpose,
 } from '@mcp/store/semantic-store.js';
 import {
   BedrockTitanEmbeddingService,
@@ -30,8 +31,7 @@ import { BedrockReranker } from './bedrock-reranker.js';
 import type { RerankCandidate, RerankResult } from './reranker-types.js';
 import { resolveLocalReranker } from './local-reranker-policy.js';
 
-export type SemanticPurpose = 'code' | 'knowledge';
-export type { EmbeddingTarget, RerankerTarget } from '@mcp/store/semantic-store.js';
+export type { EmbeddingTarget, RerankerTarget, SemanticPurpose } from '@mcp/store/semantic-store.js';
 
 const OPENAI_BASES: Record<string, string> = {
   openai: 'https://api.openai.com/v1',

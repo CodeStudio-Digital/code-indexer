@@ -15,17 +15,25 @@ import { allResources, collectListedResources, readResource } from './resources/
 import { coerceArgs } from './utils.js';
 import { VERSION, PACKAGE_NAME } from '@mcp/shared/version.js';
 import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
+import { normalizeMcpToolResult } from './tool.js';
 
 const ctx = buildContext();
 const registry = buildToolRegistry();
 
 const server = new Server(
   { name: PACKAGE_NAME, version: VERSION },
-  { capabilities: { tools: {}, resources: {} } },
+  {
+    capabilities: { tools: {}, resources: {} },
+    instructions:
+      'CodeStudio exposes project-aware code navigation, documentation, memory and controlled agent execution. ' +
+      'Start with read-only bootstrap tools and pass project_name when requested.',
+  },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: allTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+  tools: allTools.map(({ name, description, inputSchema, annotations }) => ({
+    name, description, inputSchema, annotations,
+  })),
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -36,8 +44,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   try {
     const args = coerceArgs((rawArgs ?? {}) as Record<string, unknown>);
-    const result = await tool.handler(args, ctx);
-    return { content: [{ type: 'text', text: result }] };
+    const result = normalizeMcpToolResult(await tool.handler(args, ctx));
+    return {
+      content: [{ type: 'text', text: result.text }],
+      ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+      ...(result.sourceTruncations?.length
+        ? { _meta: { sourceTruncations: result.sourceTruncations } }
+        : {}),
+    };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true };

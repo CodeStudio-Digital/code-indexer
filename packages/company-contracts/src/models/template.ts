@@ -105,6 +105,10 @@ export interface CompanyRoleConfig {
    * skill overrides in `skill_session_config`.
    */
   skills?: RoleSkills;
+  /** Tool names pinned into the role's visible catalog from turn one.
+   * This is a starting preset, not an allowlist: find_tools/direct calls and
+   * expand_toolset remain available for capabilities outside this list. */
+  initialTools?: string[];
   /**
    * Concrete project ids this role is bound to in THIS session. When set,
    * `spawn_subordinate_agent` auto-resolves `project_id` (single binding) or

@@ -108,6 +108,48 @@ describe('HybridSearch active-generation embedding', () => {
     }));
   });
 
+  it('uses the Memory profile reranker for hybrid snapshot results', async () => {
+    const first = {
+      id: 44, project_id: 7, title: 'first', category: 'decision', content: 'older choice', tags: '[]',
+      created_at: '2026-07-15 00:00:00', updated_at: '2026-07-15 00:00:00', created_by: 'test',
+      embedding_hash: 'a', source: 'manual', importance: 1, last_accessed_at: null,
+      access_count: 0, archived_at: null,
+    } as const;
+    const second = { ...first, id: 45, title: 'preferred', content: 'the relevant choice' };
+    const db = {
+      searchSnapshots: vi.fn(() => [first, second]),
+      getSnapshotById: vi.fn((id: number) => id === 44 ? first : second),
+    } as unknown as CodeIndexDB;
+    const search = vi.fn(async () => [
+      { id: 's44', score: 0.9, metadata: { type: 'snapshot', ref_id: '44' } },
+      { id: 's45', score: 0.8, metadata: { type: 'snapshot', ref_id: '45' } },
+    ]);
+    const rerank = vi.fn(async () => [
+      { id: '45', score: 0.9, originalScore: 0.01 },
+      { id: '44', score: 0.2, originalScore: 0.02 },
+    ]);
+    const hybrid = new HybridSearch(
+      db,
+      { search } as unknown as VectorStore,
+      queryEmbedding(vi.fn(async () => ({ vector: [7], tokens: 1, generationId: 17 }))),
+      null,
+      null,
+      null,
+      null,
+      queryEmbedding(vi.fn(async () => ({ vector: [9], tokens: 1, generationId: 19 }))),
+      { name: 'memory-test', rerank },
+    );
+
+    const results = await hybrid.searchSnapshotsHybrid(7, 'project-seven', 'relevant choice', 2);
+
+    expect(results.map((row) => row.id)).toEqual([45, 44]);
+    expect(rerank).toHaveBeenCalledWith(
+      'relevant choice',
+      expect.arrayContaining([expect.objectContaining({ id: '45', text: expect.stringContaining('preferred') })]),
+      2,
+    );
+  });
+
   it('keeps the embedded generation pinned when activation happens before vector search', async () => {
     let activeGeneration = 11;
     const query = queryEmbedding(vi.fn(async () => {

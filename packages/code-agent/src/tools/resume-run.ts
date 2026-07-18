@@ -29,6 +29,7 @@ import {
 } from '@mcp/code-agent/tools/spawn-agent-render.js';
 import { captureInvestigation } from '@mcp/code-agent/tools/investigation-capture.js';
 import { buildContinuationNudge } from '@mcp/code-agent/tools/resume-nudges.js';
+import { appendResearchContract } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import {
   replaceAgentState,
   type ResumableAgentState,
@@ -64,7 +65,9 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
     task: state.task,
     label: state.label,
     maxTurns: state.maxTurns,
-    systemPrompt: profile.systemPrompt,
+    systemPrompt: appendResearchContract(profile.systemPrompt, state.researchPolicy),
+    researchPolicy: state.researchPolicy,
+    profile: profile.id,
     allowlist: profile.allowlist,
     pathScope: profile.pathScopeMode === 'enforce-writes' && state.files?.length ? state.files : undefined,
     pathScopeMode: profile.pathScopeMode,
@@ -106,6 +109,9 @@ export async function relaunchResumedAgents(
         provider: pinfo.provider,
         model: pinfo.model,
         task: a.task,
+        researchDepth: a.researchPolicy?.depth,
+        softToolTarget: a.researchPolicy?.softToolTarget,
+        softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
         status: targetIdx.has(a.agentIndex) ? 'pending' : reasonToStatus(a.reason),
         attempt: targetIdx.has(a.agentIndex) ? a.attempt + 1 : a.attempt,
       };
@@ -118,7 +124,15 @@ export async function relaunchResumedAgents(
     reasoningEffort: effortForProfile(deps, profiles[i]),
   }));
   const { results, totalUsage } = await runParallelAgents(
-    { provider: deps.provider, tools: deps.parentTools, ctx, sessionId, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
+    {
+      provider: deps.provider,
+      tools: deps.parentTools,
+      ctx,
+      sessionId,
+      agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+      toolSelectionFilter: deps.toolSelectionFilter,
+      externalToolTiers: deps.externalToolTiers,
+    },
     specs,
     MICRO_AGENT_PROFILES.explore.systemPrompt,
     MICRO_AGENT_PROFILES.explore.allowlist,

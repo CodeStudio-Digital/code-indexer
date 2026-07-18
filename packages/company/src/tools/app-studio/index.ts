@@ -38,6 +38,25 @@ const ROLE_TOOLS: Readonly<Record<string, readonly string[]>> = {
   qa: ['app_run_checks', 'app_record_work_evidence', 'app_request_decision'],
 };
 
+export const APP_STUDIO_TOOL_NAMES: readonly string[] = [
+  'app_get_state',
+  'app_get_plan',
+  'app_update_plan',
+  'app_upsert_work_items',
+  'app_request_decision',
+  'app_request_plan_approval',
+  'app_dispatch_ready_work',
+  'app_record_work_evidence',
+  'app_get_db_state',
+  'app_update_database',
+  'app_run_checks',
+];
+
+export function appStudioToolNamesForRole(audience: AppStudioToolAudience, role?: string): ReadonlySet<string> {
+  if (audience === 'company-master') return new Set(APP_STUDIO_TOOL_NAMES);
+  return new Set([...SUBORDINATE_READ, ...(ROLE_TOOLS[role?.trim().toLowerCase() ?? ''] ?? [])]);
+}
+
 function allTools(binding: AppToolBinding): CoderTool[] {
   return [
     appGetState(binding),
@@ -59,7 +78,6 @@ export function buildAppStudioTools(_projectId: number, options: BuildAppStudioT
     throw new Error('Persistent App Company tools require a positive appSessionId.');
   }
   const tools = allTools(appStudioSessionBinding(options.appSessionId));
-  if (options.audience === 'company-master') return tools;
-  const allowed = new Set([...SUBORDINATE_READ, ...(ROLE_TOOLS[options.role ?? ''] ?? [])]);
+  const allowed = appStudioToolNamesForRole(options.audience, options.role);
   return tools.filter((tool) => allowed.has(tool.name));
 }

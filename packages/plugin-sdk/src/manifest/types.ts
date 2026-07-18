@@ -7,6 +7,7 @@ import type {
 import type {
   appManifestSchema,
   pluginToolDeclSchema,
+  pluginToolOutputPolicySchema,
   toolWindowDeclSchema,
   commandDeclSchema,
   themeDeclSchema,
@@ -26,6 +27,7 @@ export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 export type PluginInterface = z.infer<typeof pluginInterfaceSchema>;
 export type AppManifest = z.infer<typeof appManifestSchema>;
 export type PluginToolDecl = z.infer<typeof pluginToolDeclSchema>;
+export type PluginToolOutputPolicy = z.infer<typeof pluginToolOutputPolicySchema>;
 export type ToolWindowDecl = z.infer<typeof toolWindowDeclSchema>;
 export type CommandDecl = z.infer<typeof commandDeclSchema>;
 export type ThemeDecl = z.infer<typeof themeDeclSchema>;

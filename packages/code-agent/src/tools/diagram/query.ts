@@ -7,7 +7,6 @@
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import {
   fsPort,
   fileExists,
@@ -17,13 +16,10 @@ import {
   DIAGRAMS_DIR,
 } from './shared.js';
 
-/** Char cap on diagram_read — big enough for most diagrams, bounded for cache safety. */
-const READ_CAP = 24_000;
-
 export const diagramReadTool: CoderTool = {
   name: 'diagram_read',
   description:
-    'Read the mxGraph XML of a saved draw.io diagram so you can edit it surgically with diagram_update. Returns the file contents (capped for very large diagrams).',
+    'Read the complete mxGraph XML of a saved draw.io diagram so you can edit it surgically with diagram_update. Oversized output is preserved by the runner and can be paged with get_tool_output.',
   source: 'native',
   mutates: false,
   parallelSafe: true,
@@ -44,13 +40,9 @@ export const diagramReadTool: CoderTool = {
     } catch {
       return err(`No diagram named "${r.slug}" (${r.rel}). Use diagram_list to see existing diagrams.`);
     }
-    if (xml.length > READ_CAP) {
-      const marker = truncationMarker(
-        `${xml.length} chars, showing first ${READ_CAP}`,
-        'open it in the Diagram panel to see the whole thing, or edit the visible head',
-      );
-      return ok(`${xml.slice(0, READ_CAP)}\n${marker}`);
-    }
+    // The central finalizer owns context shaping and exact spill recovery.
+    // Cutting here permanently discarded the XML tail before it could be
+    // stored, and duplicated the runner's model-aware cap.
     return ok(xml);
   },
 };

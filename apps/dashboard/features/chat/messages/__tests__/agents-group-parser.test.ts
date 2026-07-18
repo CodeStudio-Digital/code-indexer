@@ -5,7 +5,10 @@ describe('parsePersistedAgentsGroup', () => {
   it('keeps per-agent tool counts from compact transport output', () => {
     const input = {
       agents: [
-        { label: 'Agent Tools', task: 'Inspect agent tools', profile: 'explore' },
+        {
+          label: 'Agent Tools', task: 'Inspect agent tools', profile: 'explore',
+          research_depth: 'quick', target_tool_calls: 16, target_minutes: 3,
+        },
         { label: 'Company Runtime', task: 'Inspect company runtime', profile: 'explore' },
         { label: 'API Transport', task: 'Inspect API transport', profile: 'explore' },
         { label: 'Indexer Internals', task: 'Inspect indexer internals', profile: 'explore' },
@@ -61,6 +64,9 @@ describe('parsePersistedAgentsGroup', () => {
       label: 'Agent Tools',
       task: 'Inspect agent tools',
       agentType: 'explore',
+      researchDepth: 'quick',
+      softToolTarget: 16,
+      softTimeTargetMs: 180_000,
     });
     expect(group?.agents[5].summary).toBe('summary 6');
   });

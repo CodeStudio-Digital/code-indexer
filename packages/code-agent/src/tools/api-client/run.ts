@@ -11,8 +11,6 @@ import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 import { resolveApiCtx, jarForProject, resolveEnvFor } from './shared.js';
 
-const BODY_CAP = 4096;
-
 export const apiRunRequestTool: CoderTool = {
   name: 'api_run_request',
   description:
@@ -54,7 +52,9 @@ export const apiRunRequestTool: CoderTool = {
     }
     r.store.updateRequest(req.id, { last_status: res.status, last_run_at: new Date().toISOString() });
 
-    const out = res.body.length > BODY_CAP ? `${res.body.slice(0, BODY_CAP)}\n… [truncated ${res.body.length - BODY_CAP} chars]` : res.body;
+    // Keep the full acquired body for the central model-aware finalizer. The
+    // old 4K presentation cut destroyed evidence before exact spill/reduction.
+    const out = res.body;
     const ct = String(res.headers['content-type'] ?? '');
     const tests = [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])];
     const testLine = tests.length ? `tests: ${tests.filter((t) => t.passed).length}/${tests.length} passed` : '';
@@ -62,13 +62,31 @@ export const apiRunRequestTool: CoderTool = {
     // in a param), and this line goes to the AI provider in cleartext.
     let shownUrl = res.url;
     try { const u = new URL(res.url); shownUrl = `${u.origin}${u.pathname}`; } catch { shownUrl = res.url.split('?')[0]; }
-    return ok([
+    const content = [
       `${req.method} ${shownUrl} → ${res.status} ${res.statusText} (${res.ms}ms)`,
       ct ? `content-type: ${ct}` : '',
       testLine,
+      res.truncated
+        ? `[source truncated: network read ceiling reached; source size ${res.sizeExact ? `was ${res.size}` : `is at least ${res.size}`} bytes. Retry with a narrower endpoint or raise MCP_API_CLIENT_READ_CAP.]`
+        : '',
       '',
       out || '(empty body)',
-    ].filter(Boolean).join('\n'));
+    ].filter(Boolean).join('\n');
+    return {
+      content,
+      ...(res.truncated
+        ? {
+            sourceTruncations: [{
+              technique: 'network-acquisition-cap',
+              inputSize: res.size,
+              ...(res.sizeExact ? {} : { inputSizeExact: false }),
+              outputSize: Buffer.byteLength(res.body, 'utf-8'),
+              unit: 'bytes' as const,
+              recoverable: false,
+            }],
+          }
+        : {}),
+    };
   },
 };
 

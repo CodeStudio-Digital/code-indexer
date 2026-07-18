@@ -859,7 +859,13 @@ export function renderAssistantBlock(
     name: b.name ?? '',
     input: b.input,
     result: result
-      ? { content: result.content, isError: result.isError, ...(result.image ? { image: result.image } : {}) }
+      ? {
+          content: result.content,
+          isError: result.isError,
+          ...(result.image ? { image: result.image } : {}),
+          ...(result.truncated ? { truncated: true } : {}),
+          ...(result.originalLength != null ? { originalLength: result.originalLength } : {}),
+        }
       : undefined,
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
@@ -873,7 +879,7 @@ export function renderAssistantBlock(
   if (isEditTool(tc.name)) {
     return <FileEditBlock key={`fe-${b.id}-${i}`} call={tc} />;
   }
-  return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} />;
+  return <ToolCallBlock key={`tu-${b.id}-${i}`} call={tc} sessionId={sessionId} />;
 }
 
 /**

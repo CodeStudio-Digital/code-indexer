@@ -29,6 +29,7 @@ import { chromeServiceRouter } from './chrome-service.routes.js';
 import { verdaccioRouter } from './verdaccio.routes.js';
 import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
 import { capabilitiesRouter } from './capabilities.routes.js';
+import { customAgentsRouter } from './custom-agents.routes.js';
 
 export function createAdminRouter(store: ProviderStore, semantic: SemanticAdminRuntime): Hono {
   const app = new Hono();
@@ -51,6 +52,7 @@ export function createAdminRouter(store: ProviderStore, semantic: SemanticAdminR
   app.route('/', chromeServiceRouter());
   app.route('/', verdaccioRouter());
   app.route('/', capabilitiesRouter());
+  app.route('/', customAgentsRouter(store));
 
   return app;
 }

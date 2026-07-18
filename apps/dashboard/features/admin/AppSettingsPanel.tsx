@@ -7,7 +7,7 @@
  * copyable monospace sub-line. Data/mutation logic and subcomponents live in
  * ./app-settings/. Value resolution (db → env → default) is unchanged.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
@@ -29,6 +29,12 @@ export function AppSettingsPanel() {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const filtered = useSettingsFilter({ items: data?.items ?? [], activeCategory, query, showAdvanced });
+
+  useEffect(() => {
+    if (activeCategory !== 'all' && !filtered.counts.has(activeCategory)) {
+      setActiveCategory('all');
+    }
+  }, [activeCategory, filtered.counts]);
 
   if (loading && !data) {
     return (

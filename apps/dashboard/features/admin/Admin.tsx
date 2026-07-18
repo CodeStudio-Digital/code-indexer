@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   AppWindow,
   Blocks,
+  Bot,
   BookOpen,
   ChevronDown,
   Languages,
@@ -51,6 +52,7 @@ import { McpServersPanel } from './McpServersPanel.js';
 import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
 import { AppSettingsPanel } from './AppSettingsPanel.js';
 import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
+import { CustomAgentsPanel } from './CustomAgentsPanel.js';
 import { SkillsPanel } from './SkillsPanel.js';
 import { PluginsPanel } from './PluginsPanel.js';
 import { SemanticIndexingPanel } from './SemanticIndexingPanel.js';
@@ -90,6 +92,7 @@ export default function Admin() {
     deleteModel,
     setModelEffort,
     setModelContextWindow,
+    setModelMaxOutputTokens,
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,
@@ -153,6 +156,8 @@ export default function Admin() {
       hint: 'Modelos rodando em fallback de context window' },
     { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
       hint: 'Quality watchdog, intervention policies' },
+    { id: 'agents',            label: t('admin:customAgents.tab'), icon: Bot,           group: 'models',
+      hint: t('admin:customAgents.tabHint') },
     // Busca & Conhecimento
     { id: 'semantic',          label: t('admin:tabs.semanticIndexing'), icon: Database, group: 'knowledge',
       hint: t('admin:semantic.navHint') },
@@ -340,6 +345,9 @@ export default function Admin() {
                 onSetModelContextWindow={(modelId, mode, value) =>
                   expanded && setModelContextWindow(expanded, modelId, mode, value)
                 }
+                onSetModelMaxOutputTokens={(modelId, mode, value) =>
+                  expanded && setModelMaxOutputTokens(expanded, modelId, mode, value)
+                }
                 onSetModelMaxTools={(modelId, mode, value) => expanded && setModelMaxTools(expanded, modelId, mode, value)}
                 onBackfillContextWindows={backfillContextWindows}
                 onSetFallback={setFallback}
@@ -350,6 +358,7 @@ export default function Admin() {
           )}
 
           {section === 'capabilities'      && <CapabilityFallbacksPanel />}
+          {section === 'agents'            && <CustomAgentsPanel />}
           {section === 'app-settings'      && <AppSettingsPanel />}
           {section === 'semantic'          && <SemanticIndexingPanel />}
           {section === 'hygiene'           && <HygienePanel />}

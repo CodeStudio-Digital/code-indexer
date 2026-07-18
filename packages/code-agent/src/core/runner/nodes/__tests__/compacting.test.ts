@@ -110,7 +110,7 @@ describe('CompactingNode', () => {
     expect((ctx.messages[0].content[0] as { text: string }).text).toContain('auto-compacted summary');
   });
 
-  it('records an unaligned checkpoint and still permits a later checkpoint', async () => {
+  it('records an unaligned checkpoint without aborting in-memory compaction', async () => {
     const { ctx } = makeTestContext();
     const finished: Array<{ status: string }> = [];
     Object.assign(ctx.opts, {
@@ -121,8 +121,7 @@ describe('CompactingNode', () => {
       },
     });
     const checkpoint = vi.fn()
-      .mockResolvedValueOnce({ status: 'noop', reason: 'unaligned', boundaryId: 0 })
-      .mockResolvedValueOnce({ status: 'committed', chapterId: 2, boundaryId: 20 });
+      .mockResolvedValueOnce({ status: 'noop', reason: 'unaligned', boundaryId: 0 });
     ctx.opts.onCompactionCheckpoint = checkpoint;
     const node = new CompactingNode({
       protectTokensOverride: 100,
@@ -134,20 +133,10 @@ describe('CompactingNode', () => {
       index % 2 === 0 ? user(`first-${index}`) : assistant(`first-${index}`)
     ));
     const firstResult = await node.execute(ctx, null);
-    const { ctx: nextCtx } = makeTestContext();
-    Object.assign(nextCtx.opts, {
-      sessionId: 1,
-      sessionStore: ctx.opts.sessionStore,
-      onCompactionCheckpoint: checkpoint,
-    });
-    nextCtx.messages = Array.from({ length: 40 }, (_, index) => (
-      index % 2 === 0 ? user(`second-${index}`) : assistant(`second-${index}`)
-    ));
-    const secondResult = await node.execute(nextCtx, null);
 
-    expect([firstResult, secondResult].map((result) => result.kind)).toEqual(['CompactionDone', 'CompactionDone']);
-    expect(checkpoint).toHaveBeenCalledTimes(2);
-    expect(finished.map((item) => item.status)).toEqual(['checkpoint_failed', 'summarized']);
+    expect(firstResult.kind).toBe('CompactionDone');
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+    expect(finished.map((item) => item.status)).toEqual(['checkpoint_failed']);
   });
 
   it('emits CompactionDone with collapsedFrom=0 when history already fits', async () => {

@@ -114,10 +114,12 @@ describe('retired project indexer surfaces', () => {
     const ctx = context();
     const pulse = projectTools.find((entry) => entry.name === 'get_project_pulse')!;
     const skeleton = fileTools.find((entry) => entry.name === 'get_file_skeleton')!;
-    const pulsePayload = JSON.parse(await pulse.handler({ project_name: 'demo', format: 'json' }, ctx));
-    const skeletonPayload = JSON.parse(await skeleton.handler({
+    const pulseResult = await pulse.handler({ project_name: 'demo', format: 'json' }, ctx);
+    const skeletonResult = await skeleton.handler({
       project_name: 'demo', file_path: 'src/index.ts', format: 'json',
-    }, ctx));
+    }, ctx);
+    const pulsePayload = JSON.parse(typeof pulseResult === 'string' ? pulseResult : pulseResult.text);
+    const skeletonPayload = JSON.parse(typeof skeletonResult === 'string' ? skeletonResult : skeletonResult.text);
     const resource = await projectResources[0].read('mcp://project/demo/overview', ctx);
     const resourcePayload = JSON.parse(resource?.[0]?.type === 'text' ? resource[0].text : '{}');
 

@@ -30,7 +30,36 @@
     "resume": "Retomar construção",
     "cancelBuild": "Cancelar construção",
     "cancelTitle": "Cancelar a construção?",
-    "cancelBody": "Os arquivos e o plano permanecem, mas os trabalhos ainda ativos serão cancelados."
+    "cancelBody": "Os arquivos e o plano permanecem, mas os trabalhos ainda ativos serão cancelados.",
+    "sessions": {
+      "railButton": "Sessões individuais",
+      "newTitle": "Trabalhar em {{app}}",
+      "selectionRequired": "Abra uma sessão individual para selecionar elementos e pedir mudanças.",
+      "open": "Abrir sessões"
+    },
+    "team": {
+      "title": "Equipe do App",
+      "railLabel": "Painéis do App",
+      "railButton": "Equipe e regras",
+      "collapse": "Recolher equipe",
+      "loading": "Carregando a equipe persistente…",
+      "outdatedApi": "O backend ainda está usando o contrato antigo. Reinicie o CodeStudio para carregar a API nova; nenhum fallback v5 será usado.",
+      "rulesTitle": "Regras de ouro",
+      "rulesHint": "Valem para o Master e todos os especialistas nos próximos ciclos.",
+      "rolesTitle": "Agentes e runtime",
+      "rolesHint": "Clique em um papel para configurar provider, modelo, fallback, skills, tools fixadas, prompt e raciocínio. As capacidades do papel são herdadas automaticamente.",
+      "master": "Master coordenador",
+      "skillCount_one": "{{count}} skill",
+      "skillCount_other": "{{count}} skills",
+      "toolCount_one": "{{count}} tool fixada",
+      "toolCount_other": "{{count}} tools fixadas",
+      "fallbackValue": "fallback: {{provider}} · {{model}}",
+      "noFallback": "sem fallback",
+      "failoverHint": "O fallback só é usado em falha transitória ou indisponibilidade real do provider. Erros de configuração, permissão, teste ou lógica bloqueiam claramente.",
+      "openAgents": "Abrir detalhes em Agents",
+      "advancedHint": "Transcripts, tool calls, métricas e diagnóstico continuam em Agents.",
+      "status": { "idle": "disponível", "running": "trabalhando", "paused": "pausada", "completed": "concluída", "error": "com erro" }
+    }
   },
   "home": {
     "title": "Meus apps",

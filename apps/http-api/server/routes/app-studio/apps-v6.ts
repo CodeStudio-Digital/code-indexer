@@ -10,6 +10,7 @@ import { abortCompanyRuntime } from '../company/runtime-lifecycle.js';
 import { stopCompanySessionRuntime } from '../company/session-delete.js';
 import { notFound, parseIdParam, parseJsonBody } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
+import { mountAppStudioTeamConfigRoutes } from './team-routes.js';
 
 type AppStage = 'planning' | 'building' | 'reviewing' | 'ready' | 'live';
 
@@ -145,6 +146,7 @@ function workFromPlan(appSessionId: number, revisionId: number, plan: AppPlanV1)
 }
 
 export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
+  mountAppStudioTeamConfigRoutes(app, deps);
   app.get('/api/app-studio/apps', (c) => c.json({
     apps: deps.appStudioStore.listSessions().map((session) => appState(deps, session.id)),
   }));
@@ -284,9 +286,4 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
     return team ? c.json({ team, agents_url: `/agents/${team.company_session_id}` }) : notFound(c, 'App team not found');
   });
 
-  app.get('/api/app-studio/apps/:id/team/config', (c) => {
-    const id = parseIdParam(c);
-    const team = getAppTeamSession(deps, id);
-    return team ? c.json({ managed_in: 'agents', company_session_id: team.company_session_id }) : notFound(c, 'App team not found');
-  });
 }

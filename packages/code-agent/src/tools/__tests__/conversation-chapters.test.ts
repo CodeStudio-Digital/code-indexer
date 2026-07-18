@@ -21,18 +21,21 @@ const chapter = {
   superseded_at: null,
 };
 
-function context(): ToolContext {
+function context(overrides: { chapterText?: string; sourceText?: string } = {}): ToolContext {
+  const selectedChapter = overrides.chapterText
+    ? { ...chapter, chapter_text: overrides.chapterText }
+    : chapter;
   return {
     conversationHistory: {
-      list: () => ({ items: [chapter], next_cursor: null }),
-      search: () => ({ items: [{ ...chapter, rank: -1 }], next_cursor: null }),
-      get: (id: number) => id === 7 ? chapter : null,
+      list: () => ({ items: [selectedChapter], next_cursor: null }),
+      search: () => ({ items: [{ ...selectedChapter, rank: -1 }], next_cursor: null }),
+      get: (id: number) => id === 7 ? selectedChapter : null,
       source: () => ({
         items: [{
           id: 10,
           session_id: 1,
           role: 'user',
-          content_json: JSON.stringify([{ type: 'text', text: 'original request' }]),
+          content_json: JSON.stringify([{ type: 'text', text: overrides.sourceText ?? 'original request' }]),
           input_tokens: 0,
           output_tokens: 0,
           cache_read_tokens: 0,
@@ -62,5 +65,26 @@ describe('recall_conversation', () => {
     const ctx = context();
     expect((await recallConversationTool.handler({ mode: 'search' }, ctx)).isError).toBe(true);
     expect((await recallConversationTool.handler({ mode: 'get', chapter_id: 99 }, ctx)).isError).toBe(true);
+  });
+
+  it('keeps source messages intact and marks only the recoverable search preview', async () => {
+    const sourceText = `SOURCE-BEGIN-${'x'.repeat(9_000)}-SOURCE-END`;
+    const chapterText = `CHAPTER-BEGIN-${'y'.repeat(3_000)}-CHAPTER-END`;
+    const ctx = context({ sourceText, chapterText });
+
+    const search = await recallConversationTool.handler({ mode: 'search', query: 'chapter' }, ctx);
+    expect(search.content).not.toContain('CHAPTER-END');
+    expect(search.sourceTruncations).toEqual([{
+      technique: 'conversation-search-preview',
+      inputSize: chapterText.length,
+      outputSize: 1_200,
+      unit: 'chars',
+      recoverable: true,
+    }]);
+
+    const source = await recallConversationTool.handler({ mode: 'source', chapter_id: 7 }, ctx);
+    expect(source.content).toContain('SOURCE-BEGIN-');
+    expect(source.content).toContain('-SOURCE-END');
+    expect(source.sourceTruncations).toBeUndefined();
   });
 });

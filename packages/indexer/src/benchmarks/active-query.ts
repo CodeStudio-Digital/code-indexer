@@ -134,7 +134,7 @@ export function resolveActiveDocsBenchmarkQueryServices(
   }
   const activeCollectionIds = activeCollections.map(({ collectionId }) => collectionId);
   return {
-    embeddingService: semanticRuntime.queryEmbedding('knowledge'),
+    embeddingService: semanticRuntime.queryEmbedding('docs'),
     vectorStore: activeCollectionIds.length > 0 ? vectorStore : null,
     activeCollectionIds,
     activeCollections,

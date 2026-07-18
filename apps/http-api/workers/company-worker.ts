@@ -99,6 +99,7 @@ import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core
 import { DocStore } from '../../../packages/store/src/doc-store.js';
 import {
   setGlobalPreviewDevtools,
+  previewRpcTimeoutMs,
   type IPreviewDevtools,
   type PreviewInvoke,
 } from '../../../packages/code-agent/src/tools/preview/index.js';
@@ -241,7 +242,10 @@ setGlobalCompanyRecommend((input) =>
 // preview/devtools tools, each scoped to its own window key.
 const previewShim: IPreviewDevtools = {
   invoke: async (req: PreviewInvoke) =>
-    bridge.request<unknown>('previewDevtools', req, { timeoutMs: 30_000 }),
+    bridge.request<unknown>('previewDevtools', req, { timeoutMs: previewRpcTimeoutMs(req) }),
+  cancel: (requestId: string) => {
+    void bridge.request('previewDevtoolsCancel', { requestId }, { timeoutMs: 2_000 }).catch(() => undefined);
+  },
 };
 setGlobalPreviewDevtools(previewShim);
 

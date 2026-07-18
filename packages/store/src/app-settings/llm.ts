@@ -1,24 +1,7 @@
 import type { SettingDef } from './types.js';
 
-/** LLM & API keys. Provider credentials live in the Providers panel — NOT here. */
+/** Advanced model-id overrides. Provider credentials live in the Providers panel. */
 export const LLM_SETTINGS: readonly SettingDef[] = [
-  {
-    key: 'ZAI_MAX_TOKENS',
-    label: 'Z.AI max output tokens',
-    description: 'Cap on completion length for GLM models. 32000 covers most coding tasks.',
-    type: 'int',
-    category: 'llm',
-    default: '32000',
-    min: 1,
-    max: 131072,
-  },
-  {
-    key: 'BRAVE_API_KEY',
-    label: 'Brave Search API key',
-    description: 'Powers the agent\'s web_search tool. Get a key at brave.com/search/api.',
-    type: 'secret',
-    category: 'llm',
-  },
   {
     key: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
     label: 'Anthropic Sonnet model id',

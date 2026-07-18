@@ -36,7 +36,10 @@ export interface SessionTelemetrySummary {
   llm_summaries: number;
   persisted_chapters: number;
   mechanical_fallbacks: number;
+  /** Root checkpoint failures; excludes retries and stale-pending cascades. */
   checkpoint_failures: number;
+  checkpoint_retries: number;
+  checkpoint_blocked: number;
   /** Migration 130 — lifetime durable-compaction counters (survive compaction). */
   compaction_count_auto: number;
   compaction_count_manual: number;
@@ -141,16 +144,27 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       | 'persisted_chapters'
       | 'mechanical_fallbacks'
       | 'checkpoint_failures'
+      | 'checkpoint_retries'
+      | 'checkpoint_blocked'
     >;
 
   const compactionAudit = tableExists(db, 'coder_compaction_attempts')
     ? db.prepare(`
-        SELECT COUNT(*) AS compaction_attempts,
+        SELECT COALESCE(SUM(CASE
+            WHEN trigger NOT LIKE 'checkpoint_retry:%' THEN 1 ELSE 0 END), 0) AS compaction_attempts,
           COALESCE(SUM(CASE
             WHEN summarizer_ran = 1 AND strategy = 'summarizer'
               AND status IN ('summarized', 'checkpoint_failed') THEN 1 ELSE 0 END), 0) AS llm_summaries,
           COALESCE(SUM(CASE WHEN status = 'deterministic_fallback' THEN 1 ELSE 0 END), 0) AS mechanical_fallbacks,
-          COALESCE(SUM(CASE WHEN status = 'checkpoint_failed' THEN 1 ELSE 0 END), 0) AS checkpoint_failures,
+          COALESCE(SUM(CASE
+            WHEN status = 'checkpoint_failed'
+              AND trigger NOT LIKE 'checkpoint_retry:%'
+              AND COALESCE(error_message, '') NOT LIKE 'prior checkpoint still pending:%'
+            THEN 1 ELSE 0 END), 0) AS checkpoint_failures,
+          COALESCE(SUM(CASE WHEN trigger LIKE 'checkpoint_retry:%' THEN 1 ELSE 0 END), 0) AS checkpoint_retries,
+          COALESCE(SUM(CASE
+            WHEN COALESCE(error_message, '') LIKE 'prior checkpoint still pending:%'
+            THEN 1 ELSE 0 END), 0) AS checkpoint_blocked,
           COALESCE(SUM(summarizer_ran), 0) AS summarizer_turns
         FROM coder_compaction_attempts WHERE session_id = ?
       `).get(sessionId) as {
@@ -158,6 +172,8 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
         llm_summaries: number;
         mechanical_fallbacks: number;
         checkpoint_failures: number;
+        checkpoint_retries: number;
+        checkpoint_blocked: number;
         summarizer_turns: number;
       }
     : {
@@ -165,6 +181,8 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
         llm_summaries: totals.summarizer_turns,
         mechanical_fallbacks: 0,
         checkpoint_failures: 0,
+        checkpoint_retries: 0,
+        checkpoint_blocked: 0,
         summarizer_turns: totals.summarizer_turns,
       };
   const persistedChapters = tableExists(db, 'coder_session_chapters')
@@ -359,6 +377,8 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
     persisted_chapters: persistedChapters,
     mechanical_fallbacks: compactionAudit.mechanical_fallbacks,
     checkpoint_failures: compactionAudit.checkpoint_failures,
+    checkpoint_retries: compactionAudit.checkpoint_retries,
+    checkpoint_blocked: compactionAudit.checkpoint_blocked,
     messages_all: msgCounts.messages_all,
     messages_conversation: msgCounts.messages_conversation,
     messages_user: msgCounts.messages_user,

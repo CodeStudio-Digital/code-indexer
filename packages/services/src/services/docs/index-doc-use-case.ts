@@ -109,7 +109,7 @@ export class IndexDocumentationUseCase {
       if (!hooks.beginCollectionMutation || !hooks.endCollectionMutation) {
         throw new Error('Documentation semantic mutation fence hooks are required');
       }
-      // With Knowledge embeddings enabled this is the durability boundary,
+      // With Docs embeddings enabled this is the durability boundary,
       // not a best-effort optimization. Continuing after it fails would let
       // relational writes race activation without a persistent watermark.
       fence = await hooks.beginCollectionMutation(collectionId, operation);

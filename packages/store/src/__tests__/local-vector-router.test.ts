@@ -116,7 +116,7 @@ describe('LocalVectorRouter', () => {
     }
   });
 
-  it('routes project scopes together and global knowledge scopes to separate DBs', () => {
+  it('routes project memory and global docs/memory scopes to separate DBs', () => {
     const root = freshDir();
     const dataDir = freshDir();
     const router = new LocalVectorRouter({
@@ -134,7 +134,7 @@ describe('LocalVectorRouter', () => {
       expect(snapshot.dbPath).toBe(code.dbPath);
       expect(projectMemory.dbPath).toBe(code.dbPath);
       expect(code.tableName).toBe('code_g_10');
-      expect(snapshot.tableName).toBe('knowledge_g_20');
+      expect(snapshot.tableName).toBe('memory_g_20');
       expect(docs.dbPath).toBe(globalSemanticVectorPaths(dataDir).docs);
       expect(userMemory.dbPath).toBe(globalSemanticVectorPaths(dataDir).userMemory);
       expect(docs.dbPath).not.toBe(userMemory.dbPath);
@@ -253,7 +253,7 @@ describe('LocalVectorRouter', () => {
       await new Promise<void>((resolve) => { releaseFirst = resolve; });
       order.push('first:end');
     });
-    const second = pool.write(path, 'knowledge_g_2', () => { order.push('second'); });
+    const second = pool.write(path, 'memory_g_2', () => { order.push('second'); });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(order).toEqual(['first:start']);
     releaseFirst();
@@ -782,28 +782,28 @@ describe('LocalVectorRouter', () => {
       normalize: true, queryTemplate: '{text}', documentTemplate: '{text}',
     };
     semantic.upsertProfile({
-      purpose: 'knowledge', embedding_target: target, reranker_target: { kind: 'disabled' },
+      purpose: 'docs', embedding_target: target, reranker_target: { kind: 'disabled' },
     });
     const active = semantic.createGeneration({
-      purpose: 'knowledge', fingerprint: 'active', embedding_target: target, dimension: 2,
+      purpose: 'docs', fingerprint: 'active', embedding_target: target, dimension: 2,
     });
     semantic.updateGeneration(active.id, { status: 'ready' });
     semantic.beginNamespaceGeneration({
-      namespace: 'docs:c41', purpose: 'knowledge', generation_id: active.id, expected_items: 1,
+      namespace: 'docs:c41', purpose: 'docs', generation_id: active.id, expected_items: 1,
     });
     semantic.updateNamespaceProgress('docs:c41', { indexed_items: 1 });
     semantic.activateNamespaceGeneration('docs:c41', active.id);
     semantic.beginNamespaceGeneration({
-      namespace: 'docs:c42', purpose: 'knowledge', generation_id: active.id, expected_items: 1,
+      namespace: 'docs:c42', purpose: 'docs', generation_id: active.id, expected_items: 1,
     });
     semantic.updateNamespaceProgress('docs:c42', { indexed_items: 1 });
     semantic.activateNamespaceGeneration('docs:c42', active.id);
     const building = semantic.createGeneration({
-      purpose: 'knowledge', fingerprint: 'building', embedding_target: target, dimension: 2,
+      purpose: 'docs', fingerprint: 'building', embedding_target: target, dimension: 2,
     });
     semantic.updateGeneration(building.id, { status: 'ready' });
     semantic.beginNamespaceGeneration({
-      namespace: 'docs:c41', purpose: 'knowledge', generation_id: building.id, expected_items: 1,
+      namespace: 'docs:c41', purpose: 'docs', generation_id: building.id, expected_items: 1,
     });
     const router = new LocalVectorRouter({
       dataDir, resolveProject: () => null, semanticStore: semantic,
@@ -832,8 +832,8 @@ describe('LocalVectorRouter', () => {
       try {
         const tables = physical.prepare(
           `SELECT name FROM sqlite_master WHERE name IN (?, ?)`,
-        ).all(`knowledge_g_${active.id}`, `knowledge_g_${building.id}`) as Array<{ name: string }>;
-        expect(tables.map((row) => row.name)).toEqual([`knowledge_g_${active.id}`]);
+        ).all(`docs_g_${active.id}`, `docs_g_${building.id}`) as Array<{ name: string }>;
+        expect(tables.map((row) => row.name)).toEqual([`docs_g_${active.id}`]);
       } finally {
         physical.close();
       }
@@ -843,7 +843,7 @@ describe('LocalVectorRouter', () => {
       try {
         expect(afterLastCollection.prepare(
           `SELECT name FROM sqlite_master WHERE name = ?`,
-        ).get(`knowledge_g_${active.id}`)).toBeUndefined();
+        ).get(`docs_g_${active.id}`)).toBeUndefined();
       } finally {
         afterLastCollection.close();
       }

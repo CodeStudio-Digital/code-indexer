@@ -66,6 +66,8 @@ export interface GitCommit {
 export interface GitDiffResult {
   /** Unified diff text. Empty string when there are no changes. */
   patch: string;
+  /** True when the UI preview was capped to protect renderer performance. */
+  truncated?: boolean;
 }
 
 /** A single file touched by a commit (from `git show --numstat --name-status`). */
@@ -180,7 +182,17 @@ export interface GitRunResult {
   durationMs?: number;
   timedOut?: boolean;
   truncated?: boolean;
+  /** True when a rejected push was safely rebased onto the remote and retried. */
+  updatedBeforePush?: boolean;
+  /** Stable UI intent when automatic push recovery needs operator action. */
+  pushActionRequired?: GitPushActionRequired;
 }
+
+export type GitPushActionRequired =
+  | 'git_push_conflicts'
+  | 'git_push_worktree_dirty'
+  | 'git_push_update_required'
+  | 'git_push_preview_stale';
 
 export interface GitLogPage {
   commits: GitCommit[];

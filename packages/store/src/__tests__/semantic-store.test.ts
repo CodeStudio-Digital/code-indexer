@@ -63,7 +63,7 @@ describe('SemanticStore', () => {
     const { db, store } = harness();
     try {
       const profiles = store.listProfiles();
-      expect(profiles.map((profile) => profile.purpose)).toEqual(['code', 'knowledge']);
+      expect(profiles.map((profile) => profile.purpose)).toEqual(['code', 'docs', 'memory']);
       expect(profiles.every((profile) => profile.embedding_target.kind === 'onnx')).toBe(true);
       expect(store.listModels().map((model) => model.model_id)).toEqual([
         'Xenova/multilingual-e5-small',
@@ -200,18 +200,18 @@ describe('SemanticStore', () => {
   it('leases, recovers and resumes durable reindex control jobs', () => {
     const { db, store } = harness();
     try {
-      const queued = store.enqueueReindexJob('knowledge');
+      const queued = store.enqueueReindexJob('memory');
       expect(queued).toMatchObject({
-        namespace: 'semantic:reindex:knowledge',
+        namespace: 'semantic:reindex:memory',
         status: 'pending',
       });
-      expect(store.enqueueReindexJob('knowledge').id).toBe(queued.id);
+      expect(store.enqueueReindexJob('memory').id).toBe(queued.id);
 
       const claimed = store.claimNextReindexJob('worker-a', 100, 1_000);
       expect(claimed).toMatchObject({
         id: queued.id,
         status: 'running',
-        cursor: { purpose: 'knowledge', attempt: 1, lease_owner: 'worker-a' },
+        cursor: { purpose: 'memory', attempt: 1, lease_owner: 'worker-a' },
       });
       expect(store.renewReindexJobLease(queued.id, 'other-worker', 100, 1_050)).toBe(false);
       expect(store.renewReindexJobLease(queued.id, 'worker-a', 100, 1_050)).toBe(true);
@@ -225,7 +225,7 @@ describe('SemanticStore', () => {
         cursor: { attempt: 2, lease_owner: 'worker-b' },
       });
       store.updateJob(queued.id, { status: 'paused', error: 'provider unavailable' });
-      expect(store.enqueueReindexJob('knowledge')).toMatchObject({
+      expect(store.enqueueReindexJob('memory')).toMatchObject({
         id: queued.id,
         status: 'pending',
         error: null,
@@ -277,11 +277,11 @@ describe('SemanticStore', () => {
     const { db, store } = harness();
     try {
       const code = store.enqueueReindexJob('code');
-      const knowledge = store.enqueueReindexJob('knowledge');
+      const memory = store.enqueueReindexJob('memory');
 
-      expect(store.claimNextReindexJob('worker', 100, 1_000, 'knowledge')).toMatchObject({
-        id: knowledge.id,
-        namespace: 'semantic:reindex:knowledge',
+      expect(store.claimNextReindexJob('worker', 100, 1_000, 'memory')).toMatchObject({
+        id: memory.id,
+        namespace: 'semantic:reindex:memory',
         status: 'running',
       });
       expect(store.getJob(code.id)).toMatchObject({ status: 'pending' });
@@ -378,14 +378,14 @@ describe('SemanticStore', () => {
     const { db, store } = harness();
     try {
       const target: EmbeddingTarget = {
-        kind: 'onnx', model: 'knowledge', pooling: 'mean', normalize: true,
+        kind: 'onnx', model: 'memory', pooling: 'mean', normalize: true,
         queryTemplate: '{text}', documentTemplate: '{text}',
       };
       const generation = store.createGeneration({
-        purpose: 'knowledge', fingerprint: 'knowledge-v1', embedding_target: target, dimension: 3,
+        purpose: 'memory', fingerprint: 'memory-v1', embedding_target: target, dimension: 3,
       });
       store.beginNamespaceGeneration({
-        namespace: 'snapshot:p7', purpose: 'knowledge', generation_id: generation.id,
+        namespace: 'snapshot:p7', purpose: 'memory', generation_id: generation.id,
       });
 
       const first = store.noteNamespaceMutation({
@@ -467,14 +467,14 @@ describe('SemanticStore', () => {
     const { db, store } = harness();
     try {
       const target: EmbeddingTarget = {
-        kind: 'onnx', model: 'knowledge', pooling: 'mean', normalize: true,
+        kind: 'onnx', model: 'memory', pooling: 'mean', normalize: true,
         queryTemplate: '{text}', documentTemplate: '{text}',
       };
       const generation = store.createGeneration({
-        purpose: 'knowledge', fingerprint: 'knowledge-v1', embedding_target: target, dimension: 3,
+        purpose: 'memory', fingerprint: 'memory-v1', embedding_target: target, dimension: 3,
       });
       store.beginNamespaceGeneration({
-        namespace: 'memory:user', purpose: 'knowledge', generation_id: generation.id,
+        namespace: 'memory:user', purpose: 'memory', generation_id: generation.id,
       });
       store.activateNamespaceGeneration('memory:user', generation.id);
 
@@ -515,14 +515,14 @@ describe('SemanticStore', () => {
     const { db, store } = harness();
     try {
       const generation = store.createGeneration({
-        purpose: 'knowledge', fingerprint: 'knowledge-v1', dimension: 3,
+        purpose: 'docs', fingerprint: 'docs-v1', dimension: 3,
         embedding_target: {
-          kind: 'onnx', model: 'knowledge', pooling: 'mean', normalize: true,
+          kind: 'onnx', model: 'docs', pooling: 'mean', normalize: true,
           queryTemplate: '{text}', documentTemplate: '{text}',
         },
       });
       store.beginNamespaceGeneration({
-        namespace: 'docs:c7', purpose: 'knowledge', generation_id: generation.id,
+        namespace: 'docs:c7', purpose: 'docs', generation_id: generation.id,
       });
       const first = store.noteNamespaceMutation({
         namespace: 'docs:c7', itemKeys: ['*'], operation: 'upsert',
@@ -684,14 +684,14 @@ describe('SemanticStore', () => {
       semanticIndexing227.up(db);
       let store = new SemanticStore(db);
       const generation = store.createGeneration({
-        purpose: 'knowledge', fingerprint: 'knowledge-v1', dimension: 3,
+        purpose: 'memory', fingerprint: 'memory-v1', dimension: 3,
         embedding_target: {
-          kind: 'onnx', model: 'knowledge', pooling: 'mean', normalize: true,
+          kind: 'onnx', model: 'memory', pooling: 'mean', normalize: true,
           queryTemplate: '{text}', documentTemplate: '{text}',
         },
       });
       store.beginNamespaceGeneration({
-        namespace: 'memory:project:p9', purpose: 'knowledge', generation_id: generation.id,
+        namespace: 'memory:project:p9', purpose: 'memory', generation_id: generation.id,
       });
       const job = store.noteNamespaceMutation({
         namespace: 'memory:project:p9', itemKeys: ['agent_memory:7'], operation: 'upsert',

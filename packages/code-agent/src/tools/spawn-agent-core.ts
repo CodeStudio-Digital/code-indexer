@@ -15,6 +15,11 @@ import type {
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { SpawnRetentionAgent } from '@mcp/code-agent/tools/spawn-agent-resume.js';
 import { buildGlobalWorkspaceBriefing } from '@mcp/code-agent/core/global-workspace-context.js';
+import {
+  appendResearchContract,
+  applyParentGoalBudget,
+  type SubagentResearchPolicy,
+} from '@mcp/code-agent/tools/subagent-research-policy.js';
 
 export interface NormalizedAgent {
   task: string;
@@ -23,6 +28,8 @@ export interface NormalizedAgent {
   label: string;
   maxTurns: number;
   files?: string[];
+  /** Present for read-only investigation/review profiles only. */
+  researchPolicy?: SubagentResearchPolicy;
 }
 
 function envBudget(name: string, fallback: number, allowZero = false): number {
@@ -86,6 +93,27 @@ export function taskWithWorkspaceBriefing(task: string, ctx: ToolContext): strin
   return briefing ? `${briefing}\n\n# Delegated task\n${task}` : task;
 }
 
+/** Resolve live parent-goal budget immediately before dispatch (hot apply). */
+export function prepareAgentsForDispatch(
+  agents: readonly NormalizedAgent[],
+  ctx: ToolContext,
+): NormalizedAgent[] {
+  const goal = ctx.getGoalState?.();
+  const budget = goal?.status === 'in_progress' && goal.budgetTokens && goal.budgetTokens > 0
+    ? goal.budgetTokens
+    : undefined;
+  return agents.map((agent) => agent.researchPolicy
+    ? {
+        ...agent,
+        researchPolicy: applyParentGoalBudget(agent.researchPolicy, budget, agents.length),
+      }
+    : agent);
+}
+
+export function systemPromptForAgent(agent: NormalizedAgent): string {
+  return appendResearchContract(agent.profile.systemPrompt, agent.researchPolicy);
+}
+
 /** Map a NormalizedAgent + its run result into a resume-registry entry. */
 export function toRetentionAgent(
   index: number,
@@ -105,6 +133,7 @@ export function toRetentionAgent(
     task: agent.task,
     profileId: agent.profile.id,
     files: agent.files,
+    researchPolicy: agent.researchPolicy,
     maxTurns: agent.maxTurns,
     limits: limitsForAgent(agent),
     reason: result.reason,

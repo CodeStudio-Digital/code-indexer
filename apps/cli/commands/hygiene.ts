@@ -2,7 +2,11 @@ import type { Command } from 'commander';
 import { existsSync } from 'node:fs';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { SemanticStore } from '@mcp/store/semantic-store.js';
+import {
+  SemanticStore,
+  semanticPurposeForNamespace,
+  type SemanticPurpose,
+} from '@mcp/store/semantic-store.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 import {
   queueSemanticReindex,
@@ -93,19 +97,16 @@ export function register(program: Command): void {
           keys.add(orphan.item_key);
           byNamespace.set(orphan.namespace, keys);
         }
-        let needsCode = false;
-        let needsKnowledge = false;
+        const purposes = new Set<SemanticPurpose>();
         for (const [namespace, keys] of byNamespace) {
           semanticStore.noteNamespaceMutation({
             namespace,
             itemKeys: [...keys],
             operation: 'delete',
           });
-          if (namespace.startsWith('code:')) needsCode = true;
-          else needsKnowledge = true;
+          purposes.add(semanticPurposeForNamespace(namespace));
         }
-        if (needsCode) await queueSemanticReindex(db, 'code');
-        if (needsKnowledge) await queueSemanticReindex(db, 'knowledge');
+        for (const purpose of purposes) await queueSemanticReindex(db, purpose);
         const langs = db.normalizeFileLanguages(project.id);
         const stale = db.markStaleRuns(2, project.id);
 

@@ -16,13 +16,46 @@ import { isPrivateHost } from './ssrf.js';
 /** Hard read ceiling — never buffer more than this from a single response. */
 export const READ_CAP = 512 * 1024;
 
+function utf8SequenceLength(lead: number): number {
+  if ((lead & 0x80) === 0) return 1;
+  if ((lead & 0xe0) === 0xc0) return 2;
+  if ((lead & 0xf0) === 0xe0) return 3;
+  if ((lead & 0xf8) === 0xf0) return 4;
+  return 1;
+}
+
+/**
+ * Decode at most `maxBytes` without manufacturing U+FFFD when the byte
+ * boundary lands inside the final UTF-8 sequence. The returned text is the
+ * largest complete UTF-8 prefix, so encoding it again never crosses the cap
+ * solely because an incomplete sequence became a replacement character.
+ */
+export function decodeCompleteUtf8Prefix(
+  bytes: Uint8Array,
+  maxBytes = bytes.byteLength,
+): string {
+  const finiteMax = Number.isFinite(maxBytes) ? Math.floor(maxBytes) : bytes.byteLength;
+  let end = Math.min(bytes.byteLength, Math.max(0, finiteMax));
+  if (end === 0) return '';
+
+  let lead = end - 1;
+  while (lead >= 0 && (bytes[lead] & 0xc0) === 0x80) lead -= 1;
+  if (lead < 0 || lead + utf8SequenceLength(bytes[lead]) > end) {
+    end = Math.max(0, lead);
+  }
+
+  return new TextDecoder().decode(bytes.subarray(0, end));
+}
+
 export interface RawResponse {
   status: number;
   statusText: string;
   headers: Record<string, string | string[] | undefined>;
   body: string;
-  /** Total bytes the response would have had (may exceed body.length if capped). */
+  /** Exact total bytes, or the observed lower bound when `sizeExact` is false. */
   size: number;
+  /** False when a capped transfer ended before its total length was knowable. */
+  sizeExact: boolean;
   /** True when the body was cut off at the read cap. */
   truncated: boolean;
 }
@@ -109,21 +142,44 @@ export function doRequest(o: {
       (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
+        const rawContentLength = Array.isArray(res.headers['content-length'])
+          ? res.headers['content-length'][0]
+          : res.headers['content-length'];
+        const parsedContentLength = typeof rawContentLength === 'string'
+          && /^\d+$/.test(rawContentLength.trim())
+          ? Number(rawContentLength)
+          : Number.NaN;
+        const declaredLength = Number.isSafeInteger(parsedContentLength) && parsedContentLength >= 0
+          ? parsedContentLength
+          : undefined;
         const finish = (truncated: boolean): void => {
           if (settled) return;
           settled = true;
+          const bodyBytes = Buffer.concat(chunks);
+          // Native node:http yields the wire body (it does not transparently
+          // decompress content-encoding), so a valid Content-Length is exact.
+          // Without it, an early cancel only proves how many bytes we observed.
+          const declaredLengthIsConsistent = declaredLength != null && declaredLength >= total;
           resolve({
             status: res.statusCode ?? 0,
             statusText: res.statusMessage ?? '',
             headers: res.headers,
-            body: Buffer.concat(chunks).toString('utf8'),
-            size: total,
+            body: decodeCompleteUtf8Prefix(bodyBytes, cap),
+            size: truncated && declaredLengthIsConsistent ? declaredLength : total,
+            sizeExact: !truncated || declaredLengthIsConsistent,
             truncated,
           });
         };
         res.on('data', (c: Buffer) => {
+          const before = total;
           total += c.length;
           if (total <= cap) { chunks.push(c); return; }
+          // Preserve the exact prefix up to the acquisition boundary even
+          // when one large socket chunk crosses it. The previous code dropped
+          // that entire final chunk, sometimes returning an empty body for a
+          // perfectly useful capped response.
+          const remaining = Math.max(0, cap - before);
+          if (remaining > 0) chunks.push(c.subarray(0, remaining));
           // Cap exceeded — resolve with what we have and TEAR DOWN the transfer
           // immediately instead of draining a possibly-gigabyte response just to
           // discard the overflow (bandwidth/socket DoS). Resolve before destroy

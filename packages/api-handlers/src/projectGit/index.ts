@@ -35,6 +35,7 @@ import {
 import type { HandlerDeps } from '../types.js';
 import { callGeneralAiJson, stripJsonFences } from '../aiJson.js';
 import { durationToBucket } from '@mcp/store/pipeline-telemetry-store.js';
+import { pushWithAutoUpdate } from '@mcp/shared/git/push-with-auto-update.js';
 import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { createRepoResolver } from './repos.js';
@@ -70,12 +71,27 @@ const GIT_STATUS_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_STATUS_MAX_OUTPUT
 const GIT_AGG_CONCURRENCY = Number(process.env.MCP_GIT_AGG_CONCURRENCY ?? 4);
 const GIT_LIST_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_LIST_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
 const GIT_DETAIL_MAX_OUTPUT_BYTES = Number(process.env.MCP_GIT_DETAIL_MAX_OUTPUT_BYTES ?? 32 * 1024 * 1024);
+const GIT_DIFF_PREVIEW_MAX_BYTES = 500_000;
 
 const GIT_ENV_BLOCKLIST = new Set([
   'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG', 'GIT_CONFIG_GLOBAL',
   'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES',
 ]);
+
+function pushNeedsAction(
+  result: GitRunResult,
+  action: NonNullable<GitRunResult['pushActionRequired']>,
+  message: string,
+): GitRunResult {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  return {
+    ...result,
+    ok: false,
+    stderr: detail ? `${message}\n\n${detail}` : message,
+    pushActionRequired: action,
+  };
+}
 
 function safeGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -1273,7 +1289,10 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (r.code !== 0 && !r.stdout) {
         throwGitReadFailure('git_show', r, 'git show failed');
       }
-      return { patch: r.stdout };
+      return {
+        patch: r.stdout.slice(0, GIT_DIFF_PREVIEW_MAX_BYTES),
+        truncated: r.stdout.length > GIT_DIFF_PREVIEW_MAX_BYTES,
+      };
     },
 
     async stage({ projectId, paths, repoPath }) {
@@ -1594,9 +1613,51 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       // from the UI — that's a footgun behind a button.
       if (force) args.push('--force-with-lease');
       if (setUpstream) args.push('-u');
-      if (pushTags) args.push('--tags');
+      // Keep reviewed branch + tag publication all-or-nothing. This also
+      // prevents tags from being published before an automatic update stops.
+      if (pushTags) args.push('--atomic', '--tags');
       if (remote) args.push(remote);
       if (branch) args.push(targetBranch && targetBranch !== branch ? `${branch}:${targetBranch}` : branch);
+      if (remote && branch) {
+        const outcome = await pushWithAutoUpdate({
+          pushArgs: args,
+          remote,
+          branch,
+          targetBranch: targetBranch ?? branch,
+          expectedHead,
+          pushTags,
+          allowAutoUpdate: !force,
+          run: async (gitArgs, runOptions): Promise<GitRunResult> => {
+            if (runOptions.kind === 'read') {
+              const result = await runGit(root, gitArgs, {
+                env: runOptions.env,
+                profile: 'read',
+              });
+              return {
+                command: 'git',
+                args: gitArgs,
+                ok: result.code === 0,
+                code: result.code,
+                stdout: result.stdout,
+                stderr: result.stderr,
+                errorCode: result.errorCode,
+                durationMs: result.durationMs,
+                timedOut: result.timedOut,
+                truncated: result.truncated,
+              };
+            }
+            return runAsResult(root, 'git', gitArgs, runOptions.env, GIT_NETWORK_TIMEOUT_MS);
+          },
+        });
+        if (outcome.actionRequired) {
+          return pushNeedsAction(
+            outcome.result,
+            outcome.actionRequired,
+            outcome.actionMessage ?? 'Update the branch before pushing.',
+          );
+        }
+        return { ...outcome.result, updatedBeforePush: outcome.updatedBeforePush };
+      }
       return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
     },
 

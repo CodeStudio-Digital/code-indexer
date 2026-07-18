@@ -50,6 +50,34 @@ export function resolve(db: DB, toolUseId: string, status: CoderPlanStatus, feed
   `).run(status, feedback ?? null, toolUseId);
 }
 
+/**
+ * Resolve the newest pending plan after its runner was lost.
+ *
+ * `submit_plan` records an internal plan id while the persisted assistant
+ * message carries the provider's tool_use id. The live runner resolves with
+ * the internal id, but a restart can only recover the provider id from chat
+ * history. In that path, session + newest pending row is the durable identity.
+ */
+export function resolveLatestPending(
+  db: DB,
+  sessionId: number,
+  status: CoderPlanStatus,
+  feedback?: string,
+): boolean {
+  const result = db.prepare(`
+    UPDATE coder_plans
+       SET status = ?, feedback = ?, resolved_at = datetime('now')
+     WHERE id = (
+       SELECT id
+         FROM coder_plans
+        WHERE session_id = ? AND status = 'pending'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+     )
+  `).run(status, feedback ?? null, sessionId);
+  return result.changes > 0;
+}
+
 export function list(db: DB, sessionId: number): CoderPlanRow[] {
   return db.prepare('SELECT * FROM coder_plans WHERE session_id = ? ORDER BY created_at DESC, id DESC')
     .all(sessionId) as CoderPlanRow[];

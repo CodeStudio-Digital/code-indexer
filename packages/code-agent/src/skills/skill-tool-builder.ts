@@ -163,6 +163,7 @@ export function buildSkillDiscoveryTools(
     description:
       'Get the full instructions of a specific skill by ID. Use get_skills_list first to discover available skill IDs.',
     source: 'native',
+    outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
     parameters: {
       type: 'object',
       properties: {
@@ -240,6 +241,7 @@ export function buildInvokeSkillTool(
     name: 'invoke_skill',
     description: `Invoke a reusable skill by ID. Skills are pre-configured prompt instruction packages that guide your behavior for specific tasks.\n\nAvailable skills:\n${catalog}\n\nWhen invoked, the skill's instructions are returned for you to follow.`,
     source: 'native',
+    outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
     parameters: {
       type: 'object',
       properties: {

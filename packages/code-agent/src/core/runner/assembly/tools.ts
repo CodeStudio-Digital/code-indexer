@@ -15,8 +15,13 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
-import { filterByTiers, getToolTier } from '@mcp/code-agent/tools/tiers.js';
-import { NEVER_TRIM, selectUnderCap } from '@mcp/code-agent/tools/tool-priority.js';
+import { filterByTiers, getToolTier, MASTER_TOOLS } from '@mcp/code-agent/tools/tiers.js';
+import {
+  NEVER_TRIM,
+  PREVIEW_WORKFLOW_FLOOR,
+  ROLE_CAPABILITY_FLOOR,
+  selectUnderCap,
+} from '@mcp/code-agent/tools/tool-priority.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
@@ -74,6 +79,8 @@ export interface BuildToolsResult {
   capInfo: BuildToolsCapInfo | null;
   /** Actual serialized size of the eligible pre-cap catalog this turn. */
   eligibleToolsDefChars: number;
+  /** Names the downstream relevance selector must never remove. */
+  protectedToolNames: ReadonlySet<string>;
 }
 
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
@@ -145,7 +152,10 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   for (const t of filtered) {
     const isProtected =
       NEVER_TRIM.has(t.name) ||
+      PREVIEW_WORKFLOW_FLOOR.has(t.name) ||
+      ROLE_CAPABILITY_FLOOR.has(t.name) ||
       !!args.pinnedTools?.has(t.name) ||
+      (isMasterRunner && MASTER_TOOLS.has(t.name)) ||
       (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner));
     (isProtected ? protectedBucket : others).push(t);
   }
@@ -230,7 +240,12 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       })),
   ).length;
 
-  return { tools, capInfo, eligibleToolsDefChars };
+  return {
+    tools,
+    capInfo,
+    eligibleToolsDefChars,
+    protectedToolNames: new Set(protectedBucket.map((tool) => tool.name)),
+  };
 }
 
 export interface BuildToolsCacheKeyArgs {

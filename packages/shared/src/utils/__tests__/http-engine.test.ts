@@ -35,6 +35,16 @@ beforeAll(async () => {
     } else if (req.url === '/me') {
       res.writeHead(cookie.includes('sid=zzz') ? 200 : 401);
       res.end(cookie.includes('sid=zzz') ? 'me' : 'no');
+    } else if (req.url === '/large') {
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '80000' });
+      res.end('A'.repeat(80_000));
+    } else if (req.url === '/chunked-large') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.write('B'.repeat(40_000));
+      res.end('B'.repeat(40_000));
+    } else if (req.url === '/unicode-cap') {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(Buffer.from('é🙂UNREAD_TAIL', 'utf8'));
     } else {
       res.writeHead(404);
       res.end('nf');
@@ -74,6 +84,7 @@ describe('http-engine transport', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toContain('"ok":true');
+    expect(res.sizeExact).toBe(true);
   });
 
   it('sendHttp serializes a JSON body with content-type', async () => {
@@ -81,6 +92,55 @@ describe('http-engine transport', () => {
     expect(res.status).toBe(200);
     expect(res.body).toContain('"received":"{\\"x\\":1}"');
     expect(res.body).toContain('application/json');
+  });
+
+  it('keeps the exact prefix at the network read boundary and marks truncation', async () => {
+    const res = await doRequest({
+      url: new URL(`${base}/large`),
+      method: 'GET',
+      headers: {},
+      insecure: true,
+      timeoutMs: 5000,
+      maxBytes: 32_000,
+    });
+    expect(res.truncated).toBe(true);
+    expect(Buffer.byteLength(res.body, 'utf8')).toBe(32_000);
+    expect(res.body).toBe('A'.repeat(32_000));
+    expect(res.size).toBeGreaterThan(32_000);
+    expect(res.size).toBe(80_000);
+    expect(res.sizeExact).toBe(true);
+  });
+
+  it('drops a partial trailing UTF-8 sequence instead of emitting U+FFFD past the byte cap', async () => {
+    const maxBytes = 4; // complete "é" (2 bytes) + half of the 4-byte emoji
+    const res = await doRequest({
+      url: new URL(`${base}/unicode-cap`),
+      method: 'GET',
+      headers: {},
+      insecure: true,
+      timeoutMs: 5000,
+      maxBytes,
+    });
+
+    expect(res.truncated).toBe(true);
+    expect(res.body).toBe('é');
+    expect(res.body).not.toContain('\uFFFD');
+    expect(Buffer.byteLength(res.body, 'utf8')).toBeLessThanOrEqual(maxBytes);
+  });
+
+  it('labels an interrupted chunked response size as a lower bound', async () => {
+    const res = await doRequest({
+      url: new URL(`${base}/chunked-large`),
+      method: 'GET',
+      headers: {},
+      insecure: true,
+      timeoutMs: 5000,
+      maxBytes: 32_000,
+    });
+    expect(res.truncated).toBe(true);
+    expect(res.size).toBeGreaterThan(32_000);
+    expect(res.size).toBeLessThanOrEqual(80_000);
+    expect(res.sizeExact).toBe(false);
   });
 
   it('sendHttp carries the jar across a login flow', async () => {

@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import {
   alignedDurablePrefix,
+  persistChapterCheckpoint,
+  recedePrefixToToolPairBoundary,
   serializeSessionCompaction,
 } from '../chapter-checkpoint.js';
 
@@ -24,6 +27,102 @@ describe('chapter checkpoint alignment', () => {
   it('never skips an unseen durable row to advance the boundary', () => {
     const durable = [message('user', 'missing'), message('assistant', 'present')];
     expect(alignedDurablePrefix(durable, [durable[1]])).toBe(0);
+  });
+
+  it('ignores persistence-only tool metadata but not changed tool content', () => {
+    const durable: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result', tool_use_id: 'call-1', content: 'same output',
+        is_error: false, truncated: true, originalSize: 123,
+      }],
+    };
+    const live: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result', tool_use_id: 'call-1', content: 'same output',
+        truncated: true, originalSize: 999,
+      }],
+    };
+
+    expect(alignedDurablePrefix([durable], [live])).toBe(1);
+    const changed: AgentMessage = {
+      role: 'tool',
+      content: [{
+        type: 'tool_result', tool_use_id: 'call-1', content: 'different output',
+        truncated: true, originalSize: 999,
+      }],
+    };
+    expect(alignedDurablePrefix([durable], [changed])).toBe(0);
+
+    const durableUse: AgentMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'call-2', name: 'inspect', input: { originalSize: 1 } }],
+    };
+    const changedUse: AgentMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'call-2', name: 'inspect', input: { originalSize: 2 } }],
+    };
+    expect(alignedDurablePrefix([durableUse], [changedUse])).toBe(0);
+  });
+
+  it('recedes instead of splitting an assistant/tool pair', () => {
+    const use: AgentMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'call-1', name: 'read_file', input: { path: 'a.ts' } }],
+    };
+    const result: AgentMessage = {
+      role: 'tool',
+      content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'body' }],
+    };
+    const messages = [message('user', 'before'), use, result, message('assistant', 'after')];
+
+    expect(recedePrefixToToolPairBoundary(messages, 2)).toBe(1);
+    expect(recedePrefixToToolPairBoundary(messages, 3)).toBe(3);
+  });
+
+  it('persists the receded pair-safe boundary rather than the raw aligned prefix', () => {
+    const before = message('user', 'before');
+    const use: AgentMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'call-1', name: 'read_file', input: { path: 'a.ts' } }],
+    };
+    const result: AgentMessage = {
+      role: 'tool',
+      content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'body' }],
+    };
+    const commitConversationChapter = vi.fn().mockReturnValue({
+      status: 'committed', boundary_id: 10, pruned_count: 1, chapter: { id: 1 },
+    });
+    const store = {
+      loadSessionWithMessages: () => ({
+        session: { summary_boundary_id: null },
+        messages: [before, use, result],
+        message_rows: [{ id: 10 }, { id: 11 }, { id: 12 }],
+      }),
+      commitConversationChapter,
+    } as unknown as SessionStore;
+
+    persistChapterCheckpoint({
+      store,
+      sessionId: 1,
+      summary: {
+        version: 3,
+        chapter: {
+          title: 'safe', summary: '', user_requests: [], decisions: [],
+          work_completed: [], files: [], open_issues: [], resolved_issues: [],
+        },
+        resume: {
+          objective: 'safe', current_focus: '', constraints: [], pending_tasks: [], next_step: '',
+        },
+      },
+      headMessages: [before, use],
+    });
+
+    expect(commitConversationChapter).toHaveBeenCalledWith(expect.objectContaining({
+      startMessageId: 10,
+      endMessageId: 10,
+    }));
   });
 
   it('serializes concurrent checkpoints for one session', async () => {

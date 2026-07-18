@@ -1,4 +1,4 @@
-import type { AgentStatus, AgentsGroup, ParallelAgent, StreamBlock, Usage } from './types.js';
+import type { AgentStatus, AgentsGroup, ParallelAgent, ResearchDepth, StreamBlock, Usage } from './types.js';
 
 export interface AgentProgressPayload {
   groupId: string;
@@ -20,6 +20,9 @@ export interface AgentProgressPayload {
   usage?: Usage;
   summary?: string;
   error?: string;
+  researchDepth?: ResearchDepth;
+  softToolTarget?: number;
+  softTimeTargetMs?: number;
 }
 
 export function applyAgentProgress(blocks: StreamBlock[], d: AgentProgressPayload): boolean {
@@ -73,6 +76,9 @@ function patchAgent(agent: ParallelAgent, d: AgentProgressPayload): ParallelAgen
     ...(d.deadlineMs != null ? { deadlineMs: d.deadlineMs } : {}),
     ...(d.lastToolName ? { lastToolName: d.lastToolName } : {}),
     ...(d.attempt != null ? { attempt: d.attempt } : {}),
+    ...(d.researchDepth ? { researchDepth: d.researchDepth } : {}),
+    ...(d.softToolTarget != null ? { softToolTarget: d.softToolTarget } : {}),
+    ...(d.softTimeTargetMs != null ? { softTimeTargetMs: d.softTimeTargetMs } : {}),
   };
 
   switch (d.event) {

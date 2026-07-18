@@ -15,7 +15,18 @@
  * never-trim bucket). At cap, pinning therefore SWAPS the lowest-priority
  * survivor out — deterministic, one prefix-cache miss, then stable.
  */
-import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import {
+  API_TOOLS,
+  APP_STUDIO_TOOLS,
+  CORE_TIER_NAMES,
+  DB_TOOLS,
+  DESIGN_SYSTEM_CONSUMER_TOOLS,
+  DESIGN_SYSTEM_STUDIO_TOOLS,
+  DIAGRAM_TOOLS,
+  QA_TOOLS,
+  SPRITE_STUDIO_TOOLS,
+  type ToolTier,
+} from '@mcp/code-agent/tools/tiers.js';
 
 /**
  * Tools that must NEVER be trimmed by the model cap. The discovery core
@@ -69,12 +80,40 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // tool the prompt just told it to call. Floor it so the nudge is always
   // actionable. (The CODER_SELF_REVIEW toggle governs only the reminder.)
   'self_review',
-  // App Studio planner/executor control plane. These tools are registered only
-  // in app workspaces, so protecting them has zero cost in generic sessions.
-  'app_get_context',
-  'app_get_workflow',
-  'app_get_spec',
-  'app_dispatch_ready_work',
+]);
+
+/**
+ * Complete defining surfaces for narrow specialist/product roles. Tier
+ * filtering runs before this floor, so unowned capabilities add zero tools;
+ * once a matching runtime activates one, the model cap cannot erase half of
+ * that role's identity. Broad Company/sandbox tiers keep their smaller
+ * essential floor, while preview keeps its closed-loop subset below.
+ */
+export const ROLE_CAPABILITY_FLOOR: ReadonlySet<string> = new Set([
+  ...API_TOOLS,
+  ...APP_STUDIO_TOOLS,
+  ...DB_TOOLS,
+  ...DESIGN_SYSTEM_CONSUMER_TOOLS,
+  ...DESIGN_SYSTEM_STUDIO_TOOLS,
+  ...DIAGRAM_TOOLS,
+  ...QA_TOOLS,
+  ...SPRITE_STUDIO_TOOLS,
+]);
+
+/**
+ * Minimal closed-loop browser workflow. The preview tier is auto-active only
+ * for an explicitly preview-capable launch or a Company role whose identity is
+ * visual/QA (their worker path does not carry previewAvailable). Protecting
+ * this floor therefore does not tax unrelated sessions. Keeping all 22 tools
+ * would crowd out coding tools on compact models; the rest stay discoverable.
+ */
+export const PREVIEW_WORKFLOW_FLOOR: ReadonlySet<string> = new Set([
+  'preview_open',
+  'preview_snapshot',
+  'preview_click',
+  'preview_fill',
+  'preview_screenshot',
+  'preview_console',
 ]);
 
 /**
@@ -86,9 +125,10 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
  */
 const HOT_RANK: readonly string[] = [
   'code_exec',
-  'app_get_context',
-  'app_get_workflow',
-  'app_get_spec',
+  'app_get_state',
+  'app_get_plan',
+  'app_update_plan',
+  'app_upsert_work_items',
   'app_dispatch_ready_work',
   'read_file',
   'mcp__search',
@@ -130,10 +170,11 @@ const HOT_INDEX: ReadonlyMap<string, number> = new Map(HOT_RANK.map((n, i) => [n
 
 /**
  * Survival group — higher survives longer. Drop order (first to go → last):
- * custom/external MCP tier → preview → admin → master (non-essential) →
- * navigate-cold → bootstrap-cold → navigate-hot → bootstrap-hot.
- * "Hot" = membership in HOT_RANK. Company/builder tools resolve to
- * 'bootstrap' in getToolTier, so they compete in the bootstrap groups.
+ * custom/external MCP tier → preview → admin → sandbox → company/master →
+ * specialist capability/bootstrap-cold → navigate-hot → bootstrap-hot.
+ * "Hot" = membership in HOT_RANK. Master tools are separately protected for
+ * master runners; the group here only supplies deterministic behavior in
+ * non-master catalogs and tests.
  */
 function survivalGroup(tier: ToolTier, hot: boolean): number {
   if (!CORE_TIER_NAMES.has(tier)) return 0;
@@ -142,8 +183,20 @@ function survivalGroup(tier: ToolTier, hot: boolean): number {
       return 1;
     case 'admin':
       return 2;
-    case 'master':
+    case 'sandbox':
       return 3;
+    case 'master':
+    case 'company':
+      return 4;
+    case 'api':
+    case 'diagram':
+    case 'db':
+    case 'qa':
+    case 'app':
+    case 'design-system-studio':
+    case 'design-system-consumer':
+    case 'sprite-studio':
+      return 5;
     case 'navigate':
       return hot ? 6 : 4;
     case 'bootstrap':

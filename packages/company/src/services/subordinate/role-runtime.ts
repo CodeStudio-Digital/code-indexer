@@ -21,6 +21,7 @@ export interface PersistedRoleRuntime {
   model?: string;
   tier?: string;
   skills?: RoleSkills;
+  initialTools?: string[];
   systemPromptOverride?: string;
   projectIds?: number[];
   temperature?: number;
@@ -35,6 +36,7 @@ export interface RoleRuntimeRequest {
   model?: string;
   tier?: RoleToolTier;
   skills?: RoleSkills;
+  initialTools?: string[];
   roleOverride?: string;
   temperature?: number;
   thinking?: boolean;
@@ -61,6 +63,7 @@ export interface EffectiveRoleRuntime {
   model: string;
   tier: RoleToolTier;
   skills?: RoleSkills;
+  initialTools: string[];
   roleOverride?: string;
   temperature?: number;
   thinking?: boolean;
@@ -98,6 +101,14 @@ const LEGACY_DEFAULT: AllowedModel = {
 
 function clean(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function cleanList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.flatMap((entry) => {
+    const item = clean(entry);
+    return item ? [item] : [];
+  }))];
 }
 
 function isModel(value: unknown): value is AllowedModel {
@@ -277,6 +288,7 @@ export function resolveEffectiveRoleRuntime(
     model: selected.model,
     tier,
     skills: configured?.skills ?? input.requested.skills,
+    initialTools: cleanList(configured?.initialTools ?? input.requested.initialTools),
     roleOverride: configured?.systemPromptOverride ?? input.requested.roleOverride,
     temperature: configured?.temperature ?? input.requested.temperature,
     // Persisted role settings are one immutable runtime snapshot. App/Company
@@ -375,6 +387,14 @@ export function resolveEffectiveMasterRuntime(
   const masterSkills = Array.isArray(rawMasterSkills)
     ? [...new Set(rawMasterSkills.map((skill) => (skill as string).trim()))]
     : undefined;
+  const rawMasterInitialTools = parsed.master_initial_tools;
+  if (
+    rawMasterInitialTools !== undefined
+    && (!Array.isArray(rawMasterInitialTools) || rawMasterInitialTools.some((tool) => !clean(tool)))
+  ) {
+    throw new Error('master_initial_tools must be an array of non-empty tool names when configured');
+  }
+  const masterInitialTools = cleanList(rawMasterInitialTools);
   const rawMasterPrompt = parsed.master_system_prompt_override;
   if (rawMasterPrompt !== undefined && typeof rawMasterPrompt !== 'string') {
     throw new Error('master_system_prompt_override must be a string when configured');
@@ -403,6 +423,7 @@ export function resolveEffectiveMasterRuntime(
         thinkingBudgetTokens: masterThinkingBudget as number | undefined,
         reasoningEffort: clean(parsed.master_reasoning_effort),
         skills: masterSkills,
+        initialTools: masterInitialTools,
         systemPromptOverride: masterSystemPromptOverride,
         fallbackModels: fallbackProvider && fallbackModel
           ? [{ provider: fallbackProvider, model: fallbackModel }]

@@ -44,6 +44,7 @@ export interface ProviderModalProps {
   onDeleteModel: (modelId: string, mode: string) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
+  onSetModelMaxOutputTokens: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
   onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;

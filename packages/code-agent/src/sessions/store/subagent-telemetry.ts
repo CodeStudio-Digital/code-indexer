@@ -14,6 +14,10 @@ export interface SubagentRunTelemetry {
   max_tool_calls: number | null;
   timeout_ms: number | null;
   stall_ms: number | null;
+  research_depth: string | null;
+  soft_tool_target: number | null;
+  soft_time_target_ms: number | null;
+  synthesis_nudged: 0 | 1;
   reason: string | null;
   turns: number;
   auto_continues: number;
@@ -63,6 +67,9 @@ export interface StartSubagentRunInput {
   max_tool_calls?: number | null;
   timeout_ms?: number | null;
   stall_ms?: number | null;
+  research_depth?: string | null;
+  soft_tool_target?: number | null;
+  soft_time_target_ms?: number | null;
 }
 
 export interface SubagentToolCallInput {
@@ -98,22 +105,29 @@ export interface CompleteSubagentRunInput {
   cache_creation_input_tokens?: number;
   has_summary: boolean;
   output_id?: string | null;
+  synthesis_nudged?: boolean;
 }
 
 export function start(db: DB, input: StartSubagentRunInput): void {
   db.prepare(`
     INSERT INTO coder_subagent_runs (
       session_id, run_id, parent_run_id, spawn_id, profile, label, task_preview,
-      max_turns, max_tool_calls, timeout_ms, stall_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      max_turns, max_tool_calls, timeout_ms, stall_ms, research_depth,
+      soft_tool_target, soft_time_target_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       parent_run_id=excluded.parent_run_id, profile=excluded.profile,
-      label=excluded.label, task_preview=excluded.task_preview
+      label=excluded.label, task_preview=excluded.task_preview,
+      research_depth=excluded.research_depth,
+      soft_tool_target=excluded.soft_tool_target,
+      soft_time_target_ms=excluded.soft_time_target_ms
   `).run(
     input.session_id, input.run_id, input.parent_run_id ?? null,
     input.spawn_id ?? null, input.profile, input.label ?? null,
     input.task_preview?.slice(0, 1000) ?? null, input.max_turns,
     input.max_tool_calls ?? null, input.timeout_ms ?? null, input.stall_ms ?? null,
+    input.research_depth ?? null, input.soft_tool_target ?? null,
+    input.soft_time_target_ms ?? null,
   );
 }
 
@@ -138,7 +152,7 @@ export function complete(db: DB, input: CompleteSubagentRunInput): void {
       productive_operations=?, paginate_calls=?, duplicate_calls=?, error_calls=?,
       refused_calls=?, elapsed_ms=?, input_tokens=?, output_tokens=?,
       cache_read_input_tokens=?, cache_creation_input_tokens=?, has_summary=?,
-      output_id=?, completed_at=datetime('now')
+      output_id=?, synthesis_nudged=?, completed_at=datetime('now')
     WHERE run_id=?
   `).run(
     input.reason, input.turns, input.auto_continues, input.tool_calls,
@@ -146,7 +160,7 @@ export function complete(db: DB, input: CompleteSubagentRunInput): void {
     input.duplicate_calls, input.error_calls, input.refused_calls, input.elapsed_ms,
     input.input_tokens, input.output_tokens, input.cache_read_input_tokens ?? 0,
     input.cache_creation_input_tokens ?? 0, input.has_summary ? 1 : 0,
-    input.output_id ?? null, input.run_id,
+    input.output_id ?? null, input.synthesis_nudged ? 1 : 0, input.run_id,
   );
 }
 

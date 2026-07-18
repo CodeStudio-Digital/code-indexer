@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { AgentMessage, ChatDelta, ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext, CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ExecutingNode } from '../executing.js';
@@ -18,12 +18,13 @@ import { consumeStream, thinkingOnlyBudgetMs } from '../executing-stream.js';
 import { makeTestContext } from './test-helpers.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 
-function makeStreamingProvider(deltas: ChatDelta[]): ChatProvider {
+function makeStreamingProvider(deltas: ChatDelta[], onRequest?: (request: ChatRequest) => void): ChatProvider {
   return {
     name: 'mock',
     model: 'claude-haiku-4-5-20251001',
     setModel() {},
-    async *chat(): AsyncIterable<ChatDelta> {
+    async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+      onRequest?.(request);
       for (const d of deltas) yield d;
     },
   };
@@ -60,6 +61,40 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
+  it('only exposes get_tool_output when a real recovery snapshot exists', async () => {
+    const seenWithoutSnapshot: string[] = [];
+    const withoutSnapshot = makeTestContext({
+      provider: makeStreamingProvider(
+        [{ type: 'text_delta', text: 'done' }, { type: 'done', stop_reason: 'end_turn' }],
+        (request) => seenWithoutSnapshot.push(...request.tools.map((tool) => tool.name)),
+      ),
+      registry: makeRegistry({ get_tool_output: () => 'unused', echo: () => 'unused' }),
+      toolContext: {
+        ...emptyToolContext(),
+        toolOutputStore: { hasOutputs: () => false },
+      } as unknown as ToolContext,
+    });
+
+    await new ExecutingNode().execute(withoutSnapshot.ctx, null);
+    expect(seenWithoutSnapshot).not.toContain('get_tool_output');
+
+    const seenWithSnapshot: string[] = [];
+    const withSnapshot = makeTestContext({
+      provider: makeStreamingProvider(
+        [{ type: 'text_delta', text: 'done' }, { type: 'done', stop_reason: 'end_turn' }],
+        (request) => seenWithSnapshot.push(...request.tools.map((tool) => tool.name)),
+      ),
+      registry: makeRegistry({ get_tool_output: () => 'unused', echo: () => 'unused' }),
+      toolContext: {
+        ...emptyToolContext(),
+        toolOutputStore: { hasOutputs: () => true },
+      } as unknown as ToolContext,
+    });
+
+    await new ExecutingNode().execute(withSnapshot.ctx, null);
+    expect(seenWithSnapshot).toContain('get_tool_output');
+  });
+
   it('emits CleanFinish when the assistant returns text and no tool_use', async () => {
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider([
@@ -136,6 +171,40 @@ describe('ExecutingNode', () => {
     // tool_call_result event was emitted.
     const toolEvent = recordedEvents.find((e) => e.event === 'tool_call_result');
     expect(toolEvent).toBeDefined();
+  });
+
+  it('emits producer truncation metadata without deriving it from display text', async () => {
+    const sourceTruncations = [{
+      technique: 'bounded-stream-cap',
+      inputSize: 2_000,
+      outputSize: 500,
+      unit: 'chars' as const,
+      recoverable: false,
+    }];
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu1', name: 'echo' },
+        { type: 'tool_call_end', id: 'tu1', name: 'echo', input: {} },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry: makeRegistry({
+        echo: () => ({
+          content: '[truncated: display marker]',
+          sourceTruncations,
+        }),
+      }),
+      toolContext: emptyToolContext(),
+    });
+
+    await new ExecutingNode().execute(ctx, null);
+
+    const toolEvent = recordedEvents.find((event) => event.event === 'tool_call_result');
+    const payload = (toolEvent!.args as unknown as [string, string, {
+      content: string;
+      sourceTruncations?: typeof sourceTruncations;
+    }, number])[2];
+    expect(payload.content).toContain('[truncated: display marker]');
+    expect(payload.sourceTruncations).toEqual(sourceTruncations);
   });
 
   it('emits context_status with the cache-inclusive prompt total from usage', async () => {

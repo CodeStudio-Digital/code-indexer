@@ -19,6 +19,7 @@ import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
 
 export interface ResumableAgentState {
   /** 0-based; matches agent_progress.agentIndex and the original roster. */
@@ -28,6 +29,8 @@ export interface ResumableAgentState {
   /** Allowlist + systemPrompt are re-resolved from this at resume time. */
   profileId: MicroAgentProfileId;
   files?: string[];
+  /** Original soft research contract, preserved across resumptions. */
+  researchPolicy?: SubagentResearchPolicy;
   maxTurns: number;
   limits: SubagentLimits;
   /** Pairing-repaired; undefined for completed agents (nothing to resume). */

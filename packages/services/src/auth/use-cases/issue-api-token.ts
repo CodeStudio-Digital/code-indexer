@@ -16,6 +16,7 @@ export interface IssueInput {
    * back to plain scope-based RBAC.
    */
   tier?: McpTier | null;
+  profileId?: string | null;
 }
 
 export interface IssueOutput {
@@ -52,6 +53,7 @@ export class IssueApiToken {
       expiresAt,
       now,
       tier: input.tier ?? null,
+      profileId: input.profileId ?? null,
     });
 
     this.repo.insert(token);

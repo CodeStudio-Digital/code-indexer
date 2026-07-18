@@ -1,16 +1,8 @@
 import type { HandlerDeps } from '../types.js';
 import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
+import { APP_TEAM_ROLE_PRESETS } from './app-team-presets.js';
 
-const APP_TEAM_ROLE_PRESET = [
-  { role: 'research', tier: 'navigate' },
-  { role: 'architect', tier: 'navigate' },
-  { role: 'backend', tier: 'full' },
-  { role: 'frontend', tier: 'full' },
-  { role: 'database', tier: 'full' },
-  { role: 'ux', tier: 'full' },
-  { role: 'qa', tier: 'full' },
-  { role: 'fullstack', tier: 'full' },
-] as const;
+const APP_TEAM_SPECIALIST_PRESETS = APP_TEAM_ROLE_PRESETS.filter((preset) => preset.role !== 'master');
 
 export type AppTeamDeps = Pick<HandlerDeps, 'appStudioStore' | 'companyStore' | 'sessionStore'>;
 export type CoderSession = NonNullable<ReturnType<HandlerDeps['sessionStore']['getSession']>>;
@@ -51,11 +43,13 @@ function initialTeamConfig(appSessionId: number, projectId: number, coordinator:
   const fallback = coordinator.fallback_provider && coordinator.fallback_model
     ? { provider: coordinator.fallback_provider, model: coordinator.fallback_model }
     : null;
-  const roleAssignments = APP_TEAM_ROLE_PRESET.map(({ role, tier }) => ({
+  const roleAssignments = APP_TEAM_SPECIALIST_PRESETS.map(({ role, tier, systemPromptOverride, initialTools }) => ({
     role,
     provider: coordinator.provider,
     model: coordinator.model,
     tier,
+    systemPromptOverride,
+    initialTools: [...initialTools],
     projectIds: [projectId],
     enabled: true,
     ...(coordinator.temperature_override != null ? { temperature: coordinator.temperature_override } : {}),
@@ -67,6 +61,7 @@ function initialTeamConfig(appSessionId: number, projectId: number, coordinator:
   if (fallback && (fallback.provider !== coordinator.provider || fallback.model !== coordinator.model)) {
     allowedModels.push({ ...fallback, label: 'Explicit fallback', is_default: false });
   }
+  const masterPreset = APP_TEAM_ROLE_PRESETS.find((preset) => preset.role === 'master')!;
   return {
     runtime_kind: 'app_studio',
     app_session_id: appSessionId,
@@ -84,6 +79,8 @@ function initialTeamConfig(appSessionId: number, projectId: number, coordinator:
     master_provider: coordinator.provider,
     master_model: coordinator.model,
     master_tier: 'navigate',
+    master_system_prompt_override: masterPreset.systemPromptOverride,
+    master_initial_tools: [...masterPreset.initialTools],
     ...(coordinator.reasoning_effort_override ? { master_reasoning_effort: coordinator.reasoning_effort_override } : {}),
     ...(coordinator.temperature_override != null ? { master_temperature: coordinator.temperature_override } : {}),
     ...(coordinator.thinking_enabled ? { master_thinking: true } : {}),

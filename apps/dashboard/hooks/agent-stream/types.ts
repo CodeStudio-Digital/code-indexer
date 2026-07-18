@@ -4,7 +4,14 @@ export interface ToolCallEvent {
   input?: Record<string, unknown>;
   /** `image` is set for tools that return a picture (preview_screenshot,
    *  view_image) so the UI can show it inline under the tool call. */
-  result?: { content: string; isError?: boolean; image?: { mediaType: string; base64: string } };
+  result?: {
+    content: string;
+    isError?: boolean;
+    image?: { mediaType: string; base64: string };
+    /** Dashboard transport preview only; the complete audit result remains in DB. */
+    truncated?: boolean;
+    originalLength?: number;
+  };
   durationMs?: number;
   status: 'running' | 'awaiting_approval' | 'done' | 'error';
   /** `Date.now()` stamped when `tool_call_start` arrived. Used to render
@@ -199,6 +206,7 @@ export interface AgentAttachment {
 // ─── Parallel agents ──────────────────────────────────────────
 
 export type AgentStatus = 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
+export type ResearchDepth = 'quick' | 'standard' | 'deep' | 'exhaustive';
 
 export interface ParallelAgent {
   index: number;
@@ -226,6 +234,9 @@ export interface ParallelAgent {
   attempt?: number;
   /** Terminal stop reason, from history — shown in the detail modal. */
   reason?: string;
+  researchDepth?: ResearchDepth;
+  softToolTarget?: number;
+  softTimeTargetMs?: number;
 }
 
 export interface AgentsGroup {

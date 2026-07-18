@@ -188,7 +188,7 @@ describe('normalizeMessageForCache — legacy resume normalization', () => {
     expect(JSON.stringify(once)).toBe(JSON.stringify(twice));
   });
 
-  it('preserves selected specialist tool outputs on session resume', () => {
+  it('keeps selected specialist outputs authoritative but never unbounded on resume', () => {
     const big = 's'.repeat(30_000);
     const history: AgentMessage[] = [
       {
@@ -203,7 +203,9 @@ describe('normalizeMessageForCache — legacy resume normalization', () => {
     const normalized = normalizeMessagesForCache(history, 24_000, new Set(['app_get_spec']));
     const block = normalized[1].content[0];
     if (block.type !== 'tool_result') throw new Error('expected tool_result');
-    expect(block.truncated).toBeUndefined();
-    expect(block.content).toBe(big);
+    expect(block.truncated).toBe(true);
+    expect(block.originalSize).toBe(big.length);
+    expect(block.content.length).toBeLessThanOrEqual(24_000);
+    expect(block.content).toContain('original_size=30000');
   });
 });

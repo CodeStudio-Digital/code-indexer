@@ -17,6 +17,7 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { buildToolMessage, dispatchTools, toToolResultBlock, type DispatchArgs } from '../nodes/executing-dispatch.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { resolveToolOutputPolicy } from '@mcp/code-agent/core/tool-output-policy.js';
 
 describe('capToolContent', () => {
   it('no-ops when content fits the cap', () => {
@@ -79,6 +80,12 @@ describe('capToolContent', () => {
       expect(capToolContent(content, cap, 'abcdef')).toEqual(result);
     }
   });
+
+  it('never emits orphaned UTF-16 surrogates at a hard-cap boundary', () => {
+    const result = capToolContent('😀'.repeat(500), 100, 'abcdef');
+    expect(result.content.length).toBeLessThanOrEqual(100);
+    expect(result.content).not.toMatch(/[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
 });
 
 describe('finalizeToolOutput', () => {
@@ -96,7 +103,11 @@ describe('finalizeToolOutput', () => {
     expect(calls).toEqual([raw]); // spilled the RAW, not the shaped
     expect(r.truncated).toBe(true);
     expect(r.content).toContain('output_id=cafe1234');
+    expect(r.content).toContain('original_size=1000');
+    expect(r.content).toContain('shaped_size=500');
+    expect(r.originalSize).toBe(1000);
     expect(r.outputId).toBe('cafe1234');
+    expect(r.reductionReport.stages?.map((stage) => stage.stage)).toEqual(['spill', 'hard_cap']);
   });
 
   it('advertises output_id when shaped fits but the reducer dropped rows', () => {
@@ -108,6 +119,67 @@ describe('finalizeToolOutput', () => {
     expect(r.truncated).toBeFalsy();
     expect(r.content.startsWith(shaped)).toBe(true);
     expect(r.content).toContain('get_tool_output("cafe1234")');
+  });
+
+  it('reserves room for output_id even when reduced content already fills the cap', () => {
+    const { store } = recorder();
+    const r = finalizeToolOutput({
+      rawContent: 'R'.repeat(1000),
+      shapedContent: 'S'.repeat(100),
+      isError: false,
+      cap: 100,
+      store,
+    });
+    expect(r.content.length).toBeLessThanOrEqual(100);
+    expect(r.content).toContain('get_tool_output("cafe1234")');
+    expect(r.reductionReport.stages?.at(-1)?.stage).toBe('recovery_marker');
+  });
+
+  it('keeps output_store as a lossless fallback for cursor recovery', () => {
+    const { store, calls } = recorder();
+    const raw = 'R'.repeat(1000);
+    const r = finalizeToolOutput({
+      toolName: 'read_file',
+      rawContent: raw,
+      shapedContent: raw,
+      isError: false,
+      cap: 100,
+      store,
+      policy: resolveToolOutputPolicy('read_file'),
+    });
+    expect(calls).toEqual([raw]);
+    expect(r.content).toContain('output_id=cafe1234');
+  });
+
+  it('uses tool-specific cursor guidance when a store is unavailable', () => {
+    const raw = 'R'.repeat(1000);
+    const r = finalizeToolOutput({
+      toolName: 'read_file',
+      rawContent: raw,
+      shapedContent: raw,
+      isError: false,
+      cap: 140,
+      policy: resolveToolOutputPolicy('read_file'),
+    });
+    expect(r.content).toContain('start_line/end_line');
+  });
+
+  it('keeps a spill fallback for third-party page tools', () => {
+    const { store, calls } = recorder();
+    const raw = 'P'.repeat(1000);
+    const r = finalizeToolOutput({
+      toolName: 'plugin__demo__page',
+      rawContent: raw,
+      shapedContent: raw,
+      isError: false,
+      cap: 100,
+      store,
+      policy: resolveToolOutputPolicy('plugin__demo__page', {
+        mode: 'page', reducer: 'none', recovery: 'cursor',
+      }),
+    });
+    expect(calls).toEqual([raw]);
+    expect(r.content).toContain('output_id=cafe1234');
   });
 
   it('does not spill when nothing exceeds the cap and no error', () => {
@@ -131,6 +203,105 @@ describe('finalizeToolOutput', () => {
     const r = finalizeToolOutput({ rawContent: err, shapedContent: err, isError: true, cap: 1000, store });
     expect(calls).toEqual([err]);
     expect(r.content).toBe(err); // fits cap, no reduction → returned as-is
+  });
+
+  it('records irreversible source caps separately from semantic/final shaping', () => {
+    const raw = 'head\n[truncated: 900 bytes omitted; preserved beginning and true tail]\ntail';
+    const r = finalizeToolOutput({
+      toolName: 'run_command',
+      rawContent: raw,
+      shapedContent: raw,
+      isError: false,
+      cap: 1000,
+      sourceTruncations: [{
+        technique: 'bounded-stream-cap',
+        inputSize: 977,
+        outputSize: raw.length,
+        unit: 'bytes',
+        recoverable: false,
+      }],
+    });
+    expect(r.reductionReport.stages).toEqual([
+      expect.objectContaining({ stage: 'source_cap', technique: 'bounded-stream-cap', recoverable: false }),
+    ]);
+    expect(r.reductionReport).toMatchObject({
+      kind: 'source_cap',
+      technique: 'bounded-stream-cap',
+    });
+  });
+
+  it('promotes a producer recovery id and never spills its capped preview again', () => {
+    let puts = 0;
+    const preview = `PREVIEW-${'p'.repeat(300)}`;
+    const r = finalizeToolOutput({
+      toolName: 'mcp__verbose',
+      rawContent: preview,
+      shapedContent: preview,
+      isError: false,
+      cap: 140,
+      store: { put: () => { puts += 1; return 'cafe00000009'; } },
+      sourceTruncations: [{
+        technique: 'mcp-pathological-guard',
+        inputSize: 9_000_000,
+        outputSize: 1_000,
+        unit: 'chars',
+        recoverable: true,
+        outputId: 'cafe00000008',
+      }],
+    });
+
+    expect(r.outputId).toBe('cafe00000008');
+    expect(r.truncated).toBe(true);
+    expect(r.originalSize).toBe(9_000_000);
+    expect(r.content).toContain('original_size=9000000');
+    expect(r.reductionReport.outputId).toBe('cafe00000008');
+    expect(r.reductionReport.stages).toEqual([
+      expect.objectContaining({ stage: 'source_cap', technique: 'mcp-pathological-guard' }),
+      expect.objectContaining({ stage: 'hard_cap', recoverable: true }),
+    ]);
+    expect(puts).toBe(0);
+  });
+
+  it('does not infer a source cap when a command merely prints a marker', () => {
+    const raw = '[truncated: 900 bytes omitted; preserved beginning and true tail]';
+    const r = finalizeToolOutput({
+      toolName: 'run_command', rawContent: raw, shapedContent: raw, isError: false, cap: 1000,
+    });
+    expect(r.reductionReport.stages).toEqual([]);
+  });
+
+  it('does not create a recovery-of-recovery output for an already paged result', () => {
+    const { store, calls } = recorder();
+    const page = 'P'.repeat(180);
+    const r = finalizeToolOutput({
+      toolName: 'get_tool_output',
+      rawContent: page,
+      shapedContent: page,
+      isError: false,
+      cap: 100,
+      store,
+      policy: resolveToolOutputPolicy('get_tool_output'),
+    });
+    expect(calls).toEqual([]);
+    expect(r.outputId).toBeUndefined();
+    expect(r.content).not.toContain('output_id=');
+    expect(r.reductionReport.preserved).toContain('contiguous_prefix');
+    expect(r.reductionReport).toMatchObject({ policyMode: 'page', recovery: 'cursor' });
+  });
+
+  it('keeps exact ranges contiguous instead of splicing an unrelated tail', () => {
+    const raw = 'HEAD-' + 'middle'.repeat(80) + '-TAIL';
+    const r = finalizeToolOutput({
+      toolName: 'read_file',
+      rawContent: raw,
+      shapedContent: raw,
+      isError: false,
+      cap: 120,
+      policy: resolveToolOutputPolicy('read_file'),
+    });
+    expect(r.content).toContain('HEAD-');
+    expect(r.content).not.toContain('-TAIL');
+    expect(r.reductionReport.preserved).toContain('contiguous_prefix');
   });
 });
 
@@ -174,15 +345,20 @@ function baseArgs(registry: ToolRegistry): DispatchArgs {
 describe('dispatchTools — finalize hook', () => {
   it('runs after the reducer, gets RAW + shaped, and threads the truncated flag', async () => {
     let seen: { rawContent: string; shapedContent: string } | null = null;
+    let reducerMeta: { input: Record<string, unknown>; isError: boolean; contentFormat: string } | undefined;
     const res = await dispatchTools({
       ...baseArgs(registryWith('RAWBODY')),
-      reduceToolResult: (_name, content) => `${content}-reduced`,
+      reduceToolResult: (_name, content, meta) => {
+        reducerMeta = meta;
+        return `${content}-reduced`;
+      },
       finalizeToolResult: (a) => {
         seen = { rawContent: a.rawContent, shapedContent: a.shapedContent };
         return { content: 'FINAL', truncated: true, originalSize: 7 };
       },
     });
     expect(seen).toEqual({ rawContent: 'RAWBODY', shapedContent: 'RAWBODY-reduced' });
+    expect(reducerMeta).toEqual({ input: {}, isError: false, contentFormat: 'text' });
     expect(res.results[0].content).toBe('FINAL');
     expect(res.results[0].truncated).toBe(true);
     // Measurement fix: the result carries the RAW (pre-reduce) size so index.ts
@@ -191,6 +367,48 @@ describe('dispatchTools — finalize hook', () => {
     const block = toToolResultBlock(res.results[0]) as { truncated?: boolean; originalSize?: number };
     expect(block.truncated).toBe(true);
     expect(block.originalSize).toBe(7);
+  });
+
+  it('threads explicit source metadata through dispatch and never infers it from text', async () => {
+    const source = {
+      technique: 'bounded-stream-cap',
+      inputSize: 2_000,
+      outputSize: 500,
+      unit: 'chars' as const,
+      recoverable: false,
+    };
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'foo',
+      description: 'mock capped tool',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      handler: async () => ({
+        content: '[truncated: this marker is display text]',
+        sourceTruncations: [source],
+      }),
+    });
+    let seenSource: unknown;
+    const res = await dispatchTools({
+      ...baseArgs(registry),
+      finalizeToolResult: (args) => {
+        seenSource = args.sourceTruncations;
+        return finalizeToolOutput({ ...args, cap: 1_000 });
+      },
+    });
+
+    expect(seenSource).toEqual([source]);
+    expect(res.results[0].sourceTruncations).toEqual([source]);
+    expect(res.results[0].reductionReport?.stages).toEqual([
+      expect.objectContaining({ stage: 'source_cap', technique: 'bounded-stream-cap' }),
+    ]);
+
+    const markerOnly = await dispatchTools({
+      ...baseArgs(registryWith('[truncated: this marker is only user-visible text]')),
+      finalizeToolResult: (args) => finalizeToolOutput({ ...args, cap: 1_000 }),
+    });
+    expect(markerOnly.results[0].sourceTruncations).toBeUndefined();
+    expect(markerOnly.results[0].reductionReport?.stages).toEqual([]);
   });
 
   it('leaves content unchanged when no finalize hook is wired', async () => {

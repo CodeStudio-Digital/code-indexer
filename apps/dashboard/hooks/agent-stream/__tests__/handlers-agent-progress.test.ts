@@ -33,7 +33,13 @@ describe('agent_progress handlers', () => {
         groupId: 'grp_1',
         provider: 'zai',
         model: 'glm-5',
-        agents: [{ index: 0, label: 'Explore HTTP' }],
+        agents: [{
+          index: 0,
+          label: 'Explore HTTP',
+          researchDepth: 'quick',
+          softToolTarget: 16,
+          softTimeTargetMs: 180_000,
+        }],
       },
       'agents_group_start',
     );
@@ -69,6 +75,9 @@ describe('agent_progress handlers', () => {
       progressNote: 'thinking',
       toolCallCount: 3,
       lastToolName: 'read_file',
+      researchDepth: 'quick',
+      softToolTarget: 16,
+      softTimeTargetMs: 180_000,
     });
     expect(beforeAgent.phase).toBeUndefined();
     expect(flush).toHaveBeenCalledTimes(1);

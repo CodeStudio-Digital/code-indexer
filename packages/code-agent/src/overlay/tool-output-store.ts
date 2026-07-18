@@ -71,6 +71,22 @@ export class ToolOutputStore {
     }
   }
 
+  /**
+   * Whether this session currently has at least one recoverable snapshot.
+   *
+   * The runner uses this to keep `get_tool_output` out of the provider-facing
+   * catalog until there is a real ID the model can copy. Besides saving one
+   * tool definition, this prevents speculative placeholder calls such as
+   * `output_id: "nonexistent"` in sessions that never spilled an output.
+   */
+  hasOutputs(): boolean {
+    try {
+      return existsSync(this.dir) && readdirSync(this.dir).some((entry) => entry.endsWith('.txt'));
+    } catch {
+      return false;
+    }
+  }
+
   /** Prune files older than TTL_MS. Best-effort, failures are swallowed. */
   private gc(): void {
     try {

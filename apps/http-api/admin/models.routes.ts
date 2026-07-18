@@ -88,6 +88,7 @@ export function modelsRouter(store: ProviderStore): Hono {
       enabled?: boolean;
       name?: string;
       default_reasoning_level?: string | null;
+      default_max_tokens?: number | null;
       context_window?: number | null;
       max_tools?: number | null;
     }>();
@@ -115,6 +116,14 @@ export function modelsRouter(store: ProviderStore): Hono {
         );
       }
     }
+    if (body.default_max_tokens !== undefined && body.default_max_tokens !== null) {
+      if (body.default_max_tokens < 1 || body.default_max_tokens > 1_000_000) {
+        return c.json(
+          { error: `default_max_tokens must be between 1 and 1_000_000 (got ${body.default_max_tokens})` },
+          400,
+        );
+      }
+    }
     if (body.max_tools !== undefined && body.max_tools !== null) {
       // Sanity bounds: below 4 the agent can't even hold the discovery core;
       // above 256 the cap is meaningless (largest catalogs are ~200).
@@ -128,7 +137,11 @@ export function modelsRouter(store: ProviderStore): Hono {
     store.updateModel(id, modelId, mode, body);
     // If we just changed a capability value, rehydrate the in-memory cache so
     // newly-created sessions pick up the value without a server restart.
-    if (body.context_window !== undefined || body.max_tools !== undefined) {
+    if (
+      body.context_window !== undefined ||
+      body.max_tools !== undefined ||
+      body.default_max_tokens !== undefined
+    ) {
       try {
         mergeDBCapabilities(store.listAllModels());
       } catch {

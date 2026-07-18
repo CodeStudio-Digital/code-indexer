@@ -1,5 +1,8 @@
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
-import type { SemanticStore } from '@mcp/store/semantic-store.js';
+import {
+  semanticPurposeForNamespace,
+  type SemanticStore,
+} from '@mcp/store/semantic-store.js';
 import {
   createDurableSemanticMutationSink,
   type SemanticMutationSink,
@@ -88,7 +91,9 @@ export function createMcpSemanticMutationSink(
 ): SemanticMutationSink {
   return createDurableSemanticMutationSink(semanticStore, {
     owner: `mcp:${process.pid}:${Math.random().toString(16).slice(2)}`,
-    enabled: () => semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+    enabled: (namespace) => semanticStore.getProfile(
+      semanticPurposeForNamespace(namespace),
+    )?.embedding_target.kind !== 'disabled',
     // Do not wake the profile-wide reindex endpoint here. The targeted owner
     // wake reconciles only an already-active namespace; generation-less
     // namespaces still wait for an explicit first build.

@@ -22,9 +22,19 @@ import { describe, expect, it } from 'vitest';
 import {
   getToolTier,
   allTieredToolNames,
+  APP_STUDIO_TOOLS,
   BOOTSTRAP_TOOLS,
+  COMPANY_TOOLS,
+  contextualTiersForRuntime,
+  DESIGN_SYSTEM_CONSUMER_TOOLS,
+  DESIGN_SYSTEM_STUDIO_TOOLS,
+  getAllKnownToolsMeta,
   NAVIGATE_TOOLS,
   MASTER_TOOLS,
+  QA_TOOLS,
+  SANDBOX_TOOLS,
+  SPRITE_STUDIO_TOOLS,
+  TIER_COUNTS,
 } from '@mcp/code-agent/tools/tiers.js';
 
 // ── Static tool arrays (code-agent) ───────────────────────────────────────
@@ -57,6 +67,12 @@ import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools } from '@mcp/code-agent/tools/worktree.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { dbTools } from '@mcp/code-agent/tools/db/index.js';
+import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
+import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
+import {
+  buildDesignSystemConsumerTools,
+  buildDesignSystemStudioTools,
+} from '@mcp/company/tools/design-system/index.js';
 
 // ── Static tool arrays (@mcp/company — builder mode) ───────────────────────
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -93,8 +109,12 @@ const FACTORY_ALWAYS_ON = [
   // DocsAgent escalation — installed per-runner via installDocsDeepResearch
   // (string only: importing @mcp/docs-agent here would create a cycle).
   'docs_deep_research',
-  // DS consumer set (builder project linked to a published design system).
+  // Contextual factories (their dedicated tiers auto-activate at runtime).
   'ds_components', 'ds_component', 'ds_docs',
+  'ds_get_session_info', 'ds_record_component', 'ds_list_components',
+  'ds_audit_package', 'ds_set_version_status', 'ds_publish_version',
+  'ds_get_pipeline', 'ds_submit_stage', 'ds_analyze_import',
+  'sprite_get_project', 'sprite_list_assets', 'sprite_generate', 'sprite_process', 'sprite_export',
 ];
 
 const isRuntimeTiered = (name: string) => name.startsWith('mcp__') || name.startsWith('ext_');
@@ -133,9 +153,9 @@ describe('tier contract — Phase A/B placements are locked', () => {
     }
   });
 
-  it('keeps the DS consumer queries always-on (bootstrap)', () => {
+  it('keeps DS consumer queries in their contextual capability tier', () => {
     for (const n of ['ds_components', 'ds_component', 'ds_docs']) {
-      expect(getToolTier(n), n).toBe('bootstrap');
+      expect(getToolTier(n), n).toBe('design-system-consumer');
     }
   });
 
@@ -181,10 +201,72 @@ describe('tier contract — Phase A/B placements are locked', () => {
     }
   });
 
-  it('places company/builder always-on tools at bootstrap (within their session)', () => {
-    for (const n of ['write_shared_file', 'send_message', 'qa_start_run', 'start_pipeline', 'env_set', 'docs_write']) {
-      expect(getToolTier(n), n).toBe('bootstrap');
+  it('places every contextual product surface in its own tier', () => {
+    expect(getToolTier('write_shared_file')).toBe('company');
+    expect(getToolTier('send_message')).toBe('company');
+    expect(getToolTier('env_set')).toBe('company');
+    expect(getToolTier('docs_write')).toBe('sandbox');
+    expect(getToolTier('service_restart')).toBe('sandbox');
+    expect(getToolTier('qa_start_run')).toBe('qa');
+    expect(getToolTier('app_get_state')).toBe('app');
+    expect(getToolTier('ds_record_component')).toBe('design-system-studio');
+    expect(getToolTier('ds_components')).toBe('design-system-consumer');
+    expect(getToolTier('sprite_generate')).toBe('sprite-studio');
+  });
+
+  it('keeps every functional family out of the global bootstrap tier', () => {
+    const contextual = new Set([
+      ...COMPANY_TOOLS,
+      ...SANDBOX_TOOLS,
+      ...QA_TOOLS,
+      ...APP_STUDIO_TOOLS,
+      ...DESIGN_SYSTEM_STUDIO_TOOLS,
+      ...DESIGN_SYSTEM_CONSUMER_TOOLS,
+      ...SPRITE_STUDIO_TOOLS,
+      ...MASTER_TOOLS,
+    ]);
+    expect([...BOOTSTRAP_TOOLS].filter((name) => contextual.has(name))).toEqual([]);
+  });
+
+  it('App Studio catalog is exactly the 11 v6 tools (no legacy ghosts)', () => {
+    expect([...APP_STUDIO_TOOLS].sort()).toEqual([
+      'app_dispatch_ready_work',
+      'app_get_db_state',
+      'app_get_plan',
+      'app_get_state',
+      'app_record_work_evidence',
+      'app_request_decision',
+      'app_request_plan_approval',
+      'app_run_checks',
+      'app_update_database',
+      'app_update_plan',
+      'app_upsert_work_items',
+    ]);
+    for (const legacy of [
+      'app_get_context',
+      'app_get_spec',
+      'app_get_architecture',
+      'app_get_ux',
+      'app_get_wireframe',
+      'app_run_test_cycle',
+    ]) {
+      expect(() => getToolTier(legacy, undefined, { strict: true }), legacy).toThrow();
     }
+  });
+
+  it('static functional catalogs match the tools their runtime factories register', () => {
+    const names = (tools: readonly NamedTool[]) => tools.map((tool) => tool.name).sort();
+    expect(names(buildAppStudioTools(1, {
+      audience: 'company-master',
+      appSessionId: 1,
+    }))).toEqual([...APP_STUDIO_TOOLS].sort());
+    expect(names(buildDesignSystemStudioTools(1))).toEqual([...DESIGN_SYSTEM_STUDIO_TOOLS].sort());
+    expect(names(buildDesignSystemConsumerTools({
+      sessionId: 1,
+      packageName: '@test/ui',
+      semver: '1.0.0',
+    }))).toEqual([...DESIGN_SYSTEM_CONSUMER_TOOLS].sort());
+    expect(names(buildSpriteStudioTools(1))).toEqual([...SPRITE_STUDIO_TOOLS].sort());
   });
 
   it('db_* v2 tools live in the dedicated db tier (moved out of BUILDER_TOOLS)', () => {
@@ -198,8 +280,86 @@ describe('tier contract — Phase A/B placements are locked', () => {
     expect(getToolTier('review_subordinate_work')).toBe('master');
   });
 
+  it('master tier covers every master factory family, including batch and pipeline tools', () => {
+    for (const name of [
+      'approve_subordinate_plans', 'recommend_role', 'broadcast_to_roles',
+      'kanban_plan_graph', 'list_containers', 'read_container_logs',
+      'list_pipelines', 'start_pipeline', 'get_pipeline_status', 'stop_pipeline',
+    ]) {
+      expect(MASTER_TOOLS.has(name), name).toBe(true);
+      expect(getToolTier(name), name).toBe('master');
+    }
+  });
+
+  it('catalog metadata and counts expose the same dedicated tier identities', () => {
+    const metadata = getAllKnownToolsMeta();
+    const names = metadata.map((tool) => tool.name);
+    expect(new Set(names).size).toBe(names.length);
+    const byName = new Map(metadata.map((tool) => [tool.name, tool]));
+    const functionalTools = new Set([
+      ...COMPANY_TOOLS,
+      ...SANDBOX_TOOLS,
+      ...QA_TOOLS,
+      ...APP_STUDIO_TOOLS,
+      ...DESIGN_SYSTEM_STUDIO_TOOLS,
+      ...DESIGN_SYSTEM_CONSUMER_TOOLS,
+      ...SPRITE_STUDIO_TOOLS,
+      ...MASTER_TOOLS,
+    ]);
+    for (const name of functionalTools) {
+      expect(byName.get(name)?.description.trim(), `${name} needs a searchable description`).not.toBe('');
+    }
+    expect(TIER_COUNTS).toMatchObject({
+      company: COMPANY_TOOLS.size,
+      sandbox: SANDBOX_TOOLS.size,
+      qa: QA_TOOLS.size,
+      app: APP_STUDIO_TOOLS.size,
+      'design-system-studio': DESIGN_SYSTEM_STUDIO_TOOLS.size,
+      'design-system-consumer': DESIGN_SYSTEM_CONSUMER_TOOLS.size,
+      'sprite-studio': SPRITE_STUDIO_TOOLS.size,
+    });
+  });
+
   it('bootstrap and navigate are disjoint', () => {
     const overlap = [...BOOTSTRAP_TOOLS].filter((n) => NAVIGATE_TOOLS.has(n));
     expect(overlap).toEqual([]);
+  });
+});
+
+describe('contextual tier activation', () => {
+  it('activates every registered product capability without polluting bootstrap', () => {
+    expect([...contextualTiersForRuntime({
+      company: true,
+      sandbox: true,
+      qa: true,
+      app: true,
+      designSystemStudio: true,
+      designSystemConsumer: true,
+      spriteStudio: true,
+      isMaster: true,
+    })].sort()).toEqual([
+      'app',
+      'company',
+      'design-system-consumer',
+      'design-system-studio',
+      'master',
+      'qa',
+      'sandbox',
+      'sprite-studio',
+    ]);
+  });
+
+  it.each(['qa', 'frontend', 'ux', 'fullstack'])(
+    'gives visual Company role %s the preview capability on turn 1',
+    (companyRole) => {
+      expect(contextualTiersForRuntime({ company: true, companyRole }).has('preview')).toBe(true);
+    },
+  );
+
+  it('gives database roles and dedicated agents their defining tiers', () => {
+    expect(contextualTiersForRuntime({ company: true, companyRole: 'database' }).has('db')).toBe(true);
+    expect(contextualTiersForRuntime({ agentId: 'app_db' }).has('db')).toBe(true);
+    expect(contextualTiersForRuntime({ agentId: 'api' }).has('api')).toBe(true);
+    expect(contextualTiersForRuntime({ agentId: 'diagram' }).has('diagram')).toBe(true);
   });
 });

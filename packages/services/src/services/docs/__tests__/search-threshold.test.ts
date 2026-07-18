@@ -113,6 +113,16 @@ describe('DocHybridSearch relevance + threshold', () => {
     expect(diag.top_relevance).toBeNull();
   });
 
+  it('over-fetches one candidate to report an honest top-K omission', async () => {
+    const search = new DocHybridSearch(fakeDocStore(fakeChunks()), null, null);
+    const { results, diag } = await search.search({ query: 'q', limit: 2 });
+    expect(results).toHaveLength(2);
+    expect(diag).toMatchObject({
+      results_before_limit: 3,
+      results_truncated: true,
+    });
+  });
+
   it('does not apply the calibrated threshold when the strict cross-encoder fails', async () => {
     const strictFailure: RerankerService = {
       name: 'strict-local',

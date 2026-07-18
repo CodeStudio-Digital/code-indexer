@@ -155,6 +155,12 @@ export interface RunFreshOpts {
   maxTurns?: number;
   planMode?: boolean;
   agent?: AgentId;
+  /** Sticky picker id. Differs from `agent` when a custom agent inherits a built-in preset. */
+  agentSelectionId?: string;
+  /** User-authored prompt appended as a cache-stable system section. */
+  customAgentPrompt?: string;
+  /** Exact custom-agent tool allowlist. Undefined inherits the preset/profile catalog. */
+  allowedToolNames?: string[];
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };
@@ -595,6 +601,7 @@ export class CoderWorkerPool {
             sessionId,
           });
         }
+        closePreviewSession(sessionId);
         this.entries.delete(sessionId);
       },
       onError: (err) => {
@@ -697,6 +704,12 @@ export class CoderWorkerPool {
       const svc = getGlobalPreviewDevtools();
       if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
       return svc.invoke(payload as PreviewInvoke);
+    });
+    const offPreviewDevtoolsCancel = bridge.handle('previewDevtoolsCancel', async (payload) => {
+      const svc = getGlobalPreviewDevtools();
+      const requestId = (payload as { requestId?: unknown })?.requestId;
+      if (svc?.cancel && typeof requestId === 'string') await svc.cancel(requestId);
+      return { ok: true };
     });
     // Vision fallback — routes image→text describe to the main-process vision
     // describer (resolves the code-agent/vision Pipelines role + runs a one-off
@@ -842,6 +855,7 @@ export class CoderWorkerPool {
         try { offDocOutline(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
+        try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offSpriteHost(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }

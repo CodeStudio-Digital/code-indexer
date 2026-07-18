@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AppFitnessCheck, AppFitnessReport, AppPlanV1 } from './types.js';
+import { requireAppPlan, type AppFitnessCheck, type AppFitnessReport, type AppPlanV1 } from './types.js';
 
 const SUPPORTED_COMPONENTS = new Set<AppPlanV1['engineering']['components'][number]['kind']>([
   'spa', 'worker', 'd1',
@@ -21,7 +21,8 @@ function check(
   return { id, status: ok ? 'pass' : 'fail', severity, title, detail, source_ids: sourceIds, ...(action ? { action } : {}) };
 }
 
-export function auditAppPlan(plan: AppPlanV1, now = new Date()): AppFitnessReport {
+export function auditAppPlan(input: unknown, now = new Date()): AppFitnessReport {
+  const plan = requireAppPlan(input);
   const checks: AppFitnessCheck[] = [];
   const selected = plan.scope.capabilities.filter((item) => item.selected);
   const knownSources = new Set<string>([

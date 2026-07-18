@@ -37,13 +37,14 @@ export function replaceFromSource(
   const tx = db.transaction(() => {
     const existingRows = db
       .prepare(
-        'SELECT model_id, mode, enabled, default_reasoning_level, max_tools, context_window, context_window_overridden FROM provider_models WHERE provider_id = ? AND source = ?'
+        'SELECT model_id, mode, enabled, default_reasoning_level, default_max_tokens, max_tools, context_window, context_window_overridden FROM provider_models WHERE provider_id = ? AND source = ?'
       )
       .all(providerId, source) as {
         model_id: string;
         mode: string;
         enabled: number;
         default_reasoning_level: string | null;
+        default_max_tokens: number | null;
         max_tools: number | null;
         context_window: number | null;
         context_window_overridden: number | null;
@@ -54,6 +55,10 @@ export function replaceFromSource(
     // null, but row existed) from "first time we see the model" (= no entry
     // in this map, fall back to seed default).
     const existingReasoning = new Map<string, string | null>();
+    // Keep the stored completion cap across live refreshes. This column is
+    // both discovery metadata and the admin-editable runtime value; after the
+    // first insert the persisted row is authoritative, like reasoning level.
+    const existingMaxOutputTokens = new Map<string, number | null>();
     // max_tools is admin-set and live discovery never supplies it — without
     // this preservation every refresh would wipe the admin's cap.
     const existingMaxTools = new Map<string, number | null>();
@@ -67,6 +72,7 @@ export function replaceFromSource(
       const key = `${row.model_id}|${row.mode}`;
       existingEnabled.set(key, !!row.enabled);
       existingReasoning.set(key, row.default_reasoning_level);
+      existingMaxOutputTokens.set(key, row.default_max_tokens);
       existingMaxTools.set(key, row.max_tools);
       if (row.context_window_overridden) {
         existingOverriddenWindow.set(key, row.context_window);
@@ -118,6 +124,9 @@ export function replaceFromSource(
       const finalReasoningLevel = existingReasoning.has(key)
         ? existingReasoning.get(key) ?? null
         : m.default_reasoning_level ?? null;
+      const finalMaxOutputTokens = existingMaxOutputTokens.has(key)
+        ? existingMaxOutputTokens.get(key) ?? null
+        : m.default_max_tokens ?? null;
       const finalMaxTools = existingMaxTools.has(key)
         ? existingMaxTools.get(key) ?? null
         : m.max_tools ?? null;
@@ -134,7 +143,7 @@ export function replaceFromSource(
         mode,
         m.name,
         finalContextWindow,
-        m.default_max_tokens ?? null,
+        finalMaxOutputTokens,
         m.can_reason ? 1 : 0,
         m.supports_attachments ? 1 : 0,
         finalEnabled ? 1 : 0,
@@ -169,6 +178,7 @@ export function update(
     enabled?: boolean;
     name?: string;
     default_reasoning_level?: string | null;
+    default_max_tokens?: number | null;
     context_window?: number | null;
     max_tools?: number | null;
   },
@@ -180,6 +190,10 @@ export function update(
   if (patch.default_reasoning_level !== undefined) {
     sets.push('default_reasoning_level = ?');
     args.push(patch.default_reasoning_level);
+  }
+  if (patch.default_max_tokens !== undefined) {
+    sets.push('default_max_tokens = ?');
+    args.push(patch.default_max_tokens);
   }
   if (patch.context_window !== undefined) {
     sets.push('context_window = ?');

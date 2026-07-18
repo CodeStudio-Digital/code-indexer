@@ -38,6 +38,34 @@ describe('jsonCrush', () => {
     expect(jsonCrush({ content, cap: 50 }).applied).toBe(false);
   });
 
+  it.each(['data', 'results', 'items'] as const)(
+    'reduces a %s envelope while preserving its shape and sibling metadata',
+    (key) => {
+      const content = JSON.stringify({
+        requestId: 'req-123',
+        total: 20,
+        [key]: Array.from({ length: 20 }, (_, i) => ({ id: i, pad: 'e'.repeat(80) })),
+      });
+      const r = jsonCrush({ content, cap: 1_000, contentFormat: 'application/json' });
+      expect(r.applied).toBe(true);
+      expect(r.content.length).toBeLessThanOrEqual(1_000);
+      const parsed = JSON.parse(r.content) as Record<string, unknown>;
+      expect(parsed.requestId).toBe('req-123');
+      expect(parsed.total).toBe(20);
+      expect(Array.isArray(parsed[key])).toBe(true);
+      expect((parsed[key] as unknown[]).length).toBeLessThan(20);
+      expect(parsed._smart_reducer).toMatchObject({ source_key: key, total: 20 });
+    },
+  );
+
+  it('uses contentFormat to unwrap a fenced JSON payload', () => {
+    const value = Array.from({ length: 20 }, (_, i) => ({ id: i, pad: 'x'.repeat(80) }));
+    const content = `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
+    const r = jsonCrush({ content, cap: 700, contentFormat: 'application/json' });
+    expect(r.applied).toBe(true);
+    expect(JSON.parse(r.content)).toHaveProperty('_smart_reducer');
+  });
+
   it('dedups exact-duplicate rows', () => {
     const content = JSON.stringify(Array.from({ length: 20 }, () => ({ v: 'same' })));
     const r = jsonCrush({ content, cap: 100 });
@@ -74,6 +102,28 @@ describe('jsonCrush', () => {
     // The query promotes the matching middle row past the in-order fillers.
     expect(withQuery.content).toContain('needle');
     expect(noQuery.content).not.toContain('needle');
+  });
+
+  it('uses tool args as stable relevance terms', () => {
+    const content = jsonArray(20, (i) => ({
+      id: i,
+      body: i === 10 ? 'customer-needle' : `ordinary-${i}`,
+      pad: 'a'.repeat(100),
+    }));
+    const r = jsonCrush({ content, cap: 1_300, args: { search: 'customer-needle' } });
+    expect(r.applied).toBe(true);
+    expect(r.content).toContain('customer-needle');
+  });
+
+  it('prioritizes failure rows for error results', () => {
+    const content = jsonArray(20, (i) => ({
+      id: i,
+      body: i === 10 ? 'FATAL exception: decisive failure' : `debug-${i}`,
+      pad: 'b'.repeat(100),
+    }));
+    const r = jsonCrush({ content, cap: 1_300, isError: true });
+    expect(r.applied).toBe(true);
+    expect(r.content).toContain('decisive failure');
   });
 
   it('compresses NDJSON (one JSON object per line)', () => {

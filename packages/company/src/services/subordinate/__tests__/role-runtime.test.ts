@@ -78,6 +78,7 @@ describe('resolveEffectiveRoleRuntime', () => {
         tier: 'full',
         reasoningEffort: 'xhigh',
         thinking: true,
+        initialTools: ['app_get_plan', 'find_tools', 'app_get_plan'],
         fallbackModels: [{ provider: 'openai-chatgpt', model: 'gpt-5.6' }],
       },
       requested: {
@@ -102,6 +103,7 @@ describe('resolveEffectiveRoleRuntime', () => {
       tier: 'full',
       reasoningEffort: 'xhigh',
       thinking: true,
+      initialTools: ['app_get_plan', 'find_tools'],
       configuredProvider: 'openai-chatgpt',
       configuredModel: 'gpt-5.6-terra',
       dispatchSource: 'scheduler',
@@ -184,6 +186,7 @@ describe('resolveEffectiveMasterRuntime', () => {
         master_thinking_budget_tokens: 12000,
         master_reasoning_effort: 'xhigh',
         master_skills: ['backend-contracts', 'qa-checks', 'backend-contracts'],
+        master_initial_tools: ['app_get_state', 'find_tools', 'app_get_state'],
         master_system_prompt_override: 'Coordinate through contracts first.',
         allowed_models: [
           { provider: 'openai-chatgpt', model: 'gpt-5.6-terra' },
@@ -204,6 +207,7 @@ describe('resolveEffectiveMasterRuntime', () => {
       thinking: true,
       thinkingBudgetTokens: 12000,
       skills: ['backend-contracts', 'qa-checks'],
+      initialTools: ['app_get_state', 'find_tools'],
       roleOverride: 'Coordinate through contracts first.',
       dispatchSource: 'app_studio',
       resolutionSource: 'role_assignment',
@@ -248,6 +252,10 @@ describe('resolveEffectiveMasterRuntime', () => {
       runtimeKind: 'app_studio',
       configJson: JSON.stringify({ ...base, master_skills: ['valid', ''] }),
     })).toThrow(/master_skills/);
+    expect(() => resolveEffectiveMasterRuntime({
+      runtimeKind: 'app_studio',
+      configJson: JSON.stringify({ ...base, master_initial_tools: ['find_tools', ''] }),
+    })).toThrow(/master_initial_tools/);
     expect(() => resolveEffectiveMasterRuntime({
       runtimeKind: 'app_studio',
       configJson: JSON.stringify({ ...base, master_system_prompt_override: 42 }),

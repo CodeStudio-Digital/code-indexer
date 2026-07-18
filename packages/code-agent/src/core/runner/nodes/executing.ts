@@ -418,30 +418,60 @@ export class ExecutingNode implements BehaviorNode {
       toolContext: ctx.opts.toolContext,
       provider: ctx.opts.provider,
     });
-    let toolsForModel = toolsBuilt.tools;
+    // Recovery is a state-dependent capability: exposing get_tool_output
+    // before the session has any stored snapshot invites the model to invent
+    // an ID. Rebuild runs every provider turn, so the tool appears immediately
+    // after the first successful spill and remains available on resume.
+    const outputStore = ctx.opts.toolContext.toolOutputStore;
+    const hasRecoverableOutput = outputStore
+      ? typeof outputStore.hasOutputs === 'function'
+        ? outputStore.hasOutputs()
+        : true // compatibility for narrow test/host stubs
+      : false;
+    const availableTools = hasRecoverableOutput
+      ? toolsBuilt.tools
+      : toolsBuilt.tools.filter((tool) => tool.name !== 'get_tool_output');
+    let toolsForModel = availableTools;
     if (ctx.opts.toolSelectionFilter) {
       try {
-        let taskText = '';
+        const recentUserTexts: string[] = [];
         for (let i = messagesForChat.length - 1; i >= 0; i--) {
           const message = messagesForChat[i];
           if (message.role !== 'user') continue;
-          taskText = message.content
+          const text = message.content
             .map((block) => block.type === 'text' ? block.text : '')
             .filter(Boolean)
             .join(' ');
-          if (taskText) break;
+          if (text) recentUserTexts.unshift(text);
+          if (recentUserTexts.length >= 3) break;
         }
-        const selected = await ctx.opts.toolSelectionFilter(toolsBuilt.tools, {
+        const taskText = recentUserTexts.join('\n').slice(-4_000);
+        const selected = await ctx.opts.toolSelectionFilter(availableTools, {
           taskText,
-          recentToolCalls: [],
+          recentToolCalls: (ctx.opts.toolContext.toolCallLedger?.snapshot() ?? [])
+            .slice(-50)
+            .map((entry) => ({
+              name: entry.name,
+              timestampMs: entry.timestampMs,
+              ok: !entry.isError,
+            })),
+          protectedToolNames: new Set([
+            ...toolsBuilt.protectedToolNames,
+            ...ctx.pinnedTools,
+          ]),
         });
-        // Default is observability-only. An explicit second flag is required
-        // to mutate the provider surface after shadow telemetry is trusted.
-        if (process.env.MCP_PIPELINES_TOOL_SELECTION_APPLY === '1' && selected.length > 0) {
-          toolsForModel = selected;
+        // The primary feature gate already opted into selection. APPLY=0 is
+        // the explicit shadow-only escape hatch; requiring a second positive
+        // flag silently left production catalogs unfiltered (session 1263:
+        // 110 eligible and 110 visible despite the reducer being enabled).
+        if (process.env.MCP_PIPELINES_TOOL_SELECTION_APPLY !== '0' && selected.length > 0) {
+          // Selection is relevance-ranked internally, but provider tool order
+          // is not a recommendation channel. Keep a stable catalog order so
+          // identical memberships retain the same prompt-cache prefix.
+          toolsForModel = [...selected].sort((a, b) => a.name.localeCompare(b.name));
         }
       } catch (e) {
-        console.warn(`[coder] tool-selection shadow failed: ${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[coder] tool-selection failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
@@ -960,6 +990,8 @@ export class ExecutingNode implements BehaviorNode {
           input: inputByUseId.get(r.toolUseId),
           refusalKind: r.refusalKind,
           reductionReport: r.reductionReport,
+          sourceTruncations: r.sourceTruncations,
+          truncated: r.truncated,
           outputId: r.outputId,
           ledgerEntry: r.ledgerEntry,
           guardVerdict: r.guardVerdict,

@@ -17,15 +17,38 @@ type DB = InstanceType<typeof Database>;
  */
 export class SqliteApiTokenRepo implements ApiTokenReaderRepo, ApiTokenAdminRepo {
   private readonly db: DB;
+  private readonly hasProfileSchema: boolean;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
+    this.db.pragma('foreign_keys = ON');
+    const profileTable = this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mcp_connection_profiles'",
+    ).get();
+    const profileColumn = (this.db.prepare('PRAGMA table_info(api_tokens)').all() as Array<{ name: string }>)
+      .some((column) => column.name === 'profile_id');
+    this.hasProfileSchema = Boolean(profileTable) && profileColumn;
   }
 
   findByHash(tokenHash: string): ApiToken | null {
+    const sql = this.hasProfileSchema
+      ? `
+        SELECT t.*,
+          p.name AS profile_name,
+          p.project_ids AS profile_project_ids,
+          p.tool_allowlist AS profile_tool_allowlist,
+          p.agent_allowlist AS profile_agent_allowlist,
+          p.approval_mode AS profile_approval_mode,
+          p.max_concurrent_runs AS profile_max_concurrent_runs,
+          p.max_runtime_ms AS profile_max_runtime_ms
+        FROM api_tokens t
+        LEFT JOIN mcp_connection_profiles p ON p.id = t.profile_id
+        WHERE t.token_hash = ?
+      `
+      : 'SELECT * FROM api_tokens WHERE token_hash = ?';
     const row = this.db
-      .prepare<[string], ApiTokenRow>('SELECT * FROM api_tokens WHERE token_hash = ?')
+      .prepare<[string], ApiTokenRow>(sql)
       .get(tokenHash);
     return row ? ApiToken.fromRow(row) : null;
   }
@@ -37,10 +60,27 @@ export class SqliteApiTokenRepo implements ApiTokenReaderRepo, ApiTokenAdminRepo
   }
 
   insert(token: ApiToken): void {
+    if (!this.hasProfileSchema) {
+      this.db
+        .prepare(
+          `INSERT INTO api_tokens (id, token_hash, name, scopes, expires_at, created_at, tier)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          token.id,
+          token.tokenHash,
+          token.name,
+          token.scopes.toJson(),
+          token.expiresAt,
+          new Date(token.createdAt).toISOString(),
+          token.tier,
+        );
+      return;
+    }
     this.db
       .prepare(
-        `INSERT INTO api_tokens (id, token_hash, name, scopes, expires_at, created_at, tier)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO api_tokens (id, token_hash, name, scopes, expires_at, created_at, tier, profile_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         token.id,
@@ -50,6 +90,7 @@ export class SqliteApiTokenRepo implements ApiTokenReaderRepo, ApiTokenAdminRepo
         token.expiresAt,
         new Date(token.createdAt).toISOString(),
         token.tier,
+        token.profileId,
       );
   }
 

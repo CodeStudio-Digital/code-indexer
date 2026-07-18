@@ -14,11 +14,28 @@ export interface ApiTokenRow {
   last_used_at: number | null;
   revoked_at: number | null;
   tier: McpTier | null;
+  profile_id: string | null;
+}
+
+export interface McpConnectionProfile {
+  id: string;
+  name: string;
+  description: string;
+  projectIds: number[];
+  toolAllowlist: string[];
+  agentAllowlist: string[];
+  approvalMode: 'read_only' | 'controlled' | 'admin';
+  maxConcurrentRuns: number;
+  maxRuntimeMs: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface McpHttpToolRow {
   name: string;
   tier: string;
+  scope: string;
+  readOnly: boolean;
   description: string;
 }
 
@@ -27,8 +44,14 @@ export interface McpHttpStatus {
   authEnabled: boolean;
   stateful: boolean;
   endpoint: string;
+  configs: {
+    claudeCode: string;
+    codex: string;
+  };
   port: number;
   path: string;
+  projects: Array<{ id: number; name: string; rootPath: string }>;
+  agents: Array<{ id: string; name: string; description: string }>;
   tools: McpHttpToolRow[];
   counts: {
     total: number;
@@ -70,20 +93,65 @@ export async function createApiToken(input: {
   scopes?: string[];
   expiresInDays?: number;
   tier?: McpTier | null;
-}): Promise<{ id: string; rawToken: string; tier: McpTier | null }> {
+  profileId?: string | null;
+}): Promise<{ id: string; rawToken: string; tier: McpTier | null; profileId: string | null }> {
   const r = await fetch('/api/admin/api-tokens', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
   if (!r.ok) throw new Error((await r.json().catch(() => ({ error: 'unknown' }))).error);
-  return (await r.json()) as { id: string; rawToken: string; tier: McpTier | null };
+  return (await r.json()) as { id: string; rawToken: string; tier: McpTier | null; profileId: string | null };
 }
 
 export async function fetchMcpHttpStatus(): Promise<McpHttpStatus> {
   const r = await fetch('/api/admin/mcp-http/status');
   if (!r.ok) throw new Error(`mcp-http/status failed: ${r.status}`);
   return (await r.json()) as McpHttpStatus;
+}
+
+export async function listMcpConnectionProfiles(): Promise<McpConnectionProfile[]> {
+  const r = await fetch('/api/admin/mcp-http/profiles');
+  if (!r.ok) throw new Error(`mcp-http/profiles failed: ${r.status}`);
+  return ((await r.json()) as { profiles: McpConnectionProfile[] }).profiles;
+}
+
+export async function saveMcpConnectionProfile(
+  input: Omit<McpConnectionProfile, 'createdAt' | 'updatedAt'>,
+): Promise<McpConnectionProfile> {
+  const r = await fetch('/api/admin/mcp-http/profiles', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const payload = await r.json() as { profile?: McpConnectionProfile; error?: string };
+  if (!r.ok || !payload.profile) throw new Error(payload.error ?? `profile save failed: ${r.status}`);
+  return payload.profile;
+}
+
+export async function deleteMcpConnectionProfile(id: string): Promise<void> {
+  const r = await fetch(`/api/admin/mcp-http/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 404) throw new Error(`profile delete failed: ${r.status}`);
+}
+
+export async function exportMcpAgent(agentId: string, target: 'claude' | 'codex'): Promise<{
+  fileName: string;
+  content: string;
+}> {
+  const q = new URLSearchParams({ agent_id: agentId, target });
+  const r = await fetch(`/api/admin/mcp-http/agent-export?${q}`);
+  const payload = await r.json() as { fileName?: string; content?: string; error?: string };
+  if (!r.ok || !payload.fileName || payload.content === undefined) {
+    throw new Error(payload.error ?? `agent export failed: ${r.status}`);
+  }
+  return { fileName: payload.fileName, content: payload.content };
+}
+
+export async function installCodexMcpBridge(): Promise<{ note: string }> {
+  const r = await fetch('/api/admin/mcp-http/codex-bridge', { method: 'POST' });
+  const payload = await r.json() as { note?: string; error?: string };
+  if (!r.ok) throw new Error(payload.error ?? `Codex bridge failed: ${r.status}`);
+  return { note: payload.note ?? 'Codex bridge registered.' };
 }
 
 export async function revokeApiToken(id: string): Promise<void> {

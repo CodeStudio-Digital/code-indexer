@@ -94,6 +94,11 @@ export interface DocSearchResult {
   /** API signature (api_reference docs), e.g. `AddForce(Vector3, ForceMode)`. */
   api_signature: string | null;
   snippet: string;
+  /** Exact source-body size before the search preview boundary. */
+  snippet_source_chars: number;
+  /** Source-body chars retained in the preview (excludes summary/ellipsis). */
+  snippet_retained_chars: number;
+  snippet_truncated: boolean;
   /** Raw fusion score (RRF reciprocal-rank). NOT comparable across queries. */
   score: number;
   /**
@@ -138,6 +143,10 @@ export interface DocSearchDiagnostics {
   stale_vector_hits?: number;
   /** Fraction of persisted chunks with a confirmed vector in searched collections. */
   vector_coverage?: number;
+  /** Candidates available immediately before the caller's final result limit. */
+  results_before_limit?: number;
+  /** True when the final result limit omitted at least one candidate. */
+  results_truncated?: boolean;
 }
 
 export interface DocHybridSearchEnhancementDeps {
@@ -192,7 +201,9 @@ export class DocHybridSearch {
             positiveEnvInt('MCP_DOC_RERANK_MAX_CANDIDATES', DEFAULT_MAX_RERANK_CANDIDATES),
           ),
         )
-      : limit;
+      // Over-fetch one result so ordinary (non-reranked) searches can report
+      // an honest lower-bound proof that the caller's top-K omitted more.
+      : limit + 1;
 
     const ftsBudget = effectiveLimit * 4;
     const vectorBudget = effectiveLimit * 4;
@@ -290,6 +301,7 @@ export class DocHybridSearch {
       const chunk = byId.get(chunkId);
       if (!chunk) continue;
       const collection = this.docStore.getCollection(chunk.collection_id);
+      const snippet = buildSnippet(chunk);
       results.push({
         chunk_id: chunk.id,
         collection: collection?.name ?? '(unknown)',
@@ -299,7 +311,10 @@ export class DocHybridSearch {
         anchor: chunk.anchor,
         api_symbol: chunk.api_symbol,
         api_signature: chunk.api_signature,
-        snippet: buildSnippet(chunk),
+        snippet: snippet.text,
+        snippet_source_chars: snippet.sourceChars,
+        snippet_retained_chars: snippet.retainedChars,
+        snippet_truncated: snippet.truncated,
         score: m.rrfScore ?? m.score,
         // Uncalibrated until the reranker (Stage 3) overwrites these.
         relevance: null,
@@ -355,8 +370,11 @@ export class DocHybridSearch {
       if (outcome.topRelevance != null) topRelevance = outcome.topRelevance;
     }
 
-    // Final truncate to the caller's requested `limit`.
-    if (results.length > limit) {
+    // Final truncate to the caller's requested `limit`, retaining structural
+    // evidence so every host can distinguish top-K omission from a full set.
+    const resultsBeforeLimit = results.length;
+    const resultsTruncated = resultsBeforeLimit > limit;
+    if (resultsTruncated) {
       results = results.slice(0, limit);
     }
 
@@ -376,6 +394,8 @@ export class DocHybridSearch {
         top_relevance: topRelevance,
         stale_vector_hits: staleVectorHits,
         vector_coverage: this.vectorCoverage(collectionIds),
+        results_before_limit: resultsBeforeLimit,
+        results_truncated: resultsTruncated,
       },
     };
   }
@@ -504,12 +524,31 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function buildSnippet(chunk: DocChunk): string {
+export function buildSnippet(chunk: DocChunk): {
+  text: string;
+  sourceChars: number;
+  retainedChars: number;
+  truncated: boolean;
+} {
   const lead = chunk.summary ? `${chunk.summary}\n\n` : '';
-  const body = chunk.content.length > SNIPPET_MAX_CHARS
-    ? chunk.content.slice(0, SNIPPET_MAX_CHARS) + '…'
+  const truncated = chunk.content.length > SNIPPET_MAX_CHARS;
+  let retainedBody = chunk.content;
+  if (truncated) {
+    let end = SNIPPET_MAX_CHARS;
+    const final = chunk.content.charCodeAt(end - 1);
+    const next = chunk.content.charCodeAt(end);
+    if (final >= 0xd800 && final <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end -= 1;
+    retainedBody = chunk.content.slice(0, end);
+  }
+  const body = truncated
+    ? retainedBody + '…'
     : chunk.content;
-  return (lead + body).trim();
+  return {
+    text: (lead + body).trim(),
+    sourceChars: chunk.content.length,
+    retainedChars: retainedBody.length,
+    truncated,
+  };
 }
 
 /**

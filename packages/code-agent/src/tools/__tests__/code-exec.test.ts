@@ -119,6 +119,90 @@ describe('code_exec timeout (codex-faithful)', () => {
   });
 });
 
+describe('code_exec console output limits', () => {
+  it('elides excess console output without aborting the structured return', async () => {
+    const registry = new ToolRegistry();
+    const codeExec = buildCodeExecTool(registry);
+    const put = vi.fn(() => 'must-not-be-used');
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          console.log('x'.repeat(49_980));
+          console.log('discard-me'.repeat(100));
+          console.error('CRITICAL_DIAGNOSTIC_AFTER_LOG_CAP');
+          return { status: 'done', important: 'structured-return-survived' };
+        `,
+      },
+      {
+        ...makeCtx(),
+        toolOutputStore: { put } as never,
+      },
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('console_truncated=2 line(s)');
+    expect(res.content).toContain('CRITICAL_DIAGNOSTIC_AFTER_LOG_CAP');
+    expect(res.content).toContain('[return]');
+    expect(res.content).toContain('structured-return-survived');
+    expect(res.content).not.toContain('output cap (50000 bytes) exceeded');
+    expect(res.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'bounded-console-cap',
+        unit: 'bytes',
+        recoverable: false,
+      }),
+    ]);
+    expect(res.sourceTruncations![0]!.inputSize).toBeGreaterThan(
+      res.sourceTruncations![0]!.outputSize,
+    );
+    expect(res.sourceTruncations![0]!.outputId).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('passes a large return intact to the central runner finalizer', async () => {
+    const registry = new ToolRegistry();
+    const codeExec = buildCodeExecTool(registry);
+    const middle = 'MIDDLE-SENTINEL';
+    const payload = `BEGIN-${'a'.repeat(30_000)}${middle}${'z'.repeat(30_000)}-TAIL`;
+
+    const res = await codeExec.handler(
+      { code: `return ${JSON.stringify(payload)};` },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content.length).toBeGreaterThan(50_000);
+    expect(res.content).toContain('BEGIN-');
+    expect(res.content).toContain(middle);
+    expect(res.content).toContain('-TAIL');
+    expect(res.content).not.toContain('[truncated: output_id=');
+  });
+
+  it('surfaces the real script failure after noisy logs', async () => {
+    const registry = new ToolRegistry();
+    const codeExec = buildCodeExecTool(registry);
+
+    const res = await codeExec.handler(
+      {
+        code: `
+          console.log('x'.repeat(60_000));
+          throw new Error('REAL_SCRIPT_FAILURE_AFTER_LOG_CAP');
+        `,
+      },
+      makeCtx(),
+    );
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('REAL_SCRIPT_FAILURE_AFTER_LOG_CAP');
+    expect(res.content).toContain('[logs truncated: 1 line(s), 60001 byte(s)');
+    expect(res.content).not.toContain('output cap (50000 bytes) exceeded');
+    expect(res.sourceTruncations).toEqual([
+      expect.objectContaining({ technique: 'bounded-console-cap', recoverable: false }),
+    ]);
+  });
+});
+
 describe('code_exec structured tool compatibility', () => {
   it('returns compact JSON from structuredData while direct callers receive markdown', async () => {
     const registry = new ToolRegistry();
@@ -423,6 +507,37 @@ describe('code_exec tools-proxy misses (telemetry: "tools.X is not a function")'
 });
 
 describe('code_exec nested loop guards (observer wired via ToolContext)', () => {
+  it('carries nested producer truncation metadata into the observer audit event', async () => {
+    const sourceTruncations = [{
+      technique: 'nested-page-limit',
+      inputSize: 20,
+      outputSize: 10,
+      unit: 'items' as const,
+      recoverable: true,
+    }];
+    const registry = new ToolRegistry();
+    registry.register({
+      ...noopTool('read_file'),
+      handler: async () => ({ content: 'nested page', sourceTruncations }),
+    });
+    const events: Array<{ sourceTruncations?: unknown }> = [];
+
+    const result = await buildCodeExecTool(registry).handler(
+      { code: `return await tools.read_file({ path: 'a.ts' });` },
+      {
+        ...makeCtx(),
+        nestedToolObserver: {
+          beforeNestedCall: () => null,
+          afterNestedCall: (event) => events.push(event),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.sourceTruncations).toEqual(sourceTruncations);
+  });
+
   it('a script looping the SAME unsafe mutation is interrupted by the local guard', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('edit_file'));

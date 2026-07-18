@@ -57,7 +57,20 @@ const handleReadFile: OverlayHandler = {
       const footer = actualEnd < total
         ? `\n... ${truncationMarker(`${total - actualEnd} more lines`, 'pass start_line/end_line to read more')}`
         : '';
-      return ok(`${header}\n${body}${footer}`);
+      return {
+        content: `${header}\n${body}${footer}`,
+        ...(actualEnd < total
+          ? {
+              sourceTruncations: [{
+                technique: 'overlay-read-file-line-window',
+                inputSize: total,
+                outputSize: lines.length,
+                unit: 'lines' as const,
+                recoverable: true,
+              }],
+            }
+          : {}),
+      };
     } catch (e) {
       return err(`overlay read_file failed for ${filePath}: ${e instanceof Error ? e.message : String(e)}`);
     }

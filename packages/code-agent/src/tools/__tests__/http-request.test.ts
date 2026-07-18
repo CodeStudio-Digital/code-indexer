@@ -6,14 +6,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { httpRequestTool } from '../http.js';
-import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 
 let server: Server;
 let base = '';
 
 const ctx = (sessionId: number) => ({ sessionId }) as unknown as ToolContext;
 const run = (args: Record<string, unknown>, sessionId = 1) =>
-  httpRequestTool.handler(args, ctx(sessionId)) as Promise<{ content: string; isError?: boolean }>;
+  httpRequestTool.handler(args, ctx(sessionId)) as Promise<ToolResult>;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -21,6 +21,12 @@ beforeAll(async () => {
     if (req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+    } else if (req.url === '/large') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(`${'x'.repeat(20_000)}TAIL_SENTINEL`);
+    } else if (req.url === '/huge') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(`${'h'.repeat(80_000)}UNREAD_TAIL`);
     } else if (req.url === '/login' && req.method === 'POST') {
       res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'sid=abc123; Path=/; HttpOnly' });
       res.end(JSON.stringify({ token: 't' }));
@@ -50,6 +56,33 @@ describe('http_request', () => {
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('200');
     expect(r.content).toContain('"ok":true');
+  });
+
+  it('returns a large body intact so the runner can spill it', async () => {
+    const r = await run({ url: `${base}/large` });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('TAIL_SENTINEL');
+    expect(r.content.length).toBeGreaterThan(20_000);
+  });
+
+  it('marks the intentional acquisition boundary instead of claiming a full result', async () => {
+    const r = await run({ url: `${base}/huge`, maxBytes: 32_000 });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('[source truncated: network read ceiling reached');
+    expect(r.content).not.toContain('UNREAD_TAIL');
+    expect(r.content.length).toBeLessThan(40_000);
+    expect(r.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'network-acquisition-cap',
+        unit: 'bytes',
+        inputSizeExact: false,
+        outputSize: 32_000,
+        recoverable: false,
+      }),
+    ]);
+    expect(r.sourceTruncations![0]!.inputSize).toBeGreaterThan(
+      r.sourceTruncations![0]!.outputSize,
+    );
   });
 
   it('rejects a non-http(s) url', async () => {

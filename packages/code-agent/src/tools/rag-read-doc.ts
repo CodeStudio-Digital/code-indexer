@@ -14,12 +14,10 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { getGlobalDocSearch, type DocChunkNeighborRef, type DocSectionRead } from './rag-search-docs.js';
+import { stripUnpairedSurrogates } from '@mcp/code-agent/core/text-boundaries.js';
 
 /** Neighbor previews are capped — the agent reads them in full by chunk_id. */
 const NEIGHBOR_PREVIEW_CHARS = 1_200;
-/** Mirrors the backend's SECTION_MAX_CHUNKS — used only to note a capped section. */
-const SECTION_CAP = 12;
-
 export const ragReadDocTool: CoderTool = {
   name: 'rag_read_doc',
   description:
@@ -30,6 +28,7 @@ export const ragReadDocTool: CoderTool = {
     "USE mode:'section' to reassemble a heading that was split into several chunks into ONE contiguous read (no neighbor previews).\n" +
     "DON'T: guess chunk_ids — they come from rag_search_docs output.",
   source: 'native',
+  outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store' },
   parameters: {
     type: 'object',
     properties: {
@@ -119,7 +118,25 @@ export const ragReadDocTool: CoderTool = {
     lines.push('', '─── Section (full) ───', chunk.content.trim());
     for (const n of next) lines.push('', renderNeighbor(n, 'Next', chunk.source_uri));
 
-    return ok(lines.join('\n'));
+    const cappedNeighbors = [...prev, ...next]
+      .filter((neighbor) => neighbor.content.length > NEIGHBOR_PREVIEW_CHARS);
+    return {
+      content: lines.join('\n'),
+      ...(cappedNeighbors.length > 0
+        ? {
+            sourceTruncations: [{
+              technique: 'rag-neighbor-preview',
+              inputSize: cappedNeighbors.reduce((sum, neighbor) => sum + neighbor.content.length, 0),
+              outputSize: cappedNeighbors.reduce(
+                (sum, neighbor) => sum + neighborPreviewPrefix(neighbor.content).length,
+                0,
+              ),
+              unit: 'chars' as const,
+              recoverable: true,
+            }],
+          }
+        : {}),
+    };
   },
 };
 
@@ -129,13 +146,17 @@ function renderNeighbor(
   mainUri: string | null,
 ): string {
   const truncated = n.content.length > NEIGHBOR_PREVIEW_CHARS;
-  const body = truncated ? n.content.slice(0, NEIGHBOR_PREVIEW_CHARS) + '…' : n.content;
+  const body = truncated ? neighborPreviewPrefix(n.content) + '…' : n.content;
   const tail = truncated ? `\n[truncated — rag_read_doc({chunk_id: ${n.chunk_id}}) for the rest]` : '';
   // Neighbors are by ord within the SOURCE, which on a multi-page crawl can
   // cross a page boundary — flag that so the agent doesn't treat it as part
   // of the same page's flow.
   const otherPage = n.source_uri && n.source_uri !== mainUri ? `\n(different page: ${n.source_uri})` : '';
   return `─── ${label} section — chunk_id ${n.chunk_id}${n.heading_path ? ` (${n.heading_path})` : ''} ───${otherPage}\n${body.trim()}${tail}`;
+}
+
+function neighborPreviewPrefix(content: string): string {
+  return stripUnpairedSurrogates(content.slice(0, NEIGHBOR_PREVIEW_CHARS));
 }
 
 /** Render a whole-section read (mode:'section') — all size-split parts joined. */
@@ -149,12 +170,6 @@ function renderSection(sec: DocSectionRead): string {
     `${sec.chunks.length} chunk(s) · ~${sec.total_tokens} tokens${sec.doc_type ? ` · ${sec.doc_type}` : ''}`,
   );
   lines.push('', sec.chunks.map((c) => c.content.trim()).join('\n\n'));
-  if (sec.chunks.length >= SECTION_CAP) {
-    lines.push(
-      '',
-      `[section capped at ${SECTION_CAP} chunks — if it continues, use rag_search_docs to locate the later parts]`,
-    );
-  }
   return lines.join('\n');
 }
 

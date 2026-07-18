@@ -4,6 +4,7 @@ import type {
   PendingToolApproval,
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
+  ResearchDepth,
   StreamBlock,
   StreamTask,
   StreamTaskMode,
@@ -594,7 +595,18 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         background?: boolean;
         jobId?: string;
         resumed?: boolean;
-        agents: Array<{ index: number; label: string; provider?: string; model?: string; task?: string; status?: AgentStatus; attempt?: number }>;
+        agents: Array<{
+          index: number;
+          label: string;
+          provider?: string;
+          model?: string;
+          task?: string;
+          status?: AgentStatus;
+          attempt?: number;
+          researchDepth?: ResearchDepth;
+          softToolTarget?: number;
+          softTimeTargetMs?: number;
+        }>;
       };
       // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
       // still-running background job MERGES into the existing block (rows flip
@@ -625,6 +637,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             model: a.model ?? d.model ?? was?.model,
             task: a.task ?? was?.task,
             attempt: a.attempt ?? was?.attempt,
+            researchDepth: a.researchDepth ?? was?.researchDepth,
+            softToolTarget: a.softToolTarget ?? was?.softToolTarget,
+            softTimeTargetMs: a.softTimeTargetMs ?? was?.softTimeTargetMs,
           };
         }),
       };

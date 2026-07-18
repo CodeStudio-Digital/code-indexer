@@ -72,9 +72,26 @@ export interface ResolveDevUrlOptions {
   reusePollMs?: number;
   bootPollMs?: number;
   pollIntervalMs?: number;
+  signal?: AbortSignal;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('Preview dev-server resolution aborted.'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new Error('Preview dev-server resolution aborted.'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    // Close the tiny race between the initial check and listener install.
+    if (signal?.aborted) onAbort();
+  });
+}
 
 /** Poll a terminal buffer until extractDevUrl yields a match (or timeout). */
 async function pollForUrl(
@@ -83,6 +100,7 @@ async function pollForUrl(
   timeoutMs: number,
   wantAuthoritative: boolean,
   intervalMs: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   let provisional: string | null = null;
@@ -91,12 +109,16 @@ async function pollForUrl(
     if (match.url && (match.authoritative || !wantAuthoritative)) return match.url;
     if (match.url) provisional = match.url;
     if (Date.now() >= deadline) return provisional;
-    await sleep(intervalMs);
+    await sleep(intervalMs, signal);
   }
 }
 
 function localhost(port: number): string {
   return `http://localhost:${port}`;
+}
+
+function ensureNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('Preview dev-server resolution aborted.');
 }
 
 export async function resolveDevUrl(
@@ -107,8 +129,11 @@ export async function resolveDevUrl(
   const reusePollMs = opts.reusePollMs ?? REUSE_POLL_MS;
   const bootPollMs = opts.bootPollMs ?? BOOT_POLL_MS;
   const intervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const signal = opts.signal;
+  ensureNotAborted(signal);
   const pinned = bridge.pinnedPort(projectId);
   const tasks = await bridge.list();
+  ensureNotAborted(signal);
   const running = tasks.find(
     (t) => t.projectId === projectId && t.status === 'running' && isDevServerCommand(t.command, t.label),
   );
@@ -116,7 +141,7 @@ export async function resolveDevUrl(
   // ── Reuse an already-running dev server (NEVER owned → never stopped). ──
   if (running) {
     if (pinned) return { url: localhost(pinned) };
-    const url = await pollForUrl(bridge, running.terminalId, reusePollMs, false, intervalMs);
+    const url = await pollForUrl(bridge, running.terminalId, reusePollMs, false, intervalMs, signal);
     if (url) return { url };
     throw new Error(
       'A dev server is running for this project but no URL was detected in its output. ' +
@@ -126,14 +151,25 @@ export async function resolveDevUrl(
 
   // ── Nothing running → start a tracked, owned dev server. ──
   const detected = await bridge.detectDevCommand(projectId);
+  ensureNotAborted(signal);
   const cmd = detected ?? { command: 'npm run dev', label: 'dev', manager: 'npm' };
   const task = await bridge.start({ projectId, ...cmd });
   const ownedTaskId = task.taskId;
+  if (signal?.aborted) {
+    await bridge.stop(ownedTaskId).catch(() => undefined);
+    throw new Error('Preview dev-server resolution aborted.');
+  }
 
   // strictPort scaffolds bind exactly to the pinned port, so once the
   // server announces ANY ready URL we trust the pinned port. Prefer an
   // authoritative detected URL when it actually differs.
-  const detectedUrl = await pollForUrl(bridge, task.terminalId, bootPollMs, !pinned, intervalMs);
+  let detectedUrl: string | null;
+  try {
+    detectedUrl = await pollForUrl(bridge, task.terminalId, bootPollMs, !pinned, intervalMs, signal);
+  } catch (error) {
+    await bridge.stop(ownedTaskId).catch(() => undefined);
+    throw error;
+  }
   if (detectedUrl) return { url: pinned ? localhost(pinned) : detectedUrl, ownedTaskId };
   if (pinned) return { url: localhost(pinned), ownedTaskId };
 

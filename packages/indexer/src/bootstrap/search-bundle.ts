@@ -41,18 +41,20 @@ export function createSearchBundle(
   vectorOverride: VectorStore,
   /** Query-only Code service bound to each namespace's active generation. */
   queryEmbeddingOverride: EmbeddingService,
-  /** Query-only Knowledge service used by snapshot retrieval. */
-  knowledgeQueryEmbeddingOverride: EmbeddingService,
+  /** Query-only Memory service used by snapshot retrieval. */
+  memoryQueryEmbeddingOverride: EmbeddingService,
   /** Optional HyDE pipeline binding resolver. No resolver (or no
    * `indexer_search/hyde` binding) means query expansion is disabled. */
   hydeResolver?: PipelineProviderResolver | null,
+  /** Reranker resolved from the Memory profile for snapshots. */
+  memoryReranker?: RerankerService | null,
 ): SearchBundle {
   // Ownership is explicit: this compositor is incapable of constructing an
   // ONNX session or opening sqlite-vec. The desktop passes worker proxies; if
   // the worker is unavailable it passes Null services and search stays FTS.
   const embeddingService = embeddingOverride;
   const queryEmbeddingService = queryEmbeddingOverride;
-  const knowledgeQueryEmbeddingService = knowledgeQueryEmbeddingOverride;
+  const memoryQueryEmbeddingService = memoryQueryEmbeddingOverride;
   const rawVectorStore = vectorOverride;
   const searchableRaw = rawVectorStore instanceof NullVectorStore ? null : rawVectorStore;
   const vectorStore = rawVectorStore;
@@ -69,7 +71,8 @@ export function createSearchBundle(
     reranker,
     recentFilesSource,
     pipelineTelemetry,
-    knowledgeQueryEmbeddingService,
+    memoryQueryEmbeddingService,
+    memoryReranker,
   );
 
   return {

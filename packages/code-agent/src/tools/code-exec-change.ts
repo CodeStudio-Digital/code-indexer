@@ -26,7 +26,6 @@ import {
 
 type CallTool = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-const MAX_RAW_CHARS = 150_000;
 const MAX_SEARCH_HITS = 50;
 
 function normalizePath(p: string): string {
@@ -50,11 +49,6 @@ function parseRefs(content: string): ReviewReferenceHit[] {
   } catch {
     return [];
   }
-}
-
-function cap(text: string | null, max = MAX_RAW_CHARS): string | null {
-  if (text == null) return null;
-  return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated]`;
 }
 
 export function buildChangeSandboxApi(
@@ -130,12 +124,12 @@ export function buildChangeSandboxApi(
         }));
     },
 
-    /** Full before/after content of one changed file (capped). */
+    /** Full before/after content of one changed file. */
     raw: async (path: unknown) => {
       const diff = await diffFor(String(path ?? ''));
       return {
-        before: cap(await before(diff.baseline.id)),
-        after: cap(diff.currentContent),
+        before: await before(diff.baseline.id),
+        after: diff.currentContent,
       };
     },
 

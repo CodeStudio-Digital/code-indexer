@@ -206,10 +206,16 @@ export function ProjectPreview({
   }, [origin, projectId, add, post, handleRegionSelect]);
 
   useEffect(() => {
+    if (!selectionEnabled) {
+      if (selectMode) setSelectMode(false);
+      if (regionMode) setRegionMode(false);
+      post({ type: 'mcp:disarm' });
+      return;
+    }
     if (regionMode) post({ type: 'mcp:arm-region' });
     else if (selectMode) post({ type: 'mcp:arm' });
     else post({ type: 'mcp:disarm' });
-  }, [selectMode, regionMode, reloadKey, post]);
+  }, [selectionEnabled, selectMode, regionMode, reloadKey, post]);
 
   // Pop the preview out to a separate window. While popped out the in-project
   // iframe is UNMOUNTED (frees its renderer process) — only one preview

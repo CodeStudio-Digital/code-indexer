@@ -47,14 +47,16 @@ const ALL_TOOLS: ThinTool[] = [
 ];
 
 describe('applyToolSelectionThin', () => {
-  it('returns allTools unchanged when task text is too short', async () => {
+  it('keeps short non-empty follow-ups filtered', async () => {
     const out = await applyToolSelectionThin({
       allTools: ALL_TOOLS,
-      taskText: 'hi',
+      taskText: 'sim',
       embed: toyEmbed,
       embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 10,
     });
-    expect(out).toBe(ALL_TOOLS);
+    expect(out).not.toBe(ALL_TOOLS);
+    expect(out.length).toBeLessThan(ALL_TOOLS.length);
   });
 
   it('returns allTools unchanged when count <= k', async () => {
@@ -130,6 +132,18 @@ describe('applyToolSelectionThin', () => {
     expect(callsAfterFirst).toBeGreaterThan(1);
   });
 
+  it('always keeps runtime-pinned tools even when they rank below k', async () => {
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful unrelated task text',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+      protectedNames: new Set(['Sandbox']),
+    });
+    expect(out.map((tool) => tool.name)).toContain('Sandbox');
+  });
+
   it.each([4, 7])(
     'does not reuse task or tool vectors after a model switch (new dimension %i)',
     async (newDimension) => {
@@ -155,7 +169,9 @@ describe('applyToolSelectionThin', () => {
         embeddingStore: store,
         k: 10,
       });
-      expect(calls).toHaveLength(ALL_TOOLS.length + 1);
+      const firstModelCallCount = calls.length;
+      expect(firstModelCallCount).toBeGreaterThan(1);
+      expect(firstModelCallCount).toBeLessThan(ALL_TOOLS.length + 1);
 
       model = 'model-b';
       dimension = newDimension;
@@ -170,7 +186,7 @@ describe('applyToolSelectionThin', () => {
         onResult,
       });
 
-      expect(calls).toHaveLength(ALL_TOOLS.length + 1);
+      expect(calls).toHaveLength(firstModelCallCount);
       expect(calls.filter((text) => text === taskText)).toHaveLength(1);
       expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ taskEmbeddingCacheHit: false }));
     },
@@ -180,14 +196,17 @@ describe('applyToolSelectionThin', () => {
     const failingEmbed: EmbeddingFn = async () => {
       throw new Error('boom');
     };
+    const onError = vi.fn();
     const out = await applyToolSelectionThin({
       allTools: ALL_TOOLS,
       taskText: 'frontend bug fix in login flow',
       embed: failingEmbed,
       embeddingStore: new InMemoryToolEmbeddingStore(),
       k: 10,
+      onError,
     });
     expect(out).toBe(ALL_TOOLS);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom' }));
   });
 
   it('frequency-boost lifts recently-used non-essential tools', async () => {
@@ -208,6 +227,51 @@ describe('applyToolSelectionThin', () => {
     });
     const names = new Set(out.map((t) => t.name));
     expect(names.has('Kanban')).toBe(true);
+  });
+
+  it('does not boost repeatedly failing tools', async () => {
+    const now = Date.now();
+    const out = await applyToolSelectionThin({
+      allTools: ALL_TOOLS,
+      taskText: 'meaningful task text here',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+      recentToolCalls: [
+        ...Array.from({ length: 5 }, (_, i) => ({
+          name: 'DesignSystem', timestampMs: now - i, ok: false,
+        })),
+        { name: 'Jira', timestampMs: now, ok: true },
+      ],
+    });
+    const names = new Set(out.map((tool) => tool.name));
+    expect(names.has('Jira')).toBe(true);
+    expect(names.has('DesignSystem')).toBe(false);
+  });
+
+  it('keeps skill workflow follow-ups after successful namespace discovery', async () => {
+    const skillTools = [
+      ...ALL_TOOLS,
+      makeTool('list_skill_namespaces'),
+      makeTool('get_skills_list'),
+      makeTool('get_skill_content'),
+      makeTool('invoke_skill'),
+    ];
+    const out = await applyToolSelectionThin({
+      allTools: skillTools,
+      taskText: 'compare application deployment settings',
+      embed: constEmbed,
+      embeddingStore: new InMemoryToolEmbeddingStore(),
+      k: 9,
+      recentToolCalls: [
+        { name: 'list_skill_namespaces', timestampMs: Date.now(), ok: true },
+      ],
+    });
+
+    const names = new Set(out.map((tool) => tool.name));
+    expect(names.has('get_skills_list')).toBe(true);
+    expect(names.has('get_skill_content')).toBe(true);
+    expect(names.has('invoke_skill')).toBe(true);
   });
 
   // ── toolPolicy nudge (Agent Decision Engine wiring) ──────────────────

@@ -68,7 +68,7 @@ describe('CLI semantic control', () => {
         Number(job.cursor?.fence_lease_expires_at_ms) > Number(job.cursor?.fence_started_at_ms)))
         .toBe(true);
       expect(semantic.listJobs().some((job) =>
-        job.namespace === 'semantic:reindex:knowledge')).toBe(false);
+        job.namespace === 'semantic:reindex:memory')).toBe(false);
       expect(wake).toHaveBeenCalledWith(`snapshot:p${projectId}`);
     } finally {
       db.close();
@@ -82,17 +82,17 @@ describe('CLI semantic control', () => {
       headers: { 'content-type': 'application/json' },
     }));
     try {
-      const wake = await queueSemanticReindex(db, 'knowledge', {
+      const wake = await queueSemanticReindex(db, 'memory', {
         config: config(),
         fetchImpl: fetchImpl as typeof fetch,
       });
       expect(wake.server).toMatchObject({ reached: true, ok: true, status: 202 });
       expect(new SemanticStore(db.raw()).listJobs().some((job) =>
-        job.namespace === 'semantic:reindex:knowledge'
+        job.namespace === 'semantic:reindex:memory'
         && job.kind === 'build'
         && job.status === 'pending')).toBe(true);
       expect(fetchImpl).toHaveBeenCalledWith(
-        'http://127.0.0.1:7333/api/admin/semantic/profiles/knowledge/reindex',
+        'http://127.0.0.1:7333/api/admin/semantic/profiles/memory/reindex',
         expect.objectContaining({ method: 'POST' }),
       );
     } finally {
@@ -131,7 +131,7 @@ describe('CLI semantic control', () => {
     const source = readFileSync(join(process.cwd(), 'apps/cli/commands/snapshots.ts'), 'utf8');
     expect(source).not.toContain('LocalVectorRouter');
     expect(source).not.toContain('backfillSnapshotEmbeddings');
-    expect(source).not.toContain("queueSemanticReindex(db, 'knowledge')");
+    expect(source).not.toContain("queueSemanticReindex(db, 'memory')");
     expect(source).toContain('snapshotNamespace(project.id)');
   });
 

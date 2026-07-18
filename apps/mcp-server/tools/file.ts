@@ -1,6 +1,6 @@
 import { isAbsolute, join } from 'node:path';
 import { readFileSync, readdirSync, existsSync, lstatSync, statSync } from 'node:fs';
-import { defineTool, type McpTool } from '../tool.js';
+import { defineTool, mcpAccess, type McpTool, type McpToolResult } from '../tool.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import {
   readFileSlice,
@@ -11,6 +11,46 @@ import {
 } from '@mcp/services/services/code-reader.js';
 import { treeSitterSymbols } from '@mcp/indexer/indexer/incremental.js';
 import { normalizeFilePath, withProject, formatOutput } from './_helpers.js';
+
+function readFileWindowResult(
+  text: string,
+  totalLines: number,
+  retainedLines: number,
+  startLine: number,
+): McpToolResult {
+  const omitted = startLine > 1 || retainedLines < totalLines;
+  return omitted
+    ? {
+        text,
+        sourceTruncations: [{
+          technique: 'mcp-read-file-line-window',
+          inputSize: totalLines,
+          outputSize: retainedLines,
+          unit: 'lines',
+          recoverable: true,
+        }],
+      }
+    : text;
+}
+
+function skeletonResult(
+  text: string,
+  totalSymbols: number,
+  shownSymbols: number,
+): McpToolResult {
+  return shownSymbols < totalSymbols
+    ? {
+        text,
+        sourceTruncations: [{
+          technique: 'mcp-file-skeleton-symbol-cap',
+          inputSize: totalSymbols,
+          outputSize: shownSymbols,
+          unit: 'items',
+          recoverable: true,
+        }],
+      }
+    : text;
+}
 
 /**
  * Tree-sitter-driven skeleton fallback. Used when the symbol DB has no row
@@ -77,6 +117,8 @@ async function diskSkeletonFallback(
 // deps/dependents inline) is available via read_file / get_dependencies.
 const get_file_skeleton = defineTool({
   name: 'get_file_skeleton',
+  tier: 'bootstrap',
+  ...mcpAccess('read'),
   description: 'Compact outline of a file: header + symbol list (line, kind, name, signature). Symbol count is capped by max_symbols (default 100). Pass format="json" for a structured response.\n' +
     'file_path may also be a DIRECTORY — returns the exported symbols of the indexed files under it (grouped per file), which is the cheapest way to map an unfamiliar module.',
   inputSchema: {
@@ -105,14 +147,17 @@ const get_file_skeleton = defineTool({
       const dirPrefix = filePath.replace(/\/+$/, '') + '/';
       const dirFiles = db.listFiles(project.id).filter((f) => f.path.startsWith(dirPrefix));
       if (dirFiles.length > 0) {
-        const maxSymbols = (args.max_symbols as number) ?? 100;
+        const requestedMaxSymbols = (args.max_symbols as number) ?? 100;
+        const maxSymbols = Number.isFinite(requestedMaxSymbols)
+          ? Math.max(1, Math.floor(requestedMaxSymbols))
+          : 100;
         const kindFilterD = args.kind as string | undefined;
         const nameFilterD = args.filter as string | undefined;
         let nameRe: RegExp | null = null;
         if (nameFilterD) { try { nameRe = new RegExp(nameFilterD); } catch { /* ignore */ } }
         const groups: Array<{ path: string; syms: ReturnType<typeof db.getSymbolsByFile> }> = [];
         let total = 0;
-        for (const f of dirFiles.slice(0, 40)) {
+        for (const f of dirFiles) {
           let syms = db.getSymbolsByFile(project.id, f.path).filter((s) => s.exported);
           if (kindFilterD) syms = syms.filter((s) => s.kind === kindFilterD);
           if (nameRe) syms = syms.filter((s) => nameRe.test(s.name));
@@ -121,28 +166,31 @@ const get_file_skeleton = defineTool({
           total += syms.length;
         }
         let shown = 0;
-        const truncatedDir = total > maxSymbols || dirFiles.length > 40;
+        const shownGroups = groups.flatMap((g) => {
+          if (shown >= maxSymbols) return [];
+          const take = g.syms.slice(0, maxSymbols - shown);
+          shown += take.length;
+          return [{ path: g.path, syms: take }];
+        });
+        const truncatedDir = total > shown;
         if (args.format === 'json') {
-          return JSON.stringify({
+          const text = JSON.stringify({
             directory: filePath, files_in_dir: dirFiles.length, total_symbols: total, truncated: truncatedDir,
-            files: groups.flatMap((g) => {
-              if (shown >= maxSymbols) return [];
-              const take = g.syms.slice(0, maxSymbols - shown); shown += take.length;
-              return [{ path: g.path, symbols: take.map((s) => ({ line: s.line, kind: s.kind, name: s.name, signature: s.signature })) }];
-            }),
+            files: shownGroups.map((g) => ({
+              path: g.path,
+              symbols: g.syms.map((s) => ({ line: s.line, kind: s.kind, name: s.name, signature: s.signature })),
+            })),
           });
+          return skeletonResult(text, total, shown);
         }
-        const lines: string[] = [`DIR ${filePath} | ${dirFiles.length} files | exported symbols${truncatedDir ? ` [showing ${Math.min(total, maxSymbols)}/${total}]` : ''}`, ''];
-        for (const g of groups) {
-          if (shown >= maxSymbols) break;
+        const lines: string[] = [`DIR ${filePath} | ${dirFiles.length} files | exported symbols${truncatedDir ? ` [showing ${shown}/${total}]` : ''}`, ''];
+        for (const g of shownGroups) {
           lines.push(g.path);
           for (const s of g.syms) {
-            if (shown >= maxSymbols) break;
             lines.push(`${String(s.line ?? '?').padStart(5)} ${s.kind} ${s.parent ? `${s.parent}.` : ''}${s.name}${s.signature && s.signature !== s.name ? ` ${s.signature}` : ''}`);
-            shown++;
           }
         }
-        return lines.join('\n');
+        return skeletonResult(lines.join('\n'), total, shown);
       }
       // Tree-sitter fallback: parse the file off disk so the agent gets a
       // useful skeleton even when the project has never been indexed (or
@@ -156,7 +204,8 @@ const get_file_skeleton = defineTool({
       }
       const kindFilterX = args.kind as string | undefined;
       const nameFilterX = args.filter as string | undefined;
-      const maxX = (args.max_symbols as number) ?? 100;
+      const requestedMaxX = (args.max_symbols as number) ?? 100;
+      const maxX = Number.isFinite(requestedMaxX) ? Math.max(1, Math.floor(requestedMaxX)) : 100;
       const asJsonX = args.format === 'json';
       let syms = fallback.symbols;
       if (kindFilterX) syms = syms.filter((s) => s.kind === kindFilterX);
@@ -168,7 +217,7 @@ const get_file_skeleton = defineTool({
       const shownX = truncatedX ? syms.slice(0, maxX) : syms;
       const extX = filePath.split('.').pop() ?? '';
       if (asJsonX) {
-        return JSON.stringify({
+        const text = JSON.stringify({
           file: { path: filePath, ext: extX, line_count: fallback.lineCount, size_bytes: fallback.bytes },
           total_symbols: totalX,
           shown_symbols: shownX.length,
@@ -176,6 +225,7 @@ const get_file_skeleton = defineTool({
           source: 'tree-sitter-fallback',
           symbols: shownX.map((s) => ({ line: s.line, kind: s.kind, parent: s.parent, name: s.name, signature: s.signature })),
         });
+        return skeletonResult(text, totalX, shownX.length);
       }
       const headerX = `${filePath} | ${extX} | ${fallback.lineCount}L | tree-sitter fallback (project not indexed)`;
       const truncNoteX = truncatedX ? `[truncated: showing ${shownX.length}/${totalX} symbols]` : '';
@@ -183,22 +233,25 @@ const get_file_skeleton = defineTool({
         const parent = s.parent ? `${s.parent}.` : '';
         return `${String(s.line ?? '?').padStart(5)} ${s.kind} ${parent}${s.name}${s.signature && s.signature !== s.name ? ` ${s.signature}` : ''}`;
       });
-      return [headerX, truncNoteX, '', ...symLinesX].filter(Boolean).join('\n');
+      return skeletonResult(
+        [headerX, truncNoteX, '', ...symLinesX].filter(Boolean).join('\n'),
+        totalX,
+        shownX.length,
+      );
     }
     let symbols = db.getSymbolsByFile(project.id, filePath);
     const kindFilter = args.kind as string | undefined;
     const nameFilter = args.filter as string | undefined;
-    const maxSymbols = (args.max_symbols as number) ?? 100;
+    const requestedMaxSymbols = (args.max_symbols as number) ?? 100;
+    const maxSymbols = Number.isFinite(requestedMaxSymbols)
+      ? Math.max(1, Math.floor(requestedMaxSymbols))
+      : 100;
     const asJson = args.format === 'json';
     if (kindFilter) symbols = symbols.filter(s => s.kind === kindFilter);
     if (nameFilter) {
       try { const re = new RegExp(nameFilter); symbols = symbols.filter(s => re.test(s.name)); } catch { /* ignore */ }
     }
     const ext = filePath.split('.').pop() ?? '';
-    const totalSymbols = symbols.length;
-    const truncated = totalSymbols > maxSymbols;
-    const shownSymbols = truncated ? symbols.slice(0, maxSymbols) : symbols;
-
     interface ExtraEntry { line: number | null; kind: string; name: string; signature: string; from_fallback: true }
     const extras: ExtraEntry[] = [];
     if (symbols.length < 3 && file.line_count > 80 && !kindFilter && !nameFilter) {
@@ -207,14 +260,19 @@ const get_file_skeleton = defineTool({
         const known = new Set(symbols.map(s => `${s.line}:${s.name}`));
         for (const e of extracted) {
           if (known.has(`${e.line}:${e.name}`)) continue;
-          if (extras.length + shownSymbols.length >= maxSymbols) break;
-          extras.push({ line: e.line, kind: e.kind, name: e.name, signature: e.signature.slice(0, 100), from_fallback: true });
+          extras.push({ line: e.line, kind: e.kind, name: e.name, signature: e.signature, from_fallback: true });
         }
       } catch { /* ignore */ }
     }
 
+    const totalSymbols = symbols.length + extras.length;
+    const shownSymbols = symbols.slice(0, maxSymbols);
+    const shownExtras = extras.slice(0, Math.max(0, maxSymbols - shownSymbols.length));
+    const shownCount = shownSymbols.length + shownExtras.length;
+    const truncated = totalSymbols > shownCount;
+
     if (asJson) {
-      return JSON.stringify({
+      const text = JSON.stringify({
         file: {
           path: filePath,
           ext,
@@ -224,7 +282,7 @@ const get_file_skeleton = defineTool({
           content_hash: file.content_hash,
         },
         total_symbols: totalSymbols,
-        shown_symbols: shownSymbols.length + extras.length,
+        shown_symbols: shownCount,
         truncated,
         symbols: [
           ...shownSymbols.map(s => ({
@@ -235,14 +293,15 @@ const get_file_skeleton = defineTool({
             signature: s.signature,
             stable_id: s.stable_id,
           })),
-          ...extras,
+          ...shownExtras,
         ],
       });
+      return skeletonResult(text, totalSymbols, shownCount);
     }
 
     const header = `${filePath} | ${file.language || ext} | ${file.line_count}L | ${file.size} bytes`;
     const truncateNote = truncated
-      ? `[truncated: showing ${shownSymbols.length}/${totalSymbols} symbols — use max_symbols or kind/filter to refine]`
+      ? `[truncated: showing ${shownCount}/${totalSymbols} symbols — use max_symbols or kind/filter to refine]`
       : '';
     const symLines = shownSymbols.map(s => {
       const parent = s.parent ? `${s.parent}.` : '';
@@ -250,18 +309,24 @@ const get_file_skeleton = defineTool({
       return `${String(s.line ?? '?').padStart(5)} ${s.kind} ${parent}${s.name}${sig && sig !== s.name ? ` ${sig}` : ''}`;
     });
     let fallbackNote = '';
-    if (extras.length > 0) {
+    if (shownExtras.length > 0) {
       fallbackNote = `\n[regex fallback -- DB had ${symbols.length} symbols]`;
-      for (const e of extras) {
+      for (const e of shownExtras) {
         symLines.push(`${String(e.line ?? '?').padStart(5)} ${e.kind} ${e.name} ${e.signature}`);
       }
     }
-    return [header, truncateNote, fallbackNote, '', ...symLines].filter(Boolean).join('\n');
+    return skeletonResult(
+      [header, truncateNote, fallbackNote, '', ...symLines].filter(Boolean).join('\n'),
+      totalSymbols,
+      shownCount,
+    );
   }),
 });
 
 const read_file = defineTool({
   name: 'read_file',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'Read a file slice with smart defaults. Auto-returns the whole file when it has ≤800 lines (no pagination needed for most source files).\n' +
     '\n' +
@@ -390,7 +455,12 @@ const read_file = defineTool({
         const header = `${filePath} | ${total} lines | ${ext} | [disk fallback — file not indexed]\n[lines ${startLine}-${endLine}]${tag}\n`;
         const remaining = total - endLine;
         const footer = remaining > 0 ? `\n... [${remaining} more lines — pass force=true, symbol, around_line, or search_term]` : '';
-        return header + headerNote + numbered + footer;
+        return readFileWindowResult(
+          header + headerNote + numbered + footer,
+          total,
+          slice.length,
+          startLine,
+        );
       } catch (e) {
         throw new Error(`Failed to read ${filePath} from disk: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -450,7 +520,12 @@ const read_file = defineTool({
       const footer = remaining > 0
         ? `\n... [${remaining} more lines — pass force=true, symbol, around_line, or search_term]`
         : '';
-      return richHeader + headerNote + numbered + footer;
+      return readFileWindowResult(
+        richHeader + headerNote + numbered + footer,
+        file.line_count,
+        slice.lines.length,
+        start,
+      );
     } catch (e) {
       return `Failed: ${(e as Error).message}`;
     }
@@ -459,6 +534,8 @@ const read_file = defineTool({
 
 const list_directory = defineTool({
   name: 'list_directory',
+  tier: 'bootstrap',
+  ...mcpAccess('read'),
   description: 'List files under a path prefix. Reads from the index when populated; falls back to a bounded disk scan when the index has nothing for the path (project not indexed, or directory created in this session).',
   inputSchema: {
     type: 'object',
@@ -478,7 +555,7 @@ const list_directory = defineTool({
       out.push(`${f.path} (${f.line_count}L)`);
     }
     if (out.length > 0) {
-      return out.slice(0, 200).join('\n');
+      return out.join('\n');
     }
     // Disk fallback: index is empty for this prefix. Walk the directory
     // directly so the agent gets useful results in non-indexed projects
@@ -486,11 +563,33 @@ const list_directory = defineTool({
     const topLevelLinks = project.is_synthetic
       ? new Set(assignWorkspaceSlugs(db.listUnionProjectIds(project.id)).map((p) => p.slug))
       : undefined;
-    const diskEntries = listDirectoryFromDisk(project.root_path, prefix, depth, topLevelLinks);
+    let diskTruncated = false;
+    const diskEntries = listDirectoryFromDisk(
+      project.root_path,
+      prefix,
+      depth,
+      topLevelLinks,
+      () => { diskTruncated = true; },
+    );
     if (diskEntries.length === 0) {
       return 'Empty.';
     }
-    return `[disk fallback — index has no entries for this path]\n` + diskEntries.slice(0, 200).join('\n');
+    const text = `[disk fallback — index has no entries for this path]\n`
+      + diskEntries.join('\n')
+      + (diskTruncated ? '\n... [disk scan capped at 500 entries — use a narrower path or depth]' : '');
+    return diskTruncated
+      ? {
+          text,
+          sourceTruncations: [{
+            technique: 'mcp-list-directory-disk-scan-cap',
+            inputSize: diskEntries.length + 1,
+            inputSizeExact: false,
+            outputSize: diskEntries.length,
+            unit: 'items',
+            recoverable: true,
+          }],
+        }
+      : text;
   }),
 });
 
@@ -506,6 +605,8 @@ export function listDirectoryFromDisk(
   prefix: string,
   depth: number,
   topLevelLinks?: ReadonlySet<string>,
+  onTruncated?: () => void,
+  maxEntries = 500,
 ): string[] {
   const IGNORE = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', '.mcp-indexer', '.cache', '.turbo', 'coverage']);
   const normalizedPrefix = prefix.replace(/\\/g, '/').replace(/^\.\/+/, '');
@@ -526,6 +627,7 @@ export function listDirectoryFromDisk(
     } catch { return []; }
   }
   const startAbs = prefixParts.length > 0 ? join(rootPath, ...prefixParts) : rootPath;
+  const cap = Number.isFinite(maxEntries) ? Math.max(1, Math.floor(maxEntries)) : 500;
   let stat: { isDirectory(): boolean };
   try { stat = statSync(startAbs); } catch { return []; }
   if (!stat.isDirectory()) {
@@ -548,7 +650,6 @@ export function listDirectoryFromDisk(
     try { entries = readdirSync(absDir, { withFileTypes: true }); } catch { return; }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (out.length >= 500) return;
       if (IGNORE.has(entry.name)) continue;
       if (entry.name.startsWith('.') && entry.name !== '.env.example') continue;
       const childRel = relDir ? `${relDir}/${entry.name}` : entry.name;
@@ -557,6 +658,12 @@ export function listDirectoryFromDisk(
       const isAuthorizedTopLevelLink =
         atSyntheticRoot && topLevelLinks.has(entry.name) && entry.isSymbolicLink();
       if (atSyntheticRoot && !isAuthorizedTopLevelLink) continue;
+      const eligible = entry.isDirectory() || isAuthorizedTopLevelLink || entry.isFile();
+      if (!eligible) continue;
+      if (out.length >= cap) {
+        onTruncated?.();
+        return;
+      }
       if (entry.isDirectory() || isAuthorizedTopLevelLink) {
         out.push(`${childRel}/`);
         walk(childAbs, childRel, level + 1);
@@ -573,6 +680,8 @@ export function listDirectoryFromDisk(
 
 const get_recently_modified_files = defineTool({
   name: 'get_recently_modified_files',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'List the most recently modified files in the index, newest first (timestamp, path, line count).\n' +
     'Default limit 20. Useful to see what changed lately or where current work is happening.',
@@ -592,6 +701,8 @@ const get_recently_modified_files = defineTool({
 
 const get_dependencies = defineTool({
   name: 'get_dependencies',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'List everything a file imports, with resolved in-project target paths where known.\n' +
     "DON'T: use to find who imports THIS file — that's get_dependents.",
@@ -611,6 +722,8 @@ const get_dependencies = defineTool({
 
 const get_dependents = defineTool({
   name: 'get_dependents',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'List every file that imports a given file (reverse dependencies) — the blast radius of editing it.\n' +
     "DON'T: use to see what this file itself imports — that's get_dependencies.",

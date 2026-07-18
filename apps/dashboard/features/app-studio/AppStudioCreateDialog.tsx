@@ -1,9 +1,9 @@
 /**
  * Modal de criação do App Studio — MINIMALISTA para leigo: nome do app +
  * frase da ideia (opcional, vira semente da entrevista). Provider/model
- * são auto-selecionados (default do admin) e só aparecem num collapsible
- * "Opções avançadas". Progresso do scaffold em frases humanas; log
- * técnico atrás de <details>.
+ * partem do default do admin, mas ficam visíveis para o usuário confirmar
+ * qual runtime será herdado pela equipe. Progresso do scaffold em frases
+ * humanas; log técnico atrás de <details>.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,7 +20,13 @@ export function AppStudioCreateDialog({
   onCreated: (appSessionId: number, masterSessionId: number, idea: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
-  const { providerOptions, getDefaultModel } = useProviders();
+  const {
+    enrichedProviders,
+    providerOptions,
+    getModelsForProvider,
+    getDefaultModel,
+    loading: providersLoading,
+  } = useProviders();
 
   const [name, setName] = useState('');
   const [idea, setIdea] = useState('');
@@ -32,19 +38,29 @@ export function AppStudioCreateDialog({
   const [logTail, setLogTail] = useState('');
   const logRef = useRef<HTMLPreElement | null>(null);
 
-  // Auto-pick: primeiro provider + modelo default — leigo não escolhe modelo.
+  // Wait for the DB-backed catalog before choosing. useProviders exposes the
+  // static Anthropic-first legacy list while loading, which must not override
+  // the provider explicitly marked as default by the user in Admin.
   useEffect(() => {
-    if (provider === '' && providerOptions.length > 0) {
-      const firstId = providerOptions[0].id;
-      setProvider(firstId);
-      setModel(getDefaultModel(firstId));
-    }
+    if (providersLoading || provider !== '' || providerOptions.length === 0) return;
+    const configuredDefault = enrichedProviders.find((entry) => entry.is_default)?.id;
+    const firstUsable = providerOptions.find((entry) => getDefaultModel(entry.id) !== '')?.id;
+    const selectedProvider = configuredDefault ?? firstUsable ?? providerOptions[0].id;
+    setProvider(selectedProvider);
+    setModel(getDefaultModel(selectedProvider));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerOptions.length]);
+  }, [providersLoading, providerOptions.length]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [logTail]);
+
+  const availableModels = provider ? getModelsForProvider(provider) : [];
+
+  function handleProviderChange(nextProvider: string) {
+    setProvider(nextProvider);
+    setModel(getDefaultModel(nextProvider));
+  }
 
   const canSubmit = name.trim() !== '' && provider !== '' && model !== '' && !busy;
 
@@ -102,6 +118,37 @@ export function AppStudioCreateDialog({
               placeholder={t('create.ideaPlaceholder')}
             />
           </label>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">{t('create.provider')}</span>
+              <select
+                value={provider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                disabled={busy || providersLoading}
+                className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+              >
+                <option value="" disabled>—</option>
+                {providerOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium">{t('create.model')}</span>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={busy || providersLoading || provider === ''}
+                className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+              >
+                <option value="" disabled>—</option>
+                {availableModels.map((option) => (
+                  <option key={option.id} value={option.id}>{option.name || option.id}</option>
+                ))}
+              </select>
+            </label>
+          </div>
 
           {busy && (
             <div className="space-y-2 rounded border bg-muted/20 p-3">

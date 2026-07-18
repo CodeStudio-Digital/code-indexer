@@ -1,13 +1,49 @@
-import { defineTool, type McpTool } from '../tool.js';
-import { truncateToTokens } from '../utils.js';
+import {
+  defineTool,
+  mcpAccess,
+  type McpSourceTruncation,
+  type McpTool,
+  type McpToolResult,
+} from '../tool.js';
+import { truncateToTokensDetailed } from '../utils.js';
 import { buildRepoMap } from '@mcp/services/services/repo-map.js';
 import { withProject } from './_helpers.js';
 import { basename, resolve } from 'node:path';
 import { requestMcpLocalServer } from '../server-control.js';
 import { buildProjectSummary } from '../project-summary.js';
 
+const UNBOUNDED_REPO_MAP_TOKENS = Number.MAX_SAFE_INTEGER / 4;
+
+function positiveBudget(value: unknown): number | undefined {
+  const budget = Number(value);
+  return Number.isFinite(budget) && budget > 0 ? budget : undefined;
+}
+
+function outputWithBudget(
+  text: string,
+  maxTokens: number | undefined,
+  technique: string,
+  sourceTruncations: McpSourceTruncation[] = [],
+): McpToolResult {
+  const limited = truncateToTokensDetailed(text, maxTokens);
+  if (limited.truncated) {
+    sourceTruncations.push({
+      technique,
+      inputSize: limited.inputChars,
+      outputSize: limited.retainedChars,
+      unit: 'chars',
+      recoverable: true,
+    });
+  }
+  return sourceTruncations.length > 0
+    ? { text: limited.text, sourceTruncations }
+    : limited.text;
+}
+
 const index_project = defineTool({
   name: 'index_project',
+  tier: 'admin',
+  ...mcpAccess('admin'),
   description:
     'Reconcile the structural index for one project, then start its configured semantic generation. ' +
     'Structural indexing extracts files, symbols, references and dependencies; semantic work runs in the server-owned worker. ' +
@@ -76,6 +112,8 @@ const index_project = defineTool({
 
 const get_project_overview = defineTool({
   name: 'get_project_overview',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description: 'Get a structural project overview with files, symbols, languages and semantic-generation status. Use compact=true for dense output. In compact mode, file list is capped by max_files (default 50).',
   inputSchema: {
     type: 'object',
@@ -94,7 +132,10 @@ const get_project_overview = defineTool({
     const compact = args.compact === true;
 
     if (compact) {
-      const maxFiles = (args.max_files as number) ?? 50;
+      const requestedMaxFiles = Number(args.max_files);
+      const maxFiles = Number.isFinite(requestedMaxFiles)
+        ? Math.max(0, Math.trunc(requestedMaxFiles))
+        : 50;
       const langs = Object.entries(summary.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `${l}(${c})`).join(' ');
       const directories = summary.top_directories.map((row) => `${row.path}(${row.files})`).join(' ');
       const shownFiles = files.slice(0, maxFiles);
@@ -103,7 +144,21 @@ const get_project_overview = defineTool({
         : '';
       const semantic = `${summary.semantic.state} ${summary.semantic.indexed_items}/${summary.semantic.expected_items} (${summary.semantic.coverage_pct}%)`;
       const out = `${project.name} | ${summary.file_count}f ${summary.symbol_count}s ${summary.total_lines}L\nlangs: ${langs}\ndirectories: ${directories}\nstructural: ${summary.structural.state}\nsemantic: ${semantic}\nfiles:\n${shownFiles.map(f => `  ${f.path} (${f.language},${f.line_count}L)`).join('\n')}${fileTrunc}`;
-      return truncateToTokens(out, args.max_tokens as number | undefined);
+      const sourceTruncations: McpSourceTruncation[] = files.length > shownFiles.length
+        ? [{
+            technique: 'mcp-project-overview-file-limit',
+            inputSize: files.length,
+            outputSize: shownFiles.length,
+            unit: 'items',
+            recoverable: true,
+          }]
+        : [];
+      return outputWithBudget(
+        out,
+        positiveBudget(args.max_tokens),
+        'mcp-project-overview-token-budget',
+        sourceTruncations,
+      );
     }
 
     const sections = [
@@ -121,12 +176,18 @@ const get_project_overview = defineTool({
       sections.push('', '## Top-level directories', summary.top_directories.map(row => `- ${row.path}: ${row.files} files`).join('\n'));
     }
     sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines)`).join('\n'));
-    return truncateToTokens(sections.join('\n'), args.max_tokens as number | undefined);
+    return outputWithBudget(
+      sections.join('\n'),
+      positiveBudget(args.max_tokens),
+      'mcp-project-overview-token-budget',
+    );
   }),
 });
 
 const get_project_pulse = defineTool({
   name: 'get_project_pulse',
+  tier: 'bootstrap',
+  ...mcpAccess('read'),
   description: 'Ultra-compact project overview (~250 tokens). Use this as the FIRST contextualization tool. Pass format="json" for a structured response.',
   inputSchema: {
     type: 'object',
@@ -162,18 +223,27 @@ const get_project_pulse = defineTool({
 // dependency and symbol context is available through overview + repo map.
 const get_repo_map = defineTool({
   name: 'get_repo_map',
-  description: 'Structural map of the repository (~2000 tokens). Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Use after get_project_pulse for a mental model of the codebase architecture.',
+  tier: 'navigate',
+  ...mcpAccess('read'),
+  description: 'Structural map of the repository. Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Returns the complete map by default; pass max_tokens only when an explicit compact budget is required. Use after get_project_pulse for a mental model of the codebase architecture.',
   inputSchema: {
     type: 'object',
     properties: {
       project_name: { type: 'string' },
-      max_tokens: { type: 'number', description: 'Token budget (default 2000)' },
+      max_tokens: { type: 'number', description: 'Optional approximate token budget. Omit for the complete map.' },
     },
     required: ['project_name'],
   },
   handler: withProject((args, { db }, project) => {
-    const maxTokens = (args.max_tokens as number) ?? 2000;
-    return buildRepoMap(db, project.id, maxTokens);
+    // buildRepoMap historically imposed its own 2k default without exposing
+    // whether anything was omitted. Materialize the complete structural map;
+    // only an explicit caller budget may shorten it, with exact char evidence.
+    const completeMap = buildRepoMap(db, project.id, UNBOUNDED_REPO_MAP_TOKENS);
+    return outputWithBudget(
+      completeMap,
+      positiveBudget(args.max_tokens),
+      'mcp-repo-map-token-budget',
+    );
   }),
 });
 

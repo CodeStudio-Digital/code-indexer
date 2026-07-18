@@ -30,7 +30,36 @@
     "resume": "Resume build",
     "cancelBuild": "Cancel build",
     "cancelTitle": "Cancel the build?",
-    "cancelBody": "Files and the plan remain, but active work will be cancelled."
+    "cancelBody": "Files and the plan remain, but active work will be cancelled.",
+    "sessions": {
+      "railButton": "Individual sessions",
+      "newTitle": "Work on {{app}}",
+      "selectionRequired": "Open an individual session to select elements and request changes.",
+      "open": "Open sessions"
+    },
+    "team": {
+      "title": "App team",
+      "railLabel": "App panels",
+      "railButton": "Team and rules",
+      "collapse": "Collapse team",
+      "loading": "Loading the persistent team…",
+      "outdatedApi": "The backend is still using the old contract. Restart CodeStudio to load the new API; no v5 fallback will be used.",
+      "rulesTitle": "Golden rules",
+      "rulesHint": "They apply to the Master and every specialist on their next cycles.",
+      "rolesTitle": "Agents and runtime",
+      "rolesHint": "Select a role to configure provider, model, fallback, skills, pinned tools, prompt and reasoning. Role capabilities are inherited automatically.",
+      "master": "Coordinator Master",
+      "skillCount_one": "{{count}} skill",
+      "skillCount_other": "{{count}} skills",
+      "toolCount_one": "{{count}} pinned tool",
+      "toolCount_other": "{{count}} pinned tools",
+      "fallbackValue": "fallback: {{provider}} · {{model}}",
+      "noFallback": "no fallback",
+      "failoverHint": "Fallback is only used for transient failures or real provider outages. Configuration, permission, test and logic errors block clearly.",
+      "openAgents": "Open details in Agents",
+      "advancedHint": "Transcripts, tool calls, metrics and diagnostics remain in Agents.",
+      "status": { "idle": "available", "running": "working", "paused": "paused", "completed": "completed", "error": "error" }
+    }
   },
   "home": {
     "title": "My apps",

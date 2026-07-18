@@ -151,6 +151,25 @@ export class ProjectVectorStorePool {
     }
   }
 
+  /** Exclusive administrative cleanup for a retired generation prefix. */
+  async dropVirtualTablesWithPrefix(dbPath: string, prefix: string): Promise<number> {
+    const key = pathKey(dbPath);
+    const entry = this.getEntry(dbPath);
+    entry.draining = true;
+    await this.waitForIdle(entry);
+    try {
+      if (this.entries.get(key) !== entry) throw new Error(`Vector database was evicted: ${dbPath}`);
+      await entry.database.loadExtension();
+      return entry.database.dropVirtualTablesWithPrefix(prefix);
+    } finally {
+      if (this.entries.get(key) === entry) {
+        entry.draining = false;
+        entry.lastUsedAt = this.now();
+        this.bump(key);
+      }
+    }
+  }
+
   sweepIdle(): void {
     const now = this.now();
     for (const [key, entry] of [...this.entries]) {

@@ -9,6 +9,7 @@ import {
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
+import { resolveAgentSelection } from '../../../custom-agents.js';
 
 interface SpecResponseBody {
   approved: boolean;
@@ -82,7 +83,7 @@ export function mountCoderSpecResponseRoute(
 
     if (approved) {
       const session = sessionStore.getSession(id);
-      if (session?.agent === 'spec') {
+      if (resolveAgentSelection(deps.providerStore, session?.agent)?.baseAgentId === 'spec') {
         try {
           sessionStore.setSessionAgent(id, 'build');
           const reminder: AgentMessage = {

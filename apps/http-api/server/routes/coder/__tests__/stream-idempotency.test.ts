@@ -59,6 +59,7 @@ function setup(
   recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys(),
   opts: {
     sessionAgent?: string | null;
+    customAgents?: unknown[];
     globalFresh?: boolean;
     projectFresh?: boolean;
     ensureStructuralReady?: () => Promise<{
@@ -88,7 +89,13 @@ function setup(
   };
   const deps = {
     sessionStore,
-    providerStore: { getProvider: () => undefined, listModels: () => [] },
+    providerStore: {
+      getProvider: () => undefined,
+      listModels: () => [],
+      getAppSetting: (key: string) => key === 'coder_custom_agents_v1' && opts.customAgents
+        ? JSON.stringify(opts.customAgents)
+        : null,
+    },
     db: { getProject: () => projectId == null ? null : ({ id: projectId, root_path: 'D:/fake' }) },
     projectIndexService: {
       ensureFresh: () => {},
@@ -300,6 +307,39 @@ describe('POST /messages idempotency', () => {
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
     expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'explore' });
+  });
+
+  it('resolves a custom agent into runtime prompt, skills, and tool allowlist', async () => {
+    const custom = {
+      id: '12345678-abcd-4321-abcd-123456789abc',
+      name: 'Security reviewer',
+      description: 'Reviews risky changes',
+      baseAgentId: 'plan',
+      prompt: 'Focus on trust boundaries.',
+      skillIds: ['security-review'],
+      toolNames: ['read_file', 'grep'],
+      enabled: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const selectionId = `custom:${custom.id}`;
+    const h = setup(new RecentMessageKeys(), { sessionAgent: selectionId, customAgents: [custom] });
+
+    const res = await h.post('/api/coder/sessions/1/messages', {
+      content: 'review this change',
+      selected_skill_ids: ['repo-review'],
+      client_msg_id: 'K8',
+    });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    expect(runCoderMock.mock.calls[0][0]).toMatchObject({
+      agent: 'plan',
+      agentSelectionId: selectionId,
+      customAgentPrompt: custom.prompt,
+      allowedToolNames: custom.toolNames,
+      selectedSkillIds: ['security-review', 'repo-review'],
+    });
   });
 });
 

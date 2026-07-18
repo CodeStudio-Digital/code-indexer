@@ -9,9 +9,10 @@
  * Writing, git, and admin tools are dead weight in the prompt until the
  * conversation actually calls for them.
  *
- * This module defines 3 tiers and a filter helper. The runner builds its
- * `tools` array each turn by intersecting the registry with the currently
- * active tier set — which starts as {bootstrap} and grows monotonically.
+ * This module defines the three base-profile tiers plus explicit functional
+ * capability tiers. The runner builds its `tools` array each turn by
+ * intersecting the registry with the currently active tier set — which starts
+ * with {bootstrap}, adds runtime-owned capabilities, and grows monotonically.
  * Tiers never shrink, so once navigate is promoted, the tool list only
  * grows; this matters for server-side prefix caching (Anthropic ephemeral
  * / ZAI auto-cache) because the prefix becomes stable again from the turn
@@ -23,19 +24,50 @@
  */
 
 /**
- * Core tiers are the 3 built-in static tiers. External MCP servers can also
+ * Core tiers are the built-in static tiers. External MCP servers can also
  * define **custom named tiers** (e.g., "cloudflare", "github") that the agent
  * unlocks on-demand via `expand_toolset`. ToolTier is widened to `string` so
  * the runner, filter, and promotion logic work generically with any tier name.
  */
-import { APP_STUDIO_TOOLS, COMPANY_TOOLS, BUILDER_TOOLS } from '@mcp/code-agent/tools/tiers-company.js';
+import {
+  APP_STUDIO_TOOLS,
+  BUILDER_TOOLS,
+  COMPANY_TOOLS,
+  DESIGN_SYSTEM_CONSUMER_TOOLS,
+  DESIGN_SYSTEM_STUDIO_TOOLS,
+  QA_TOOLS,
+  SANDBOX_TOOLS,
+} from '@mcp/code-agent/tools/tiers-company.js';
 
 // Company/builder tool catalogs live in a sibling module (pure data) to keep
 // this file focused on tiering logic; re-exported so tiers.ts stays the single
 // public entry point for tier data.
-export { APP_STUDIO_TOOLS, COMPANY_TOOLS, BUILDER_TOOLS };
+export {
+  APP_STUDIO_TOOLS,
+  BUILDER_TOOLS,
+  COMPANY_TOOLS,
+  DESIGN_SYSTEM_CONSUMER_TOOLS,
+  DESIGN_SYSTEM_STUDIO_TOOLS,
+  QA_TOOLS,
+  SANDBOX_TOOLS,
+};
 
-export type CoreTier = 'bootstrap' | 'navigate' | 'admin' | 'master' | 'preview' | 'api' | 'diagram' | 'db';
+export type CoreTier =
+  | 'bootstrap'
+  | 'navigate'
+  | 'admin'
+  | 'master'
+  | 'preview'
+  | 'api'
+  | 'diagram'
+  | 'db'
+  | 'company'
+  | 'sandbox'
+  | 'qa'
+  | 'app'
+  | 'design-system-studio'
+  | 'design-system-consumer'
+  | 'sprite-studio';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -48,6 +80,13 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'api',
   'diagram',
   'db',
+  'company',
+  'sandbox',
+  'qa',
+  'app',
+  'design-system-studio',
+  'design-system-consumer',
+  'sprite-studio',
 ]);
 
 /**
@@ -68,6 +107,7 @@ export const PREVIEW_TOOLS: ReadonlySet<string> = new Set<string>([
   'preview_performance',
   'preview_memory',
   'preview_storage',
+  'preview_snapshot',
   'preview_click',
   'preview_fill',
   'preview_type',
@@ -125,26 +165,39 @@ export const DIAGRAM_TOOLS: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
+ * Sprite Studio tools — registered only for projects carrying the
+ * `.sprite-studio/` marker. They used to ride the unknown-tool bootstrap
+ * fallback, which made the administrative catalog mislabel another product
+ * surface as core infrastructure.
+ */
+export const SPRITE_STUDIO_TOOLS: ReadonlySet<string> = new Set<string>([
+  'sprite_get_project',
+  'sprite_list_assets',
+  'sprite_generate',
+  'sprite_process',
+  'sprite_export',
+]);
+
+/**
  * Profile = user-facing shorthand for "which tiers start active".
  * - bootstrap: only Tier 0 (default for new sessions)
  * - navigate:  Tier 0 + Tier 1 (default when the user asks to "implement"/"refactor")
- * - full:      all tiers (default for resumed sessions and --profile full)
+ * - full:      all three base tiers (default for resumed sessions and --profile full)
  *
- * Note: Custom tiers are NEVER included in profile expansion. Even 'full'
- * only activates the 3 core tiers. The agent explicitly opts in to custom
- * tiers via `expand_toolset`, keeping the prompt lean.
+ * Note: Functional and external tiers are NEVER included in profile expansion.
+ * Even 'full' only activates bootstrap+navigate+admin. runCoder derives product
+ * capabilities from runtime context; external tiers remain explicit opt-ins.
  */
 export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 
 /**
- * Tier 0 — bootstrap. Always visible. ~45 tools: the minimal read/interaction
- * core + orchestration discovery (expand_toolset/find_tools/spawn_agent) +
- * the company comms that masters/subordinates need on turn 1. Cold tools
+ * Tier 0 — bootstrap. Always visible: the minimal read/interaction core plus
+ * orchestration discovery (expand_toolset/find_tools/spawn_agent). Company,
+ * App, QA, sandbox, Design System and studio tools have contextual tiers. Cold tools
  * (≤12 calls in 12k turns) were demoted to navigate — see "Phase B" markers.
  *
- * Exported for test access — the membership of company-specific tools
- * (kanban subordinate, design-system) is treated as a contract that
- * regression tests should be able to inspect directly.
+ * Exported for test access so regression tests can keep the global bootstrap
+ * surface free of product-specific capabilities.
  */
 export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Native — minimal read/interaction set.
@@ -167,46 +220,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // each across 12k turns. Subordinates run profile 'navigate'+ and masters
   // 'full', so they still see them; only solo bootstrap sessions defer them
   // until expand_toolset('navigate').
-  // Subordinate variants (company mode — same events, master-directed names)
-  'ask_master',
-  'submit_plan_to_master',
-  'submit_tasks_to_master',
-  // Company board tools — mandatory communication channel for master +
-  // subordinates. Keep explicit so they cannot disappear from tool config.
-  'post_to_board',
-  'read_board',
-  'set_agent_status',
-  'kanban_read_my_card',
-  // Unified kanban tools (company mode — master + subordinate use these).
-  // Sub omits card_id and auto-resolves to assigned card; master passes
-  // card_id explicitly. Replaces the prior split `kanban_my_*` (sub) +
-  // `kanban_add_comment`/`kanban_update_checklist` (master) which
-  // confused agents about which variant to call.
-  'kanban_post_comment',
-  'kanban_update_objectives',
-  // Subordinate-only column transition (in_progress → review with
-  // constraint). Distinct from master's generic `kanban_move_card`.
-  'kanban_move_to_review',
-  // Design System Creator tools (company mode — DS sessions). All four
-  // were previously visible only via the `'bootstrap'` fallback in
-  // `getToolTier`; registering them here makes the contract grep-able
-  // and matches the pattern used for the kanban subordinate tools.
-  'ds_get_session_info',
-  'ds_record_component',
-  'ds_list_components',
-  'ds_audit_package',
-  'ds_set_version_status',
-  'ds_publish_version',
-  // Design pipeline (máquina de etapas do DS Studio, mig 190).
-  'ds_get_pipeline',
-  'ds_submit_stage',
-  'ds_analyze_import',
-  // DS consumer tools (builder projects linked to a PUBLISHED design
-  // system — `builder_json.designSystem`). Read-only queries; always on
-  // so the agent checks the inventory before inventing components.
-  'ds_components',
-  'ds_component',
-  'ds_docs',
+  // Company collaboration, App Studio, Design System, QA, sandbox and other
+  // product capabilities live in dedicated contextual tiers. runCoder
+  // auto-activates those tiers only when the matching runtime is present.
   'expand_toolset',
   'find_tools',
   // spawn_agent is orchestration — same tier as expand_toolset/find_tools.
@@ -425,6 +441,7 @@ export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   'wait_for_subordinates',
   'resume_subordinate',
   'approve_subordinate_plan',
+  'approve_subordinate_plans',
   'approve_subordinate_tasks',
   'answer_subordinate_question',
   'abort_subordinate_agent',
@@ -434,13 +451,20 @@ export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   'finalize_subordinates',
   'list_containers',
   'read_container_logs',
-  'respond_to_inbox',
+  'recommend_role',
+  'broadcast_to_roles',
+  'kanban_plan_graph',
   // review_subordinate_work — master runs the review pipeline over a sub's
   // snapshots (buildMasterTools). Was an untiered bootstrap fallback.
   'review_subordinate_work',
+  // Company pipeline orchestration is constructed by buildMasterTools. It is
+  // not a subordinate sandbox capability and belongs to the master identity.
+  'list_pipelines',
+  'start_pipeline',
+  'get_pipeline_status',
+  'stop_pipeline',
   // Master-only kanban management. The unified `kanban_post_comment`
-  // and `kanban_update_objectives` stay in bootstrap because they're
-  // shared with subordinates.
+  // and `kanban_update_objectives` live in the shared company tier.
   'kanban_create_card',
   'kanban_move_card',
   'kanban_update_meta',
@@ -483,9 +507,9 @@ export interface GetToolTierOpts {
  * Return the tier a tool belongs to.
  *
  * Runtime overrides win first (external MCP tools, tier configured per-server
- * in the DB). Then an EXPLICIT lookup across every static set. Company/builder
- * tools resolve to `bootstrap` because they are always-on within their
- * (conditionally-registered) sessions.
+ * in the DB). Then an EXPLICIT lookup across every static set. Product
+ * capabilities keep their own named tiers and are auto-activated by runCoder
+ * only in the matching runtime context.
  *
  * Unlisted tools default to `bootstrap` so a newly added internal tool is
  * never accidentally hidden — BUT this fallback is no longer load-bearing:
@@ -508,13 +532,18 @@ export function getToolTier(
   if (API_TOOLS.has(name)) return 'api';
   if (DIAGRAM_TOOLS.has(name)) return 'diagram';
   if (DB_TOOLS.has(name)) return 'db';
-  // Always-on within their own session class; map to bootstrap (see set docs).
-  if (COMPANY_TOOLS.has(name) || BUILDER_TOOLS.has(name) || APP_STUDIO_TOOLS.has(name)) return 'bootstrap';
+  if (COMPANY_TOOLS.has(name)) return 'company';
+  if (SANDBOX_TOOLS.has(name)) return 'sandbox';
+  if (QA_TOOLS.has(name)) return 'qa';
+  if (APP_STUDIO_TOOLS.has(name)) return 'app';
+  if (DESIGN_SYSTEM_STUDIO_TOOLS.has(name)) return 'design-system-studio';
+  if (DESIGN_SYSTEM_CONSUMER_TOOLS.has(name)) return 'design-system-consumer';
+  if (SPRITE_STUDIO_TOOLS.has(name)) return 'sprite-studio';
   // Unlisted — no explicit tier.
   if (opts?.strict) {
     throw new Error(
       `getToolTier: tool "${name}" is not in any tier set. Add it to a tier in ` +
-        `tiers.ts (or COMPANY_TOOLS / BUILDER_TOOLS / APP_STUDIO_TOOLS) so it stops riding the ` +
+        `tiers.ts (or one of the functional tier sets) so it stops riding the ` +
         `silent bootstrap fallback.`,
     );
   }
@@ -534,8 +563,12 @@ export function allTieredToolNames(): Set<string> {
     ...DIAGRAM_TOOLS,
     ...DB_TOOLS,
     ...COMPANY_TOOLS,
-    ...BUILDER_TOOLS,
+    ...SANDBOX_TOOLS,
+    ...QA_TOOLS,
     ...APP_STUDIO_TOOLS,
+    ...DESIGN_SYSTEM_STUDIO_TOOLS,
+    ...DESIGN_SYSTEM_CONSUMER_TOOLS,
+    ...SPRITE_STUDIO_TOOLS,
   ]);
 }
 
@@ -549,6 +582,54 @@ export function profileToTiers(profile: CoderProfile): Set<ToolTier> {
     case 'full':
       return new Set<ToolTier>(['bootstrap', 'navigate', 'admin']);
   }
+}
+
+/** Runtime facts used to derive capability tiers that must be active on turn 1. */
+export interface ContextualToolTierContext {
+  company?: boolean;
+  sandbox?: boolean;
+  qa?: boolean;
+  app?: boolean;
+  designSystemStudio?: boolean;
+  designSystemConsumer?: boolean;
+  spriteStudio?: boolean;
+  isMaster?: boolean;
+  previewAvailable?: boolean;
+  agentId?: string | null;
+  companyRole?: string | null;
+}
+
+/**
+ * Resolve the non-profile tiers implied by the current runtime identity.
+ *
+ * A tier controls visibility, not authority: tools still have to be registered
+ * for the runtime and pass disabled/policy filters. Keeping this derivation
+ * pure gives launch paths and regression tests one contract instead of a pile
+ * of role-specific pins.
+ */
+export function contextualTiersForRuntime(
+  context: ContextualToolTierContext,
+): Set<ToolTier> {
+  const tiers = new Set<ToolTier>();
+  const role = context.companyRole?.trim().toLowerCase() ?? '';
+  if (context.company) tiers.add('company');
+  if (context.sandbox) tiers.add('sandbox');
+  if (context.qa) tiers.add('qa');
+  if (context.app) tiers.add('app');
+  if (context.designSystemStudio) tiers.add('design-system-studio');
+  if (context.designSystemConsumer) tiers.add('design-system-consumer');
+  if (context.spriteStudio) tiers.add('sprite-studio');
+  if (context.isMaster) tiers.add('master');
+  if (
+    context.previewAvailable
+    || ['qa', 'frontend', 'ux', 'fullstack'].includes(role)
+  ) {
+    tiers.add('preview');
+  }
+  if (context.agentId === 'api') tiers.add('api');
+  if (context.agentId === 'diagram') tiers.add('diagram');
+  if (context.agentId === 'app_db' || role === 'database') tiers.add('db');
+  return tiers;
 }
 
 /**
@@ -740,6 +821,126 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   diagram_export: 'Export a diagram to SVG/PNG via the live editor',
 };
 
+/** Searchable one-line identity for every contextual and master capability. */
+const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
+  // Company collaboration
+  ask_master: 'Ask the Company master for a blocking decision or clarification',
+  submit_plan_to_master: 'Submit this subordinate plan to the Company master for approval',
+  submit_tasks_to_master: 'Submit a gated subordinate task list to the Company master',
+  submit_specification_to_master: 'Escalate a completed specification to the Company master',
+  send_to_agent: 'Send a direct Company message to another agent role',
+  send_to_master: 'Send a non-blocking Company message to the master',
+  respond_to_inbox: 'Reply to a pending Company inbox message',
+  read_my_inbox: 'Read messages addressed to this Company agent',
+  check_inbox_answer: 'Check whether a prior Company inbox question was answered',
+  post_to_board: 'Post a status, finding, blocker, or decision to the Company board',
+  read_board: 'Read the shared Company board',
+  set_agent_status: 'Publish this Company agent status',
+  kanban_read_my_card: 'Read the Kanban card assigned to this subordinate',
+  kanban_post_comment: 'Post a comment to a Company Kanban card',
+  kanban_update_objectives: 'Add or complete objectives on a Company Kanban card',
+  kanban_move_to_review: 'Move the assigned subordinate card to review',
+  read_shared_file: 'Read a file from the Company shared drive',
+  write_shared_file: 'Write a file to the Company shared drive',
+  append_shared_file: 'Append content to a Company shared-drive file',
+  delete_shared_file: 'Delete a file from the Company shared drive',
+  list_shared_files: 'List files in the Company shared drive',
+  send_message: 'Send a message to a live agent in the current Company tree',
+  send_input: 'Interrupt a live Company agent with additional input',
+  list_agents: 'List agents and statuses in the current Company tree',
+  wait_agents: 'Wait for one or more Company agents to progress or finish',
+  followup_task: 'Send follow-up work to an existing Company agent',
+  env_list: 'List shared environment variables for this Company session',
+  env_read: 'Read one shared Company environment variable',
+  env_set: 'Create or update a shared Company environment variable',
+  env_delete: 'Delete a shared Company environment variable',
+  env_validate: 'Validate required shared Company environment variables',
+
+  // Sandbox / builder
+  docs_delete: 'Delete a document from the sandbox workspace docs directory',
+  docs_index_update: 'Refresh the sandbox documentation index',
+  docs_list: 'List documents stored inside the sandbox workspace',
+  docs_read: 'Read a document from the sandbox workspace',
+  docs_write: 'Write a document inside the sandbox workspace',
+  read_sandbox_logs: 'Read recent logs from the bound sandbox',
+  list_services: 'List services and health in the bound sandbox',
+  service_logs: 'Read structured logs for one sandbox service',
+  service_restart: 'Restart an authorized sandbox service',
+  service_start: 'Start an authorized sandbox service',
+  service_stop: 'Stop an authorized sandbox service',
+
+  // Generic QA
+  qa_get_browser_endpoint: 'Resolve and validate the browser endpoint for a QA run',
+  qa_publish_result: 'Publish a structured QA result to the Company work graph',
+  qa_start_run: 'Start a tracked Company QA test run',
+
+  // App Studio v6
+  app_get_state: 'Read the current App Studio v6 workflow state',
+  app_get_plan: 'Read the active App Studio v6 plan revision',
+  app_update_plan: 'Validate and save a new App Studio v6 plan revision',
+  app_upsert_work_items: 'Create or update App Studio v6 work items',
+  app_request_decision: 'Request a durable product decision for the App workflow',
+  app_request_plan_approval: 'Request user approval of the active App plan',
+  app_dispatch_ready_work: 'Dispatch ready App work to its persistent specialist roles',
+  app_record_work_evidence: 'Record implementation or verification evidence for App work',
+  app_get_db_state: 'Read the database state linked to this App',
+  app_update_database: 'Apply an App database state update or migration',
+  app_run_checks: 'Run the checks owned by an App specialist role',
+
+  // Design System Studio / consumer
+  ds_get_session_info: 'Read the current Design System Studio package and version context',
+  ds_record_component: 'Record an approved component in the Design System draft',
+  ds_list_components: 'List draft and published Design System components',
+  ds_audit_package: 'Audit the Design System package before publication',
+  ds_set_version_status: 'Update the current Design System version status',
+  ds_publish_version: 'Publish the approved Design System version',
+  ds_get_pipeline: 'Read the Design System Studio pipeline state',
+  ds_submit_stage: 'Submit an artifact to a Design System pipeline stage',
+  ds_analyze_import: 'Analyze an imported package for Design System adoption',
+  ds_components: 'List components from the Design System linked to this project',
+  ds_component: 'Read one linked Design System component and its props',
+  ds_docs: 'Read documentation from the linked Design System version',
+
+  // Sprite Studio
+  sprite_get_project: 'Read the Sprite Studio project style contract and asset summary',
+  sprite_list_assets: 'List assets and versions in the Sprite Studio project',
+  sprite_generate: 'Generate and save a sprite from a visual intent',
+  sprite_process: 'Apply deterministic processing to create a sprite version',
+  sprite_export: 'Export Sprite Studio assets into the project output directory',
+
+  // Company master
+  spawn_subordinate_agent: 'Spawn a persistent Company subordinate for a role and task',
+  wait_for_subordinates: 'Wait for persistent Company subordinates to progress or finish',
+  resume_subordinate: 'Resume a stopped or failed Company subordinate',
+  approve_subordinate_plan: 'Approve or reject one subordinate plan',
+  approve_subordinate_plans: 'Resolve multiple pending subordinate plans in one operation',
+  approve_subordinate_tasks: 'Approve or reject a subordinate task list',
+  answer_subordinate_question: 'Answer a blocking question from a subordinate',
+  abort_subordinate_agent: 'Abort a running Company subordinate',
+  list_subordinates: 'List persistent subordinates and their current states',
+  list_company_projects: 'List projects available to the Company team',
+  forward_to_agent: 'Forward context or instructions to a Company agent',
+  finalize_subordinates: 'Finalize completed subordinate runs and collect their results',
+  list_containers: 'List containers owned by the Company session',
+  read_container_logs: 'Read logs from a Company-managed container',
+  recommend_role: 'Recommend the best Company role for a task',
+  broadcast_to_roles: 'Broadcast one message to multiple Company roles',
+  kanban_plan_graph: 'Create a dependency-aware Company Kanban work graph',
+  review_subordinate_work: 'Run the master review pipeline over subordinate changes',
+  list_pipelines: 'List Company execution pipelines',
+  start_pipeline: 'Start a Company execution pipeline',
+  get_pipeline_status: 'Read the current Company pipeline status',
+  stop_pipeline: 'Stop a Company execution pipeline',
+  kanban_create_card: 'Create one or more Company Kanban cards',
+  kanban_move_card: 'Move one or more Company Kanban cards between columns',
+  kanban_update_meta: 'Update Company Kanban card metadata',
+  kanban_add_dependency: 'Add a dependency between Company Kanban cards',
+  kanban_remove_dependency: 'Remove a dependency between Company Kanban cards',
+  kanban_assign_agent: 'Assign a Company agent to a Kanban card',
+  kanban_list_cards: 'List Company Kanban cards',
+  kanban_get_card: 'Read one Company Kanban card in detail',
+};
+
 /** Metadata for a single known tool. */
 export interface ToolMeta {
   name: string;
@@ -761,7 +962,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
         name,
         tier,
         source: name.startsWith('mcp__') ? 'mcp' : 'native',
-        description: SHORT_DESCRIPTIONS[name] ?? '',
+        description: SHORT_DESCRIPTIONS[name] ?? FUNCTIONAL_DESCRIPTIONS[name] ?? '',
       });
     }
   };
@@ -773,11 +974,13 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('api', API_TOOLS);
   push('diagram', DIAGRAM_TOOLS);
   push('db', DB_TOOLS);
-  // Company/builder tools resolve to bootstrap in getToolTier (always-on within
-  // their session class); label them as such so the catalog matches.
-  push('bootstrap', COMPANY_TOOLS);
-  push('bootstrap', BUILDER_TOOLS);
-  push('bootstrap', APP_STUDIO_TOOLS);
+  push('company', COMPANY_TOOLS);
+  push('sandbox', SANDBOX_TOOLS);
+  push('qa', QA_TOOLS);
+  push('app', APP_STUDIO_TOOLS);
+  push('design-system-studio', DESIGN_SYSTEM_STUDIO_TOOLS);
+  push('design-system-consumer', DESIGN_SYSTEM_CONSUMER_TOOLS);
+  push('sprite-studio', SPRITE_STUDIO_TOOLS);
   return result;
 }
 
@@ -792,6 +995,10 @@ export const TIER_COUNTS = {
   diagram: DIAGRAM_TOOLS.size,
   db: DB_TOOLS.size,
   company: COMPANY_TOOLS.size,
-  builder: BUILDER_TOOLS.size,
-  appStudio: APP_STUDIO_TOOLS.size,
+  sandbox: SANDBOX_TOOLS.size,
+  qa: QA_TOOLS.size,
+  app: APP_STUDIO_TOOLS.size,
+  'design-system-studio': DESIGN_SYSTEM_STUDIO_TOOLS.size,
+  'design-system-consumer': DESIGN_SYSTEM_CONSUMER_TOOLS.size,
+  'sprite-studio': SPRITE_STUDIO_TOOLS.size,
 } as const;

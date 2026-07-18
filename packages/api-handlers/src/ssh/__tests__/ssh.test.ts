@@ -9,6 +9,7 @@ import { KnownHostsStore } from '../known-hosts.js';
 import { adaptChannelToIPty } from '../ssh-pty-adapter.js';
 import { generateSshKey } from '../ssh-keys.js';
 import { TunnelManager } from '../ssh-tunnels.js';
+import { SftpManager } from '../ssh-sftp.js';
 import type { SshConnectionManager } from '../ssh-connection-manager.js';
 
 describe('KnownHostsStore (TOFU)', () => {
@@ -128,6 +129,46 @@ describe('generateSshKey', () => {
     const k = generateSshKey({ type: 'rsa', bits: 1024 }); // below floor → bumped to 4096
     expect(k.keyType).toBe('ssh-rsa');
     expect(k.publicKey.startsWith('ssh-rsa ')).toBe(true);
+  });
+});
+
+describe('SftpManager editor save', () => {
+  const spec = {
+    hostId: 'saved:project:1',
+    host: 'example.com',
+    username: 'root',
+    auth: { method: 'agent' as const },
+  };
+
+  it('uploads the edited UTF-8 text to the same remote path', async () => {
+    const sftp = new EventEmitter() as EventEmitter & {
+      writeFile: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+    };
+    sftp.writeFile = vi.fn((_path: string, _content: Buffer, done: (error?: Error | null) => void) => done(null));
+    sftp.end = vi.fn();
+
+    const client = new EventEmitter() as EventEmitter & {
+      sftp: ReturnType<typeof vi.fn>;
+    };
+    client.sftp = vi.fn((done: (error: Error | undefined, channel?: unknown) => void) => done(undefined, sftp));
+
+    const manager = {
+      acquire: vi.fn().mockResolvedValue(client),
+      release: vi.fn(),
+    } as unknown as SshConnectionManager;
+    const service = new SftpManager(manager);
+    const content = 'imagem: produção\n';
+
+    await expect(service.writeFile(spec, '/srv/app/Dockerfile', content)).resolves.toEqual({
+      size: Buffer.byteLength(content, 'utf8'),
+    });
+    expect(sftp.writeFile).toHaveBeenCalledOnce();
+    const [remotePath, uploaded] = sftp.writeFile.mock.calls[0] as [string, Buffer];
+    expect(remotePath).toBe('/srv/app/Dockerfile');
+    expect(uploaded).toEqual(Buffer.from(content, 'utf8'));
+
+    service.close(spec.hostId);
   });
 });
 

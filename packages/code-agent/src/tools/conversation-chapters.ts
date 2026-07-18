@@ -5,7 +5,6 @@ import type { CoderMessageRow, ConversationChapterRow } from '@mcp/code-agent/se
 const UNAVAILABLE = 'Conversation chapters are not available in this session.';
 const MAX_LIST_LIMIT = 50;
 const MAX_SOURCE_LIMIT = 20;
-const SOURCE_BLOCK_CAP = 8_000;
 
 function history(ctx: ToolContext) {
   return ctx.conversationHistory ?? null;
@@ -41,12 +40,6 @@ function safeSourceContent(row: CoderMessageRow): unknown {
     const copy: Record<string, unknown> = { ...block };
     if (typeof copy.base64 === 'string') {
       copy.base64 = `[binary attachment omitted: ${copy.base64.length} base64 chars]`;
-    }
-    if (typeof copy.content === 'string' && copy.content.length > SOURCE_BLOCK_CAP) {
-      copy.content = `${copy.content.slice(0, SOURCE_BLOCK_CAP)}\n[message block truncated; ${copy.content.length - SOURCE_BLOCK_CAP} chars omitted]`;
-    }
-    if (typeof copy.text === 'string' && copy.text.length > SOURCE_BLOCK_CAP) {
-      copy.text = `${copy.text.slice(0, SOURCE_BLOCK_CAP)}\n[message block truncated; ${copy.text.length - SOURCE_BLOCK_CAP} chars omitted]`;
     }
     return copy;
   });
@@ -111,7 +104,21 @@ export const recallConversationTool: CoderTool = {
           chapterHeader(row),
           row.chapter_text.slice(0, 1_200),
         ].join('\n'));
-        return ok(`Matches for ${JSON.stringify(query)}:\n\n${matches.join('\n\n')} ${renderPageFooter(page.next_cursor)}`);
+        const capped = page.items.filter((row) => row.chapter_text.length > 1_200);
+        return {
+          content: `Matches for ${JSON.stringify(query)}:\n\n${matches.join('\n\n')} ${renderPageFooter(page.next_cursor)}`,
+          ...(capped.length > 0
+            ? {
+                sourceTruncations: [{
+                  technique: 'conversation-search-preview',
+                  inputSize: capped.reduce((sum, row) => sum + row.chapter_text.length, 0),
+                  outputSize: capped.length * 1_200,
+                  unit: 'chars' as const,
+                  recoverable: true,
+                }],
+              }
+            : {}),
+        };
       }
 
       if (mode === 'get') {

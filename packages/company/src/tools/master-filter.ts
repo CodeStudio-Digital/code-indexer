@@ -68,6 +68,22 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   // COMPANY_TOOL_PREFIXES entry below.
   'list_services',
   'read_sandbox_logs',
+  // Master tier identity. Keep this list aligned with MASTER_TOOLS in
+  // code-agent/tiers.ts; prefix-based allowance below covers most delegation
+  // and Kanban names, while these exact names would otherwise be filtered
+  // before tier selection can even see them.
+  'approve_subordinate_plans',
+  'list_containers',
+  'read_container_logs',
+  'recommend_role',
+  'broadcast_to_roles',
+  'respond_to_inbox',
+  'review_subordinate_work',
+  'kanban_plan_graph',
+  'list_pipelines',
+  'start_pipeline',
+  'get_pipeline_status',
+  'stop_pipeline',
 ]);
 
 export interface MasterToolFilterOptions {

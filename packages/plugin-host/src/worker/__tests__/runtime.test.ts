@@ -10,7 +10,10 @@ let bundle: string;
 
 const SAMPLE = `export default {
   tools: [
-    { name: 'echo', description: 'e', parameters: {}, handler: async (args) => ({ content: 'echo:' + args.text }) },
+    { name: 'echo', description: 'e', parameters: {}, handler: async (args) => ({
+      content: 'echo:' + args.text,
+      sourceTruncations: [{ technique: 'plugin-page-limit', inputSize: 2, outputSize: 1, unit: 'items', recoverable: true }],
+    }) },
     { name: 'boom', description: 'b', parameters: {}, handler: async () => { throw new Error('kaboom'); } },
   ],
   toolWindows: [], commands: [], themes: [],
@@ -41,6 +44,13 @@ describe('plugin worker runtime', () => {
     const r = await invokePluginTool(map, 'hello', 'echo', { text: 'hi' }, ctx);
     expect(r.content).toBe('echo:hi');
     expect(r.isError).toBeUndefined();
+    expect(r.sourceTruncations).toEqual([{
+      technique: 'plugin-page-limit',
+      inputSize: 2,
+      outputSize: 1,
+      unit: 'items',
+      recoverable: true,
+    }]);
   });
 
   it('returns an error result for an unknown tool', async () => {

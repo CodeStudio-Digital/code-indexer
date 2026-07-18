@@ -3,54 +3,34 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type {
+  CoderTool,
+  ToolContext,
+  ToolResult,
+  ToolSourceTruncation,
+} from '@mcp/code-agent/core/tool.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
+import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
+import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 
-/**
- * Default `max_tokens` injected by the bridge for verbose MCP tools when the
- * model omits the parameter. Without these, tools like `get_project_overview`
- * return unbounded content (truncateToTokens in src/mcp/server.ts is a no-op
- * when max_tokens is undefined). Override with CODER_MCP_DEFAULT_MAX_TOKENS
- * (JSON object: {"tool_name": number}).
- */
-const DEFAULT_MAX_TOKENS_BUILTIN: Record<string, number> = {
-  get_project_overview: 2000,
-  search_memory: 1500,
-};
-
-function loadDefaultMaxTokens(): Record<string, number> {
-  const raw = process.env.CODER_MCP_DEFAULT_MAX_TOKENS;
-  if (!raw) return DEFAULT_MAX_TOKENS_BUILTIN;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, number>;
-    return { ...DEFAULT_MAX_TOKENS_BUILTIN, ...parsed };
-  } catch {
-    return DEFAULT_MAX_TOKENS_BUILTIN;
-  }
-}
-
-// Raised 16k → 200k: this is now only a PATHOLOGICAL guard against multi-MB
-// payloads. Normal large arrays flow intact to the runner, which spills the
-// original (recoverable via get_tool_output), relevance-ranks via json-crush,
-// and applies the fail-safe push-time cap (see finalizeToolResultForBridge).
-// Blind head-cutting here used to pre-empt json-crush's full-array ranking.
-const MCP_OUTPUT_HARD_CAP = Number(process.env.CODER_MCP_OUTPUT_HARD_CAP ?? 200_000);
 const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 800);
+const MCP_PATHOLOGICAL_OUTPUT_CHARS = Number(
+  process.env.CODER_MCP_PATHOLOGICAL_OUTPUT_CHARS ?? 8_000_000,
+);
+const MCP_PATHOLOGICAL_STORE_MAX_CHARS = Number(
+  process.env.CODER_MCP_PATHOLOGICAL_STORE_MAX_CHARS ?? 32_000_000,
+);
 /**
  * "Unrestricted tool output" overrides — picked when the active session has
  * `unrestricted_tool_output = 1`. Deliberately not Infinity so the cap arithmetic
  * keeps working on pathological outputs. Auto-compaction in the runner still
  * runs above PRUNE_MINIMUM, so this is not a context-window bypass.
  */
-const UNRESTRICTED_MCP_HARD_CAP = Number(
-  process.env.CODER_UNRESTRICTED_MCP_HARD_CAP ?? 1_000_000,
-);
 const UNRESTRICTED_READ_FILE_HARD_MAX = Number(
   process.env.CODER_UNRESTRICTED_READ_FILE_HARD_MAX ?? 5_000,
 );
@@ -82,6 +62,74 @@ function schemaProperties(schema: JsonSchema): Record<string, unknown> | null {
 function schemaHasProperty(schema: JsonSchema, property: string): boolean {
   const props = schemaProperties(schema);
   return props ? property in props : false;
+}
+
+/** Last-resort guard for a broken/hostile MCP server. */
+function guardPathologicalMcpOutputDetailed(
+  text: string,
+  ctx: ToolContext,
+  pathologicalCap = MCP_PATHOLOGICAL_OUTPUT_CHARS,
+): { content: string; sourceTruncations?: ToolSourceTruncation[] } {
+  const guardCap = Number.isFinite(pathologicalCap) && pathologicalCap > 0
+    ? Math.floor(pathologicalCap)
+    : 8_000_000;
+  if (text.length <= guardCap) return { content: text };
+  const outputId = text.length <= MCP_PATHOLOGICAL_STORE_MAX_CHARS
+    ? ctx.toolOutputStore?.put(text) ?? undefined
+    : undefined;
+  const contextualCap = ctx.toolOutputInlineCap;
+  const inlineCap = Math.max(1, Math.min(
+    guardCap,
+    typeof contextualCap === 'number' && Number.isFinite(contextualCap) && contextualCap > 0
+      ? Math.floor(contextualCap)
+      : guardCap,
+  ));
+  const content = capToolContent(
+    text,
+    inlineCap,
+    outputId,
+    'mcp_pathological_output',
+    'head_tail',
+    'output_store',
+    text.length,
+  ).content;
+  return {
+    content,
+    sourceTruncations: [{
+      technique: 'mcp-pathological-guard',
+      inputSize: text.length,
+      outputSize: content.length,
+      unit: 'chars',
+      recoverable: !!outputId,
+      ...(outputId ? { outputId } : {}),
+    }],
+  };
+}
+
+export function guardPathologicalMcpOutput(
+  text: string,
+  ctx: ToolContext,
+  pathologicalCap = MCP_PATHOLOGICAL_OUTPUT_CHARS,
+): string {
+  return guardPathologicalMcpOutputDetailed(text, ctx, pathologicalCap).content;
+}
+
+function guardMcpToolResult(
+  result: ToolResult,
+  ctx: ToolContext,
+  additional: ToolSourceTruncation[] = [],
+): ToolResult {
+  const guarded = guardPathologicalMcpOutputDetailed(result.content, ctx);
+  const sourceTruncations = [
+    ...(result.sourceTruncations ?? []),
+    ...additional,
+    ...(guarded.sourceTruncations ?? []),
+  ];
+  return {
+    ...result,
+    content: guarded.content,
+    ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
+  };
 }
 
 /**
@@ -166,7 +214,6 @@ export class McpToolBridge {
     const res = await this.client.listTools();
 
     const disabled = loadDisabledTools();
-    const defaultMaxTokens = loadDefaultMaxTokens();
 
     // Sort by name so the tools array is bit-stable across sessions — critical
     // for prompt caching (ZAI/GLM auto-cache and Anthropic ephemeral cache both
@@ -178,11 +225,9 @@ export class McpToolBridge {
     return sortedTools.map((t): CoderTool => {
       const schema = (t.inputSchema ?? { type: 'object', properties: {} }) as unknown as JsonSchema;
       const hasProjectName = schemaHasProperty(schema, 'project_name');
-      const hasMaxTokens = schemaHasProperty(schema, 'max_tokens');
       const publicSchema = stripInjectedProjectName(schema);
 
       const overlayHandler = getOverlayHandler(t.name);
-      const builtinDefault = defaultMaxTokens[t.name];
 
       return {
         name: `mcp__${t.name}`,
@@ -201,21 +246,9 @@ export class McpToolBridge {
 
           const overlay = ctx.overlay ?? toolCtx.overlay;
           const projectRoot = toolCtx.cwd;
-
-          // 1. Short-circuit via overlay when possible (dirty files skip MCP)
-          if (overlay && overlayHandler?.pre) {
-            const local = overlayHandler.pre(args, overlay, projectRoot);
-            if (local) return capResult(local, toolCtx);
-          }
-
-          // 2. Delegate to the real MCP server
           const finalArgs = { ...args };
           if (hasProjectName) {
             finalArgs.project_name = ctx.projectName;
-          }
-          // Inject default max_tokens for verbose tools when the model omits it.
-          if (hasMaxTokens && finalArgs.max_tokens === undefined && builtinDefault) {
-            finalArgs.max_tokens = builtinDefault;
           }
           // Clamp read_file.max_lines to a hard absolute maximum and tell
           // the caller via a tiny synthetic prefix on the response when the
@@ -234,10 +267,30 @@ export class McpToolBridge {
             const requested = typeof finalArgs.max_lines === 'number' ? finalArgs.max_lines : null;
             if (requested != null && requested > effectiveReadFileHardMax) {
               finalArgs.max_lines = effectiveReadFileHardMax;
-              clampNote = `${truncationMarker(`max_lines clamped from ${requested} to ${effectiveReadFileHardMax}`, 'bridge cap')}\n`;
+              // Argument normalization is not itself proof that the source was
+              // truncated: a 20-line file still fits after a 5,000→800 clamp.
+              // The MCP producer supplies structured omission metadata only
+              // when lines are actually left out.
+              clampNote = `[note: max_lines clamped from ${requested} to ${effectiveReadFileHardMax} by bridge]\n`;
             }
           }
+
+          // 1. Short-circuit via overlay when possible (dirty files skip MCP).
+          // Use the already-clamped args so a dirty file cannot bypass the
+          // same read_file line safety boundary as the remote MCP path.
+          if (overlay && overlayHandler?.pre) {
+            const local = overlayHandler.pre(finalArgs, overlay, projectRoot);
+            if (local) {
+              return guardMcpToolResult(
+                { ...local, content: clampNote + local.content },
+                toolCtx,
+              );
+            }
+          }
+
+          // 2. Delegate to the real MCP server
           let mcpText: string;
+          let mcpSourceTruncations: ToolSourceTruncation[] = [];
           try {
             const result = await this.client.callTool({ name: t.name, arguments: finalArgs });
             const text = (result.content as Array<{ type: string; text?: string }> | undefined)
@@ -249,6 +302,9 @@ export class McpToolBridge {
               return err(message, inferToolErrorInfo(`mcp__${t.name}`, message));
             }
             mcpText = text;
+            mcpSourceTruncations = normalizeSourceTruncations(
+              (result as { _meta?: { sourceTruncations?: unknown } })._meta?.sourceTruncations,
+            ).map(({ outputId: _remoteOutputId, ...source }) => source);
           } catch (e) {
             return err(`MCP tool '${t.name}' failed: ${e instanceof Error ? e.message : String(e)}`, {
               code: 'MCP_CALL_FAILED',
@@ -260,12 +316,14 @@ export class McpToolBridge {
 
           // 3. Post-process — merge overlay data into the MCP output
           if (overlay && overlayHandler?.postProcess) {
-            return capResult(
-              overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot),
-              toolCtx,
-            );
+            const merged = overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot);
+            return guardMcpToolResult(merged, toolCtx, mcpSourceTruncations);
           }
-          return ok(applyOutputCap(clampNote + mcpText, toolCtx));
+          // Do not cut here: the runner must see the complete raw payload so
+          // it can spill it to ToolOutputStore before semantic reduction and
+          // the context-relative fail-safe cap. A bridge-level head cut made
+          // the omitted portion permanently unrecoverable.
+          return guardMcpToolResult(ok(clampNote + mcpText), toolCtx, mcpSourceTruncations);
         },
       };
     });
@@ -334,32 +392,6 @@ export class McpToolBridge {
     this.client = null;
     this.transport = null;
   }
-}
-
-/**
- * Hard-cap the textual output of any MCP tool. Prevents a single rogue call
- * (or one where the model forgot to pass max_tokens) from injecting tens of
- * thousands of tokens into the conversation history. The marker is
- * deterministic so identical truncations preserve prefix-cache stability.
- *
- * The cap scales with the session's tool-output cap LEVEL via `capFor`:
- * `MCP_OUTPUT_HARD_CAP` (≈200k) base, up to `UNRESTRICTED_MCP_HARD_CAP` (≈1 MB)
- * at `max` and ≈4 MB at `ultra`.
- * Useful for sessions doing Unity work or large file reads where truncation
- * actively degrades the agent's quality.
- */
-function applyOutputCap(text: string, ctx?: ToolContext): string {
-  const cap = capFor(ctx?.toolOutputCapLevel ?? 'economic', MCP_OUTPUT_HARD_CAP, UNRESTRICTED_MCP_HARD_CAP);
-  if (text.length <= cap) return text;
-  return (
-    text.slice(0, cap) +
-    `\n\n${truncationMarker(`output capped at ${cap} chars`, 'refine your query, use max_tokens/limit, or paginate via offset')}`
-  );
-}
-
-/** Apply applyOutputCap to a ToolResult, preserving isError. */
-function capResult(r: ToolResult, ctx?: ToolContext): ToolResult {
-  return { ...r, content: applyOutputCap(r.content, ctx) };
 }
 
 /**

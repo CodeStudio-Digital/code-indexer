@@ -129,6 +129,9 @@ describe('rag_search_docs rendering', () => {
             api_symbol: 'useEffect',
             api_signature: 'useEffect(setup, dependencies?)',
             snippet: 'snippet',
+            snippet_source_chars: 900,
+            snippet_retained_chars: 480,
+            snippet_truncated: true,
             score: 0.01,
             relevance: 0.8,
             summary: null,
@@ -144,6 +147,13 @@ describe('rag_search_docs rendering', () => {
     // Deep-link anchor + API signature surfaced for grounding.
     expect(res.content).toContain('https://react.dev/x#useeffect');
     expect(res.content).toContain('Signature: useEffect(setup, dependencies?)');
+    expect(res.sourceTruncations).toEqual([{
+      technique: 'docs-search-snippet-preview',
+      inputSize: 900,
+      outputSize: 480,
+      unit: 'chars',
+      recoverable: true,
+    }]);
   });
 
   it('passes scope + project_id through and reports the scoped collections', async () => {
@@ -188,5 +198,40 @@ describe('rag_search_docs rendering', () => {
     await ragSearchDocsTool.handler({ query: 'q', limit: 35 }, ctx);
 
     expect(seen).toMatchObject({ limit: 35 });
+  });
+
+  it('declares an omitted top-K result set separately from snippet previews', async () => {
+    setGlobalDocSearch(
+      backendReturning({
+        results: [{
+          chunk_id: 1,
+          collection: 'docs',
+          source_id: 1,
+          source_uri: null,
+          heading_path: 'A',
+          anchor: null,
+          api_symbol: null,
+          api_signature: null,
+          snippet: 'complete snippet',
+          snippet_source_chars: 16,
+          snippet_retained_chars: 16,
+          snippet_truncated: false,
+          score: 0.01,
+          relevance: null,
+          summary: null,
+          concepts: [],
+        }],
+        diag: diag({ results_before_limit: 2, results_truncated: true }),
+      }),
+    );
+
+    const res = await ragSearchDocsTool.handler({ query: 'q', limit: 1 }, ctx);
+    expect(res.sourceTruncations).toEqual([{
+      technique: 'docs-search-result-limit',
+      inputSize: 2,
+      outputSize: 1,
+      unit: 'items',
+      recoverable: true,
+    }]);
   });
 });

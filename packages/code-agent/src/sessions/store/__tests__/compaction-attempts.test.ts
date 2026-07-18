@@ -71,4 +71,35 @@ describe('durable compaction attempts', () => {
       last_attempt: { status: 'deterministic_fallback', error_message: 'both providers timed out' },
     });
   });
+
+  it('separates one root checkpoint failure from retries and stale-pending cascades', () => {
+    const recordFailure = (trigger: string, error: string): void => {
+      const id = attempts.start(db, {
+        session_id: 1,
+        run_id: 'run-1',
+        turn: 8,
+        trigger,
+        provider_chain: [],
+      });
+      attempts.finish(db, id, {
+        status: 'checkpoint_failed',
+        strategy: 'summarizer',
+        summarizer_ran: !trigger.startsWith('checkpoint_retry:'),
+        error_message: error,
+      });
+    };
+
+    recordFailure('milestone:error-resolved', 'unaligned');
+    recordFailure('checkpoint_retry:milestone:error-resolved', 'unaligned');
+    recordFailure('checkpoint_retry:milestone:error-resolved', 'unaligned');
+    recordFailure('cumulative', 'prior checkpoint still pending: unaligned');
+
+    expect(attempts.chapterStatus(db, 1).counters).toMatchObject({
+      attempts: 2,
+      checkpoint_failures: 1,
+      checkpoint_retries: 2,
+      checkpoint_blocked: 1,
+      failures: 1,
+    });
+  });
 });

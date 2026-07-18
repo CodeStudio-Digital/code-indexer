@@ -111,6 +111,27 @@ describe('execute_tasks budget integration', () => {
     expect(budgetEmits.length).toBe(0);
   });
 
+  it('maps investigate complexity to a soft research policy', async () => {
+    vi.mocked(runSubagent).mockResolvedValue({
+      reason: 'completed', finalText: 'ok',
+      usage: { input_tokens: 100, output_tokens: 50 }, sandboxViolations: [],
+    });
+    const runner = makeStubRunner('cancel_pending');
+    const { tool, ctx } = setupCtx(
+      [task({ kind: 'investigate', estimated_complexity: 'medium' })],
+      runner,
+    );
+
+    await tool.handler({}, ctx);
+
+    expect(runSubagent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runSubagent).mock.calls[0]?.[1].researchPolicy).toMatchObject({
+      depth: 'standard',
+      softToolTarget: 40,
+      softTimeTargetMs: 7 * 60_000,
+    });
+  });
+
   it('cap exceeded → budget_request emitted, "stop_after_current" skips remaining', async () => {
     vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '100');
     vi.mocked(runSubagent).mockResolvedValue({

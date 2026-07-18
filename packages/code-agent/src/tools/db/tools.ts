@@ -5,11 +5,16 @@
  * surfaced through the `db` tool tier; the read-only valve reads the SAME
  * pool metadata the UI handlers enforce with.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type {
+  CoderTool,
+  ToolContext,
+  ToolResult,
+  ToolSourceTruncation,
+} from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
 import { isWriteCommand } from '@mcp/db-drivers/command-classify.js';
-import type { DatabaseDriver, DbCommand, TableRef } from '@mcp/db-drivers/types.js';
+import type { DatabaseDriver, DbCommand, QueryResult, TableRef } from '@mcp/db-drivers/types.js';
 import { engineKind } from './scope.js';
 import { CONNECTION_PARAM, clampMaxRows, pickFromCtx, resolveToolScope } from './shared.js';
 import { scrubDbError } from './resolve-spec.js';
@@ -18,6 +23,51 @@ import { renderQueryResult, renderSchema, renderSchemaCatalog } from './render.j
 
 export const DEFAULT_SCHEMA_PAGE_SIZE = 40;
 export const MAX_SCHEMA_PAGE_SIZE = 100;
+
+function renderDbResult(result: QueryResult, ctx: ToolContext, sourceRecoverable: boolean): ToolResult {
+  const sourceTruncations: ToolSourceTruncation[] = [];
+  let cappedCells = 0;
+  let inputChars = 0;
+  let outputChars = 0;
+  let recoverable = true;
+  const content = renderQueryResult(result, {
+    outputStore: ctx.toolOutputStore,
+    onCellTruncated: (info) => {
+      cappedCells += 1;
+      inputChars += info.inputChars;
+      outputChars += info.outputChars;
+      recoverable &&= info.recoverable;
+    },
+  });
+  if (result.truncated === true) {
+    sourceTruncations.push({
+      technique: 'db-driver-row-cap',
+      // Drivers often cannot know the exact total without a second COUNT.
+      // rowCount may be exact; otherwise +1 is the smallest truthful proof
+      // that at least one row was omitted.
+      inputSize: Math.max(result.rowCount, result.rows.length + 1),
+      inputSizeExact: false,
+      outputSize: result.rows.length,
+      unit: 'rows',
+      // Re-running a SELECT/read command with pagination is safe. Re-running
+      // INSERT/UPDATE/DELETE or a mutating document command is not recovery.
+      recoverable: sourceRecoverable,
+    });
+  }
+  if (cappedCells > 0) {
+    sourceTruncations.push({
+      technique: 'db-cell-cap',
+      inputSize: inputChars,
+      outputSize: outputChars,
+      unit: 'chars',
+      recoverable,
+    });
+  }
+  return {
+    content,
+    ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
+  };
+}
 
 export function defaultSchemaFromOptions(optionsJson: unknown): string | undefined {
   if (typeof optionsJson !== 'string' || !optionsJson) return undefined;
@@ -43,10 +93,10 @@ function schemaPageOffset(value: unknown): number {
 }
 
 /** Progressive schema inspection: list cheaply, expand exactly one table. */
-export async function inspectRelationalSchema(
+export async function inspectRelationalSchemaResult(
   driver: DatabaseDriver,
   args: Record<string, unknown>,
-): Promise<string> {
+): Promise<ToolResult> {
   const schema = typeof args.schema === 'string' && args.schema.trim() ? args.schema.trim() : undefined;
   const refs = await driver.listTables(schema);
   const tableName = typeof args.table === 'string' && args.table.trim() ? args.table.trim() : undefined;
@@ -56,7 +106,7 @@ export async function inspectRelationalSchema(
     if (!ref) {
       throw new Error(`table '${tableName}' not found in the selected schema; use db_schema search to locate it`);
     }
-    return renderSchema([await driver.describeTable(ref.schema, ref.name)]);
+    return ok(renderSchema([await driver.describeTable(ref.schema, ref.name)]));
   }
 
   const search = typeof args.search === 'string' && args.search.trim() ? args.search.trim() : undefined;
@@ -65,12 +115,36 @@ export async function inspectRelationalSchema(
     : refs;
   const offset = schemaPageOffset(args.offset);
   const limit = schemaPageLimit(args.limit);
-  return renderSchemaCatalog(filtered.slice(offset, offset + limit), {
+  const page = filtered.slice(offset, offset + limit);
+  const content = renderSchemaCatalog(page, {
     total: filtered.length,
     offset,
     limit,
     search,
   });
+  const omitted = filtered.length > 0 && (offset > 0 || page.length < filtered.length);
+  return {
+    content,
+    ...(omitted
+      ? {
+          sourceTruncations: [{
+            technique: 'db-schema-page',
+            inputSize: filtered.length,
+            outputSize: page.length,
+            unit: 'items' as const,
+            recoverable: true,
+          }],
+        }
+      : {}),
+  };
+}
+
+/** Backwards-compatible string view used by direct callers/tests. */
+export async function inspectRelationalSchema(
+  driver: DatabaseDriver,
+  args: Record<string, unknown>,
+): Promise<string> {
+  return (await inspectRelationalSchemaResult(driver, args)).content;
 }
 
 const dbList: CoderTool = {
@@ -81,6 +155,7 @@ const dbList: CoderTool = {
     'credentials and does NOT connect. Call this before db_query/db_schema/db_command when ' +
     'unsure which connection to target.',
   source: 'native',
+  outputPolicy: { mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   riskLevel: 'read',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx): Promise<ToolResult> => {
@@ -107,6 +182,7 @@ const dbSchema: CoderTool = {
     '`search` to narrow. Pass exactly one `table` to fetch its columns, nullability and PK flags. ' +
     '`schema` defaults to the connection filter or the engine default. Never try to load every table definition at once.',
   source: 'native',
+  outputPolicy: { mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   riskLevel: 'read',
   parameters: {
     type: 'object',
@@ -133,7 +209,7 @@ const dbSchema: CoderTool = {
       const inspectionArgs = typeof args.schema === 'string' && args.schema.trim()
         ? args
         : { ...args, schema: savedSchema };
-      return ok(await inspectRelationalSchema(acquired.driver, inspectionArgs));
+      return await inspectRelationalSchemaResult(acquired.driver, inspectionArgs);
     } catch (e) {
       return err(`db_schema failed: ${scrubDbError(e, acquired?.spec)}`);
     }
@@ -148,6 +224,7 @@ const dbQuery: CoderTool = {
     'for values derived from user/agent input (Postgres $1…, MySQL ?). Results are capped — ' +
     'paginate with LIMIT/OFFSET. Pass `connection` when more than one is registered.',
   source: 'native',
+  outputPolicy: { mode: 'rows', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   riskOf: (input) => {
     const sql = (input as { sql?: unknown } | null)?.sql;
     return typeof sql === 'string' && isReadStatement(sql) ? 'read' : 'write';
@@ -185,7 +262,7 @@ const dbQuery: CoderTool = {
       }
       const params = Array.isArray(args.params) ? (args.params as unknown[]) : undefined;
       const result = await acquired.driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows) });
-      return ok(renderQueryResult(result));
+      return renderDbResult(result, ctx, isReadStatement(sql));
     } catch (e) {
       return err(`db_query failed: ${scrubDbError(e, acquired?.spec)}`);
     }
@@ -212,6 +289,7 @@ const dbCommand: CoderTool = {
     "(find/aggregate/insertOne/…, payload carries filter/pipeline/document) or {args: ['GET','key']} " +
     'for Redis. Read-only connections refuse mutating commands.',
   source: 'native',
+  outputPolicy: { mode: 'rows', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   riskOf: commandRisk,
   parameters: {
     type: 'object',
@@ -258,7 +336,7 @@ const dbCommand: CoderTool = {
         return err(`db_command: the '${picked.value.conn.engine}' driver does not support commands.`);
       }
       const result = await acquired.driver.runCommand(command, { maxRows: clampMaxRows(args.max_rows) });
-      return ok(renderQueryResult(result));
+      return renderDbResult(result, ctx, !isWriteCommand(command));
     } catch (e) {
       return err(`db_command failed: ${scrubDbError(e, acquired?.spec)}`);
     }

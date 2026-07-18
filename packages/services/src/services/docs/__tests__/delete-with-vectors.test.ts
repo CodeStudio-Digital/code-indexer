@@ -59,12 +59,12 @@ function seed(h: Handle, count: number): { collectionId: number; sourceId: numbe
     content_hash: `h${i}`,
   })));
   for (const chunkId of chunkIds) {
-    h.store.updateChunkEmbeddingState(chunkId, `hash-${chunkId}`, 'knowledge:v1');
+    h.store.updateChunkEmbeddingState(chunkId, `hash-${chunkId}`, 'docs:v1');
   }
   const semanticStore = new SemanticStore(h.db.raw());
   const generation = semanticStore.createGeneration({
-    purpose: 'knowledge',
-    fingerprint: 'knowledge:v1',
+    purpose: 'docs',
+    fingerprint: 'docs:v1',
     embedding_target: { kind: 'disabled' },
     dimension: 3,
   });
@@ -131,10 +131,10 @@ describe('IndexDocumentationUseCase local vector cleanup', () => {
       ...[0, 1].map((i) => ({ collection_id: c.id, source_id: s1.id, ord: i, content: `a${i}`, content_hash: `ah${i}` })),
       ...[0, 1, 2].map((i) => ({ collection_id: c.id, source_id: s2.id, ord: i, content: `b${i}`, content_hash: `bh${i}` })),
     ]);
-    for (const id of chunkIds) h.store.updateChunkEmbeddingState(id, `hash-${id}`, 'knowledge:v1');
+    for (const id of chunkIds) h.store.updateChunkEmbeddingState(id, `hash-${id}`, 'docs:v1');
     const semanticStore = new SemanticStore(h.db.raw());
     const generation = semanticStore.createGeneration({
-      purpose: 'knowledge', fingerprint: 'knowledge:v1',
+      purpose: 'docs', fingerprint: 'docs:v1',
       embedding_target: { kind: 'disabled' }, dimension: 3,
     });
     for (const id of chunkIds) {

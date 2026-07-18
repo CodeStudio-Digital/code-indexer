@@ -192,16 +192,12 @@ export function getToolCallStats(db: DB, sessionId: number, recentLimit = 30): T
     `SELECT
        CASE
          WHEN tc.reduction_kind IS NOT NULL THEN tc.reduction_kind
-         WHEN tc.truncated = 1 OR tc.result_text LIKE '%[truncated:%' THEN 'hard_cap'
-         WHEN tc.result_text LIKE '%json-crush%' THEN 'json_crush'
-         WHEN tc.result_text LIKE '%[smart-reducer:%' THEN 'semantic'
+         WHEN tc.truncated = 1 THEN 'hard_cap'
          ELSE 'none'
        END AS kind,
        COALESCE(tc.reduction_technique,
          CASE
-           WHEN tc.truncated = 1 OR tc.result_text LIKE '%[truncated:%' THEN 'legacy-hard-cap'
-           WHEN tc.result_text LIKE '%json-crush%' THEN 'legacy-json-crush'
-           WHEN tc.result_text LIKE '%[smart-reducer:%' THEN 'legacy-semantic'
+           WHEN tc.truncated = 1 THEN 'legacy-structured-truncated-flag'
            ELSE 'none'
          END) AS technique,
        COUNT(*) AS calls,

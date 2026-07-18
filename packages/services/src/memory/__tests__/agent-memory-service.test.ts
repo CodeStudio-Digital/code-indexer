@@ -3,6 +3,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { AgentMemoryRow } from '@mcp/shared/types.js';
 import type { VectorSearchOptions, VectorStore } from '@mcp/store/vectors.js';
+import type { RerankerService } from '@mcp/indexer/search/reranker-types.js';
 import { AgentMemoryService } from '../agent-memory-service.js';
 
 function embedding(overrides: Partial<EmbeddingService> = {}): EmbeddingService {
@@ -39,6 +40,43 @@ function memoryRow(id: number): AgentMemoryRow {
 }
 
 describe('AgentMemoryService active-generation queries', () => {
+  it('uses the Memory profile reranker after RRF and preserves descending scores', async () => {
+    const first = memoryRow(1);
+    const second = { ...memoryRow(2), name: 'preferred result' };
+    const db = {
+      searchAgentMemoryFts: vi.fn(() => [first, second]),
+      getAgentMemoryById: vi.fn((id: number) => id === 1 ? first : second),
+    } as unknown as CodeIndexDB;
+    const vectors = {
+      search: vi.fn(async () => [
+        { id: 'am_1', score: 0.9, metadata: { type: 'agent_memory', scope: 'project', ref_id: '1' } },
+        { id: 'am_2', score: 0.8, metadata: { type: 'agent_memory', scope: 'project', ref_id: '2' } },
+      ]),
+    } as unknown as VectorStore;
+    const rerank = vi.fn(async () => [
+      { id: '2', score: 0.95, originalScore: 0.01 },
+      { id: '1', score: 0.4, originalScore: 0.02 },
+    ]);
+    const reranker = { name: 'memory-test', rerank } as RerankerService;
+    const service = new AgentMemoryService(
+      db,
+      embedding(),
+      vectors,
+      embedding({ embedQueryForNamespace: vi.fn(async () => ({ vector: [1], tokens: 1, generationId: 3 })) }),
+      null,
+      reranker,
+    );
+
+    const results = await service.search('project', 7, 'preferred', 2);
+
+    expect(results.map(({ id, score }) => [id, score])).toEqual([[2, 0.95], [1, 0.4]]);
+    expect(rerank).toHaveBeenCalledWith(
+      'preferred',
+      expect.arrayContaining([expect.objectContaining({ id: '2', text: expect.stringContaining('preferred result') })]),
+      2,
+    );
+  });
+
   it('reports relational memory mutations synchronously through the sink', () => {
     const live = memoryRow(4);
     const archived = { ...live, archived_at: '2026-07-15 13:00:00' };

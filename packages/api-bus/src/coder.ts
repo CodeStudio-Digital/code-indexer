@@ -25,7 +25,7 @@ import type { ApiContext, AsyncStream } from './common.js';
  * stable while the agent internals evolve.
  */
 
-export type AgentPreset =
+export type BuiltInAgentPreset =
   | 'explore'
   | 'plan'
   | 'build'
@@ -36,6 +36,8 @@ export type AgentPreset =
   | 'api'
   | 'diagram'
   | 'builder';
+export type CustomAgentPreset = `custom:${string}`;
+export type AgentPreset = BuiltInAgentPreset | CustomAgentPreset;
 export type ToolProfile = 'bootstrap' | 'navigate' | 'full' | 'auto';
 export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 

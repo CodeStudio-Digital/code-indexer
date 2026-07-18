@@ -2,7 +2,14 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import * as path from 'node:path';
 import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/shell-port.js';
-import type { GitCommit, GitCommitDetail, GitCommitFileChange, GitPushPreview } from '@mcp/api-bus';
+import type {
+  GitCommit,
+  GitCommitDetail,
+  GitCommitFileChange,
+  GitPushActionRequired,
+  GitPushPreview,
+} from '@mcp/api-bus';
+import { pushWithAutoUpdate } from '@mcp/shared/git/push-with-auto-update.js';
 
 export interface GitFileStatus {
   path: string;
@@ -26,13 +33,21 @@ function port(): IShellPort {
   return defaultLocalShellPort();
 }
 
-async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }> {
-  const r = await port().run('git', args, { cwd, encoding: 'utf-8' });
+async function runGit(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<{ ok: boolean; stdout: string; stderr: string; code: number | null }> {
+  const r = await port().run('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    env: env ? { ...process.env, ...env } : undefined,
+  });
   return {
     ok: r.exitCode === 0,
     stdout: r.stdout ?? '',
     stderr: r.stderr ?? '',
-    exitCode: r.exitCode,
+    code: r.exitCode,
   };
 }
 
@@ -362,6 +377,40 @@ export async function gitDiscard(
 export interface GitPushResult extends GitMutationResult {
   /** True when the local branch had no upstream and one was set with `--set-upstream`. */
   setUpstream: boolean;
+  /** True when a rejected push was safely rebased onto the remote and retried. */
+  updatedBeforePush?: boolean;
+  /** Stable UI intent when automatic push recovery needs operator action. */
+  pushActionRequired?: GitPushActionRequired;
+}
+
+type WorkspaceGitResult = Awaited<ReturnType<typeof runGit>>;
+
+function workspacePushResult(
+  result: WorkspaceGitResult,
+  setUpstream: boolean,
+  extras: Pick<GitPushResult, 'updatedBeforePush' | 'pushActionRequired'> = {},
+): GitPushResult {
+  return {
+    ok: result.ok,
+    message: (result.stderr || result.stdout).trim() || (result.ok ? 'pushed' : 'git push failed'),
+    setUpstream,
+    ...extras,
+  };
+}
+
+function workspacePushNeedsAction(
+  result: WorkspaceGitResult,
+  setUpstream: boolean,
+  action: GitPushActionRequired,
+  message: string,
+): GitPushResult {
+  const detail = (result.stderr || result.stdout).trim();
+  return {
+    ok: false,
+    message: detail ? `${message}\n\n${detail}` : message,
+    setUpstream,
+    pushActionRequired: action,
+  };
 }
 
 /**
@@ -388,17 +437,35 @@ export async function gitPush(root: string, options: {
     }
     const args = ['push'];
     if (options.setUpstream) args.push('--set-upstream');
-    if (options.pushTags) args.push('--tags');
+    // Keep reviewed branch + tag publication all-or-nothing. This also
+    // prevents tags from being published before an automatic update stops.
+    if (options.pushTags) args.push('--atomic', '--tags');
     args.push(options.remote);
     args.push(options.targetBranch && options.targetBranch !== options.branch
       ? `${options.branch}:${options.targetBranch}`
       : options.branch);
-    const reviewed = await runGit(root, args);
-    return {
-      ok: reviewed.ok,
-      message: (reviewed.stderr || reviewed.stdout).trim() || (reviewed.ok ? 'pushed' : 'git push failed'),
-      setUpstream: options.setUpstream === true,
-    };
+    const setUpstream = options.setUpstream === true;
+    const outcome = await pushWithAutoUpdate({
+      pushArgs: args,
+      remote: options.remote,
+      branch: options.branch,
+      targetBranch: options.targetBranch ?? options.branch,
+      expectedHead: options.expectedHead,
+      pushTags: options.pushTags,
+      run: (gitArgs, runOptions) => runGit(root, gitArgs, runOptions.env),
+    });
+    if (outcome.actionRequired) {
+      const failure = workspacePushNeedsAction(
+        outcome.result,
+        setUpstream,
+        outcome.actionRequired,
+        outcome.actionMessage ?? 'Update the branch before pushing.',
+      );
+      return { ...failure, updatedBeforePush: outcome.updatedBeforePush };
+    }
+    return workspacePushResult(outcome.result, setUpstream, {
+      updatedBeforePush: outcome.updatedBeforePush,
+    });
   }
   // Try the plain `git push` first — git already knows the upstream
   // for branches that have one configured.

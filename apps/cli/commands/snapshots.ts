@@ -9,7 +9,7 @@ import {
 } from '../semantic-control.js';
 
 function reconciliationNotice(db: ReturnType<typeof getDB>): string {
-  const enabled = new SemanticStore(db.raw()).getProfile('knowledge')?.embedding_target.kind !== 'disabled';
+  const enabled = new SemanticStore(db.raw()).getProfile('memory')?.embedding_target.kind !== 'disabled';
   return enabled ? ' Semantic reconciliation was queued for this project only.' : '';
 }
 
@@ -92,9 +92,9 @@ export function register(program: Command): void {
           operation: 'upsert',
         });
         const enabled = new SemanticStore(db.raw())
-          .getProfile('knowledge')?.embedding_target.kind !== 'disabled';
+          .getProfile('memory')?.embedding_target.kind !== 'disabled';
         if (!enabled) {
-          console.log('Knowledge semantic indexing is disabled; snapshots remain available through SQLite/FTS.');
+          console.log('Memory semantic indexing is disabled; snapshots remain available through SQLite/FTS.');
         } else {
           console.log(`Snapshot reconciliation for "${projectName}" was queued for its namespace only.`);
         }

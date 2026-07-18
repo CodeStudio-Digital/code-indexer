@@ -79,6 +79,25 @@ describe('rag_read_doc', () => {
     );
     const res = await ragReadDocTool.handler({ chunk_id: 10 }, ctx);
     expect(res.content).toContain('rag_read_doc({chunk_id: 11}) for the rest');
+    expect(res.sourceTruncations).toEqual([{
+      technique: 'rag-neighbor-preview',
+      inputSize: 5_000,
+      outputSize: 1_200,
+      unit: 'chars',
+      recoverable: true,
+    }]);
+  });
+
+  it('keeps neighbor preview boundaries Unicode-safe and reports actual retained chars', async () => {
+    const content = `${'a'.repeat(1_199)}🙂tail`;
+    setGlobalDocSearch(backendWith(read({
+      next: [{ chunk_id: 11, ord: 3, heading_path: null, content, token_count: 900, source_uri: null }],
+    })));
+
+    const res = await ragReadDocTool.handler({ chunk_id: 10 }, ctx);
+    expect(res.content).toContain(`${'a'.repeat(1_199)}…`);
+    expect(res.content).not.toContain('\uFFFD');
+    expect(res.sourceTruncations?.[0]?.outputSize).toBe(1_199);
   });
 
   it('errors with guidance on a stale chunk_id', async () => {
@@ -152,5 +171,34 @@ describe('rag_read_doc', () => {
     const res = await ragReadDocTool.handler({ chunk_id: 10, mode: 'section' }, ctx);
     expect(res.isError).toBe(true);
     expect(res.content).toContain('section mode is not available');
+  });
+
+  it("mode:'section' preserves more than the legacy 12-part boundary", async () => {
+    const chunks = Array.from({ length: 14 }, (_, index) => ({
+      chunk_id: index + 1,
+      ord: index,
+      content: `section-part-${index + 1}`,
+      token_count: 10,
+    }));
+    setGlobalDocSearch({
+      search: async () => ({ results: [], diag: { fts_hits: 0, vector_hits: 0, mode: 'fts', embedding_available: false, vector_available: false } }),
+      readSection: async () => ({
+        source_id: 1,
+        collection: 'docs',
+        source_uri: null,
+        heading_path: 'Long section',
+        anchor: null,
+        api_symbol: null,
+        api_signature: null,
+        doc_type: null,
+        chunks,
+        total_tokens: 140,
+      }),
+    });
+
+    const res = await ragReadDocTool.handler({ chunk_id: 1, mode: 'section' }, ctx);
+    expect(res.content).toContain('14 chunk(s)');
+    expect(res.content).toContain('section-part-14');
+    expect(res.content).not.toContain('section capped');
   });
 });

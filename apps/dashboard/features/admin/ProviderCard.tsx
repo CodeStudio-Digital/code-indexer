@@ -33,6 +33,7 @@ interface ProviderCardProps {
   onDeleteModel: (modelId: string, mode: string) => void;
   onSetModelEffort: (modelId: string, mode: string, level: string | null) => void;
   onSetModelContextWindow: (modelId: string, mode: string, value: number | null) => void;
+  onSetModelMaxOutputTokens: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
   onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
@@ -69,6 +70,7 @@ export function ProviderCard({
   onDeleteModel,
   onSetModelEffort,
   onSetModelContextWindow,
+  onSetModelMaxOutputTokens,
   onSetModelMaxTools,
   onBackfillContextWindows,
   onSetFallback,
@@ -191,6 +193,18 @@ export function ProviderCard({
                           })}
                         </select>
                       )}
+                    <NumericOverrideField
+                      modelId={m.model_id}
+                      mode={m.mode}
+                      value={m.default_max_tokens}
+                      onSet={onSetModelMaxOutputTokens}
+                      min={1}
+                      placeholder={t('admin:provider.maxOutputTokensPlaceholder')}
+                      unknownLabel="auto out"
+                      format={(v) => `${formatCtx(v)} out`}
+                      titleUnknown="Output limit: automatic (model registry) — click to override"
+                      titleValue={(v) => `Output limit: ${v.toLocaleString()} tokens — click to edit`}
+                    />
                     <NumericOverrideField
                       modelId={m.model_id}
                       mode={m.mode}

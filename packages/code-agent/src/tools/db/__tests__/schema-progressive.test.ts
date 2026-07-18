@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseDriver, TableInfo, TableRef } from '@mcp/db-drivers/types.js';
-import { DEFAULT_SCHEMA_PAGE_SIZE, defaultSchemaFromOptions, inspectRelationalSchema } from '../tools.js';
+import {
+  DEFAULT_SCHEMA_PAGE_SIZE,
+  defaultSchemaFromOptions,
+  inspectRelationalSchema,
+  inspectRelationalSchemaResult,
+} from '../tools.js';
 
 function fakeDriver(tableCount = 500): {
   driver: DatabaseDriver;
@@ -38,6 +43,18 @@ describe('progressive db_schema inspection', () => {
     expect(describeTable).not.toHaveBeenCalled();
     expect(out).toContain(`returned=${DEFAULT_SCHEMA_PAGE_SIZE} total=500 more=true`);
     expect(out.length).toBeLessThan(5_000);
+  });
+
+  it('declares catalog pagination as a recoverable producer cap', async () => {
+    const { driver } = fakeDriver(500);
+    const out = await inspectRelationalSchemaResult(driver, { offset: 40, limit: 40 });
+    expect(out.sourceTruncations).toEqual([{
+      technique: 'db-schema-page',
+      inputSize: 500,
+      outputSize: 40,
+      unit: 'items',
+      recoverable: true,
+    }]);
   });
 
   it('searches names before paging without expanding matching tables', async () => {

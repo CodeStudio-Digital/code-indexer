@@ -78,7 +78,7 @@ import {
   type ProjectSemanticScope,
 } from './semantic-project-status.js';
 
-const PURPOSES: SemanticProfilePurpose[] = ['code', 'knowledge'];
+const PURPOSES: SemanticProfilePurpose[] = ['code', 'docs', 'memory'];
 
 function defaultTarget(capability: 'embedding' | 'rerank'): SemanticTarget {
   if (capability === 'embedding') {
@@ -180,10 +180,11 @@ function semanticJobPurpose(
   if (job.namespace === 'semantic:reindex:code'
     || job.namespace.startsWith('semantic:reindex:code:p')
     || job.namespace.startsWith('code:p')) return 'code';
-  if (job.namespace === 'semantic:reindex:knowledge'
-    || job.namespace.startsWith('docs:')
+  if (job.namespace === 'semantic:reindex:docs'
+    || job.namespace.startsWith('docs:')) return 'docs';
+  if (job.namespace === 'semantic:reindex:memory'
     || job.namespace.startsWith('snapshot:p')
-    || job.namespace.startsWith('memory:')) return 'knowledge';
+    || job.namespace.startsWith('memory:')) return 'memory';
   if (job.generation_id != null) {
     return generations.find((generation) => Number(generation.id) === job.generation_id)?.purpose ?? null;
   }
@@ -892,7 +893,11 @@ function ProfileCard({
           : generation?.status === 'building'
             ? 'paused'
             : generation?.status ?? 'pending';
-  const PurposeIcon = profile.purpose === 'code' ? Code2 : BookOpen;
+  const PurposeIcon = profile.purpose === 'code'
+    ? Code2
+    : profile.purpose === 'docs'
+      ? BookOpen
+      : Sparkles;
   const rerankerDiagnostics = rerankerStatus.diagnostics;
   const localReranker = profile.reranker_target.kind === 'onnx';
 
@@ -1025,11 +1030,12 @@ function ProfileCard({
                 <p>{t('semantic.storage.codePath')}</p>
                 <p>{t('semantic.storage.codeFallback')}</p>
               </>
+            ) : profile.purpose === 'docs' ? (
+              <p>{t('semantic.storage.docsPath')}</p>
             ) : (
               <>
-                <p>{t('semantic.storage.knowledgeProjectPath')}</p>
-                <p>{t('semantic.storage.knowledgeProjectFallback')}</p>
-                <p>{t('semantic.storage.docsPath')}</p>
+                <p>{t('semantic.storage.memoryProjectPath')}</p>
+                <p>{t('semantic.storage.memoryProjectFallback')}</p>
                 <p>{t('semantic.storage.memoryPath')}</p>
               </>
             )}
@@ -1199,7 +1205,7 @@ function ProjectSemanticStatusTable({
   loading,
   reindexingProjectId,
   codeProfileRunning,
-  knowledgeProfileRunning,
+  memoryProfileRunning,
   executingNamespaces,
   codeIndexingDisabled,
   onReindexProject,
@@ -1209,7 +1215,7 @@ function ProjectSemanticStatusTable({
   loading: boolean;
   reindexingProjectId: number | null;
   codeProfileRunning: boolean;
-  knowledgeProfileRunning: boolean;
+  memoryProfileRunning: boolean;
   executingNamespaces: ReadonlySet<string>;
   codeIndexingDisabled: boolean;
   onReindexProject: (project: ProjectSemanticStatusResult['project']) => void;
@@ -1309,7 +1315,7 @@ function ProjectSemanticStatusTable({
                             ?? (scope.scope === 'code' ? result.status?.reindex_job?.error ?? null : null)}
                           executing={scope.scope === 'code'
                             ? projectBuilding
-                            : knowledgeProfileRunning
+                            : memoryProfileRunning
                               || (!!scope.status && executingNamespaces.has(scope.status.namespace))}
                         />
                       </td>
@@ -1378,7 +1384,7 @@ function ProjectSemanticStatusTable({
                 </span>
                 <Badge variant={memory.active
                   ? 'success'
-                  : memory.building && (knowledgeProfileRunning || executingNamespaces.has(memory.namespace))
+                  : memory.building && (memoryProfileRunning || executingNamespaces.has(memory.namespace))
                     ? 'info'
                     : memory.building
                       ? 'warning'
@@ -1387,7 +1393,7 @@ function ProjectSemanticStatusTable({
                     ? t('semantic.projects.activeGeneration', {
                         id: memory.active.generationId,
                       })
-                    : memory.building && (knowledgeProfileRunning || executingNamespaces.has(memory.namespace))
+                    : memory.building && (memoryProfileRunning || executingNamespaces.has(memory.namespace))
                       ? t('semantic.projects.buildingGeneration', {
                           id: memory.building.generationId,
                         })
@@ -1418,7 +1424,8 @@ export function SemanticIndexingPanel() {
     SemanticRerankerStatusView
   >>({
     code: { target_kind: 'missing', diagnostics: null, error: null },
-    knowledge: { target_kind: 'missing', diagnostics: null, error: null },
+    docs: { target_kind: 'missing', diagnostics: null, error: null },
+    memory: { target_kind: 'missing', diagnostics: null, error: null },
   });
   const [providers, setProviders] = useState<AdminProvider[]>([]);
   const [projectStatuses, setProjectStatuses] = useState<ProjectSemanticStatusResult[]>([]);
@@ -1645,7 +1652,7 @@ export function SemanticIndexingPanel() {
           {t('semantic.loading')}
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4 xl:grid-cols-3">
           {visibleProfiles.map((profile) => (
             <ProfileCard
               key={profile.purpose}
@@ -1668,8 +1675,8 @@ export function SemanticIndexingPanel() {
         loading={loading}
         reindexingProjectId={reindexingProjectId}
         codeProfileRunning={!!purposeJobs.code && isExecutingSemanticJob(purposeJobs.code)}
-        knowledgeProfileRunning={jobs.some((job) =>
-          job.namespace === 'semantic:reindex:knowledge' && isExecutingSemanticJob(job))}
+        memoryProfileRunning={jobs.some((job) =>
+          job.namespace === 'semantic:reindex:memory' && isExecutingSemanticJob(job))}
         executingNamespaces={executingNamespaces}
         codeIndexingDisabled={visibleProfiles.find((profile) => profile.purpose === 'code')
           ?.embedding_target.kind === 'disabled'}

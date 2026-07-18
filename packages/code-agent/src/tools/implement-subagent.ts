@@ -27,6 +27,10 @@ import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessi
 import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
 import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
 import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
+import {
+  buildResearchSynthesisNudge,
+  type SubagentResearchPolicy,
+} from '@mcp/code-agent/tools/subagent-research-policy.js';
 
 /**
  * Tool filter for a subagent. Three shapes:
@@ -53,6 +57,8 @@ export interface SubagentSpec {
   provider?: ChatProvider;
   /** Per-spec reasoning-effort override; falls back to the parent session's effort. */
   reasoningEffort?: string;
+  /** Soft scope/sufficiency contract. It can request synthesis but never aborts the run. */
+  researchPolicy?: SubagentResearchPolicy;
   spawnId?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
@@ -240,6 +246,9 @@ export interface SubagentParent {
    * if the parent isn't explicitly v2.
    */
   agentLoopV2?: boolean;
+  /** Optional explicit overrides; normal child runs inherit these from ctx.runner. */
+  toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
+  externalToolTiers?: import('@mcp/code-agent/core/runner.js').RunnerOptions['externalToolTiers'];
 }
 
 /**
@@ -266,6 +275,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   let duplicateCalls = 0;
   let errorCalls = 0;
   let refusedCalls = 0;
+  let synthesisNudged = false;
   const logicalOperations = new Set<string>();
   let watchdogFailed = false;
   let watchdogPhase: string | undefined;
@@ -353,6 +363,13 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   } catch (e) {
     console.warn(`[subagent] record_memo registration failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // Progressive discovery must survive every specialist allowlist. Without
+  // these two meta-tools, enabling tiers for a child would make plugin/custom
+  // groups unreachable rather than merely lazy.
+  for (const name of ['find_tools', 'expand_toolset']) {
+    const tool = parent.tools.find((candidate) => candidate.name === name);
+    if (tool && !subRegistry.has(name)) subRegistry.register(tool);
+  }
 
   const subContext: ToolContext = {
     cwd: parent.ctx.cwd,
@@ -402,6 +419,23 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     telemetryRolloutKey,
   );
   const subProvider = spec.provider ?? parent.provider;
+  const parentRunner = parent.ctx.runner;
+  const inheritedToolSelection = parent.toolSelectionFilter
+    ?? (typeof parentRunner?.getToolSelectionFilter === 'function'
+      ? parentRunner.getToolSelectionFilter()
+      : undefined);
+  const inheritedExternalTiers = parent.externalToolTiers
+    ?? (typeof parentRunner?.getExternalToolTiers === 'function'
+      ? parentRunner.getExternalToolTiers()
+      : undefined);
+  // Tool objects are the source of truth for plugin tiers. Merge them locally
+  // so direct runSubagent callers cannot accidentally leak a plugin into the
+  // bootstrap fallback merely because they omitted the host tier map.
+  const subExternalTiers = new Map(inheritedExternalTiers ?? []);
+  for (const tool of subRegistry.list()) {
+    const tier = tool.runtimeTier?.id.trim();
+    if (tier) subExternalTiers.set(tool.name, tier);
+  }
   const subRunner = new CoderRunner({
     provider: subProvider,
     registry: subRegistry,
@@ -414,6 +448,15 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     isSubagent: true,
     parentRunId: parent.ctx.runner?.runId,
     subagentProfile: spec.profile ?? 'unknown',
+    // Explore/review/verify/implement children start with core navigation only.
+    // Plugin and external custom groups remain registered behind their own
+    // runtime tiers and can be discovered/unlocked explicitly. A `full`
+    // specialist preserves its historical un-tiered surface.
+    profile: spec.profile === 'full' ? undefined : 'navigate',
+    externalToolTiers: subExternalTiers,
+    // `full` is the explicit exact-surface escape hatch. Other specialists
+    // inherit the smart selector and stay bounded to the configured top-K.
+    toolSelectionFilter: spec.profile === 'full' ? undefined : inheritedToolSelection,
     turnTelemetryStore: subagentTelemetryEnabled ? parent.sessionStore : undefined,
     // PR-6: subagent inherits the parent's v2 flag so pre-read cap, result-
     // dup cap, and exp+jitter retry apply inside the subagent loop too.
@@ -452,6 +495,24 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('turn_start', (turn) => {
     currentTurn = typeof turn === 'number' ? turn : currentTurn + 1;
     markActivity('turn', `turn ${currentTurn}`);
+    const policy = spec.researchPolicy;
+    if (!policy || synthesisNudged) return;
+    const toolsReached = policy.softToolTarget > 0 && subToolCalls >= policy.softToolTarget;
+    const timeReached = policy.softTimeTargetMs > 0 && Date.now() - startedAt >= policy.softTimeTargetMs;
+    if (!toolsReached && !timeReached) return;
+    synthesisNudged = true;
+    const trigger = toolsReached ? 'tools' : 'time';
+    const note = `soft ${policy.depth} research target reached; synthesize unless a named criterion is missing`;
+    subRunner.setSystemPromptForNextTurn(finalSystemPrompt + buildResearchSynthesisNudge(policy, trigger));
+    monitor.recordVisual('synthesis_nudge', note);
+    if (parentEmit) {
+      parentEmit.emit('tool_progress', {
+        id: `subagent-synthesis:${subRunner.runId}`,
+        name: 'subagent:synthesis-checkpoint',
+        elapsedMs: Date.now() - startedAt,
+        note: `[subagent] ${note}`,
+      });
+    }
   });
   subRunner.on('auto_continue', (count) => { autoContinues = Math.max(autoContinues, count); });
   subRunner.on('provider_call', (payload: { provider?: string; model?: string }) => {
@@ -612,12 +673,16 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   abortFailure = (message) => handleWatchdogFailure(message, 'aborted');
   if (subAbort.signal.aborted) handleWatchdogFailure(lastAbortReason, 'aborted');
 
-  const taskPreview = spec.initialMessages
+  const taskText = spec.initialMessages
     .flatMap((message) => Array.isArray(message.content)
       ? message.content.filter((b): b is { type: 'text'; text: string } => b.type === 'text').map((b) => b.text)
       : [])
-    .join('\n')
-    .slice(0, 1000);
+    .join('\n');
+  const delegatedMarker = '# Delegated task\n';
+  const delegatedAt = taskText.lastIndexOf(delegatedMarker);
+  const taskPreview = (delegatedAt >= 0
+    ? taskText.slice(delegatedAt + delegatedMarker.length)
+    : taskText).slice(0, 1000);
   if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
     try {
       parent.sessionStore.startSubagentRun({
@@ -632,6 +697,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         max_tool_calls: limits.maxToolCalls ?? null,
         timeout_ms: limits.timeoutMs ?? null,
         stall_ms: limits.stallMs ?? null,
+        research_depth: spec.researchPolicy?.depth ?? null,
+        soft_tool_target: spec.researchPolicy?.softToolTarget ?? null,
+        soft_time_target_ms: spec.researchPolicy?.softTimeTargetMs ?? null,
       });
     } catch { /* best-effort */ }
   }
@@ -661,6 +729,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
           cache_creation_input_tokens: out.usage.cache_creation_input_tokens ?? 0,
           has_summary: out.finalText.trim().length > 0,
           output_id: outputId,
+          synthesis_nudged: synthesisNudged,
         });
       } catch { /* best-effort */ }
     }
@@ -1201,6 +1270,7 @@ export interface ParallelAgentSpec {
   provider?: ChatProvider;
   /** Per-agent reasoning-effort override; falls back to the parent session's effort. */
   reasoningEffort?: string;
+  researchPolicy?: SubagentResearchPolicy;
   pathScope?: string[];
   pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
@@ -1234,6 +1304,9 @@ export interface ParallelAgentProgress {
   usage?: ChatUsage;
   summary?: string;
   error?: string;
+  researchDepth?: import('@mcp/code-agent/tools/subagent-research-policy.js').ResearchDepth;
+  softToolTarget?: number;
+  softTimeTargetMs?: number;
 }
 
 export type ParallelAgentResult = SubagentRunResult & { label: string; toolCallCount: number };
@@ -1302,7 +1375,15 @@ export async function runParallelAgents(
   const results: ParallelAgentResult[] = new Array(agents.length);
 
   const tasks = agents.map((spec, agentIndex) => async () => {
-    onProgress({ agentIndex, label: spec.label, event: 'spawned', status: 'running' });
+    onProgress({
+      agentIndex,
+      label: spec.label,
+      event: 'spawned',
+      status: 'running',
+      researchDepth: spec.researchPolicy?.depth,
+      softToolTarget: spec.researchPolicy?.softToolTarget,
+      softTimeTargetMs: spec.researchPolicy?.softTimeTargetMs,
+    });
 
     let toolCallCount = 0;
 
@@ -1316,6 +1397,7 @@ export async function runParallelAgents(
         profile: spec.profile,
         provider: spec.provider,
         reasoningEffort: spec.reasoningEffort,
+        researchPolicy: spec.researchPolicy,
         spawnId: spec.spawnId,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
@@ -1339,6 +1421,9 @@ export async function runParallelAgents(
             lastToolName: progress.lastToolName ?? progress.toolName,
             status: progress.status ?? 'running',
             limit: progress.limit,
+            researchDepth: spec.researchPolicy?.depth,
+            softToolTarget: spec.researchPolicy?.softToolTarget,
+            softTimeTargetMs: spec.researchPolicy?.softTimeTargetMs,
           });
         },
       });

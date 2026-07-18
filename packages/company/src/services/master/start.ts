@@ -60,6 +60,8 @@ export interface MasterStartOpts {
   fallbackModels?: AllowedModel[];
   /** Skills and prompt configured for the App's app_orchestrator role. */
   skills?: RoleSkills;
+  /** Role preset tools pinned into the Master's first visible catalog. */
+  initialTools?: string[];
   systemPromptOverride?: string;
   /**
    * Route work through the built-in SDD pipeline by default. Threaded into
@@ -246,6 +248,7 @@ export async function startMaster(
         thinking: opts.thinking,
         thinkingBudgetTokens: opts.thinkingBudgetTokens,
         reasoningEffort: opts.reasoningEffort,
+        initialPinnedTools: opts.initialTools,
         // Wire HumanInTheLoop BEFORE the runner takes turn 1, so a master
         // that calls `ask_user` immediately is still captured.
         onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),

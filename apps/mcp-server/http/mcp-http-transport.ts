@@ -12,6 +12,7 @@
  */
 import { Hono } from 'hono';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
@@ -20,14 +21,14 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { normalizeMcpToolResult, type McpTool } from '../tool.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
-import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
+import type { McpConnectionPolicy, McpTier } from '@mcp/services/auth/domain/api-token.js';
 import type { EnforceScope } from '@mcp/services/auth/use-cases/enforce-scope.js';
 import type { RecordAudit } from '@mcp/services/auth/use-cases/record-audit.js';
 import { PACKAGE_NAME, VERSION } from '@mcp/shared/version.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
-import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildContext, type ToolContext } from '../context.js';
 import { allTools, buildToolRegistry } from '../tools/index.js';
 import {
@@ -38,8 +39,6 @@ import {
 } from '../resources/index.js';
 import { coerceArgs } from '../utils.js';
 import { SessionManager } from './session-manager.js';
-
-const DEFAULT_TOOL_SCOPE = 'mcp:write';
 
 /**
  * Numeric rank for tier comparison. A token at tier N can see tools at
@@ -57,38 +56,72 @@ const TIER_RANK: Record<string, number> = {
   admin: 2,
 };
 
-function tierRank(tier: string): number {
-  return TIER_RANK[tier] ?? 0;
+function tierRank(tier: McpTier): number {
+  return TIER_RANK[tier];
 }
 
 /**
- * The tier registry in `@mcp/code-agent/tools/tiers.ts` keys MCP tools
- * with the `mcp__` prefix the agent uses internally (e.g.
- * `mcp__find_references`). Our HTTP server's catalogue strips that
- * prefix for cleaner external tool names (`find_references`). Probe the
- * prefixed name first so navigate/admin tools land in the right tier;
- * fall back to the bare name so legitimately-prefixed natives (none
- * today, but future-proof) still resolve.
- */
-function resolveTierForTool(toolName: string): string {
-  const prefixedTier = getToolTier(`mcp__${toolName}`);
-  if (prefixedTier !== 'bootstrap') return prefixedTier;
-  // Bare-name lookup catches tools the agent registers without the
-  // `mcp__` prefix (e.g. `rag_search_docs`). Anything still unknown
-  // falls into bootstrap, matching the agent's permissive default for
-  // newly added tools.
-  return getToolTier(toolName);
-}
-
-/**
- * Returns true when `toolName` is at or below the caller's tier. When
+ * Returns true when `tool` is at or below the caller's tier. When
  * the caller has no tier (legacy scope-only tokens, or unauthenticated
  * requests in dev), tier filtering is skipped — scope enforcement still
  * applies further down.
  */
-function isToolAllowedForTier(toolName: string, callerTier: McpTier | null | undefined): boolean {
+export function isToolAllowedForTier(tool: McpTool, callerTier: McpTier | null | undefined): boolean {
   if (!callerTier) return true; // no tier binding → no tier filter
-  return tierRank(resolveTierForTool(toolName)) <= tierRank(callerTier);
+  return tierRank(tool.tier) <= tierRank(callerTier);
+}
+
+export function isToolAllowedForPolicy(tool: McpTool, policy: McpConnectionPolicy | null | undefined): boolean {
+  if (!policy) return true;
+  if (policy.toolAllowlist.length > 0 && !policy.toolAllowlist.includes(tool.name)) return false;
+  if (policy.approvalMode === 'read_only') return tool.annotations.readOnlyHint;
+  if (policy.approvalMode === 'controlled') {
+    return tool.scope !== 'mcp:admin' && !tool.annotations.destructiveHint;
+  }
+  return true;
+}
+
+function applyProjectPolicy(
+  tool: McpTool,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  policy: McpConnectionPolicy | null | undefined,
+): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+  if (!policy || policy.projectIds.length === 0) return { ok: true, args };
+  if (tool.name === 'index_project') {
+    return { ok: false, error: 'Project-scoped profiles cannot register arbitrary filesystem paths' };
+  }
+
+  const properties = tool.inputSchema.properties ?? {};
+  if (!Object.prototype.hasOwnProperty.call(properties, 'project_name')) return { ok: true, args };
+
+  const allowed = ctx.db.listProjects().filter((project) => policy.projectIds.includes(project.id));
+  if (allowed.length === 0) return { ok: false, error: 'This profile has no accessible projects' };
+
+  const requested = typeof args.project_name === 'string' ? args.project_name.trim() : '';
+  if (!requested && allowed.length === 1) {
+    return { ok: true, args: { ...args, project_name: allowed[0].name } };
+  }
+  if (!requested) {
+    return { ok: false, error: 'project_name is required because this profile grants multiple projects' };
+  }
+  const selected = allowed.find((project) => project.name === requested || String(project.id) === requested);
+  if (!selected) return { ok: false, error: `Project '${requested}' is outside this profile` };
+  return { ok: true, args: { ...args, project_name: selected.name } };
+}
+
+function isResourceAllowedForPolicy(
+  uri: string,
+  ctx: ToolContext,
+  policy: McpConnectionPolicy | null | undefined,
+): boolean {
+  if (!policy || policy.projectIds.length === 0) return true;
+  const match = /^mcp:\/\/(?:project|snapshot)\/([^/]+)/.exec(uri);
+  if (!match) return true;
+  let projectName = match[1];
+  try { projectName = decodeURIComponent(projectName); } catch { /* keep raw segment */ }
+  const project = ctx.db.listProjects().find((candidate) => candidate.name === projectName);
+  return Boolean(project && policy.projectIds.includes(project.id));
 }
 
 export interface McpHttpDeps {
@@ -113,6 +146,22 @@ export function createMcpHttpApp(
   const ctx = buildContext();
   const registry = buildToolRegistry();
   const sessions = new SessionManager();
+  const authContexts = new AsyncLocalStorage<AuthContext | undefined>();
+  let statelessTransport: WebStandardStreamableHTTPServerTransport | null = null;
+
+  const currentAuthCtx = () => authContexts.getStore();
+
+  const ensureStatelessTransport = async () => {
+    if (statelessTransport) return statelessTransport;
+    const server = buildServer(ctx, registry, currentAuthCtx, deps);
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
+    await server.connect(transport);
+    statelessTransport = transport;
+    return transport;
+  };
 
   const app = new Hono();
 
@@ -123,42 +172,16 @@ export function createMcpHttpApp(
     const authCtx = deps.resolveAuthContext?.(c);
 
     const transport = config.mcp.http.stateful
-      ? await resolveStatefulTransport(c.req.raw, sessions, ctx, registry, authCtx, deps)
-      : await ensureStatelessTransport(ctx, registry, authCtx, deps);
+      ? await resolveStatefulTransport(c.req.raw, sessions, ctx, registry, currentAuthCtx, deps)
+      : await ensureStatelessTransport();
 
-    return transport.handleRequest(c.req.raw);
+    // AsyncLocalStorage binds authentication to the complete asynchronous
+    // request chain. Concurrent MCP calls cannot overwrite each other's
+    // principal, tier or scopes.
+    return authContexts.run(authCtx, () => transport.handleRequest(c.req.raw));
   });
 
   return app;
-}
-
-// ── Stateless: one transport reused across all requests. ──
-
-let statelessTransport: WebStandardStreamableHTTPServerTransport | null = null;
-let statelessAuthCtx: AuthContext | undefined;
-
-async function ensureStatelessTransport(
-  ctx: ToolContext,
-  registry: Map<string, import('../tool.js').McpTool>,
-  authCtx: AuthContext | undefined,
-  deps: McpHttpDeps,
-): Promise<WebStandardStreamableHTTPServerTransport> {
-  // Per-request authCtx update — handlers read a closure variable that is
-  // set right before handleRequest runs. This works because Node processes
-  // one handler at a time per event-loop tick; the closure sees the latest
-  // value for the current in-flight request.
-  statelessAuthCtx = authCtx;
-
-  if (statelessTransport) return statelessTransport;
-
-  const server = buildServer(ctx, registry, () => statelessAuthCtx, deps);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  await server.connect(transport);
-  statelessTransport = transport;
-  return transport;
 }
 
 // ── Stateful: per-session transport, looked up by Mcp-Session-Id header. ──
@@ -167,8 +190,8 @@ async function resolveStatefulTransport(
   req: Request,
   sessions: SessionManager,
   ctx: ToolContext,
-  registry: Map<string, import('../tool.js').McpTool>,
-  authCtx: AuthContext | undefined,
+  registry: Map<string, McpTool>,
+  currentAuthCtx: () => AuthContext | undefined,
   deps: McpHttpDeps,
 ): Promise<WebStandardStreamableHTTPServerTransport> {
   const sessionId = req.headers.get('mcp-session-id') ?? undefined;
@@ -180,7 +203,7 @@ async function resolveStatefulTransport(
   // Either there's no session header (initialize request) or the header
   // is unknown — create a fresh transport. Invalid session IDs are rejected
   // downstream by the SDK's validateSession.
-  const server = buildServer(ctx, registry, () => authCtx, deps);
+  const server = buildServer(ctx, registry, currentAuthCtx, deps);
   const transport: WebStandardStreamableHTTPServerTransport =
     new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
@@ -199,13 +222,18 @@ async function resolveStatefulTransport(
 
 function buildServer(
   ctx: ToolContext,
-  registry: Map<string, import('../tool.js').McpTool>,
+  registry: Map<string, McpTool>,
   currentAuthCtx: () => AuthContext | undefined,
   deps: McpHttpDeps,
 ): Server {
   const server = new Server(
     { name: PACKAGE_NAME, version: VERSION },
-    { capabilities: { tools: {}, resources: {} } },
+    {
+      capabilities: { tools: {}, resources: {} },
+      instructions:
+        'CodeStudio exposes project-aware code navigation, documentation, memory and controlled agent execution. ' +
+        'Start with read-only bootstrap tools, pass project_name when requested, and use write/admin tools only when the task requires mutation.',
+    },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -214,12 +242,14 @@ function buildServer(
     // Tier filtering happens here (not in CallTool) so the listing the
     // client sees matches what it can actually invoke — prevents the
     // "tool advertised but rejected" UX problem in MCP clients.
-    const visible = callerTier
-      ? allTools.filter((t) => isToolAllowedForTier(t.name, callerTier))
-      : allTools;
+    const visible = allTools.filter((tool) =>
+      isToolAllowedForTier(tool, callerTier)
+      && isToolAllowedForPolicy(tool, authCtx?.policy)
+      && (!authCtx || !deps.enforceScope || authCtx.scopes.grants(tool.scope)),
+    );
     return {
-      tools: visible.map(({ name, description, inputSchema }) => ({
-        name, description, inputSchema,
+      tools: visible.map(({ name, description, inputSchema, annotations }) => ({
+        name, description, inputSchema, annotations,
       })),
     };
   });
@@ -236,8 +266,8 @@ function buildServer(
     // a tier-specific reason ("Tool 'x' requires tier 'navigate', token
     // has 'bootstrap'") rather than a generic scope_denied.
     const callerTier = authCtx?.tier ?? null;
-    if (callerTier && !isToolAllowedForTier(name, callerTier)) {
-      const required = resolveTierForTool(name);
+    if (callerTier && !isToolAllowedForTier(tool, callerTier)) {
+      const required = tool.tier;
       deps.audit?.execute({
         principal: authCtx?.principal ?? null,
         tokenType: authCtx?.tokenType ?? null,
@@ -257,11 +287,26 @@ function buildServer(
       };
     }
 
+    if (!isToolAllowedForPolicy(tool, authCtx?.policy)) {
+      deps.audit?.execute({
+        principal: authCtx?.principal ?? null,
+        tokenType: authCtx?.tokenType ?? null,
+        event: 'scope_denied',
+        status: 403,
+        toolName: name,
+        meta: { profileId: authCtx?.policy?.id ?? null, reason: 'profile_policy' },
+      });
+      return {
+        content: [{ type: 'text', text: `Tool '${name}' is not allowed by connection profile '${authCtx?.policy?.name ?? ''}'.` }],
+        isError: true,
+      };
+    }
+
     // Scope enforcement — only applies when auth is enabled (authCtx defined)
     // AND the deployment wired an EnforceScope use-case. Fail-safe default
-    // is 'mcp:write' when the tool omits the `scope` field.
+    // is declared explicitly by every tool in the registry.
     if (authCtx && deps.enforceScope) {
-      const required = tool.scope ?? DEFAULT_TOOL_SCOPE;
+      const required = tool.scope;
       const gate = deps.enforceScope.execute(authCtx, required);
       if (!gate.ok) {
         deps.audit?.execute({
@@ -281,7 +326,19 @@ function buildServer(
 
     try {
       const args = coerceArgs((rawArgs ?? {}) as Record<string, unknown>);
-      const result = await tool.handler(args, ctx, authCtx);
+      const projectGate = applyProjectPolicy(tool, args, ctx, authCtx?.policy);
+      if (!projectGate.ok) {
+        deps.audit?.execute({
+          principal: authCtx?.principal ?? null,
+          tokenType: authCtx?.tokenType ?? null,
+          event: 'scope_denied',
+          status: 403,
+          toolName: name,
+          meta: { profileId: authCtx?.policy?.id ?? null, reason: projectGate.error },
+        });
+        return { content: [{ type: 'text', text: projectGate.error }], isError: true };
+      }
+      const result = normalizeMcpToolResult(await tool.handler(projectGate.args, ctx, authCtx));
       deps.audit?.execute({
         principal: authCtx?.principal ?? null,
         tokenType: authCtx?.tokenType ?? null,
@@ -290,7 +347,13 @@ function buildServer(
         toolName: name,
         meta: {},
       });
-      return { content: [{ type: 'text', text: result }] };
+      return {
+        content: [{ type: 'text', text: result.text }],
+        ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+        ...(result.sourceTruncations?.length
+          ? { _meta: { sourceTruncations: result.sourceTruncations } }
+          : {}),
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       deps.audit?.execute({
@@ -327,7 +390,12 @@ function buildServer(
         return { resources: [] };
       }
     }
-    return { resources: await collectListedResources(ctx, authCtx) };
+    const resources = await collectListedResources(ctx, authCtx);
+    return {
+      resources: resources.filter((resource) =>
+        isResourceAllowedForPolicy(resource.uri, ctx, authCtx?.policy),
+      ),
+    };
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
@@ -342,6 +410,9 @@ function buildServer(
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
     const authCtx = currentAuthCtx();
+    if (!isResourceAllowedForPolicy(uri, ctx, authCtx?.policy)) {
+      throw new Error('Resource is outside this connection profile');
+    }
     if (authCtx && deps.enforceScope) {
       const gate = deps.enforceScope.execute(authCtx, DEFAULT_RESOURCE_SCOPE);
       if (!gate.ok) {

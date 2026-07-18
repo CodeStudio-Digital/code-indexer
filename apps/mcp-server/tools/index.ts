@@ -6,6 +6,7 @@ import { symbolTools } from './symbols.js';
 import { snapshotTools } from './snapshots.js';
 import { miscTools } from './misc.js';
 import { docsTools } from './docs.js';
+import { agentTools } from './agents.js';
 
 /**
  * All MCP tools exposed by this server, grouped by domain.
@@ -23,6 +24,7 @@ export const allTools: McpTool[] = [
   // so external agents see the same `rag_search_docs` shape the in-house
   // code-agent uses internally — no rebranding for clients.
   ...docsTools,
+  ...agentTools,
 ];
 
 export function buildToolRegistry(): Map<string, McpTool> {

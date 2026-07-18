@@ -409,6 +409,11 @@ export interface BridgeCallbacks {
   reduceToolResult?: (
     toolName: string,
     content: string,
+    meta?: {
+      input: Record<string, unknown>;
+      isError: boolean;
+      contentFormat: 'text' | 'markdown' | 'json';
+    },
   ) => string | import('@mcp/code-agent/core/smart-reducers.js').DetailedReduction;
   /**
    * Live final shaping hook. Spills the raw original to the side-file store
@@ -421,11 +426,13 @@ export interface BridgeCallbacks {
     shapedContent: string;
     isError: boolean;
     reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
+    sourceTruncations?: import('@mcp/code-agent/core/tool.js').ToolSourceTruncation[];
   }) => {
     content: string;
     truncated?: boolean;
     originalSize?: number;
     outputId?: string;
+    inlineCap?: number;
     reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
   };
   /**

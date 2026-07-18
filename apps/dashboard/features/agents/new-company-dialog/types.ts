@@ -4,7 +4,15 @@ export interface Template {
   id: number;
   name: string;
   description: string;
-  roles: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[] }>;
+  roles: Array<{
+    role: string;
+    provider: string;
+    model: string;
+    tier: string;
+    skills?: string[];
+    initialTools?: string[];
+    systemPromptOverride?: string;
+  }>;
 }
 
 export interface Project {

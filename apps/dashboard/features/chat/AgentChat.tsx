@@ -125,14 +125,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       const detail = (e as CustomEvent).detail as { sessionId?: number; agent?: string };
       if (!detail || detail.sessionId !== selectedId) return;
       const next = detail.agent;
-      if (
-        next
-        && next !== agent
-        && (
-          next === 'explore' || next === 'plan' || next === 'build' || next === 'admin' ||
-          next === 'spec' || next === 'app_orchestrator' || next === 'app_db' || next === 'api' || next === 'diagram' || next === 'builder'
-        )
-      ) {
+      if (next && next !== agent && isAgentPreset(next)) {
         setAgent(next);
       }
     };
@@ -924,12 +917,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // `coder:session_agent_changed` handler above (disjoint trigger).
   useEffect(() => {
     const a = sessionData?.session?.agent;
-    if (
-      a && (
-        a === 'explore' || a === 'plan' || a === 'build' || a === 'admin' ||
-        a === 'spec' || a === 'app_orchestrator' || a === 'app_db' || a === 'api' || a === 'diagram' || a === 'builder'
-      )
-    ) {
+    if (isAgentPreset(a)) {
       setAgent(a);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1295,14 +1283,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             const r = await fetch(`/api/coder/sessions/${selectedId}`);
             if (r.ok) {
               const s = (await r.json()) as { agent?: string };
-              if (
-                s.agent
-                && s.agent !== agent
-                && (
-                  s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'app_db' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
-                )
-              ) {
+              if (s.agent && s.agent !== agent && isAgentPreset(s.agent)) {
                 setAgent(s.agent);
               }
             }
@@ -1322,14 +1303,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             const r = await fetch(`/api/coder/sessions/${selectedId}`);
             if (r.ok) {
               const s = (await r.json()) as { agent?: string };
-              if (
-                s.agent
-                && s.agent !== agent
-                && (
-                  s.agent === 'explore' || s.agent === 'plan' || s.agent === 'build' || s.agent === 'admin' ||
-                  s.agent === 'spec' || s.agent === 'app_orchestrator' || s.agent === 'app_db' || s.agent === 'api' || s.agent === 'diagram' || s.agent === 'builder'
-                )
-              ) {
+              if (s.agent && s.agent !== agent && isAgentPreset(s.agent)) {
                 setAgent(s.agent);
               }
             }
@@ -1868,5 +1842,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         </Dialog>
       )}
     </>
+  );
+}
+function isAgentPreset(value: unknown): value is AgentPreset {
+  return typeof value === 'string' && (
+    value === 'explore' || value === 'plan' || value === 'build' || value === 'admin' ||
+    value === 'spec' || value === 'app_orchestrator' || value === 'app_db' || value === 'api' ||
+    value === 'diagram' || value === 'builder' || /^custom:[a-zA-Z0-9-]{8,80}$/.test(value)
   );
 }

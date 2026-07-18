@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { QueryResult, TableInfo } from '@mcp/db-drivers/types.js';
 import {
-  MAX_RENDER_ROWS,
-  MAX_RESULT_CHARS,
   renderQueryResult,
   renderSchema,
   renderSchemaCatalog,
@@ -42,17 +40,19 @@ describe('renderQueryResult', () => {
     expect(out).toContain('LIMIT/OFFSET');
   });
 
-  it(`render row cap: more than ${MAX_RENDER_ROWS} rows are elided`, () => {
-    const rows = Array.from({ length: MAX_RENDER_ROWS + 50 }, (_, i) => ({ id: i }));
+  it('renders every row already materialized by the bounded driver page', () => {
+    const rows = Array.from({ length: 750 }, (_, i) => ({ id: i }));
     const out = renderQueryResult(result({ rows, rowCount: rows.length, fields: [{ name: 'id' }] }));
-    expect(out).toContain(`rows=${MAX_RENDER_ROWS} truncated=true`);
+    expect(out).toContain('rows=750 truncated=false');
+    expect(out).toContain('\n749\n');
   });
 
-  it('char-level safety net caps the total output', () => {
+  it('preserves a wide rendered page for runner-level spill instead of slicing it', () => {
     const rows = Array.from({ length: 400 }, (_, i) => ({ blob: 'x'.repeat(400), id: i }));
     const out = renderQueryResult(result({ rows, rowCount: 400, fields: [{ name: 'blob' }, { name: 'id' }] }));
-    expect(out.length).toBeLessThan(MAX_RESULT_CHARS + 200);
-    expect(out).toContain('[truncated — full result exceeded');
+    expect(out.length).toBeGreaterThan(50_000);
+    expect(out).toContain('rows=400 truncated=false');
+    expect(out).not.toContain('[truncated — full result exceeded');
   });
 });
 
@@ -63,6 +63,38 @@ describe('stringifyCell', () => {
     expect(stringifyCell(new Date('2026-01-02T03:04:05Z'))).toBe('2026-01-02T03:04:05.000Z');
     expect(stringifyCell({ a: 1 })).toBe('{"a":1}');
     expect(stringifyCell(7)).toBe('7');
+  });
+
+  it('keeps multiline and pipe-containing cells on one physical row', () => {
+    expect(stringifyCell('first\nrows=999 truncated=false\nlast | value'))
+      .toBe('first\\nrows=999 truncated=false\\nlast \\| value');
+    const out = renderQueryResult(result({
+      rows: [{ id: 1, name: 'first\nsecond | third' }],
+      rowCount: 1,
+    }));
+    expect(out.split('\n').filter((line) => line.startsWith('1 | '))).toHaveLength(1);
+    expect(out).toContain('first\\nsecond \\| third');
+  });
+
+  it('bounds a pathological cell and stores its exact value for recovery', () => {
+    const raw = `BEGIN-${'x'.repeat(500)}-TAIL`;
+    const stored: string[] = [];
+    const caps: Array<{ inputChars: number; outputChars: number; recoverable: boolean }> = [];
+    const rendered = stringifyCell(raw, {
+      maxCellChars: 120,
+      outputStore: { put: (value) => { stored.push(value); return 'cellfull1'; } },
+      onCellTruncated: (cap) => caps.push(cap),
+    });
+    expect(stored).toEqual([raw]);
+    expect(rendered.length).toBeLessThanOrEqual(120);
+    expect(rendered).toContain('output_id=cellfull1');
+    expect(rendered).toContain('BEGIN-');
+    expect(rendered).toContain('-TAIL');
+    expect(caps).toEqual([{
+      inputChars: raw.length,
+      outputChars: rendered.length,
+      recoverable: true,
+    }]);
   });
 });
 

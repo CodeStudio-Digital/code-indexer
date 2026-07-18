@@ -253,6 +253,10 @@ export class SemanticVectorWorkerClient implements VectorStore {
     return this.request('vectors.dropGeneration', { namespace, generationId });
   }
 
+  dropLegacyKnowledgeTables(namespace: string): Promise<number> {
+    return this.request('vectors.dropLegacyKnowledgeTables', { namespace });
+  }
+
   hasGeneration(namespace: string, generationId: number): Promise<boolean> {
     return this.request('vectors.hasGeneration', { namespace, generationId });
   }

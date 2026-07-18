@@ -7,10 +7,37 @@ export function resolveProject(db: CodeIndexDB, name: string) {
 }
 
 export function truncateToTokens(text: string, maxTokens?: number): string {
-  if (!maxTokens || maxTokens <= 0) return text;
-  const maxChars = maxTokens * 4;
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars) + `\n\n... [truncated to ~${maxTokens} tokens]`;
+  return truncateToTokensDetailed(text, maxTokens).text;
+}
+
+export interface TokenTruncationResult {
+  text: string;
+  truncated: boolean;
+  inputChars: number;
+  retainedChars: number;
+}
+
+/**
+ * Apply an explicitly requested approximate token budget while preserving the
+ * exact source/retained character counts needed by MCP omission telemetry.
+ */
+export function truncateToTokensDetailed(text: string, maxTokens?: number): TokenTruncationResult {
+  if (!maxTokens || maxTokens <= 0) {
+    return { text, truncated: false, inputChars: text.length, retainedChars: text.length };
+  }
+  const maxChars = Math.max(0, Math.floor(maxTokens * 4));
+  if (text.length <= maxChars) {
+    return { text, truncated: false, inputChars: text.length, retainedChars: text.length };
+  }
+  let prefix = text.slice(0, maxChars);
+  const tail = prefix.charCodeAt(prefix.length - 1);
+  if (tail >= 0xD800 && tail <= 0xDBFF) prefix = prefix.slice(0, -1);
+  return {
+    text: prefix + `\n\n... [truncated to ~${maxTokens} tokens — rerun without max_tokens or increase it]`,
+    truncated: true,
+    inputChars: text.length,
+    retainedChars: prefix.length,
+  };
 }
 
 /**

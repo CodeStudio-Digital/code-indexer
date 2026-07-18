@@ -21,9 +21,9 @@
  * the prefix cache — even though the query-relevance step is query-dependent,
  * the reducer is never re-run on resume (that path uses buildToolResultBlock).
  *
- * Fase 1 is lossy: elided rows are gone — re-run the tool with narrower params
- * to recover. Fase 2 (wiring the dormant ToolOutputStore spill) will let the
- * marker carry an `output_id` so `get_tool_output` recovers dropped rows.
+ * The shaped representation is intentionally lossy, but the runner finalizer
+ * receives both raw and shaped values and spills the raw payload whenever this
+ * reducer applies. That keeps omitted rows recoverable through output_id.
  */
 
 export interface JsonCrushInput {
@@ -31,6 +31,12 @@ export interface JsonCrushInput {
   cap: number;
   /** Latest user-turn text; when present, rows are ranked by overlap with it. */
   query?: string;
+  /** Tool arguments add stable, call-local relevance terms to row ranking. */
+  args?: Record<string, unknown>;
+  /** Error payloads preferentially retain rows that look like failures/stacks. */
+  isError?: boolean;
+  /** Optional producer hint (for example application/json or ndjson). */
+  contentFormat?: string;
 }
 
 export interface JsonCrushOutput {
@@ -87,15 +93,34 @@ interface Row {
   idx: number;
   /** Serialized text used for dedup, scoring and re-emit. */
   text: string;
+  /** Parsed value, retained only for JSON arrays/envelopes when re-emitting. */
+  value?: unknown;
 }
 
 function tokenize(s: string): string[] {
-  return s.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? [];
+  return s.toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) ?? [];
+}
+
+const ENVELOPE_KEYS = ['data', 'results', 'items'] as const;
+
+interface ParsedRows {
+  rows: Row[];
+  mode: 'array' | 'ndjson' | 'envelope';
+  envelope?: {
+    key: (typeof ENVELOPE_KEYS)[number];
+    value: Record<string, unknown>;
+  };
 }
 
 /** Parse content into rows + the shape to re-serialize as, or null if N/A. */
-function parseRows(content: string): { rows: Row[]; mode: 'array' | 'ndjson' } | null {
-  const trimmed = content.trim();
+function parseRows(content: string, contentFormat?: string): ParsedRows | null {
+  let trimmed = content.trim();
+  // Some MCP/HTTP producers wrap declared JSON in a markdown fence. Only
+  // unwrap when the producer explicitly identifies the payload as JSON.
+  if (/json/i.test(contentFormat ?? '')) {
+    const fenced = /^```(?:json)?\s*\n([\s\S]*)\n```$/i.exec(trimmed);
+    if (fenced) trimmed = fenced[1].trim();
+  }
   // Top-level JSON array.
   if (trimmed.startsWith('[')) {
     if (trimmed.length > MAX_PARSE_CHARS) return null;
@@ -104,13 +129,40 @@ function parseRows(content: string): { rows: Row[]; mode: 'array' | 'ndjson' } |
     try {
       const parsed: unknown = JSON.parse(trimmed);
       if (Array.isArray(parsed) && parsed.length >= MIN_ROWS && parsed.length <= MAX_ROWS) {
-        return { mode: 'array', rows: parsed.map((v, idx) => ({ idx, text: JSON.stringify(v) })) };
+        return {
+          mode: 'array',
+          rows: parsed.map((value, idx) => ({ idx, value, text: JSON.stringify(value) })),
+        };
       }
     } catch {
       /* not a single JSON array — fall through */
     }
     return null;
   }
+
+  // Common API/MCP envelopes: { data: [...] }, { results: [...] },
+  // { items: [...] }. Preserve all sibling metadata and the original array
+  // key so callers do not have to learn a reducer-specific response shape.
+  if (trimmed.startsWith('{') && trimmed.length <= MAX_PARSE_CHARS) {
+    try {
+      const value: unknown = JSON.parse(trimmed);
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const envelope = value as Record<string, unknown>;
+        const key = ENVELOPE_KEYS.find((candidate) => Array.isArray(envelope[candidate]));
+        const values = key ? envelope[key] as unknown[] : null;
+        if (key && values && values.length >= MIN_ROWS && values.length <= MAX_ROWS) {
+          return {
+            mode: 'envelope',
+            envelope: { key, value: envelope },
+            rows: values.map((row, idx) => ({ idx, value: row, text: JSON.stringify(row) })),
+          };
+        }
+      }
+    } catch {
+      /* not a single JSON object — fall through to NDJSON detection */
+    }
+  }
+
   // NDJSON: many non-empty lines, most of which parse as JSON objects/arrays.
   const lines = content.split('\n').filter((l) => l.trim());
   if (lines.length < MIN_ROWS || lines.length > MAX_ROWS) return null;
@@ -125,11 +177,27 @@ function parseRows(content: string): { rows: Row[]; mode: 'array' | 'ndjson' } |
   return { mode: 'ndjson', rows: lines.map((text, idx) => ({ idx, text })) };
 }
 
-export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOutput {
+function boundedArgsText(args: Record<string, unknown> | undefined): string {
+  if (!args) return '';
+  try {
+    return JSON.stringify(args).slice(0, QUERY_MAX);
+  } catch {
+    return '';
+  }
+}
+
+export function jsonCrush({
+  content,
+  cap,
+  query,
+  args,
+  isError = false,
+  contentFormat,
+}: JsonCrushInput): JsonCrushOutput {
   const pass: JsonCrushOutput = { content, applied: false };
   const safeCap = Number.isFinite(cap) && cap > 0 ? Math.max(1, Math.floor(cap)) : 1;
   if (content.length <= safeCap) return pass;
-  const parsed = parseRows(content);
+  const parsed = parseRows(content, contentFormat);
   if (!parsed) return pass;
   const { rows, mode } = parsed;
 
@@ -144,11 +212,22 @@ export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOut
   }
 
   // 2. Score by lexical overlap with the query (0 when no query → order kept).
-  const qtokens = query ? new Set(tokenize(query.slice(0, QUERY_MAX))) : null;
+  const relevanceText = [query?.slice(0, QUERY_MAX) ?? '', boundedArgsText(args)]
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, QUERY_MAX);
+  const qtokens = relevanceText ? new Set(tokenize(relevanceText)) : null;
   const score = (text: string): number => {
-    if (!qtokens || qtokens.size === 0) return 0;
     let hits = 0;
-    for (const t of new Set(tokenize(text))) if (qtokens.has(t)) hits++;
+    if (qtokens && qtokens.size > 0) {
+      for (const t of new Set(tokenize(text))) if (qtokens.has(t)) hits++;
+    }
+    // A structured error result often contains a few decisive failure rows
+    // surrounded by verbose successes/debug records. Keep those rows even
+    // when the latest user query does not contain the exact error vocabulary.
+    if (isError && /\b(error|failed?|failure|exception|fatal|panic|stack|traceback)\b/i.test(text)) {
+      hits += 100;
+    }
     return hits;
   };
 
@@ -177,6 +256,7 @@ export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOut
 
   const meta = {
     technique: 'json-crush',
+    ...(mode === 'envelope' ? { source_key: parsed.envelope!.key } : {}),
     kept: kept.length,
     total: rows.length,
     duplicates,
@@ -184,9 +264,17 @@ export function jsonCrush({ content, cap, query }: JsonCrushInput): JsonCrushOut
   };
   // Keep the shaped value machine-readable. Arrays become a documented
   // envelope; NDJSON receives one valid JSON metadata row.
-  let out = mode === 'array'
-    ? `{"_smart_reducer":${JSON.stringify(meta)},"rows":[${kept.map((r) => r.text).join(',')}]} `
-    : `${JSON.stringify({ _smart_reducer: meta })}\n${kept.map((r) => r.text).join('\n')}`;
+  let out: string;
+  if (mode === 'array') {
+    out = `{"_smart_reducer":${JSON.stringify(meta)},"rows":[${kept.map((r) => r.text).join(',')}]} `;
+  } else if (mode === 'envelope') {
+    const envelope = { ...parsed.envelope!.value };
+    envelope[parsed.envelope!.key] = kept.map((r) => r.value);
+    envelope._smart_reducer = meta;
+    out = JSON.stringify(envelope);
+  } else {
+    out = `${JSON.stringify({ _smart_reducer: meta })}\n${kept.map((r) => r.text).join('\n')}`;
+  }
   if (out.length > safeCap) {
     const first = unique[0]?.text ?? '';
     const last = unique.at(-1)?.text ?? '';

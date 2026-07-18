@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
-import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
+import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { decide } from '@mcp/code-agent/agents/decision-engine.js';
 import { getAllKnownToolsMeta, getToolTier, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
@@ -28,6 +28,11 @@ import {
   coderWorkerEnabled,
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
+import {
+  listCustomAgents,
+  resolveAgentSelection,
+  type AgentSelectionId,
+} from '../../../custom-agents.js';
 
 /**
  * Trim heavy inline content (tool_result strings and image/document base64)
@@ -266,7 +271,7 @@ interface CreateSessionBody {
   /** Prefer the most recently active provider/model; explicit values are fallback. */
   use_last_model?: boolean;
   /** Initial agent preset. Persisted on the session row. */
-  agent?: AgentId;
+  agent?: AgentSelectionId;
   /** Sticky reasoning-effort override for the new session. Null = model default. */
   reasoning_effort?: string | null;
   /** Initial sticky extended-thinking state. Defaults to false. */
@@ -282,6 +287,9 @@ export function mountCoderSessionsRoutes(
 ): void {
   const { sessionStore, providerStore } = deps;
   const { activeRuns } = runtime;
+
+  const validateAgentSelection = (value: unknown): value is AgentSelectionId =>
+    resolveAgentSelection(providerStore, value) !== null;
 
   // Abort a session's LIVE run (worker pool or legacy bus) — best-effort. Used
   // before tearing down a global session's virtual workspace so the runner +
@@ -385,6 +393,9 @@ export function mountCoderSessionsRoutes(
     if (!body.title || !body.provider) {
       return c.json({ error: 'title, provider required' }, 400);
     }
+    if (body.agent != null && !validateAgentSelection(body.agent)) {
+      return c.json({ error: 'unknown or disabled agent' }, 400);
+    }
     // Reuse path: attach a new session to an EXISTING virtual workspace (already
     // built + indexed) — no re-build, no re-index, instant.
     if (body.reuse_project_id) {
@@ -437,14 +448,25 @@ export function mountCoderSessionsRoutes(
     return c.json(session, 201);
   });
 
-  /**
-   * List the built-in agent presets. The dashboard uses this to render a
-   * picker when creating/starting a session. Returns static data — one
-   * entry per built-in agent plus tier counts for token-budget tooltips.
-   */
+  /** Built-in presets plus enabled user-defined agents for the dashboard picker. */
   app.get('/api/coder/agents', (c) => {
+    const custom = listCustomAgents(providerStore)
+      .filter((agent) => agent.enabled)
+      .map((agent) => {
+        const base = AGENTS[agent.baseAgentId];
+        return {
+          ...base,
+          id: agent.selectionId,
+          label: agent.name,
+          description: agent.description || base.description,
+          custom: true,
+          baseAgentId: agent.baseAgentId,
+          skillCount: agent.skillIds.length,
+          toolMode: agent.toolNames === null ? 'inherit' : 'allowlist',
+        };
+      });
     return c.json({
-      agents: Object.values(AGENTS),
+      agents: [...Object.values(AGENTS), ...custom],
       tierCounts: TIER_COUNTS,
     });
   });
@@ -831,7 +853,7 @@ export function mountCoderSessionsRoutes(
   });
 
   /**
-   * Per-session agent/mode (explore/plan/build/admin/spec/builder/api).
+   * Per-session agent/mode (built-in preset or `custom:<stable-id>`).
    * Persists the column so a manual dropdown pick is remembered even when
    * the user leaves without sending. Unlike tool-permission-mode there is NO
    * live-runner push: the agent identity (system prompt, tier seed, gates) is
@@ -843,8 +865,8 @@ export function mountCoderSessionsRoutes(
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ agent?: string | null }>(c);
     const agent = body.agent ?? null;
-    if (agent !== null && !(agent in AGENTS)) {
-      return c.json({ error: `agent: one of ${Object.keys(AGENTS).join('|')}|null required` }, 400);
+    if (agent !== null && !validateAgentSelection(agent)) {
+      return c.json({ error: 'agent must reference an enabled built-in or custom agent, or null' }, 400);
     }
     sessionStore.setSessionAgent(id, agent);
     const session = sessionStore.getSession(id);
@@ -881,6 +903,9 @@ export function mountCoderSessionsRoutes(
     const model = canUseLast ? lastUsed!.model : (body.model ?? '');
     if (!body.project_id || !body.title || !provider) {
       return c.json({ error: 'project_id, title, provider required' }, 400);
+    }
+    if (body.agent !== undefined && !validateAgentSelection(body.agent)) {
+      return c.json({ error: 'unknown or disabled agent' }, 400);
     }
     if (body.reasoning_effort !== undefined && body.reasoning_effort !== null && typeof body.reasoning_effort !== 'string') {
       return c.json({ error: 'reasoning_effort:string|null required' }, 400);

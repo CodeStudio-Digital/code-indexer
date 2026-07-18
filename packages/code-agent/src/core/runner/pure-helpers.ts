@@ -1,5 +1,8 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
+import type { ReductionReport, ReductionStage } from '@mcp/code-agent/core/smart-reducers.js';
+import type { ResolvedToolOutputPolicy } from '@mcp/code-agent/core/tool-output-policy.js';
+import type { ToolSourceTruncation } from '@mcp/code-agent/core/tool.js';
+import { stripUnpairedSurrogates } from '@mcp/code-agent/core/text-boundaries.js';
 
 /**
  * Coarse character count over a transcript. Adds a fixed per-block
@@ -62,12 +65,28 @@ export function capToolContent(
   cap: number,
   outputId?: string,
   toolName?: string,
+  capStrategy: 'head_tail' | 'contiguous' = 'head_tail',
+  recovery?: ResolvedToolOutputPolicy['recovery'],
+  sourceSize?: number,
 ): { content: string; truncated: boolean; originalSize?: number; preserved?: string[] } {
   if (content.length <= cap) return { content, truncated: false };
   const safeCap = Number.isFinite(cap) && cap > 0 ? Math.max(1, Math.floor(cap)) : 1;
+  const preferredRecovery = recovery === 'cursor'
+    ? toolName === 'read_file' || toolName?.endsWith('__read_file')
+      ? 'retry with narrower start_line/end_line'
+      : toolName === 'get_tool_output'
+        ? 'request the next offset/limit page'
+        : 'retry with a narrower cursor or range'
+    : recovery === 'section'
+      ? 'request a narrower section'
+      : recovery === 'rerun'
+        ? 'rerun with narrower arguments'
+        : null;
+  const originalSize = sourceSize ?? content.length;
+  const shapedSize = originalSize !== content.length ? `; shaped_size=${content.length}` : '';
   const marker = outputId
-    ? `\n[truncated: output_id=${outputId}; original_size=${content.length}; use get_tool_output]\n`
-    : `\n[truncated: original_size=${content.length}]\n`;
+    ? `\n[truncated: output_id=${outputId}; original_size=${originalSize}${shapedSize}; ${preferredRecovery ? `prefer ${preferredRecovery}; ` : ''}exact fallback: get_tool_output]\n`
+    : `\n[truncated: original_size=${originalSize}${shapedSize}; ${preferredRecovery ?? (recovery === 'output_store' ? 'output store unavailable in this context — do not blindly rerun mutations' : 'no recovery available')}]\n`;
 
   const fitHeadTail = (value: string, budget: number): { value: string; preserved: string[] } => {
     if (marker.length >= budget) return { value: marker.slice(0, budget), preserved: ['metadata'] };
@@ -81,7 +100,16 @@ export function capToolContent(
   };
 
   let shaped: { value: string; preserved: string[] };
-  if (toolName === 'code_exec') {
+  if (capStrategy === 'contiguous') {
+    if (marker.length >= safeCap) {
+      shaped = { value: marker.slice(0, safeCap), preserved: ['metadata'] };
+    } else {
+      shaped = {
+        value: content.slice(0, safeCap - marker.length) + marker,
+        preserved: ['contiguous_prefix'],
+      };
+    }
+  } else if (toolName === 'code_exec') {
     const returnMarker = '\n[return]\n';
     const returnAt = content.lastIndexOf(returnMarker);
     if (returnAt >= 0 && marker.length < safeCap) {
@@ -143,9 +171,9 @@ export function capToolContent(
     shaped = fitHeadTail(content, safeCap);
   }
   return {
-    content: shaped.value.slice(0, safeCap),
+    content: stripUnpairedSurrogates(shaped.value.slice(0, safeCap)),
     truncated: true,
-    originalSize: content.length,
+    originalSize,
     preserved: shaped.preserved,
   };
 }
@@ -171,33 +199,112 @@ export function finalizeToolOutput(args: {
   cap: number;
   store?: ToolOutputSpillStore;
   reductionReport?: ReductionReport;
-}): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; reductionReport: ReductionReport } {
-  const { rawContent, shapedContent, isError, cap, store, toolName } = args;
-  let outputId: string | undefined;
-  if (store && (shouldSpillToolOutput({ content: rawContent, isError }, cap) || rawContent.length > shapedContent.length)) {
+  policy?: ResolvedToolOutputPolicy;
+  sourceTruncations?: ToolSourceTruncation[];
+}): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; inlineCap: number; reductionReport: ReductionReport } {
+  const { rawContent, shapedContent, isError, cap, store, toolName, policy } = args;
+  // A producer may already have persisted the exact pre-cap source (notably
+  // the MCP pathological guard). Reuse that id as the authoritative recovery
+  // target; storing the producer's preview would create a snapshot-of-snapshot.
+  const completeSource = args.sourceTruncations?.find(
+    (source) => source.recoverable && source.outputId,
+  );
+  const sourceOutputId = completeSource?.outputId;
+  const originalChars = completeSource?.unit === 'chars'
+    ? Math.max(rawContent.length, completeSource.inputSize)
+    : rawContent.length;
+  let outputId: string | undefined = sourceOutputId;
+  let didSpill = false;
+  // A page already points at its source output id. Spilling that page creates
+  // recovery-of-recovery chains and must never happen.
+  const recoveryPage = toolName === 'get_tool_output';
+  const preserveError = policy?.preserveOnError ?? true;
+  // `recovery` is the preferred UX, not permission to discard the snapshot.
+  // Spill only when information was actually lost, but keep that exact fallback
+  // for cursor/rerun/section tools too: a single huge line, a mutating query,
+  // or a bad third-party page cannot always be reproduced safely. `none` is
+  // the only explicit opt-out. get_tool_output already references its source.
+  const outputStoreRecovery = policy?.recovery !== 'none';
+  const shouldSpill = rawContent.length > cap
+    || rawContent.length > shapedContent.length
+    || (isError && preserveError);
+  if (!outputId && store && !recoveryPage && outputStoreRecovery && shouldSpill) {
     outputId = store.put(rawContent) ?? undefined;
+    didSpill = !!outputId;
   }
-  const capped = capToolContent(shapedContent, cap, outputId, toolName);
-  const baseReport: ReductionReport = args.reductionReport ?? {
+  const capped = capToolContent(
+    shapedContent,
+    cap,
+    outputId,
+    toolName,
+    policy?.capStrategy ?? 'head_tail',
+    policy?.recovery,
+    originalChars,
+  );
+  const initialReport: ReductionReport = args.reductionReport ?? {
     kind: 'none',
     technique: 'none',
     rawChars: rawContent.length,
     shapedChars: shapedContent.length,
     cap,
     preserved: [],
+    stages: [],
   };
+  const sourceStages: ReductionStage[] = (args.sourceTruncations ?? []).map((source) => ({
+    stage: 'source_cap',
+    technique: source.technique,
+    inputChars: source.inputSize,
+    outputChars: source.outputSize,
+    recoverable: source.recoverable,
+    source,
+  }));
+  const sourceTechnique = sourceStages.length > 0
+    ? new Set(sourceStages.map((stage) => stage.technique)).size === 1
+      ? sourceStages[0].technique
+      : 'source-cap:multiple'
+    : null;
+  const baseReport: ReductionReport = sourceTechnique && initialReport.kind === 'none'
+    ? { ...initialReport, kind: 'source_cap', technique: sourceTechnique }
+    : initialReport;
+  const stages = [
+    ...sourceStages,
+    ...(baseReport.stages ?? []),
+  ];
+  if (didSpill) {
+    stages.push({
+      stage: 'spill',
+      technique: 'tool-output-store',
+      inputChars: rawContent.length,
+      outputChars: rawContent.length,
+      recoverable: true,
+    });
+  }
   if (capped.truncated) {
+    stages.push({
+      stage: 'hard_cap',
+      technique: toolName ? `hard-cap:${toolName}` : 'hard-cap:generic',
+      inputChars: shapedContent.length,
+      outputChars: capped.content.length,
+      recoverable: !!outputId
+        || policy?.recovery === 'cursor'
+        || policy?.recovery === 'section'
+        || policy?.recovery === 'rerun',
+    });
     return {
       content: capped.content,
       truncated: true,
       originalSize: capped.originalSize,
       outputId,
+      inlineCap: cap,
       reductionReport: {
         ...baseReport,
         kind: 'hard_cap',
         technique: toolName ? `hard-cap:${toolName}` : 'hard-cap:generic',
         shapedChars: capped.content.length,
         preserved: capped.preserved ?? ['head', 'tail'],
+        stages,
+        policyMode: policy?.mode,
+        recovery: policy?.recovery,
         ...(outputId ? { outputId } : {}),
       },
     };
@@ -206,22 +313,59 @@ export function finalizeToolOutput(args: {
   // from the spilled original — advertise the output_id so they're recoverable
   // (length-guarded so the note never pushes us back over the cap).
   if (outputId && rawContent.length > shapedContent.length) {
-    const note = `\n[reduced: full output cached — call get_tool_output("${outputId}") for the elided rows]`;
-    if (shapedContent.length + note.length <= cap) {
-      const content = shapedContent + note;
-      return {
-        content,
-        outputId,
-        reductionReport: { ...baseReport, shapedChars: content.length, outputId },
-      };
+    const preferred = policy?.recovery === 'cursor'
+      ? toolName === 'read_file' || toolName?.endsWith('__read_file')
+        ? 'prefer narrower start_line/end_line; '
+        : 'prefer a narrower cursor/range; '
+      : policy?.recovery === 'rerun'
+        ? 'prefer rerunning with narrower arguments; '
+        : policy?.recovery === 'section'
+          ? 'prefer requesting a narrower section; '
+          : '';
+    const note = `\n[reduced: ${preferred}exact snapshot: get_tool_output("${outputId}") for elided content]`;
+    const room = Math.max(0, cap - note.length);
+    const visible = shapedContent.length <= room
+      ? shapedContent
+      : policy?.capStrategy === 'contiguous'
+        ? shapedContent.slice(0, room)
+        : shapedContent.slice(0, Math.ceil(room * 0.55))
+          + shapedContent.slice(-Math.floor(room * 0.45));
+    const content = note.length >= cap
+      ? note.slice(0, cap)
+      : stripUnpairedSurrogates(visible) + note;
+    if (visible.length < shapedContent.length) {
+      stages.push({
+        stage: 'recovery_marker',
+        technique: 'reserve-output-id-marker',
+        inputChars: shapedContent.length,
+        outputChars: content.length,
+        recoverable: true,
+      });
     }
+    return {
+      content,
+      outputId,
+      inlineCap: cap,
+      reductionReport: {
+        ...baseReport,
+        shapedChars: content.length,
+        outputId,
+        stages,
+        policyMode: policy?.mode,
+        recovery: policy?.recovery,
+      },
+    };
   }
   return {
     content: capped.content,
     outputId,
+    inlineCap: cap,
     reductionReport: {
       ...baseReport,
       shapedChars: capped.content.length,
+      stages,
+      policyMode: policy?.mode,
+      recovery: policy?.recovery,
       ...(outputId ? { outputId } : {}),
     },
   };

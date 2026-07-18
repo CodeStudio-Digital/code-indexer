@@ -394,6 +394,8 @@ export interface ConversationChapterStatus {
     summarized: number;
     deterministic_fallbacks: number;
     checkpoint_failures: number;
+    checkpoint_retries: number;
+    checkpoint_blocked: number;
     noops: number;
     failures: number;
   };

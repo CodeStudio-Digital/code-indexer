@@ -12,7 +12,12 @@
  *      provider_models) and it beats the static registry.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { getModelMaxTools, getModelContextWindow, mergeDBCapabilities } from '../capabilities.js';
+import {
+  getMaxOutputTokens,
+  getModelMaxTools,
+  getModelContextWindow,
+  mergeDBCapabilities,
+} from '../capabilities.js';
 
 afterEach(() => {
   // dbLayer is a module global — always drain it so other capability tests
@@ -75,5 +80,26 @@ describe('getModelMaxTools — DB layer (admin override)', () => {
     mergeDBCapabilities([{ model_id: 'my-custom-model', context_window: 64_000, max_tools: 16 }]);
     expect(getModelContextWindow('my-custom-model')).toBe(64_000);
     expect(getModelMaxTools('my-custom-model')).toBe(16);
+  });
+});
+
+describe('getMaxOutputTokens — DB layer (per-model output cap)', () => {
+  it('DB default_max_tokens beats the static registry', () => {
+    mergeDBCapabilities([{
+      model_id: 'glm-5.1',
+      context_window: null,
+      default_max_tokens: 24_000,
+    }]);
+    expect(getMaxOutputTokens('glm-5.1')).toBe(24_000);
+  });
+
+  it('clearing the DB layer restores the registry value', () => {
+    mergeDBCapabilities([{
+      model_id: 'glm-5.1',
+      context_window: null,
+      default_max_tokens: 24_000,
+    }]);
+    mergeDBCapabilities([]);
+    expect(getMaxOutputTokens('glm-5.1')).toBe(16_000);
   });
 });

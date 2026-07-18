@@ -38,6 +38,7 @@ export const readPlanTool: CoderTool = {
     'following the agreed plan — the plan is otherwise not visible once it scrolls out of context. ' +
     'For task-level progress use list_tasks instead.',
   source: 'native',
+  outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',

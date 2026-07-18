@@ -163,7 +163,20 @@ export const globTool: CoderTool = {
           'Check the pattern or try respect_ignore:false if you expected ignored files.',
       );
     }
-    return ok(`${header}\n\n${lines.join('\n')}`);
+    return {
+      content: `${header}\n\n${lines.join('\n')}`,
+      ...(total > limit
+        ? {
+            sourceTruncations: [{
+              technique: 'glob-result-limit',
+              inputSize: total,
+              outputSize: capped.length,
+              unit: 'items' as const,
+              recoverable: true,
+            }],
+          }
+        : {}),
+    };
   },
 };
 

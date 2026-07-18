@@ -11,6 +11,7 @@ import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import { retainGroup, type ResumableGroup } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
 export interface SpawnRetentionAgent {
@@ -19,6 +20,7 @@ export interface SpawnRetentionAgent {
   task: string;
   profileId: MicroAgentProfileId;
   files?: string[];
+  researchPolicy?: SubagentResearchPolicy;
   maxTurns: number;
   limits: SubagentLimits;
   reason: StopReason;
@@ -75,6 +77,7 @@ export function retainSpawnGroup(args: {
       task: a.task,
       profileId: a.profileId,
       files: a.files,
+      researchPolicy: a.researchPolicy,
       maxTurns: a.maxTurns,
       limits: a.limits,
       transcript: a.transcript,

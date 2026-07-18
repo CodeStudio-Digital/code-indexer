@@ -8,19 +8,61 @@
  */
 import type { BrowserWindow } from 'electron';
 
-export interface Viewport { width: number; height: number; deviceScaleFactor: number; mobile: boolean }
+export interface Viewport {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: boolean;
+  requestedWidth?: number;
+  requestedHeight?: number;
+  emulated?: boolean;
+}
 /** Default preview viewport (HD). Applied as the native window CONTENT size —
  *  see PreviewWindowService — which is crash-safe (no CDP Emulation override,
  *  which destabilised Chromium on some Windows/Electron builds). Width-based
  *  responsive breakpoints work; true touch/UA device emulation is deferred. */
 export const DEFAULT_VIEWPORT: Viewport = { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false };
 
-export interface ConsoleEntry { level: string; text: string; ts: number }
-export interface NetEntry { requestId: string; url: string; method: string; status?: number; statusText?: string; failed?: boolean; errorText?: string; body?: string; ts: number }
+export interface ConsoleEntry { seq: number; level: string; text: string; ts: number; url?: string; line?: number }
+export interface NetEntry {
+  seq: number;
+  requestId: string;
+  url: string;
+  method: string;
+  status?: number;
+  statusText?: string;
+  type?: string;
+  mimeType?: string;
+  completed?: boolean;
+  failed?: boolean;
+  errorText?: string;
+  fromCache?: boolean;
+  encodedDataLength?: number;
+  durationMs?: number;
+  body?: string;
+  ts: number;
+  startedMonotonic?: number;
+}
 
 const CAP = 250;
+const MAX_CONSOLE_ENTRY_CHARS = 20_000;
+const MAX_URL_CHARS = 8_000;
 
-interface Waiter { kind: 'console' | 'network'; match: (e: unknown) => boolean; resolve: () => void; timer: NodeJS.Timeout }
+function capText(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max)}\n[entry capped at ${max} chars]` : value;
+}
+
+interface Waiter {
+  kind: 'console' | 'network';
+  match: (e: unknown) => boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+export interface PreviewCursor { consoleSeq: number; networkSeq: number }
 
 export class PreviewWindow {
   readonly id: number;
@@ -28,6 +70,11 @@ export class PreviewWindow {
   private network: NetEntry[] = [];
   private netById = new Map<string, NetEntry>();
   private waiters: Waiter[] = [];
+  private consoleSeq = 0;
+  private networkSeq = 0;
+  private navigationId = 0;
+  private nextRef = 0;
+  private refToBackendNode = new Map<string, number>();
   /** Listeners for element selections from the injected universal inspector. */
   private selectListeners = new Set<(d: unknown) => void>();
   /** Listeners for control-bar actions (`viewport:<preset>`, `close`). */
@@ -43,15 +90,42 @@ export class PreviewWindow {
 
   /** Bound CDP message handler — kept so `close()` can detach it. */
   private readonly onMessage: (e: unknown, method: string, params: unknown) => void;
+  private readonly onDetach: (_e: unknown, reason: string) => void;
 
-  constructor(public win: BrowserWindow, public url: string) {
+  private constructor(public win: BrowserWindow, public url: string) {
     this.id = win.id;
     const dbg = win.webContents.debugger;
-    try { dbg.attach('1.3'); } catch { /* already attached */ }
     this.onMessage = (_e, method, params) => this.onCdp(method, params as Record<string, unknown>);
+    this.onDetach = (_e, reason) => {
+      const entry: ConsoleEntry = {
+        seq: ++this.consoleSeq,
+        level: 'error',
+        text: `Preview DevTools detached: ${reason}`,
+        ts: Date.now(),
+      };
+      this.push(this.console, entry);
+      this.fire('console', entry);
+    };
     dbg.on('message', this.onMessage);
-    for (const d of ['Runtime', 'Network', 'Log', 'Page', 'Performance', 'DOM', 'CSS']) {
-      void dbg.sendCommand(`${d}.enable`).catch(() => undefined);
+    dbg.on('detach', this.onDetach);
+  }
+
+  static async create(win: BrowserWindow, url: string): Promise<PreviewWindow> {
+    const preview = new PreviewWindow(win, url);
+    const dbg = win.webContents.debugger;
+    try {
+      if (!dbg.isAttached()) dbg.attach('1.3');
+      if (!dbg.isAttached()) throw new Error('debugger did not attach');
+      await Promise.all(
+        ['Runtime', 'Network', 'Log', 'Page', 'Performance', 'DOM', 'CSS', 'Accessibility'].map((domain) =>
+          dbg.sendCommand(`${domain}.enable`),
+        ),
+      );
+      await dbg.sendCommand('Page.setLifecycleEventsEnabled', { enabled: true });
+      return preview;
+    } catch (error) {
+      preview.close();
+      throw new Error(`Failed to initialize Preview DevTools: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -120,10 +194,47 @@ export class PreviewWindow {
     this.console = [];
     this.network = [];
     this.netById.clear();
+    this.resetRefs();
   }
 
   getConsole(level?: string): ConsoleEntry[] {
-    return level && level !== 'all' ? this.console.filter((c) => c.level === level) : this.console.slice();
+    const normalized = level === 'warning' ? 'warn' : level;
+    return normalized && normalized !== 'all' ? this.console.filter((c) => c.level === normalized) : this.console.slice();
+  }
+
+  getCursor(): PreviewCursor {
+    return { consoleSeq: this.consoleSeq, networkSeq: this.networkSeq };
+  }
+
+  getDiagnosticsSince(cursor: PreviewCursor): { consoleErrors: ConsoleEntry[]; failedRequests: NetEntry[] } {
+    return {
+      consoleErrors: this.console.filter((entry) => entry.seq > cursor.consoleSeq && entry.level === 'error'),
+      failedRequests: this.network.filter((entry) => entry.seq > cursor.networkSeq && entry.failed),
+    };
+  }
+
+  async getPageState(): Promise<{ url: string; title: string; navigationId: number }> {
+    const url = this.win.webContents.getURL() || this.url;
+    const response = (await this.send('Runtime.evaluate', {
+      expression: 'document.title',
+      returnByValue: true,
+    }).catch(() => null)) as { result?: { value?: unknown } } | null;
+    return { url, title: typeof response?.result?.value === 'string' ? response.result.value : '', navigationId: this.navigationId };
+  }
+
+  resetRefs(): void {
+    this.nextRef = 0;
+    this.refToBackendNode.clear();
+  }
+
+  bindRef(backendNodeId: number): string {
+    const ref = `a${++this.nextRef}`;
+    this.refToBackendNode.set(ref, backendNodeId);
+    return ref;
+  }
+
+  resolveRef(ref: string): number | undefined {
+    return this.refToBackendNode.get(ref.replace(/^ref=/, ''));
   }
   getNetwork(opts: { urlFilter?: string; status?: number } = {}): NetEntry[] {
     return this.network.filter((n) => {
@@ -131,22 +242,42 @@ export class PreviewWindow {
       if (opts.status === 0) return (n.status ?? 0) >= 400 || !!n.failed;
       if (typeof opts.status === 'number' && n.status !== opts.status) return false;
       return true;
+    }).map((entry) => {
+      // Monotonic CDP timestamps are an internal duration-calculation detail;
+      // exposing them makes the model-facing payload noisy and misleading.
+      const { startedMonotonic: _startedMonotonic, ...publicEntry } = entry;
+      return publicEntry;
     });
   }
 
   /** Block until the next matching event of `kind`, or `timeoutMs`. */
-  waitFor(kind: 'console' | 'network', match: (e: unknown) => boolean, timeoutMs: number): Promise<void> {
-    return new Promise((resolve) => {
+  waitFor(kind: 'console' | 'network', match: (e: unknown) => boolean, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new Error('Preview wait aborted.'));
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.waiters = this.waiters.filter((w) => w.timer !== timer);
+        const waiter = this.waiters.find((w) => w.timer === timer);
+        if (waiter) this.removeWaiter(waiter);
         resolve();
       }, Math.min(Math.max(timeoutMs, 500), 30_000));
-      this.waiters.push({ kind, match, resolve, timer });
+      const waiter: Waiter = { kind, match, resolve, reject, timer, signal };
+      if (signal) {
+        waiter.onAbort = () => {
+          this.removeWaiter(waiter);
+          reject(new Error('Preview wait aborted.'));
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.waiters.push(waiter);
     });
   }
 
   close(): void {
+    for (const waiter of this.waiters.slice()) {
+      this.removeWaiter(waiter);
+      waiter.reject(new Error('Preview window closed.'));
+    }
     try { this.win.webContents.debugger.removeListener('message', this.onMessage); } catch { /* gone */ }
+    try { this.win.webContents.debugger.removeListener('detach', this.onDetach); } catch { /* gone */ }
     try { this.win.webContents.debugger.detach(); } catch { /* gone */ }
     try { this.win.close(); } catch { /* gone */ }
   }
@@ -162,42 +293,115 @@ export class PreviewWindow {
     this.network.push(item);
     if (this.network.length > CAP) {
       const removed = this.network.shift();
-      if (removed) this.netById.delete(removed.requestId);
+      if (removed && this.netById.get(removed.requestId) === removed) this.netById.delete(removed.requestId);
     }
   }
   private fire(kind: 'console' | 'network', e: unknown): void {
     for (const w of this.waiters.slice()) {
       if (w.kind === kind && w.match(e)) {
-        clearTimeout(w.timer);
-        this.waiters = this.waiters.filter((x) => x !== w);
+        this.removeWaiter(w);
         w.resolve();
       }
     }
   }
 
+  private removeWaiter(waiter: Waiter): void {
+    clearTimeout(waiter.timer);
+    this.waiters = this.waiters.filter((entry) => entry !== waiter);
+    if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener('abort', waiter.onAbort);
+  }
+
   private onCdp(method: string, p: Record<string, unknown>): void {
     if (method === 'Runtime.consoleAPICalled') {
-      const args = (p.args as Array<{ value?: unknown; description?: string }> | undefined) ?? [];
-      const text = args.map((a) => (a.value !== undefined ? String(a.value) : a.description ?? '')).join(' ');
-      const e: ConsoleEntry = { level: String(p.type ?? 'log'), text, ts: Date.now() };
+      const args = (p.args as Array<{ value?: unknown; unserializableValue?: string; description?: string; preview?: { description?: string } }> | undefined) ?? [];
+      const text = args.map((a) => {
+        if (a.value !== undefined) {
+          if (typeof a.value === 'string') return a.value;
+          try { return JSON.stringify(a.value); } catch { return String(a.value); }
+        }
+        return a.unserializableValue ?? a.preview?.description ?? a.description ?? '';
+      }).join(' ');
+      const stack = p.stackTrace as { callFrames?: Array<{ url?: string; lineNumber?: number }> } | undefined;
+      const frame = stack?.callFrames?.[0];
+      const rawLevel = String(p.type ?? 'log');
+      const e: ConsoleEntry = {
+        seq: ++this.consoleSeq,
+        level: rawLevel === 'warning' ? 'warn' : rawLevel,
+        text: capText(text, MAX_CONSOLE_ENTRY_CHARS),
+        ts: Date.now(),
+        ...(frame?.url ? { url: frame.url } : {}),
+        ...(typeof frame?.lineNumber === 'number' ? { line: frame.lineNumber + 1 } : {}),
+      };
       this.push(this.console, e);
       this.fire('console', e);
     } else if (method === 'Runtime.exceptionThrown') {
-      const det = p.exceptionDetails as { text?: string; exception?: { description?: string } } | undefined;
-      const e: ConsoleEntry = { level: 'error', text: det?.exception?.description ?? det?.text ?? 'exception', ts: Date.now() };
+      const det = p.exceptionDetails as { text?: string; url?: string; lineNumber?: number; exception?: { description?: string } } | undefined;
+      const e: ConsoleEntry = {
+        seq: ++this.consoleSeq,
+        level: 'error',
+        text: capText(det?.exception?.description ?? det?.text ?? 'exception', MAX_CONSOLE_ENTRY_CHARS),
+        ts: Date.now(),
+        ...(det?.url ? { url: det.url } : {}),
+        ...(typeof det?.lineNumber === 'number' ? { line: det.lineNumber + 1 } : {}),
+      };
+      this.push(this.console, e);
+      this.fire('console', e);
+    } else if (method === 'Log.entryAdded') {
+      const entry = p.entry as { level?: string; text?: string; timestamp?: number; url?: string; lineNumber?: number } | undefined;
+      const rawLevel = String(entry?.level ?? 'log');
+      const e: ConsoleEntry = {
+        seq: ++this.consoleSeq,
+        level: rawLevel === 'warning' ? 'warn' : rawLevel,
+        text: capText(entry?.text ?? '', MAX_CONSOLE_ENTRY_CHARS),
+        ts: typeof entry?.timestamp === 'number' ? entry.timestamp : Date.now(),
+        ...(entry?.url ? { url: entry.url } : {}),
+        ...(typeof entry?.lineNumber === 'number' ? { line: entry.lineNumber } : {}),
+      };
       this.push(this.console, e);
       this.fire('console', e);
     } else if (method === 'Network.requestWillBeSent') {
       const req = p.request as { url?: string; method?: string } | undefined;
-      const e: NetEntry = { requestId: String(p.requestId), url: req?.url ?? '', method: req?.method ?? 'GET', ts: Date.now() };
+      const requestId = String(p.requestId);
+      const redirect = p.redirectResponse as { status?: number; statusText?: string } | undefined;
+      const previous = this.netById.get(requestId);
+      if (redirect && previous) {
+        previous.seq = ++this.networkSeq;
+        previous.status = redirect.status;
+        previous.statusText = redirect.statusText;
+        previous.completed = true;
+        previous.durationMs = Math.max(0, (Number(p.timestamp) - (previous.startedMonotonic ?? Number(p.timestamp))) * 1000);
+        this.fire('network', previous);
+      }
+      const e: NetEntry = {
+        seq: ++this.networkSeq,
+        requestId,
+        url: capText(req?.url ?? '', MAX_URL_CHARS),
+        method: req?.method ?? 'GET',
+        type: typeof p.type === 'string' ? p.type : undefined,
+        ts: typeof p.wallTime === 'number' ? Number(p.wallTime) * 1000 : Date.now(),
+        startedMonotonic: Number(p.timestamp),
+      };
       this.netById.set(e.requestId, e);
       this.pushNet(e);
     } else if (method === 'Network.responseReceived') {
-      const res = p.response as { status?: number; statusText?: string } | undefined;
+      const res = p.response as { status?: number; statusText?: string; mimeType?: string; fromDiskCache?: boolean; fromPrefetchCache?: boolean } | undefined;
       const e = this.netById.get(String(p.requestId));
       if (e) {
         e.status = res?.status;
         e.statusText = res?.statusText;
+        e.type = typeof p.type === 'string' ? p.type : e.type;
+        e.mimeType = res?.mimeType;
+        e.fromCache = !!res?.fromDiskCache || !!res?.fromPrefetchCache;
+      }
+    } else if (method === 'Network.loadingFinished') {
+      const e = this.netById.get(String(p.requestId));
+      if (e) {
+        // Completion gets its own sequence so a request started before an
+        // interaction but failed/finished after it is still diagnosed.
+        e.seq = ++this.networkSeq;
+        e.completed = true;
+        e.encodedDataLength = Number(p.encodedDataLength) || 0;
+        e.durationMs = Math.max(0, (Number(p.timestamp) - (e.startedMonotonic ?? Number(p.timestamp))) * 1000);
         this.fire('network', e);
       }
     } else if (method === 'Network.loadingFailed') {
@@ -205,20 +409,43 @@ export class PreviewWindow {
       // received, so without this they'd be invisible to preview_network.
       const e = this.netById.get(String(p.requestId));
       if (e) {
+        e.seq = ++this.networkSeq;
+        e.completed = true;
         e.failed = true;
         e.errorText = String(p.errorText ?? (p.blockedReason ? `blocked: ${p.blockedReason}` : 'request failed'));
+        e.durationMs = Math.max(0, (Number(p.timestamp) - (e.startedMonotonic ?? Number(p.timestamp))) * 1000);
         this.fire('network', e);
       }
+    } else if (method === 'Network.requestServedFromCache') {
+      const e = this.netById.get(String(p.requestId));
+      if (e) e.fromCache = true;
     } else if (method === 'Page.javascriptDialogOpening') {
       // Native alert()/confirm()/prompt()/beforeunload BLOCK the renderer (and
       // every CDP command) until answered — so an unanswered dialog froze the
-      // whole agent preview. Auto-accept so flows proceed, and record it in the
-      // console buffer so the agent SEES that a dialog appeared and what it said.
+      // whole agent preview. Resolve it immediately and record the safe choice.
       const d = p as { type?: string; message?: string };
-      const e: ConsoleEntry = { level: 'dialog', text: `[${d.type ?? 'dialog'}] ${d.message ?? ''}`.trim(), ts: Date.now() };
+      const accept = d.type === 'alert';
+      const e: ConsoleEntry = {
+        seq: ++this.consoleSeq,
+        level: 'dialog',
+        text: `[${d.type ?? 'dialog'} ${accept ? 'accepted' : 'dismissed'}] ${d.message ?? ''}`.trim(),
+        ts: Date.now(),
+      };
       this.push(this.console, e);
       this.fire('console', e);
-      void this.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
+      // Alerts are acknowledgement-only. Confirmation/prompt/beforeunload are
+      // dismissed by default so preview automation never silently authorizes
+      // a destructive operation.
+      void this.send('Page.handleJavaScriptDialog', { accept }).catch(() => undefined);
+    } else if (method === 'Page.frameNavigated') {
+      const frame = p.frame as { parentId?: string; url?: string } | undefined;
+      if (frame && !frame.parentId) {
+        this.navigationId += 1;
+        this.url = frame.url || this.win.webContents.getURL() || this.url;
+        this.resetRefs();
+      }
+    } else if (method === 'Runtime.executionContextsCleared') {
+      this.resetRefs();
     } else if (method === 'Runtime.bindingCalled') {
       const payload = typeof p.payload === 'string' ? p.payload : '';
       if (p.name === '__mcpSelect' || p.name === '__mcpRegionSelect') {

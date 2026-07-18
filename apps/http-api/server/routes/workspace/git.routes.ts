@@ -182,11 +182,12 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
       pushTags?: boolean;
     }>(c);
     const result = await gitPush(guard.resolved.root, body);
-    if (!result.ok) return c.json({ error: result.message }, 400);
+    if (!result.ok) return c.json({ error: result.message, code: result.pushActionRequired }, 400);
     return c.json({
       ok: true,
       message: result.message,
       setUpstream: result.setUpstream,
+      updatedBeforePush: result.updatedBeforePush === true,
       status: await gitStatus(guard.resolved.root),
     });
   });

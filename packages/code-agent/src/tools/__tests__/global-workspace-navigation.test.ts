@@ -65,6 +65,24 @@ describe('native global workspace navigation', () => {
     expect(globTool.parameters.properties).not.toHaveProperty('project');
   });
 
+  it('reports a structured source cap when the glob result limit omits matches', async () => {
+    const ctx = fixture();
+    const sourceRoot = ctx.globalWorkspace!.projects[0]!.rootPath;
+    writeFileSync(join(sourceRoot, 'src', 'second.ts'), 'export const second = true;');
+    writeFileSync(join(sourceRoot, 'src', 'third.ts'), 'export const third = true;');
+
+    const result = await globTool.handler({ pattern: '**/*.ts', limit: 1 }, ctx);
+
+    expect(result.content).toContain('1 of 3 matches');
+    expect(result.sourceTruncations).toEqual([{
+      technique: 'glob-result-limit',
+      inputSize: 3,
+      outputSize: 1,
+      unit: 'items',
+      recoverable: true,
+    }]);
+  });
+
   it('reads, edits, and marks overlay paths with the project slug', async () => {
     const ctx = fixture();
     const path = 'poa-intranet-angular/src/screen.ts';

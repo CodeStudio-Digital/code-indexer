@@ -21,7 +21,7 @@ export interface PersistChapterCheckpointInput {
 
 export type PersistChapterCheckpointResult = CommitConversationChapterResult | {
   status: 'noop';
-  reason: 'unaligned';
+  reason: 'unaligned' | 'unsafe_tool_boundary';
   boundary_id: number;
   pruned_count: 0;
 } | {
@@ -51,8 +51,82 @@ export async function serializeSessionCompaction<T>(
   }
 }
 
+/**
+ * Persistence rebuilds tool_result blocks from the audit row, so operational
+ * metadata such as `originalSize` can legitimately differ from the live block
+ * even when the model saw the exact same content. Compare a stable semantic
+ * representation instead of object insertion order / persistence-only fields.
+ */
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonicalValue(item));
+  if (!value || typeof value !== 'object') return value;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([entryKey, entryValue]) => [entryKey, canonicalValue(entryValue)] as const)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return Object.fromEntries(entries);
+}
+
+function canonicalContent(message: AgentMessage): unknown {
+  return message.content.map((block) => {
+    const normalized = { ...block } as Record<string, unknown>;
+    if (block.type === 'tool_result') {
+      // Persistence reconstructs this size from audit columns; it is not model
+      // content. Keep every nested `originalSize` in tool inputs semantic.
+      delete normalized.originalSize;
+      if (normalized.is_error == null) normalized.is_error = false;
+    }
+    return canonicalValue(normalized);
+  });
+}
+
 function sameMessage(left: AgentMessage, right: AgentMessage): boolean {
-  return left.role === right.role && JSON.stringify(left.content) === JSON.stringify(right.content);
+  return left.role === right.role
+    && JSON.stringify(canonicalContent(left)) === JSON.stringify(canonicalContent(right));
+}
+
+/**
+ * Recede an aligned DB prefix when it would archive only one side of a
+ * tool_use/tool_result pair. Unlike the provider-tail cutoff helper this may
+ * never advance over an unseen row: duplicate raw text is safe, a summary gap
+ * is not.
+ */
+export function recedePrefixToToolPairBoundary(
+  messages: readonly AgentMessage[],
+  matched: number,
+): number {
+  let safe = Math.max(0, Math.min(matched, messages.length));
+  if (safe <= 0 || safe >= messages.length) return safe;
+
+  const uses = new Map<string, number>();
+  const results = new Map<string, number>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    for (const block of message.content) {
+      if (message.role === 'assistant' && block.type === 'tool_use') {
+        uses.set(block.id, index);
+      } else if (message.role === 'tool' && block.type === 'tool_result' && block.tool_use_id) {
+        results.set(block.tool_use_id, index);
+      }
+    }
+  }
+
+  // Receding for one pair can expose another crossing pair, so converge.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [id, useIndex] of uses) {
+      const resultIndex = results.get(id);
+      if (resultIndex == null) continue;
+      const earlier = Math.min(useIndex, resultIndex);
+      const later = Math.max(useIndex, resultIndex);
+      if (earlier < safe && later >= safe) {
+        safe = earlier;
+        changed = true;
+      }
+    }
+  }
+  return safe;
 }
 
 /**
@@ -89,11 +163,20 @@ export function persistChapterCheckpoint(
   const data = input.store.loadSessionWithMessages(input.sessionId);
   if (!data) throw new Error(`session ${input.sessionId} not found`);
   const expectedBoundary = data.session.summary_boundary_id ?? 0;
-  const matched = alignedDurablePrefix(data.messages, input.headMessages);
-  if (matched <= 0) {
+  const aligned = alignedDurablePrefix(data.messages, input.headMessages);
+  if (aligned <= 0) {
     return {
       status: 'noop',
       reason: 'unaligned',
+      boundary_id: expectedBoundary,
+      pruned_count: 0,
+    };
+  }
+  const matched = recedePrefixToToolPairBoundary(data.messages, aligned);
+  if (matched <= 0) {
+    return {
+      status: 'noop',
+      reason: 'unsafe_tool_boundary',
       boundary_id: expectedBoundary,
       pruned_count: 0,
     };

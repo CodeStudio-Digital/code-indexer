@@ -68,6 +68,8 @@ import {
   buildSubagentWorkspaceBriefing,
   taskWithWorkspaceBriefing,
   toRetentionAgent,
+  prepareAgentsForDispatch,
+  systemPromptForAgent,
 } from '@mcp/code-agent/tools/spawn-agent-core.js';
 import { runBackgroundEphemeral } from '@mcp/code-agent/tools/spawn-agent-background.js';
 import { captureInvestigation } from '@mcp/code-agent/tools/investigation-capture.js';
@@ -80,8 +82,13 @@ import {
   MICRO_AGENT_PROFILE_NAMES,
   MICRO_AGENT_PROFILES,
   resolveMicroAgentProfile,
-  type MicroAgentProfile,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import {
+  RESEARCH_DEPTHS,
+  buildResearchPolicy,
+  normalizeResearchDepth,
+  researchPolicyCacheKey,
+} from '@mcp/code-agent/tools/subagent-research-policy.js';
 
 // Re-exported for callers/tests that import it from spawn-agent.js (moved to
 // spawn-agent-core.js to break the spawn ↔ background import cycle).
@@ -97,6 +104,8 @@ const SPAWN_AGENT_DESC =
   'Pass a single-element `agents` array for sequential; multiple to run in parallel (auto, up to 8). ' +
   'Each agent returns only its final summary — intermediate tool results NEVER enter your history. ' +
   'Token cost IS counted in this session.\n' +
+  'For investigator/reviewer agents, `research_depth` controls breadth without imposing a hard stop: ' +
+  'quick, standard (default), deep, or exhaustive. Use exhaustive only when the user explicitly asks for complete coverage.\n' +
   '\n' +
   'Per-agent `profile` controls the specialized toolset:\n' +
   '  - "explore" / "investigator" (default): read-only investigation + non-mutating MCPs. Cheap.\n' +
@@ -134,6 +143,10 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
       label: args.label,
       max_turns: args.max_turns,
       files: args.files,
+      research_depth: args.research_depth,
+      target_minutes: args.target_minutes,
+      target_tool_calls: args.target_tool_calls,
+      completion_criteria: args.completion_criteria,
     }];
   } else {
     return { agents: [], error: 'spawn_agent: provide `agents` array OR top-level `task` (singular).' };
@@ -165,6 +178,37 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
     const files = Array.isArray(raw.files)
       ? (raw.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0)
       : undefined;
+    const requestedDepth = rawString(raw.research_depth);
+    const explicitDepth = normalizeResearchDepth(requestedDepth);
+    if (requestedDepth && !explicitDepth) {
+      return {
+        agents: [],
+        error: `spawn_agent: agent[${i}].research_depth='${requestedDepth}' invalid - use one of: ${RESEARCH_DEPTHS.join(', ')}`,
+      };
+    }
+    const readSoftNumber = (key: 'target_minutes' | 'target_tool_calls'): number | undefined | null => {
+      if (raw[key] == null) return undefined;
+      return typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0
+        ? raw[key] as number
+        : null;
+    };
+    const targetMinutes = readSoftNumber('target_minutes');
+    const targetToolCalls = readSoftNumber('target_tool_calls');
+    if (targetMinutes === null || targetToolCalls === null) {
+      return { agents: [], error: `spawn_agent: agent[${i}] soft targets must be finite non-negative numbers.` };
+    }
+    const completionCriteria = Array.isArray(raw.completion_criteria)
+      ? raw.completion_criteria.filter((value): value is string => typeof value === 'string')
+      : undefined;
+    const researchPolicy = profile.capability === 'explore' || profile.capability === 'review'
+      ? buildResearchPolicy({
+          task,
+          explicitDepth,
+          targetMinutes,
+          targetToolCalls,
+          completionCriteria,
+        })
+      : undefined;
     out.push({
       task,
       type: profile.capability,
@@ -172,18 +216,20 @@ function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAge
       label,
       maxTurns: Math.max(0, Math.floor(max_turns)),
       files,
+      researchPolicy,
     });
   }
   return { agents: out, error: null };
 }
 
 function renderParallelProfilePrompts(agents: NormalizedAgent[]): string {
-  const seen = new Set<MicroAgentProfile['id']>();
+  const seen = new Set<string>();
   const parts: string[] = [];
   for (const agent of agents) {
-    if (seen.has(agent.profile.id)) continue;
-    seen.add(agent.profile.id);
-    parts.push(`# ${agent.profile.id}\n${agent.profile.systemPrompt}`);
+    const key = `${agent.profile.id}:${researchPolicyCacheKey(agent.researchPolicy)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(`# ${agent.profile.id} (${agent.researchPolicy?.depth ?? 'no research contract'})\n${systemPromptForAgent(agent)}`);
   }
   return parts.join('\n\n---\n\n');
 }
@@ -199,13 +245,18 @@ async function runSingleEphemeral(
   const spawnId = randomUUID().slice(0, 8);
   console.log(
     `[coder s=${parentSessionId ?? '?'}] spawn_agent: type=${agent.type} provider=${providerInfo.label} ` +
-    `max_turns=${agent.maxTurns} spawn=${spawnId}${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
+    `max_turns=${agent.maxTurns} research=${agent.researchPolicy?.depth ?? 'n/a'} spawn=${spawnId}` +
+    `${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
   );
 
   const cacheKeyInput = {
     prompt: agent.task,
     agentType: agent.type === 'explore' ? 'Explore' as const : 'general-purpose' as const,
-    recentMutations: [...(agent.files ?? []), `profile:${agent.profile.id}`],
+    recentMutations: [
+      ...(agent.files ?? []),
+      `profile:${agent.profile.id}`,
+      researchPolicyCacheKey(agent.researchPolicy),
+    ],
   };
   if (isGlobalSubAgentCacheEnabled()) {
     const hit = tryGlobalSubAgentRead<{
@@ -231,12 +282,17 @@ async function runSingleEphemeral(
         session_id: parentSessionId,
         kind: 'subagent_prompt',
         source_label: `subagent:${agent.profile.id}`,
-        content: agent.profile.systemPrompt,
+        content: systemPromptForAgent(agent),
         meta: {
           task: agent.task,
           max_turns: agent.maxTurns,
           files: agent.files,
           profile: agent.profile.id,
+          research_depth: agent.researchPolicy?.depth,
+          research_source: agent.researchPolicy?.source,
+          soft_tool_target: agent.researchPolicy?.softToolTarget,
+          soft_time_target_ms: agent.researchPolicy?.softTimeTargetMs,
+          completion_criteria: agent.researchPolicy?.completionCriteria,
         },
       });
     } catch { /* best-effort */ }
@@ -254,13 +310,16 @@ async function runSingleEphemeral(
       sessionId: parentSessionId,
       sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+      toolSelectionFilter: deps.toolSelectionFilter,
+      externalToolTiers: deps.externalToolTiers,
     },
     {
       label: agent.label,
       profile: agent.profile.id,
       spawnId,
       reasoningEffort: effortForProfile(deps, agent.profile),
-      systemPrompt: agent.profile.systemPrompt,
+      systemPrompt: systemPromptForAgent(agent),
+      researchPolicy: agent.researchPolicy,
       allowlist: agent.profile.allowlist,
       initialMessages,
       maxTurns: agent.maxTurns,
@@ -336,6 +395,9 @@ async function runParallelEphemeral(
       provider: agentInfos[i]?.provider,
       model: agentInfos[i]?.model,
       task: a.task,
+      researchDepth: a.researchPolicy?.depth,
+      softToolTarget: a.researchPolicy?.softToolTarget,
+      softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
     })),
   });
 
@@ -352,6 +414,7 @@ async function runParallelEphemeral(
           labels: agents.map((a) => a.label),
           types: agents.map((a) => a.type),
           profiles: agents.map((a) => a.profile.id),
+          research_depths: agents.map((a) => a.researchPolicy?.depth ?? null),
         },
       });
     } catch { /* best-effort */ }
@@ -365,7 +428,8 @@ async function runParallelEphemeral(
     provider: agentProviders[i],
     reasoningEffort: effortForProfile(deps, a.profile),
     spawnId: groupId,
-    systemPrompt: a.profile.systemPrompt,
+    systemPrompt: systemPromptForAgent(a),
+    researchPolicy: a.researchPolicy,
     allowlist: a.profile.allowlist,
     pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0
       ? a.files
@@ -382,6 +446,8 @@ async function runParallelEphemeral(
       sessionId: parentSessionId,
       sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+      toolSelectionFilter: deps.toolSelectionFilter,
+      externalToolTiers: deps.externalToolTiers,
     },
     specs,
     MICRO_AGENT_PROFILES.explore.systemPrompt,
@@ -517,6 +583,24 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
                 type: 'number',
                 description: 'Optional exact turn cap. Omit or use 0 for unlimited (default); set a positive value only when an operator requested a cap.',
               },
+              research_depth: {
+                type: 'string',
+                enum: RESEARCH_DEPTHS,
+                description: 'Investigator/reviewer breadth: quick, standard (default), deep, or exhaustive. Soft guidance, not a hard limit.',
+              },
+              target_minutes: {
+                type: 'number',
+                description: 'Optional soft synthesis target in minutes for investigator/reviewer. Reaching it nudges a summary; 0 disables the time nudge.',
+              },
+              target_tool_calls: {
+                type: 'number',
+                description: 'Optional soft synthesis target in tool calls for investigator/reviewer. Reaching it nudges a summary; 0 disables the call nudge.',
+              },
+              completion_criteria: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Concrete evidence requirements. When satisfied, the agent must summarize instead of widening the search.',
+              },
               files: { type: 'array', items: { type: 'string' }, description: 'Implement profile: paths the agent may write to.' },
             },
             required: ['task'],
@@ -549,13 +633,17 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
       additionalProperties: false,
     },
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      const { agents, error } = normalizeAgents(args);
+      const normalized = normalizeAgents(args);
+      let agents = normalized.agents;
+      const { error } = normalized;
       if (error) return err(error);
 
       const kind = typeof args.kind === 'string' ? args.kind : 'ephemeral';
       if (kind !== 'ephemeral' && kind !== 'persistent') {
         return err(`spawn_agent: kind='${kind}' invalid — must be 'ephemeral' or 'persistent'.`);
       }
+
+      if (kind === 'ephemeral') agents = prepareAgentsForDispatch(agents, ctx);
 
       if (kind === 'persistent') {
         if (agents.length > 1) {

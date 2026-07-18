@@ -190,7 +190,9 @@ const DEFAULT_CONFIG: IndexerConfig = {
   },
   mcp: {
     http: {
-      enabled: false,
+      // Loopback-only endpoint: useful out of the box for local Claude/Codex
+      // clients while the server-level peer guard still rejects LAN callers.
+      enabled: true,
       path: '/mcp',
       stateful: false,
       corsOrigins: [],

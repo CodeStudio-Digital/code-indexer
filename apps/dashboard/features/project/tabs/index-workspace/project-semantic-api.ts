@@ -111,7 +111,7 @@ export interface ProjectSemanticSearchTestResult {
 export interface ProjectSemanticStatus {
   project_id: number;
   profiles: Array<{
-    purpose: 'code' | 'knowledge';
+    purpose: 'code' | 'docs' | 'memory';
     embedding_target: {
       kind: string;
       model?: string;

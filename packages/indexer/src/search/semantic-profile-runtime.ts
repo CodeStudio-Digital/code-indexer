@@ -425,7 +425,7 @@ export class SemanticProfileRuntime {
   private resolveRerankerTarget(target: RerankerTarget): RerankerService {
     // The concrete adapter is always strict and cached only by the effective
     // target. Policy is applied by the lightweight purpose proxy above. This
-    // lets Code (fail-open) and Knowledge (strict) share one ONNX session when
+    // lets Code, Docs and Memory share one ONNX session when
     // they select the same model instead of pinning two ~250 MB encoders.
     const cacheKey = key(target, this.providerStore);
     let service = this.rerankers.get(cacheKey);

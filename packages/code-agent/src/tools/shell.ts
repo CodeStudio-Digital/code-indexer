@@ -1,10 +1,13 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { RUN_COMMAND_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
-import { defaultLocalShellPort, type IShellPort } from '@mcp/code-agent/ports/shell-port.js';
+import {
+  boundUtf8OutputDetailed,
+  defaultLocalShellPort,
+  type IShellPort,
+} from '@mcp/code-agent/ports/shell-port.js';
 import { pathFor } from '@mcp/code-agent/tools/paths.js';
 import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 // Ceiling for a one-shot command. One-shot shell work (builds, installs,
@@ -115,15 +118,11 @@ function isReadOnlyCommand(cmd: string): { ok: true } | { ok: false; reason: str
 // The tool layer only owns policy (plan-mode gate, cwd validation, output
 // formatting). See ../ports/shell-port.ts for implementation invariants.
 
-function truncate(s: string, max = MAX_OUTPUT_BYTES): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max) + `\n... ${truncationMarker(`${s.length - max} bytes omitted`, 'narrow the command output or write it to a file and read slices')}`;
-}
-
 const runCommandTool: CoderTool = {
   name: 'run_command',
   description: maybeTerse(RUN_COMMAND_DESC),
   source: 'native',
+  outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   // `mutates: false` is INTENTIONAL even though run_command can mutate
   // the workspace. The shell tool gates internally via `isReadOnlyCommand`
   // below — letting through `grep`, `ls`, `cat`, etc. during plan mode.
@@ -221,19 +220,90 @@ const runCommandTool: CoderTool = {
       runtimeEnv: ctx.runtimeEnv,
     });
 
-    const lines: string[] = [];
-    lines.push(`$ ${command}`);
-    lines.push(`exit code: ${result.exitCode ?? 'killed'}${result.timedOut ? ' (timed out)' : ''}`);
-    if (result.stdout.trim()) {
-      lines.push('--- stdout ---');
-      lines.push(truncate(result.stdout.trimEnd()));
+    const headerLines = [
+      `$ ${command}`,
+      `exit code: ${result.exitCode ?? 'killed'}${result.timedOut ? ' (timed out)' : ''}`,
+    ];
+    const stdoutBounded = boundUtf8OutputDetailed(result.stdout, MAX_OUTPUT_BYTES);
+    const stderrBounded = boundUtf8OutputDetailed(result.stderr, MAX_OUTPUT_BYTES);
+    const localMaterializedGuardApplied = !!stdoutBounded.truncation || !!stderrBounded.truncation;
+    const upstreamStreamAlreadyLost = !!result.stdoutTruncation || !!result.stderrTruncation;
+
+    // A custom/remote adapter may hand us an oversized but still complete
+    // materialized result. Persist the complete tool result before the local
+    // defensive guard cuts it. The LocalShellAdapter is intentionally
+    // different: it discards the middle incrementally, so its truncation
+    // metadata can never honestly advertise lossless recovery here.
+    let completeOutputId: string | undefined;
+    if (localMaterializedGuardApplied && !upstreamStreamAlreadyLost && ctx.toolOutputStore) {
+      const completeLines = [...headerLines];
+      if (result.stdout.length > 0) completeLines.push('--- stdout ---', result.stdout);
+      if (result.stderr.length > 0) completeLines.push('--- stderr ---', result.stderr);
+      completeOutputId = ctx.toolOutputStore.put(completeLines.join('\n')) ?? undefined;
     }
-    if (result.stderr.trim()) {
+    const materializedGuardRecoverable = !!completeOutputId;
+
+    const lines: string[] = [...headerLines];
+    const sourceTruncations: NonNullable<ToolResult['sourceTruncations']> = [];
+    if (result.stdout.length > 0) {
+      lines.push('--- stdout ---');
+      // LocalShellAdapter has already bounded streaming output. Apply the
+      // same head+true-tail fallback for remote/custom adapters that return
+      // an oversized materialized string despite maxOutputBytes.
+      lines.push(stdoutBounded.content);
+      if (result.stdoutTruncation) {
+        sourceTruncations.push({
+          technique: 'bounded-stream-cap:stdout',
+          inputSize: result.stdoutTruncation.inputBytes,
+          outputSize: result.stdoutTruncation.outputBytes,
+          unit: 'bytes',
+          recoverable: false,
+        });
+      }
+      if (stdoutBounded.truncation) {
+        sourceTruncations.push({
+          technique: result.stdoutTruncation
+            ? 'bounded-stream-cap:stdout:local-guard'
+            : 'bounded-stream-cap:stdout',
+          inputSize: stdoutBounded.truncation.inputBytes,
+          outputSize: stdoutBounded.truncation.outputBytes,
+          unit: 'bytes',
+          recoverable: materializedGuardRecoverable,
+          ...(completeOutputId ? { outputId: completeOutputId } : {}),
+        });
+      }
+    }
+    if (result.stderr.length > 0) {
       lines.push('--- stderr ---');
-      lines.push(truncate(result.stderr.trimEnd()));
+      lines.push(stderrBounded.content);
+      if (result.stderrTruncation) {
+        sourceTruncations.push({
+          technique: 'bounded-stream-cap:stderr',
+          inputSize: result.stderrTruncation.inputBytes,
+          outputSize: result.stderrTruncation.outputBytes,
+          unit: 'bytes',
+          recoverable: false,
+        });
+      }
+      if (stderrBounded.truncation) {
+        sourceTruncations.push({
+          technique: result.stderrTruncation
+            ? 'bounded-stream-cap:stderr:local-guard'
+            : 'bounded-stream-cap:stderr',
+          inputSize: stderrBounded.truncation.inputBytes,
+          outputSize: stderrBounded.truncation.outputBytes,
+          unit: 'bytes',
+          recoverable: materializedGuardRecoverable,
+          ...(completeOutputId ? { outputId: completeOutputId } : {}),
+        });
+      }
     }
     const out = lines.join('\n');
-    return result.exitCode === 0 ? ok(out) : err(out);
+    return {
+      content: out,
+      ...(result.exitCode === 0 ? {} : { isError: true }),
+      ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
+    };
   },
 };
 

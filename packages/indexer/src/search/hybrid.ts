@@ -127,7 +127,8 @@ function buildQueryVariants(query: string): string[] {
 
 export class HybridSearch {
   private reranker: RerankerService;
-  private knowledgeEmbeddingService: EmbeddingService;
+  private memoryEmbeddingService: EmbeddingService;
+  private memoryReranker: RerankerService;
   /**
    * Optional in-memory hot cache of recently-touched files. When wired, it is
    * one normal source in the canonical hybrid pipeline.
@@ -163,12 +164,14 @@ export class HybridSearch {
     reranker?: RerankerService | null,
     recentFilesSource?: RecentFilesSource | null,
     pipelineTelemetry?: TelemetrySink | null,
-    knowledgeEmbeddingService?: EmbeddingService | null,
+    memoryEmbeddingService?: EmbeddingService | null,
+    memoryReranker?: RerankerService | null,
   ) {
     this.reranker = reranker ?? new NullReranker();
     this.recentFilesSource = recentFilesSource ?? null;
     this.pipelineTelemetry = pipelineTelemetry ?? null;
-    this.knowledgeEmbeddingService = knowledgeEmbeddingService ?? embeddingService;
+    this.memoryEmbeddingService = memoryEmbeddingService ?? embeddingService;
+    this.memoryReranker = memoryReranker ?? new NullReranker();
   }
 
   /** Single production path for hybrid retrieval. */
@@ -836,14 +839,14 @@ export class HybridSearch {
 
     // Vector side: only runs if embeddings + vector store are available.
     let vectorSnaps: ContextSnapshot[] = [];
-    if (this.vectorStore && !(this.knowledgeEmbeddingService instanceof NullEmbeddingService)) {
+    if (this.vectorStore && !(this.memoryEmbeddingService instanceof NullEmbeddingService)) {
       try {
         const namespace = snapshotNamespace(projectId);
-        if (this.knowledgeEmbeddingService.queryBlockReasonForNamespace?.(namespace)) {
+        if (this.memoryEmbeddingService.queryBlockReasonForNamespace?.(namespace)) {
           return ftsSnaps.slice(0, limit);
         }
         const { vector, generationId } = await embedQueryForNamespace(
-          this.knowledgeEmbeddingService,
+          this.memoryEmbeddingService,
           namespace,
           query,
         );
@@ -893,10 +896,39 @@ export class HybridSearch {
       else scoreMap.set(s.id, { snap: s, score });
     }
 
-    return Array.from(scoreMap.values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((e) => e.snap);
+    const fused = Array.from(scoreMap.values()).sort((a, b) => b.score - a.score);
+    if (this.memoryReranker.name !== 'null' && fused.length > 0) {
+      const depth = Math.min(
+        fused.length,
+        this.memoryReranker.candidatePoolSize?.(limit) ?? Math.max(limit * 2, 20),
+      );
+      const candidates = fused.slice(0, depth);
+      try {
+        const reranked = await this.memoryReranker.rerank(
+          query,
+          candidates.map(({ snap, score }) => ({
+            id: String(snap.id),
+            text: `${snap.title}\n${snap.category}\n${snap.content}\n${snap.tags}`,
+            originalScore: score,
+          })),
+          Math.min(limit, candidates.length),
+        );
+        const byId = new Map(candidates.map((entry) => [String(entry.snap.id), entry.snap]));
+        const seen = new Set<string>();
+        if (reranked.length !== Math.min(limit, candidates.length) || reranked.some((row) => {
+          if (!byId.has(row.id) || seen.has(row.id) || !Number.isFinite(row.score)) return true;
+          seen.add(row.id);
+          return false;
+        })) throw new Error(`${this.memoryReranker.name} returned an incomplete snapshot result set`);
+        return reranked.map((row) => byId.get(row.id)!);
+      } catch (err) {
+        console.warn(`[snapshot-search] ${this.memoryReranker.name} rerank unavailable; preserving RRF order: ${
+          err instanceof Error ? err.message : String(err)
+        }`);
+      }
+    }
+
+    return fused.slice(0, limit).map((entry) => entry.snap);
   }
 
   /**

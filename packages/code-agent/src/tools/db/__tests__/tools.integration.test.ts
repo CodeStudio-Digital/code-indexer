@@ -88,6 +88,50 @@ describe('db_query', () => {
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('rows=2 truncated=true');
     expect(r.content).toContain('LIMIT/OFFSET');
+    expect(r.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'db-driver-row-cap',
+        outputSize: 2,
+        inputSizeExact: false,
+        unit: 'rows',
+        recoverable: true,
+      }),
+    ]);
+  });
+
+  it('keeps the complete bounded driver page for central spill/reduction', async () => {
+    const r = await dbQuery.handler({
+      connection: 'main',
+      sql: 'WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 1200) SELECT x FROM n',
+      max_rows: 1000,
+    }, ctx);
+
+    expect(r.content).toContain('rows=1000 truncated=true');
+    expect(r.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'db-driver-row-cap',
+        inputSize: 1200,
+        inputSizeExact: false,
+        outputSize: 1000,
+        unit: 'rows',
+      }),
+    ]);
+  });
+
+  it('does not advertise a mutating RETURNING result as recoverable by rerun', async () => {
+    const r = await dbQuery.handler({
+      connection: 'main',
+      sql: 'UPDATE items SET name = name RETURNING id, name',
+      max_rows: 2,
+    }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(r.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'db-driver-row-cap',
+        outputSize: 2,
+        recoverable: false,
+      }),
+    ]);
   });
 
   it('writes work on a writable connection', async () => {

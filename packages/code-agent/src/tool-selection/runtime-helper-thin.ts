@@ -72,14 +72,16 @@ export interface ApplyToolSelectionThinOptions {
   allTools: ThinTool[];
   taskText: string;
   /** Recent tool calls for the frequency-boost signal. */
-  recentToolCalls?: ReadonlyArray<{ name: string; timestampMs: number }>;
+  recentToolCalls?: ReadonlyArray<{ name: string; timestampMs: number; ok?: boolean }>;
   /** Embedding function — typically `deps.toolSelectionEmbed`. */
   embed: EmbeddingFn;
   /** Shared persistent store of tool-description embeddings. */
   embeddingStore: ToolEmbeddingStore;
-  /** Top-K cap including essentials. Default 12. */
+  /** Top-K cap including essentials. Default 32. */
   k?: number;
-  /** Skip selection when task text is shorter than this. Default 8. */
+  /** Runtime pins or other host-protected names that must survive selection. */
+  protectedNames?: ReadonlySet<string>;
+  /** Legacy compatibility knob. Empty text skips; short non-empty text is still filtered. */
   minTaskLength?: number;
   /**
    * Optional intent/phase tool policy from the Agent Decision Engine. When
@@ -108,15 +110,39 @@ export interface ApplyToolSelectionThinOptions {
     /** Compact shadow-mode decision metadata, when provided by the caller. */
     agentDecision?: AgentDecisionTelemetry;
   }) => void;
+  /** Fail-open diagnostic. The original catalog is returned after this fires. */
+  onError?: (error: unknown) => void;
 }
 
-const DEFAULT_MIN_TASK_LENGTH = 8;
-const DEFAULT_K = 12;
+const DEFAULT_K = 32;
 const FREQUENCY_WINDOW_MS = 10 * 60 * 1000;
 const FREQUENCY_SATURATION = 5;
 // Policy nudge magnitudes — kept in sync with PolicyAffinityScorer (stages.ts).
 const POLICY_PREFER_BOOST = 0.5;
 const POLICY_DISCOURAGE_PENALTY = 0.5;
+
+/**
+ * Small deterministic workflow continuations. Once the agent starts skill
+ * discovery, keep the tools needed to finish that workflow in the next
+ * catalog even when the original user text does not mention their names.
+ */
+const WORKFLOW_FOLLOWUPS: Readonly<Record<string, readonly string[]>> = {
+  list_skill_namespaces: ['get_skills_list', 'get_skill_content', 'invoke_skill'],
+  get_skills_list: ['get_skill_content', 'invoke_skill'],
+};
+
+function workflowFollowups(
+  events: ReadonlyArray<{ name: string; timestampMs: number; ok?: boolean }>,
+  nowMs: number,
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  const cutoff = nowMs - FREQUENCY_WINDOW_MS;
+  for (const event of events) {
+    if (event.ok === false || event.timestampMs < cutoff) continue;
+    for (const followup of WORKFLOW_FOLLOWUPS[event.name] ?? []) names.add(followup);
+  }
+  return names;
+}
 
 function descriptionText(tool: ThinTool): string {
   const params = tool.parameters as { properties?: Record<string, unknown> } | undefined;
@@ -130,10 +156,18 @@ function descriptionText(tool: ThinTool): string {
   return `${tool.name}. ${tool.description}. Params: ${paramHints}`.trim();
 }
 
-function frequencyBoost(name: string, events: ReadonlyArray<{ name: string; timestampMs: number }>, nowMs: number): number {
+function frequencyBoost(
+  name: string,
+  events: ReadonlyArray<{ name: string; timestampMs: number; ok?: boolean }>,
+  nowMs: number,
+): number {
   const cutoff = nowMs - FREQUENCY_WINDOW_MS;
   let count = 0;
-  for (const e of events) if (e.name === name && e.timestampMs >= cutoff) count++;
+  // Failed calls are evidence against immediate reuse, not a relevance
+  // signal. Older callers omit `ok`, which remains success-compatible.
+  for (const e of events) {
+    if (e.name === name && e.timestampMs >= cutoff && e.ok !== false) count++;
+  }
   if (count === 0) return 0;
   if (count >= FREQUENCY_SATURATION) return 1;
   return count / FREQUENCY_SATURATION;
@@ -146,9 +180,11 @@ function frequencyBoost(name: string, events: ReadonlyArray<{ name: string; time
  */
 export async function applyToolSelectionThin(options: ApplyToolSelectionThinOptions): Promise<ThinTool[]> {
   const { allTools, taskText, embed, embeddingStore } = options;
-  const minLen = options.minTaskLength ?? DEFAULT_MIN_TASK_LENGTH;
   const k = options.k ?? DEFAULT_K;
-  if (!taskText || taskText.trim().length < minLen) return allTools;
+  // A short follow-up ("sim", "vai", "continue") must not balloon a 32-tool
+  // catalog back to 110. The runner supplies recent user context, and even a
+  // standalone short task is safer filtered than silently feature-off.
+  if (!taskText || taskText.trim().length === 0) return allTools;
   if (allTools.length <= k) return allTools;
 
   try {
@@ -166,6 +202,7 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
 
     const now = Date.now();
     const events = options.recentToolCalls ?? [];
+    const workflowProtected = workflowFollowups(events, now);
 
     // Optional policy nudge (Agent Decision Engine). Empty/omitted → no effect.
     const preferredPolicy = new Set((options.toolPolicy?.preferred ?? []).map(canonicalToolName));
@@ -176,7 +213,15 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
     type Scored = { tool: ThinTool; isEssential: boolean; score: number };
     const scored: Scored[] = [];
     for (const tool of allTools) {
-      const isEssential = ESSENTIAL_TOOL_NAMES.has(tool.name);
+      const isEssential = ESSENTIAL_TOOL_NAMES.has(tool.name)
+        || options.protectedNames?.has(tool.name) === true
+        || workflowProtected.has(tool.name);
+      if (isEssential) {
+        // Essentials/pins survive regardless of score; embedding them adds
+        // cold-start latency without affecting membership.
+        scored.push({ tool, isEssential: true, score: Number.POSITIVE_INFINITY });
+        continue;
+      }
       const text = descriptionText(tool);
       assertEmbeddingFingerprint(embed, embeddingFingerprint);
       const cached = embeddingStore.get(tool.name, simpleHash(text), embeddingFingerprint);
@@ -227,7 +272,8 @@ export async function applyToolSelectionThin(options: ApplyToolSelectionThinOpti
     });
 
     return selected;
-  } catch {
+  } catch (error) {
+    options.onError?.(error);
     return allTools;
   }
 }

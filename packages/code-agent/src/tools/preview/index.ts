@@ -14,11 +14,12 @@ import {
   previewPerformanceTool,
   previewMemoryTool,
   previewStorageTool,
+  previewSnapshotTool,
 } from './inspect.js';
 import { previewInteractTools } from './interact.js';
 import { previewExtraInteractTools } from './interact-extra.js';
 
-export { setGlobalPreviewDevtools, getGlobalPreviewDevtools } from './bridge.js';
+export { setGlobalPreviewDevtools, getGlobalPreviewDevtools, previewRpcTimeoutMs } from './bridge.js';
 export type { IPreviewDevtools, PreviewInvoke } from './bridge.js';
 
 export const previewTools: CoderTool[] = [
@@ -34,6 +35,7 @@ export const previewTools: CoderTool[] = [
   previewPerformanceTool,
   previewMemoryTool,
   previewStorageTool,
+  previewSnapshotTool,
   ...previewInteractTools,
   ...previewExtraInteractTools,
 ];

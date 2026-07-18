@@ -1,6 +1,6 @@
 import { minimatch } from 'minimatch';
 import { glob as fastGlob } from 'glob';
-import { defineTool, type McpTool } from '../tool.js';
+import { defineTool, mcpAccess, type McpSourceTruncation, type McpTool, type McpToolResult } from '../tool.js';
 import { grepInFiles } from '@mcp/services/services/code-reader.js';
 import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
@@ -27,15 +27,24 @@ export interface DiskScanSource {
   prefix: string;
 }
 
-export async function scanDiskForGrep(
+export interface DiskScanResult {
+  paths: string[];
+  totalMatches: number;
+  truncated: boolean;
+}
+
+export async function scanDiskForGrepDetailed(
   rootPath: string,
   glob: string | undefined,
   sources?: readonly DiskScanSource[],
-): Promise<string[]> {
+  maxFiles = DISK_FALLBACK_MAX_FILES,
+): Promise<DiskScanResult> {
   const pattern = glob && glob.length > 0 ? glob : '**/*';
+  const cap = Number.isFinite(maxFiles) ? Math.max(1, Math.floor(maxFiles)) : DISK_FALLBACK_MAX_FILES;
   try {
     if (sources && sources.length > 0) {
       const out: string[] = [];
+      let totalMatches = 0;
       for (const source of sources) {
         // Scan each DB-authorized real root directly. Prefix after discovery so
         // callers keep the synthetic workspace's path contract without asking
@@ -52,17 +61,15 @@ export async function scanDiskForGrep(
         } catch {
           continue; // deleted/unavailable linked project; keep scanning peers
         }
-        let accepted = 0;
         for (const match of matches) {
           const rel = match.split('\\').join('/');
           const globalRel = `${source.prefix}/${rel}`;
           if (glob && !minimatch(globalRel, pattern)) continue;
-          out.push(globalRel);
-          accepted++;
-          if (accepted >= DISK_FALLBACK_MAX_FILES) break;
+          totalMatches++;
+          if (out.length < cap) out.push(globalRel);
         }
       }
-      return out;
+      return { paths: out, totalMatches, truncated: totalMatches > out.length };
     }
     const matches = await fastGlob(pattern, {
       cwd: rootPath,
@@ -72,14 +79,30 @@ export async function scanDiskForGrep(
       ignore: DISK_FALLBACK_IGNORE,
     });
     // Normalize to forward slashes (Windows) and cap.
-    return matches.slice(0, DISK_FALLBACK_MAX_FILES).map(p => p.split('\\').join('/'));
+    const paths = matches.slice(0, cap).map(p => p.split('\\').join('/'));
+    return { paths, totalMatches: matches.length, truncated: matches.length > paths.length };
   } catch {
-    return [];
+    return { paths: [], totalMatches: 0, truncated: false };
   }
+}
+
+/** Compatibility wrapper for existing disk-fallback consumers. */
+export async function scanDiskForGrep(
+  rootPath: string,
+  glob: string | undefined,
+  sources?: readonly DiskScanSource[],
+): Promise<string[]> {
+  return (await scanDiskForGrepDetailed(rootPath, glob, sources)).paths;
+}
+
+function grepResult(text: string, sourceTruncations: McpSourceTruncation[]): McpToolResult {
+  return sourceTruncations.length > 0 ? { text, sourceTruncations } : text;
 }
 
 const search = defineTool({
   name: 'search',
+  tier: 'bootstrap',
+  ...mcpAccess('read'),
   description: 'Search files and symbols in a project (FTS + semantic). mode defaults to auto: the planner routes identifier-shaped queries to fast FTS and natural-language queries to hybrid.',
   inputSchema: {
     type: 'object',
@@ -159,6 +182,8 @@ const search = defineTool({
 // covers exact-shape hunts, leaving no niche for the specialized variants.
 const grep_code = defineTool({
   name: 'grep_code',
+  tier: 'bootstrap',
+  ...mcpAccess('read'),
   description: 'Textual search across project files with language/glob filters. Results capped at max_results (default 20). Use literal=true for exact string matching.',
   inputSchema: {
     type: 'object',
@@ -182,7 +207,11 @@ const grep_code = defineTool({
     // Normalize Windows backslashes — paths in the DB are forward-slash (see
     // scanner normalization), and fast-glob/minimatch expect forward slashes.
     const glob = rawGlob ? rawGlob.replace(/\\/g, '/') : undefined;
-    const maxResults = (args.max_results as number) ?? 20;
+    const requestedMaxResults = (args.max_results as number) ?? 20;
+    const maxResults = Number.isFinite(requestedMaxResults)
+      ? Math.max(1, Math.floor(requestedMaxResults))
+      : 20;
+    const probeLimit = maxResults + 1;
 
     let files = db.listFiles(project.id, lang);
     const totalIndexed = files.length;
@@ -221,8 +250,8 @@ const grep_code = defineTool({
           .map(c => c.path)
           .filter(p => allowed.has(p));
         if (candidatePaths.length > 0) {
-          hits = grepInFiles(project.root_path, candidatePaths, re, maxResults);
-          if (hits.length >= maxResults) {
+          hits = grepInFiles(project.root_path, candidatePaths, re, probeLimit);
+          if (hits.length >= probeLimit) {
             viaContentIndex = true;
             scannedAll = true; // cap reached — nothing more would be returned
           } else {
@@ -231,7 +260,7 @@ const grep_code = defineTool({
               project.root_path,
               allPaths.filter(p => !scanned.has(p)),
               re,
-              maxResults - hits.length,
+              probeLimit - hits.length,
             ));
             scannedAll = true;
           }
@@ -241,7 +270,7 @@ const grep_code = defineTool({
       }
     }
     if (!scannedAll) {
-      hits = grepInFiles(project.root_path, allPaths, re, maxResults);
+      hits = grepInFiles(project.root_path, allPaths, re, probeLimit);
     }
 
     // Disk fallback: when the index can't satisfy the search (empty index,
@@ -249,6 +278,7 @@ const grep_code = defineTool({
     // directly. Catches files created outside the session or not re-indexed.
     let usedFallback = false;
     let diskScanned = 0;
+    let diskScan: DiskScanResult | null = null;
     if (hits.length === 0) {
       const diskSources = project.is_synthetic
         ? assignWorkspaceSlugs(db.listUnionProjectIds(project.id)).map((p) => ({
@@ -256,24 +286,60 @@ const grep_code = defineTool({
             prefix: p.slug,
           }))
         : undefined;
-      const diskFiles = await scanDiskForGrep(project.root_path, glob, diskSources);
-      diskScanned = diskFiles.length;
-      if (diskFiles.length > 0) {
-        hits = grepInFiles(project.root_path, diskFiles, re, maxResults);
+      diskScan = await scanDiskForGrepDetailed(project.root_path, glob, diskSources);
+      diskScanned = diskScan.paths.length;
+      if (diskScan.paths.length > 0) {
+        hits = grepInFiles(project.root_path, diskScan.paths, re, probeLimit);
         usedFallback = hits.length > 0;
       }
     }
 
     if (hits.length === 0) {
       const diag = ` [indexed: ${totalIndexed}${glob ? `, glob-matched: ${globMatched}` : ''}, disk-scanned: ${diskScanned}]`;
-      return fallbackNote + 'No matches.' + diag;
+      const sourceTruncations: McpSourceTruncation[] = diskScan?.truncated
+        ? [{
+            technique: 'mcp-grep-disk-file-scan-cap',
+            inputSize: diskScan.totalMatches,
+            outputSize: diskScan.paths.length,
+            unit: 'items',
+            recoverable: true,
+          }]
+        : [];
+      const uncertainty = diskScan?.truncated
+        ? ' Disk scan was capped; absence is not proof. Narrow glob and retry.'
+        : '';
+      return grepResult(fallbackNote + 'No matches.' + diag + uncertainty, sourceTruncations);
     }
-    const results = hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
-    const capNote = hits.length >= maxResults ? `\n... [capped at ${maxResults} results]` : '';
+    const shownHits = hits.slice(0, maxResults);
+    const resultTruncated = hits.length > shownHits.length;
+    const results = shownHits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
+    const capNote = resultTruncated
+      ? `\n... [showing ${shownHits.length} results; at least ${hits.length} matched — narrow the pattern or raise max_results]`
+      : '';
     const fallbackTag = usedFallback
       ? '\n[note: results from disk fallback — some files may not be indexed yet, consider re-indexing]'
       : viaContentIndex ? '\n[via content-index]' : '';
-    return fallbackNote + results + capNote + fallbackTag;
+    const sourceTruncations: McpSourceTruncation[] = [];
+    if (resultTruncated) {
+      sourceTruncations.push({
+        technique: 'mcp-grep-result-cap',
+        inputSize: hits.length,
+        inputSizeExact: false,
+        outputSize: shownHits.length,
+        unit: 'items',
+        recoverable: true,
+      });
+    }
+    if (diskScan?.truncated) {
+      sourceTruncations.push({
+        technique: 'mcp-grep-disk-file-scan-cap',
+        inputSize: diskScan.totalMatches,
+        outputSize: diskScan.paths.length,
+        unit: 'items',
+        recoverable: true,
+      });
+    }
+    return grepResult(fallbackNote + results + capNote + fallbackTag, sourceTruncations);
   }),
 });
 

@@ -1,4 +1,4 @@
-import { defineTool, type McpTool } from '../tool.js';
+import { defineTool, mcpAccess, type McpTool } from '../tool.js';
 import type { SnapshotCategory } from '@mcp/shared/types.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
@@ -39,6 +39,8 @@ function withMemoryErrorHandling(
 
 const search_memory = defineTool({
   name: 'search_memory',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'Search PROJECT MEMORY (past decisions, conventions, gotchas, how-to recipes, architecture, and auto-indexed facts) by meaning — hybrid FTS+vector. USE before exploring code or figuring out how to run/build/test/deploy; many answers are already remembered. DON\'T use for live file contents (use read_file). Pass format="json" for structured results.',
   inputSchema: {
@@ -95,6 +97,8 @@ const search_memory = defineTool({
 
 const save_memory = defineTool({
   name: 'save_memory',
+  tier: 'navigate',
+  ...mcpAccess('write'),
   description:
     'Save a DURABLE fact to PROJECT MEMORY so future sessions can recall it.\n' +
     'Good memories: a decision (and why), a convention, a non-obvious gotcha/constraint, a reusable how-to recipe, an architecture note. Provide a specific title + 1-4 sentence content.\n' +

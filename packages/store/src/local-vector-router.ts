@@ -178,22 +178,22 @@ export class LocalVectorRouter {
     let match = /^code:p(\d+)$/.exec(namespace);
     if (match) return this.projectRoute(namespace, parseId(match[1], namespace), generationId, 'code', 'code', table('code'));
     match = /^snapshot:p(\d+)$/.exec(namespace);
-    if (match) return this.projectRoute(namespace, parseId(match[1], namespace), generationId, 'knowledge', 'snapshot', table('knowledge'));
+    if (match) return this.projectRoute(namespace, parseId(match[1], namespace), generationId, 'memory', 'snapshot', table('memory'));
     match = /^memory:project:p(\d+)$/.exec(namespace);
-    if (match) return this.projectRoute(namespace, parseId(match[1], namespace), generationId, 'knowledge', 'project_memory', table('knowledge'));
+    if (match) return this.projectRoute(namespace, parseId(match[1], namespace), generationId, 'memory', 'project_memory', table('memory'));
     match = /^docs:c(\d+)$/.exec(namespace);
     if (match) {
       const collectionId = parseId(match[1], namespace);
       return {
         namespace: namespace as LocalSemanticNamespace,
-        purpose: 'knowledge', scope: 'docs', projectId: null, collectionId,
-        generationId, dbPath: globalSemanticVectorPaths(this.dataDir).docs, tableName: table('knowledge'),
+        purpose: 'docs', scope: 'docs', projectId: null, collectionId,
+        generationId, dbPath: globalSemanticVectorPaths(this.dataDir).docs, tableName: table('docs'),
       };
     }
     if (namespace === 'memory:user') {
       return {
-        namespace, purpose: 'knowledge', scope: 'user_memory', projectId: null, collectionId: null,
-        generationId, dbPath: globalSemanticVectorPaths(this.dataDir).userMemory, tableName: table('knowledge'),
+        namespace, purpose: 'memory', scope: 'user_memory', projectId: null, collectionId: null,
+        generationId, dbPath: globalSemanticVectorPaths(this.dataDir).userMemory, tableName: table('memory'),
       };
     }
     throw new Error(`Unsupported semantic namespace: ${namespace}`);
@@ -552,6 +552,14 @@ export class LocalVectorRouter {
     const route = this.resolve(namespace, generationId);
     this.assertProjectAccessAllowed(route);
     return this.pool.write(route.dbPath, route.tableName, (store) => store.dropTable());
+  }
+
+  /** Migration 238 leaves old Knowledge tables intentionally unreferenced.
+   * The worker-owned pool removes them only through an explicit admin sweep. */
+  dropLegacyKnowledgeTables(namespace: string): Promise<number> {
+    const route = this.resolve(namespace, 1);
+    this.assertProjectAccessAllowed(route);
+    return this.pool.dropVirtualTablesWithPrefix(route.dbPath, 'knowledge_g_');
   }
 
   hasGeneration(namespace: string, generationId: number): Promise<boolean> {

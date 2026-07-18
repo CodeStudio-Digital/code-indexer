@@ -74,6 +74,7 @@ async function onInvoke(msg: {
     content: result.content,
     isError: result.isError,
     data: result.data,
+    sourceTruncations: result.sourceTruncations,
   });
 }
 

@@ -10,7 +10,22 @@ import type { ImageBlock } from '@mcp/code-agent/core/messages.js';
 import { invokePreview } from './bridge.js';
 
 function fmt(label: string, result: unknown): ToolResult {
-  return ok(`${label}\n${JSON.stringify(result, null, 2).slice(0, 8000)}`);
+  if (result && typeof result === 'object' && typeof (result as { error?: unknown }).error === 'string') {
+    return err((result as { error: string }).error);
+  }
+  const serialized = JSON.stringify(result, null, 2) ?? String(result);
+  const sourceTruncations = result && typeof result === 'object'
+    && Array.isArray((result as { sourceTruncations?: unknown }).sourceTruncations)
+    ? (result as { sourceTruncations: NonNullable<ToolResult['sourceTruncations']> }).sourceTruncations
+    : undefined;
+  // Keep the raw inspector payload intact. The runner owns reversible shaping
+  // and can spill oversized results before applying its context-relative cap.
+  return {
+    content: `${label}\n${serialized}`,
+    contentFormat: 'text',
+    structuredData: result,
+    ...(sourceTruncations?.length ? { sourceTruncations } : {}),
+  };
 }
 async function run(
   ctx: ToolContext,
@@ -35,17 +50,19 @@ export const previewConsoleTool: CoderTool = {
     properties: {
       level: { type: 'string', enum: ['all', 'error', 'warn'], description: 'Filter by level. Default all.' },
       waitMs: { type: 'number', description: 'Block up to N ms for the NEXT console entry (active wait). Omit for snapshot.' },
+      limit: { type: 'number', description: 'Recent console entries to return (default 50, max 250).' },
     },
     additionalProperties: false,
   },
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
+  timeoutMs: 40_000,
   // Page state evolves between identical calls — re-reading the console after
   // an action is the workflow, not a loop. Exempt from the dedup guard (the
   // polling soft/hard caps still brake a genuinely stuck poll).
   repeatable: true,
-  handler: (args, ctx) => run(ctx, 'console', { level: args.level, waitMs: args.waitMs }, 'Console:'),
+  handler: (args, ctx) => run(ctx, 'console', { level: args.level, waitMs: args.waitMs, limit: args.limit }, 'Console:'),
 };
 
 export const previewNetworkTool: CoderTool = {
@@ -56,9 +73,12 @@ export const previewNetworkTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      urlFilter: { type: 'string', description: 'Substring/pattern to match request URLs.' },
+      urlFilter: { type: 'string', description: 'Substring to match request URLs.' },
       status: { type: 'number', description: 'Match a specific HTTP status (e.g. 500). Or 0 for any >=400.' },
       includeBody: { type: 'boolean', description: 'Include (truncated) response bodies.' },
+      bodyMaxChars: { type: 'number', description: 'Per-response text-body ceiling (default 20000, max 200000). Omissions are reported and can be retried with a larger value.' },
+      bodyTotalMaxChars: { type: 'number', description: 'Aggregate body ceiling for this call (default 200000, max 2000000).' },
+      limit: { type: 'number', description: 'Recent matching requests to return (default 60, max 250).' },
       waitForMs: { type: 'number', description: 'Block up to N ms for the next matching request to finish.' },
     },
     additionalProperties: false,
@@ -66,9 +86,18 @@ export const previewNetworkTool: CoderTool = {
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
+  timeoutMs: 40_000,
   repeatable: true,
   handler: (args, ctx) =>
-    run(ctx, 'network', { urlFilter: args.urlFilter, status: args.status, includeBody: args.includeBody, waitForMs: args.waitForMs }, 'Network:'),
+    run(ctx, 'network', {
+      urlFilter: args.urlFilter,
+      status: args.status,
+      includeBody: args.includeBody,
+      bodyMaxChars: args.bodyMaxChars,
+      bodyTotalMaxChars: args.bodyTotalMaxChars,
+      limit: args.limit,
+      waitForMs: args.waitForMs,
+    }, 'Network:'),
 };
 
 export const previewEvalTool: CoderTool = {
@@ -78,15 +107,19 @@ export const previewEvalTool: CoderTool = {
   source: 'native',
   parameters: {
     type: 'object',
-    properties: { js: { type: 'string', description: 'JS expression to evaluate (async supported; the last expression is the result).' } },
+    properties: {
+      js: { type: 'string', description: 'JS expression to evaluate (async supported; the last expression is the result).' },
+      timeoutMs: { type: 'number', description: 'Execution timeout in ms (default 10000, max 30000).' },
+    },
     required: ['js'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   repeatable: true,
-  handler: (args, ctx) => run(ctx, 'eval', { js: String(args.js ?? '') }, 'Eval result:'),
+  timeoutMs: 40_000,
+  handler: (args, ctx) => run(ctx, 'eval', { js: String(args.js ?? ''), timeoutMs: args.timeoutMs }, 'Eval result:'),
 };
 
 export const previewScreenshotTool: CoderTool = {
@@ -110,6 +143,7 @@ export const previewScreenshotTool: CoderTool = {
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
+  timeoutMs: 40_000,
   repeatable: true,
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     try {
@@ -183,4 +217,58 @@ export const previewStorageTool: CoderTool = {
   riskLevel: 'read',
   repeatable: true,
   handler: (args, ctx) => run(ctx, 'storage', { kind: args.kind ?? 'local' }, 'Storage:'),
+};
+
+export const previewSnapshotTool: CoderTool = {
+  name: 'preview_snapshot',
+  description:
+    'Read a compact accessibility snapshot of the current page with stable refs such as `ref=a12`. ' +
+    'Use this before interacting: refs target the exact accessible element and are more reliable than invented CSS selectors. ' +
+    'Refs become stale after navigation; call preview_snapshot again when the page changes.',
+  source: 'native',
+  parameters: {
+    type: 'object',
+    properties: {
+      interactiveOnly: { type: 'boolean', description: 'Only return actionable controls. Default false also includes headings, dialogs, alerts, and named landmarks.' },
+      maxDepth: { type: 'number', description: 'Maximum accessibility-tree depth (default 12, max 40).' },
+      limit: { type: 'number', description: 'Maximum nodes (default 200, max 500).' },
+    },
+    additionalProperties: false,
+  },
+  mutates: false,
+  parallelSafe: true,
+  riskLevel: 'read',
+  repeatable: true,
+  handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    try {
+      const result = (await invokePreview(ctx, 'snapshot', {
+        interactiveOnly: args.interactiveOnly,
+        maxDepth: args.maxDepth,
+        limit: args.limit,
+      })) as {
+        page?: { url?: string; title?: string; navigationId?: number };
+        nodes?: Array<{ ref: string; depth: number; role: string; name: string; value?: string; states?: Record<string, unknown> }>;
+        sourceTruncations?: NonNullable<ToolResult['sourceTruncations']>;
+      };
+      const page = result.page;
+      const lines = [
+        `Page: ${page?.title || '(untitled)'} — ${page?.url || '(unknown URL)'} (navigation ${page?.navigationId ?? 0})`,
+        ...(result.nodes ?? []).map((node) => {
+          const indent = '  '.repeat(Math.min(node.depth, 12));
+          const name = node.name ? ` ${JSON.stringify(node.name)}` : '';
+          const value = node.value != null ? ` value=${JSON.stringify(node.value)}` : '';
+          const states = node.states && Object.keys(node.states).length ? ` ${JSON.stringify(node.states)}` : '';
+          return `${indent}[ref=${node.ref}] ${node.role}${name}${value}${states}`;
+        }),
+      ];
+      return {
+        content: lines.join('\n'),
+        contentFormat: 'text',
+        structuredData: result,
+        ...(result.sourceTruncations?.length ? { sourceTruncations: result.sourceTruncations } : {}),
+      };
+    } catch (error) {
+      return err(error instanceof Error ? error.message : String(error));
+    }
+  },
 };

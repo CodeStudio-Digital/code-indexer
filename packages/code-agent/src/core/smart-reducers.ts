@@ -25,6 +25,8 @@
  */
 
 import { jsonCrush } from './reducers/json-crush.js';
+import { stripUnpairedSurrogates } from './text-boundaries.js';
+import type { ToolSourceTruncation } from './tool.js';
 
 export interface ReducerInput {
   content: string;
@@ -38,7 +40,17 @@ export interface ReducerOutput {
   applied: boolean;
 }
 
-export type ReductionKind = 'none' | 'semantic' | 'json_crush' | 'hard_cap';
+export type ReductionKind = 'none' | 'source_cap' | 'semantic' | 'json_crush' | 'hard_cap';
+
+export interface ReductionStage {
+  stage: 'source_cap' | 'semantic' | 'structured' | 'spill' | 'recovery_marker' | 'hard_cap';
+  technique: string;
+  inputChars: number;
+  outputChars: number;
+  recoverable: boolean;
+  /** Original producer dimension (bytes/rows/etc.), when this is source_cap. */
+  source?: ToolSourceTruncation;
+}
 
 /** Structured accounting for one push-time shaping decision. */
 export interface ReductionReport {
@@ -48,6 +60,11 @@ export interface ReductionReport {
   shapedChars: number;
   cap: number;
   preserved: string[];
+  /** Ordered shaping history; unlike `kind`, later stages never overwrite it. */
+  stages?: ReductionStage[];
+  /** Resolved per-tool contract included in reduction_meta_json telemetry. */
+  policyMode?: string;
+  recovery?: string;
   /** Filled by the finalizer when the raw payload was spilled. */
   outputId?: string;
 }
@@ -55,6 +72,17 @@ export interface ReductionReport {
 export interface DetailedReduction {
   content: string;
   report: ReductionReport;
+}
+
+export interface SmartReducerOptions {
+  /** Latest user-turn text, used only for deterministic row relevance. */
+  query?: string;
+  /** Original call arguments, when the dispatch path can provide them. */
+  args?: Record<string, unknown>;
+  /** Whether the tool result represents a failure. */
+  isError?: boolean;
+  /** Producer-declared content type/format, such as application/json. */
+  contentFormat?: string;
 }
 
 const ELIDED = (label: string, original: number, kept: number): string =>
@@ -67,13 +95,15 @@ function validCap(cap: number): number {
 /** Final invariant for semantic reducers: deterministic head/tail, never > cap. */
 function fitReducedContent(content: string, cap: number, technique: string): string {
   const safeCap = validCap(cap);
-  if (content.length <= safeCap) return content;
+  if (content.length <= safeCap) return stripUnpairedSurrogates(content);
   const markerBase = `\n[smart-reducer: ${technique} — reduced output still exceeded cap; middle elided]\n`;
   if (markerBase.length >= safeCap) return markerBase.slice(0, safeCap);
   const room = safeCap - markerBase.length;
   const head = Math.ceil(room * 0.55);
   const tail = Math.max(0, room - head);
-  return content.slice(0, head) + markerBase + (tail > 0 ? content.slice(-tail) : '');
+  return stripUnpairedSurrogates(
+    content.slice(0, head) + markerBase + (tail > 0 ? content.slice(-tail) : ''),
+  );
 }
 
 function compactMiddle(value: string, cap: number): string {
@@ -630,6 +660,60 @@ export function reduceRunCommand({ content, cap }: ReducerInput): ReducerOutput 
   return reduceRunCommandHeadTail({ content, cap });
 }
 
+/** Keep database tables syntactically intact by dropping whole rows only. */
+export function reduceDbRows({ content, cap }: ReducerInput): ReducerOutput {
+  if (content.length <= cap) return { content, applied: false };
+  const lines = content.split('\n');
+  let footerAt = -1;
+  for (let index = lines.length - 1; index >= 2; index -= 1) {
+    if (/^rows=\d+\s+truncated=(?:true|false)$/.test(lines[index])) {
+      footerAt = index;
+      break;
+    }
+  }
+  if (footerAt < 2 || !lines[1]?.includes('---')) return { content, applied: false };
+
+  const header = lines.slice(0, 2);
+  const rows = lines.slice(2, footerAt);
+  const footer = lines.slice(footerAt);
+  const originalFooter = /^rows=(\d+)\s+truncated=(true|false)$/.exec(footer[0]);
+  if (!originalFooter) return { content, applied: false };
+  const sourceRows = Number(originalFooter[1]);
+  const sourceTruncated = originalFooter[2] === 'true';
+  const kept: string[] = [];
+  const markerFor = (count: number): string =>
+    `[smart-reducer: db rows — kept ${count}/${sourceRows} complete row(s); use the output_id recovery hint when present. Only rerun read-only queries with LIMIT/OFFSET]`;
+  const footerFor = (count: number): string[] => [
+    `rows=${count} truncated=${sourceTruncated || count < sourceRows}`,
+    `source_rows=${sourceRows} source_truncated=${sourceTruncated}`,
+    ...footer.slice(1),
+  ];
+
+  for (const row of rows) {
+    const count = kept.length + 1;
+    const candidate = [...header, ...kept, row, markerFor(count), ...footerFor(count)].join('\n');
+    if (candidate.length > cap) break;
+    kept.push(row);
+  }
+  const reduced = [...header, ...kept, markerFor(kept.length), ...footerFor(kept.length)].join('\n');
+  if (reduced.length > cap) {
+    const machineFooter = footerFor(0).join('\n');
+    const suffix = `${markerFor(0)}\n${machineFooter}`;
+    if (suffix.length >= cap) {
+      // Tiny synthetic caps cannot carry both prose and the contract. Prefer
+      // the truthful machine footer and keep it whole whenever physically
+      // possible.
+      const compact = `rows=0 truncated=true\nsource_rows=${sourceRows}`;
+      return { content: compact.length <= cap ? compact : compact.slice(0, cap), applied: true };
+    }
+    const headerText = header.join('\n');
+    const headerRoom = Math.max(0, cap - suffix.length - 1);
+    const minimal = `${stripUnpairedSurrogates(headerText.slice(0, headerRoom))}\n${suffix}`;
+    return { content: minimal, applied: true };
+  }
+  return { content: reduced, applied: true };
+}
+
 /**
  * Tool-name → reducer mapping. The runner consults this BEFORE applying the
  * blind push-time cap. A tool with no entry falls through to the original
@@ -642,6 +726,8 @@ export const SMART_REDUCERS: Record<string, (input: ReducerInput) => ReducerOutp
   grep_code: reduceGrep,
   mcp__grep_code: reduceGrep,
   run_command: reduceRunCommand,
+  db_query: reduceDbRows,
+  db_command: reduceDbRows,
 };
 
 /**
@@ -660,7 +746,7 @@ export function applySmartReducer(
   toolName: string,
   content: string,
   cap: number,
-  opts?: { query?: string },
+  opts?: SmartReducerOptions,
 ): string {
   return applySmartReducerDetailed(toolName, content, cap, opts).content;
 }
@@ -670,31 +756,50 @@ export function applySmartReducerDetailed(
   toolName: string,
   content: string,
   cap: number,
-  opts?: { query?: string },
+  opts?: SmartReducerOptions,
 ): DetailedReduction {
   const safeCap = validCap(cap);
   const fn = SMART_REDUCERS[toolName];
   if (fn) {
     const out = fn({ content, cap: safeCap });
-    const shaped = out.applied ? fitReducedContent(out.content, safeCap, toolName) : content;
-    return {
-      content: shaped,
-      report: {
-        kind: out.applied ? 'semantic' : 'none',
-        technique: out.applied ? toolName : 'none',
-        rawChars: content.length,
-        shapedChars: shaped.length,
-        cap: safeCap,
-        preserved: out.applied
-          ? toolName === 'git_diff' ? ['file_headers', 'hunks']
+    if (out.applied) {
+      const shaped = fitReducedContent(out.content, safeCap, toolName);
+      return {
+        content: shaped,
+        report: {
+          kind: 'semantic',
+          technique: toolName,
+          rawChars: content.length,
+          shapedChars: shaped.length,
+          cap: safeCap,
+          preserved: toolName === 'git_diff' ? ['file_headers', 'hunks']
             : toolName.includes('grep') ? ['file_diversity']
               : toolName === 'run_command' ? ['head', 'tail', 'errors']
-                : ['head', 'tail']
-          : [],
-      },
-    };
+                : toolName === 'db_query' || toolName === 'db_command' ? ['header', 'complete_rows', 'pagination_footer']
+                : ['head', 'tail'],
+          stages: [{
+            stage: 'semantic',
+            technique: toolName,
+            inputChars: content.length,
+            outputChars: shaped.length,
+            recoverable: false,
+          }],
+        },
+      };
+    }
+    // A registered reducer is not exclusive ownership of the payload. For
+    // example, an MCP grep implementation may return a JSON results envelope
+    // that the line-oriented grep reducer cannot recognize. Continue through
+    // the content-type stage instead of forcing the generic hard cap.
   }
-  const crushed = jsonCrush({ content, cap: safeCap, query: opts?.query });
+  const crushed = jsonCrush({
+    content,
+    cap: safeCap,
+    query: opts?.query,
+    args: opts?.args,
+    isError: opts?.isError,
+    contentFormat: opts?.contentFormat,
+  });
   const shaped = crushed.applied ? fitReducedContent(crushed.content, safeCap, 'json-crush') : content;
   return {
     content: shaped,
@@ -705,6 +810,13 @@ export function applySmartReducerDetailed(
       shapedChars: shaped.length,
       cap: safeCap,
       preserved: crushed.applied ? ['first_rows', 'last_rows', 'relevant_rows'] : [],
+      stages: crushed.applied ? [{
+        stage: 'structured',
+        technique: 'json-crush',
+        inputChars: content.length,
+        outputChars: shaped.length,
+        recoverable: false,
+      }] : [],
     },
   };
 }

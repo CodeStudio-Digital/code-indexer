@@ -326,9 +326,9 @@ const upsertVirtualTab = (
 };
 
 /**
- * Virtual Git tabs live in the editor area. The project workbench keeps that
- * area mounted while API/Database/Sessions are active, so updating the store
- * alone is no longer enough to make a newly-opened diff or log visible.
+ * Editor-hosted tabs can be opened from another primary surface (Git, Database,
+ * SSH, etc.). The workbench keeps the editor mounted behind those surfaces, so
+ * updating the store alone is not enough to make the newly-opened tab visible.
  *
  * Reuse the existing cross-pane request consumed by ProjectView. Dispatching
  * after every open (including an in-place refresh of the same synthetic path)
@@ -653,7 +653,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     requestEditorSurface(tab.projectId);
   },
 
-  openSftpFile: (tab) =>
+  openSftpFile: (tab) => {
     set((s) => {
       // Already open (same host+remote path) → focus it, KEEPING any in-progress
       // edits rather than re-downloading over them.
@@ -661,7 +661,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       const openFiles = idx >= 0 ? s.openFiles : [...s.openFiles, tab];
       const { panes, activePaneId } = placePath(s.panes, s.activePaneId, tab.path);
       return { openFiles, panes, activePaneId, activeFilePath: tab.path, activeProjectId: tab.projectId };
-    }),
+    });
+    requestEditorSurface(tab.projectId);
+  },
 
   setSftpDirty: (projectId, path, dirty) =>
     set((s) => ({

@@ -16,6 +16,7 @@ export type SectionId =
   | 'mcp-servers'
   | 'mcp-http'
   | 'skills'
+  | 'agents'
   | 'plugins'
   | 'ai-geral'
   | 'lsp-servers'

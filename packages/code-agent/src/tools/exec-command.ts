@@ -43,6 +43,7 @@ const DEFAULT_MAX_OUTPUT_CHARS = 20_000;
 const HARD_MAX_OUTPUT_CHARS = 200_000;
 const SESSION_TTL_MS = 10 * 60 * 1000;
 const MAX_OPEN_SESSIONS = 16;
+const OUTPUT_HEAD_RATIO = 0.55;
 
 // ─── Process registry ──────────────────────────────────────────────
 //
@@ -84,6 +85,12 @@ interface SessionRecord {
   exitCode: number | null;
   /** Accumulated output that hasn't been returned to the model yet. */
   pending: string;
+  /** True final output retained after `pending` becomes the bounded head. */
+  pendingTail: string;
+  /** Total source characters observed since the last drain. */
+  pendingTotalChars: number;
+  /** Per-drain response budget chosen when the session was spawned. */
+  maxOutputChars: number;
   /** Set when the buffer overflowed since the last read. */
   truncated: boolean;
   /** Timestamp the process was spawned at. PR 5 — surfaced by
@@ -149,19 +156,119 @@ function enforceMaxOpen(): void {
 
 function appendOutput(rec: SessionRecord, chunk: string, maxChars: number): void {
   if (!chunk) return;
-  rec.pending += chunk;
-  if (rec.pending.length > maxChars) {
-    rec.pending = rec.pending.slice(rec.pending.length - maxChars);
+  rec.pendingTotalChars += chunk.length;
+
+  if (!rec.truncated) {
+    if (rec.pending.length + chunk.length <= maxChars) {
+      rec.pending += chunk;
+      return;
+    }
+
+    const headCapacity = Math.floor(maxChars * OUTPUT_HEAD_RATIO);
+    const tailCapacity = maxChars - headCapacity;
+    const previousPending = rec.pending;
+    const neededForHead = Math.max(0, headCapacity - previousPending.length);
+    rec.pending = (previousPending + chunk.slice(0, neededForHead)).slice(0, headCapacity);
+
+    // Avoid concatenating the entire oversized chunk. The source chunk is
+    // unavoidable, but retained memory remains bounded by maxChars.
+    if (chunk.length >= tailCapacity) {
+      rec.pendingTail = chunk.slice(chunk.length - tailCapacity);
+    } else {
+      const priorTailChars = Math.max(0, tailCapacity - chunk.length);
+      rec.pendingTail = previousPending.slice(-priorTailChars) + chunk;
+    }
     rec.truncated = true;
+    return;
+  }
+
+  const tailCapacity = maxChars - Math.floor(maxChars * OUTPUT_HEAD_RATIO);
+  if (chunk.length >= tailCapacity) {
+    rec.pendingTail = chunk.slice(chunk.length - tailCapacity);
+  } else {
+    rec.pendingTail = (rec.pendingTail.slice(-(tailCapacity - chunk.length)) + chunk)
+      .slice(-tailCapacity);
   }
 }
 
-function drainPending(rec: SessionRecord): { output: string; truncated: boolean } {
-  const output = rec.pending;
+function pendingMarker(omittedChars: number): string {
+  return `\n[truncated: ${omittedChars} chars omitted; preserved beginning and true tail]\n`;
+}
+
+function unicodeSafePrefix(source: string, maxChars: number): string {
+  let end = Math.min(source.length, Math.max(0, maxChars));
+  if (end > 0) {
+    const last = source.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  }
+  return source.slice(0, end);
+}
+
+function unicodeSafeSuffix(source: string, maxChars: number): string {
+  let start = Math.max(0, source.length - Math.max(0, maxChars));
+  if (start < source.length) {
+    const first = source.charCodeAt(start);
+    if (first >= 0xdc00 && first <= 0xdfff) start += 1;
+  }
+  return source.slice(start);
+}
+
+function formatTruncatedPending(rec: SessionRecord): { output: string; omittedChars: number } {
+  const limit = rec.maxOutputChars;
+  let omittedChars = Math.max(1, rec.pendingTotalChars - limit);
+  let marker = pendingMarker(omittedChars);
+  let headChars = 0;
+  let tailChars = 0;
+  let selectedHead = '';
+  let selectedTail = '';
+  let stable = false;
+
+  for (let i = 0; i < 32; i += 1) {
+    if (marker.length >= limit) break;
+    const available = limit - marker.length;
+    selectedHead = unicodeSafePrefix(rec.pending, Math.floor(available * OUTPUT_HEAD_RATIO));
+    selectedTail = unicodeSafeSuffix(rec.pendingTail, available - selectedHead.length);
+    headChars = selectedHead.length;
+    tailChars = selectedTail.length;
+
+    const nextOmitted = Math.max(0, rec.pendingTotalChars - headChars - tailChars);
+    if (nextOmitted === omittedChars) {
+      stable = true;
+      break;
+    }
+    omittedChars = nextOmitted;
+    marker = pendingMarker(omittedChars);
+  }
+
+  if (!stable || marker.length >= limit) {
+    return {
+      output: `[truncated:${rec.pendingTotalChars} chars]`.slice(0, limit),
+      omittedChars: rec.pendingTotalChars,
+    };
+  }
+
+  return {
+    output: selectedHead + marker + selectedTail,
+    omittedChars,
+  };
+}
+
+function drainPending(rec: SessionRecord): {
+  output: string;
+  truncated: boolean;
+  omittedChars: number;
+  inputChars: number;
+} {
   const truncated = rec.truncated;
+  const inputChars = rec.pendingTotalChars;
+  const formatted = truncated
+    ? formatTruncatedPending(rec)
+    : { output: rec.pending, omittedChars: 0 };
   rec.pending = '';
+  rec.pendingTail = '';
+  rec.pendingTotalChars = 0;
   rec.truncated = false;
-  return { output, truncated };
+  return { output: formatted.output, truncated, omittedChars: formatted.omittedChars, inputChars };
 }
 
 function clampYield(raw: unknown, fallback: number): number {
@@ -181,18 +288,44 @@ function resolveWorkdir(ctx: ToolContext, raw: unknown): string {
 
 function describeResult(
   rec: SessionRecord,
-  drained: { output: string; truncated: boolean },
+  drained: { output: string; truncated: boolean; omittedChars: number; inputChars: number },
 ): string {
   const header = [
     `session_id=${rec.id}`,
     `status=${rec.status}`,
     rec.status === 'exited' ? `exit=${rec.exitCode ?? 'signal'}` : null,
     drained.truncated ? 'output_truncated=true' : null,
+    drained.truncated ? `output_omitted_chars=${drained.omittedChars}` : null,
   ]
     .filter(Boolean)
     .join(' ');
   const body = drained.output || '(no new output)';
   return `${header}\n\n${body}`;
+}
+
+function resultForDrain(
+  rec: SessionRecord,
+  drained: { output: string; truncated: boolean; omittedChars: number; inputChars: number },
+): ToolResult {
+  const content = describeResult(rec, drained);
+  // appendOutput() discards the middle incrementally once the bounded capture
+  // overflows. ToolOutputStore only accepts a complete materialized string,
+  // so there is no truthful snapshot to persist after drain: do not attach an
+  // outputId or claim recoverability until the store supports stream spooling.
+  return {
+    content,
+    ...(drained.truncated
+      ? {
+          sourceTruncations: [{
+            technique: 'bounded-stream-cap',
+            inputSize: drained.inputChars,
+            outputSize: drained.output.length,
+            unit: 'chars' as const,
+            recoverable: false,
+          }],
+        }
+      : {}),
+  };
 }
 
 // Strips dev-only env vars that leak from our parent (Electron/tsx) into
@@ -265,6 +398,9 @@ async function spawnSession(opts: {
     status: 'running',
     exitCode: null,
     pending: '',
+    pendingTail: '',
+    pendingTotalChars: 0,
+    maxOutputChars: opts.maxChars,
     truncated: false,
     startedAtMs: nowMs(),
     lastTouchMs: nowMs(),
@@ -299,6 +435,8 @@ async function spawnSession(opts: {
     });
   } else {
     const childProc = proc as ChildProcess;
+    childProc.stdout?.setEncoding('utf-8');
+    childProc.stderr?.setEncoding('utf-8');
     childProc.stdout?.on('data', (chunk: Buffer | string) => {
       appendOutput(rec, chunk.toString(), opts.maxChars);
     });
@@ -367,7 +505,8 @@ const EXEC_COMMAND_DESC =
   "The shell is the platform default (cmd.exe on Windows, /bin/sh on POSIX) — see the system prompt's OS line for shell-specific dos/don'ts.\n" +
   '\n' +
   `Defaults: tty=false (pipe); yields after ~${DEFAULT_EXEC_YIELD_MS}ms; output capped at ~${DEFAULT_MAX_OUTPUT_CHARS} chars. ` +
-  `Output beyond cap is FIFO-truncated; \`output_truncated=true\` in the header signals when this happened.`;
+  `Output beyond cap preserves a bounded beginning and the true final output; ` +
+  `\`output_truncated=true\` and \`output_omitted_chars=N\` report when and how much was omitted.`;
 
 export const execCommand: CoderTool = {
   name: 'exec_command',
@@ -431,7 +570,7 @@ export const execCommand: CoderTool = {
       sessions.delete(rec.id);
     }
 
-    return ok(describeResult(rec, drained));
+    return resultForDrain(rec, drained);
   },
 };
 
@@ -639,7 +778,7 @@ export const writeStdin: CoderTool = {
       sessions.delete(rec.id);
     }
 
-    return ok(describeResult(rec, drained));
+    return resultForDrain(rec, drained);
   },
 };
 

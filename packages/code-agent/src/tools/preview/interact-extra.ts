@@ -16,13 +16,13 @@ async function run(
   try {
     const r = (await invokePreview(ctx, method, args)) as { error?: string };
     if (r && typeof r === 'object' && r.error) return err(r.error);
-    return ok(`${label}\n${JSON.stringify(r, null, 2).slice(0, 2000)}`);
+    return ok(`${label}\n${JSON.stringify(r, null, 2) ?? String(r)}`);
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
   }
 }
 
-const SELECTOR_DESC = 'A CSS selector OR `text="visible text"` (e.g. `text="Settings"`).';
+const SELECTOR_DESC = 'Prefer `ref=aN` from preview_snapshot. CSS or `text="visible text"` are fallbacks.';
 
 export const previewScrollTool: CoderTool = {
   name: 'preview_scroll',
@@ -84,7 +84,7 @@ export const previewDoubleClickTool: CoderTool = {
     required: ['selector'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   handler: (args, ctx) => run(ctx, 'double_click', { selector: String(args.selector ?? '') }, 'Double-clicked:'),
@@ -92,7 +92,7 @@ export const previewDoubleClickTool: CoderTool = {
 
 export const previewRightClickTool: CoderTool = {
   name: 'preview_right_click',
-  description: 'Right-click an element (real mouse) — opens the context menu. Follow with preview_click on a menu item (by text).',
+  description: 'Right-click an element (real mouse). App-rendered context menus remain interactable; native Chromium menus are outside the page and cannot be clicked by preview tools.',
   source: 'native',
   parameters: {
     type: 'object',
@@ -100,7 +100,7 @@ export const previewRightClickTool: CoderTool = {
     required: ['selector'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   handler: (args, ctx) => run(ctx, 'right_click', { selector: String(args.selector ?? '') }, 'Right-clicked:'),

@@ -52,7 +52,7 @@ export function investigationVectorId(investigationId: number): string {
  * Derivable semantic side of Session Drive investigations.
  *
  * Rows stay in the central relational ledger. Vectors share the project's
- * Knowledge generation/table with project memory, using the collision-free
+ * Memory generation/table with project memory, using the collision-free
  * `investigation:<id>` semantic item key and `type=investigation` filter.
  */
 export class InvestigationSemanticIndex {

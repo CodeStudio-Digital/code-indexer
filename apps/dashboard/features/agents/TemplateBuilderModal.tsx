@@ -268,6 +268,12 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
           getModelsForProvider={getModelsForProvider}
           onUpdate={(patch) => updateRole(editingRoleIdx, patch)}
           onClose={() => setEditingRoleIdx(null)}
+          inheritedToolTiers={[
+            'company',
+            ...(roles[editingRoleIdx].role === 'qa' || roles[editingRoleIdx].skills?.includes('qa-playwright') ? ['qa'] : []),
+            ...(['qa', 'frontend', 'ux', 'fullstack'].includes(roles[editingRoleIdx].role) ? ['preview'] : []),
+            ...(roles[editingRoleIdx].role === 'database' ? ['db'] : []),
+          ]}
         />
       )}
     </Dialog>

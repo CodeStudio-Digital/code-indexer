@@ -1,6 +1,7 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import {
   SemanticStore,
+  semanticPurposeForNamespace,
   type SemanticJobRow,
   type SemanticPurpose,
 } from '@mcp/store/semantic-store.js';
@@ -99,7 +100,9 @@ export function createCliSemanticMutationSink(
   const semanticStore = new SemanticStore(db.raw());
   return createDurableSemanticMutationSink(semanticStore, {
     owner: `cli:${process.pid}:${Math.random().toString(16).slice(2)}`,
-    enabled: () => semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+    enabled: (namespace) => semanticStore.getProfile(
+      semanticPurposeForNamespace(namespace),
+    )?.embedding_target.kind !== 'disabled',
     // The namespace delta is the durable hand-off. The targeted wake only
     // reduces latency for an already-active namespace; it never starts a
     // generation-less namespace or fans out into a profile-wide rebuild.

@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { defineTool, type McpTool } from '../tool.js';
+import {
+  defineTool,
+  mcpAccess,
+  type McpSourceTruncation,
+  type McpTool,
+  type McpToolResult,
+} from '../tool.js';
 import {
   extractSymbolBody,
   grepInFiles,
@@ -10,7 +16,24 @@ import {
 import { treeSitterSymbols } from '@mcp/indexer/indexer/incremental.js';
 import type { DBSymbol } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
-import { scanDiskForGrep } from './search.js';
+import { scanDiskForGrep, scanDiskForGrepDetailed, type DiskScanResult } from './search.js';
+
+function withSourceTruncations(
+  text: string,
+  sourceTruncations: McpSourceTruncation[],
+): McpToolResult {
+  return sourceTruncations.length > 0 ? { text, sourceTruncations } : text;
+}
+
+function exactItemCap(
+  technique: string,
+  inputSize: number,
+  outputSize: number,
+): McpSourceTruncation | null {
+  return outputSize < inputSize
+    ? { technique, inputSize, outputSize, unit: 'items', recoverable: true }
+    : null;
+}
 
 type SymbolSearchDb = {
   searchSymbols(projectId: number, query: string, limit?: number): DBSymbol[];
@@ -98,14 +121,55 @@ async function findCallersOnDisk(
   excludeFile: string | null,
   excludeLine: number | null,
   max: number,
-): Promise<Array<{ file: string; line: number; text: string }>> {
-  const files = await scanDiskForGrep(projectRoot, '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}');
+): Promise<{
+  callers: Array<{ file: string; line: number; text: string }>;
+  observedMatches: number;
+  truncated: boolean;
+  diskScan: DiskScanResult;
+}> {
+  const diskScan = await scanDiskForGrepDetailed(
+    projectRoot,
+    '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}',
+  );
   const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`\\b${escaped}\\b`);
-  const hits = grepInFiles(projectRoot, files, re, max + 5);
-  return hits
-    .filter((h) => !(h.file === excludeFile && h.line === excludeLine))
-    .slice(0, max);
+  // One extra result proves truncation. The second spare absorbs the excluded
+  // definition line without hiding that extra caller.
+  const filtered = grepInFiles(projectRoot, diskScan.paths, re, max + 2)
+    .filter((h) => !(h.file === excludeFile && h.line === excludeLine));
+  return {
+    callers: filtered.slice(0, max),
+    observedMatches: filtered.length,
+    truncated: filtered.length > max,
+    diskScan,
+  };
+}
+
+function diskCallerTruncations(
+  detail: Awaited<ReturnType<typeof findCallersOnDisk>>,
+  technique: string,
+): McpSourceTruncation[] {
+  const sourceTruncations: McpSourceTruncation[] = [];
+  if (detail.truncated) {
+    sourceTruncations.push({
+      technique,
+      inputSize: detail.observedMatches,
+      inputSizeExact: false,
+      outputSize: detail.callers.length,
+      unit: 'items',
+      recoverable: true,
+    });
+  }
+  if (detail.diskScan.truncated) {
+    sourceTruncations.push({
+      technique: 'mcp-symbol-disk-file-scan-cap',
+      inputSize: detail.diskScan.totalMatches,
+      outputSize: detail.diskScan.paths.length,
+      unit: 'items',
+      recoverable: true,
+    });
+  }
+  return sourceTruncations;
 }
 
 // `get_symbol_details` (lookup by surrogate id) and `get_class_members` were
@@ -114,6 +178,8 @@ async function findCallersOnDisk(
 // model keeps), and skeleton/symbol_body cover the class-outline need.
 const find_references = defineTool({
   name: 'find_references',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description: 'Find all files that reference a symbol. When the symbol name is ambiguous, the response includes a list of candidate definitions; pass file_path to scope references to a specific definition. Pass format="json" for a structured response.',
   inputSchema: {
     type: 'object',
@@ -139,13 +205,18 @@ const find_references = defineTool({
 
     const refs = db.getSymbolCallers(project.id, symbolName);
     if (refs.length > 0) {
+      const shownCandidates = ambiguous ? candidates.slice(0, 10) : [];
+      const candidateCap = ambiguous
+        ? exactItemCap('mcp-symbol-ambiguity-candidate-cap', candidates.length, shownCandidates.length)
+        : null;
+      const sourceTruncations = candidateCap ? [candidateCap] : [];
       if (asJson) {
-        return JSON.stringify({
+        const text = JSON.stringify({
           symbol_name: symbolName,
           source: 'db',
           ambiguous,
           candidates: ambiguous
-            ? candidates.slice(0, 10).map(c => ({
+            ? shownCandidates.map(c => ({
                 file_path: c.file_path,
                 line: c.line,
                 kind: c.kind,
@@ -160,17 +231,22 @@ const find_references = defineTool({
             context: r.context,
           })),
         });
+        return withSourceTruncations(text, sourceTruncations);
       }
       const defBlock: string[] = [];
       if (ambiguous) {
         defBlock.push(`[note] '${symbolName}' is defined in ${candidates.length} files:`);
-        for (const c of candidates.slice(0, 10)) {
+        for (const c of shownCandidates) {
           defBlock.push(`  - ${c.file_path}:${c.line ?? '?'} [${c.kind}]${c.namespace ? ` ns:${c.namespace}` : ''}`);
         }
+        if (candidateCap) defBlock.push(`  ... and ${candidates.length - shownCandidates.length} more definitions`);
         defBlock.push('Pass file_path to scope references to a specific definition.');
         defBlock.push('');
       }
-      return defBlock.join('\n') + refs.map(r => `${r.referencing_file_path}:${r.line ?? '?'}${r.context ? `: ${r.context}` : ''}`).join('\n');
+      return withSourceTruncations(
+        defBlock.join('\n') + refs.map(r => `${r.referencing_file_path}:${r.line ?? '?'}${r.context ? `: ${r.context}` : ''}`).join('\n'),
+        sourceTruncations,
+      );
     }
     // Fallback: grep the project files directly. Prefer the indexed file
     // list; when empty (project never indexed), scan the disk so the agent
@@ -178,33 +254,76 @@ const find_references = defineTool({
     const allFiles = db.listFiles(project.id).map(f => f.path);
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(`\\b${escaped}\\b`);
-    let hits = grepInFiles(project.root_path, allFiles, pattern, 50);
+    const fallbackLimit = 50;
+    let hits = grepInFiles(project.root_path, allFiles, pattern, fallbackLimit + 1);
     let usedDisk = false;
+    let diskScan: DiskScanResult | null = null;
     if (hits.length === 0) {
-      const diskFiles = await scanDiskForGrep(project.root_path, '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}');
-      hits = grepInFiles(project.root_path, diskFiles, pattern, 50);
+      diskScan = await scanDiskForGrepDetailed(
+        project.root_path,
+        '**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,cs,kt,swift,rb,php,c,h,cpp,hpp}',
+      );
+      hits = grepInFiles(project.root_path, diskScan.paths, pattern, fallbackLimit + 1);
       usedDisk = hits.length > 0;
     }
+    const shownHits = hits.slice(0, fallbackLimit);
+    const resultTruncated = hits.length > shownHits.length;
+    const sourceTruncations: McpSourceTruncation[] = [];
+    if (resultTruncated) {
+      sourceTruncations.push({
+        technique: 'mcp-find-references-fallback-cap',
+        inputSize: hits.length,
+        inputSizeExact: false,
+        outputSize: shownHits.length,
+        unit: 'items',
+        recoverable: true,
+      });
+    }
+    if (diskScan?.truncated) {
+      sourceTruncations.push({
+        technique: 'mcp-symbol-disk-file-scan-cap',
+        inputSize: diskScan.totalMatches,
+        outputSize: diskScan.paths.length,
+        unit: 'items',
+        recoverable: true,
+      });
+    }
     if (asJson) {
-      return JSON.stringify({
+      const text = JSON.stringify({
         symbol_name: symbolName,
         source: usedDisk ? 'disk_grep_fallback' : 'grep_fallback',
         ambiguous,
-        total: hits.length,
-        references: hits.map(h => ({ file_path: h.file, line: h.line, context: h.text })),
+        total: resultTruncated ? undefined : shownHits.length,
+        total_at_least: resultTruncated ? hits.length : undefined,
+        total_exact: !resultTruncated,
+        truncated: resultTruncated,
+        references: shownHits.map(h => ({ file_path: h.file, line: h.line, context: h.text })),
       });
+      return withSourceTruncations(text, sourceTruncations);
     }
-    if (hits.length === 0) return 'No references found.';
+    if (shownHits.length === 0) {
+      const uncertainty = diskScan?.truncated
+        ? ' Disk scan was capped; absence is not proof. Narrow the project path or use grep_code with a glob.'
+        : '';
+      return withSourceTruncations(`No references found.${uncertainty}`, sourceTruncations);
+    }
     const tag = usedDisk
       ? '[disk-grep fallback — project not indexed; results from on-disk scan]'
       : '[grep fallback — symbol_references DB empty]';
-    return `${tag}\n` +
-      hits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n');
+    const capNote = resultTruncated
+      ? `\n... [showing ${shownHits.length}; at least ${hits.length} references matched — use grep_code with a narrower glob]`
+      : '';
+    return withSourceTruncations(
+      `${tag}\n` + shownHits.map(h => `${h.file}:${h.line}: ${h.text}`).join('\n') + capNote,
+      sourceTruncations,
+    );
   }),
 });
 
 const get_hierarchy = defineTool({
   name: 'get_hierarchy',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'Show the full type hierarchy of a class or interface, with file:line and namespace per entry.\n' +
     'Covers the transitive extends chain, implemented interfaces, PHP traits used, subclasses, and implementors.\n' +
@@ -247,6 +366,8 @@ const get_hierarchy = defineTool({
 
 const find_implementations = defineTool({
   name: 'find_implementations',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'List every class that implements a given interface, with file:line for each.\n' +
     "DON'T: use for the full type tree (parents + children) — that's get_hierarchy.",
@@ -270,6 +391,8 @@ const find_implementations = defineTool({
 
 const trace_usage = defineTool({
   name: 'trace_usage',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description: 'Trace the full usage tree of a symbol (who calls it, and who calls those callers)',
   inputSchema: {
     type: 'object',
@@ -294,7 +417,7 @@ const trace_usage = defineTool({
     // without a caller graph, so we cap at 1 and tell the agent why.
     if (!tree.defined_in && tree.callers.length === 0) {
       const located = await findSymbolOnDisk(project.root_path, symbolName);
-      const callers = await findCallersOnDisk(
+      const callerDetail = await findCallersOnDisk(
         project.root_path,
         symbolName,
         located?.file ?? null,
@@ -306,11 +429,16 @@ const trace_usage = defineTool({
         located ? `Defined in: ${located.file}:${located.line} [tree-sitter fallback]` : 'Definition not found in index nor on disk',
         '',
       ];
-      if (callers.length === 0) {
-        lines.push('No usages found.');
+      if (callerDetail.callers.length === 0) {
+        lines.push(callerDetail.diskScan.truncated
+          ? 'No usages found in the bounded disk scan; absence is not proof. Narrow the search scope and retry.'
+          : 'No usages found.');
       } else {
-        lines.push(`## Callers (depth: 1, disk-grep fallback — project not indexed)`);
-        for (const c of callers) {
+        const count = callerDetail.truncated
+          ? `at least ${callerDetail.observedMatches}, showing ${callerDetail.callers.length}`
+          : String(callerDetail.callers.length);
+        lines.push(`## Callers (${count}; depth: 1, disk-grep fallback — project not indexed)`);
+        for (const c of callerDetail.callers) {
           lines.push(`- **${c.file}**:${c.line}: ${c.text}`);
         }
         if (depth > 1) {
@@ -318,13 +446,21 @@ const trace_usage = defineTool({
           lines.push(`[note] requested depth=${depth} but disk fallback only supports depth=1 — re-index the project for full caller-graph traversal.`);
         }
       }
-      return lines.join('\n');
+      return withSourceTruncations(
+        lines.join('\n'),
+        diskCallerTruncations(callerDetail, 'mcp-trace-usage-disk-caller-cap'),
+      );
     }
 
+    const treeCap = { input: 0, output: 0 };
     const formatTree = (callers: typeof tree.callers, indent: string): string => {
       const MAX_CALLERS_PER_NODE = 5;
       const shownCallers = callers.slice(0, MAX_CALLERS_PER_NODE);
       const isTruncated = callers.length > MAX_CALLERS_PER_NODE;
+      if (isTruncated) {
+        treeCap.input += callers.length;
+        treeCap.output += shownCallers.length;
+      }
 
       const result = shownCallers.map(c => {
         const lines = [`${indent}- **${c.file}**${c.line ? `:${c.line}` : ''}`];
@@ -355,12 +491,23 @@ const trace_usage = defineTool({
       sections.push(`## Callers (depth: ${depth})`);
       sections.push(formatTree(tree.callers, ''));
     }
-    return sections.join('\n');
+    const treeTruncation = treeCap.input > 0
+      ? [{
+          technique: 'mcp-trace-usage-per-node-cap',
+          inputSize: treeCap.input,
+          outputSize: treeCap.output,
+          unit: 'items' as const,
+          recoverable: true,
+        }]
+      : [];
+    return withSourceTruncations(sections.join('\n'), treeTruncation);
   }),
 });
 
 const get_symbol_body = defineTool({
   name: 'get_symbol_body',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description: 'Extract just the body (line range) of a symbol — token-cheap alternative to reading the whole file. In JSON mode, returns ambiguous candidate list when symbol_name matches multiple definitions without file_path. Pass format="json" for a structured response.',
   inputSchema: {
     type: 'object',
@@ -387,11 +534,17 @@ const get_symbol_body = defineTool({
     } else {
       const candidates = db.findSymbolsByName(project.id, symbolName);
       if (candidates.length > 1 && asJson) {
-        return JSON.stringify({
+        const shownCandidates = candidates.slice(0, 10);
+        const candidateCap = exactItemCap(
+          'mcp-symbol-body-ambiguity-candidate-cap',
+          candidates.length,
+          shownCandidates.length,
+        );
+        const text = JSON.stringify({
           error: 'ambiguous',
           symbol_name: symbolName,
           total: candidates.length,
-          candidates: candidates.slice(0, 10).map(c => ({
+          candidates: shownCandidates.map(c => ({
             file_path: c.file_path,
             line: c.line,
             kind: c.kind,
@@ -399,6 +552,7 @@ const get_symbol_body = defineTool({
             stable_id: c.stable_id,
           })),
         });
+        return withSourceTruncations(text, candidateCap ? [candidateCap] : []);
       }
       sym = candidates[0];
     }
@@ -447,6 +601,8 @@ const get_symbol_body = defineTool({
 
 const prepare_edit = defineTool({
   name: 'prepare_edit',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description:
     'Fetch everything needed to edit a symbol in ONE call: body + callers + neighbors + imports + tests.\n' +
     'Replaces 5+ separate calls. Callers are capped by max_callers (default 10) and sorted by proximity (same file > same dir > rest). If the symbol name is ambiguous, returns candidate list — pass file_path to disambiguate. Pass format="json" for a structured response.\n' +
@@ -470,7 +626,10 @@ const prepare_edit = defineTool({
   handler: withProject(async (args, { db }, project) => {
     const symbolName = args.symbol_name as string;
     const filePath = args.file_path as string | undefined;
-    const maxCallers = (args.max_callers as number) ?? 10;
+    const requestedMaxCallers = (args.max_callers as number) ?? 10;
+    const maxCallers = Number.isFinite(requestedMaxCallers)
+      ? Math.max(1, Math.floor(requestedMaxCallers))
+      : 10;
     const asJson = args.format === 'json';
 
     let sym = filePath
@@ -487,7 +646,7 @@ const prepare_edit = defineTool({
         if (!located) {
           throw new Error(symbolNotFoundMessage(db, project.id, symbolName, filePath));
         }
-        const callers = await findCallersOnDisk(
+        const callerDetail = await findCallersOnDisk(
           project.root_path,
           symbolName,
           located.file,
@@ -499,15 +658,17 @@ const prepare_edit = defineTool({
           ? located.fileSymbols.slice(Math.max(0, targetIdx - 3), targetIdx + 4)
           : located.fileSymbols.slice(0, 6);
         if (asJson) {
-          return JSON.stringify({
+          const text = JSON.stringify({
             symbol: { name: symbolName, kind: '?', signature: null, file_path: located.file, line: located.line, stable_id: null },
             source: 'disk_fallback',
             body: located.body ? { file: located.file, ...located.body } : null,
             callers: {
-              total: callers.length,
-              shown: callers.length,
-              truncated: false,
-              items: callers.map((c) => ({ file_path: c.file, line: c.line, context: c.text })),
+              total: callerDetail.truncated ? undefined : callerDetail.callers.length,
+              total_at_least: callerDetail.truncated ? callerDetail.observedMatches : undefined,
+              total_exact: !callerDetail.truncated,
+              shown: callerDetail.callers.length,
+              truncated: callerDetail.truncated,
+              items: callerDetail.callers.map((c) => ({ file_path: c.file, line: c.line, context: c.text })),
             },
             neighbors: neighbors.map((n) => ({
               name: n.name,
@@ -518,6 +679,10 @@ const prepare_edit = defineTool({
             imports: [],
             tests_covering: [],
           });
+          return withSourceTruncations(
+            text,
+            diskCallerTruncations(callerDetail, 'mcp-prepare-edit-disk-caller-cap'),
+          );
         }
         const sectionsX: string[] = [
           `=== prepare_edit: ${symbolName} ===`,
@@ -525,22 +690,35 @@ const prepare_edit = defineTool({
           `file: ${located.file}:${located.body?.start_line ?? located.line}-${located.body?.end_line ?? located.line}`,
         ];
         if (located.body) sectionsX.push('\n[BODY]\n' + located.body.body);
-        sectionsX.push(`\n[CALLERS] (${callers.length}, disk-grep)`);
-        sectionsX.push(callers.map((c) => `${c.file}:${c.line}: ${c.text}`).join('\n') || 'none');
+        const callerCount = callerDetail.truncated
+          ? `at least ${callerDetail.observedMatches}, showing ${callerDetail.callers.length}`
+          : String(callerDetail.callers.length);
+        sectionsX.push(`\n[CALLERS] (${callerCount}, disk-grep)`);
+        sectionsX.push(callerDetail.callers.map((c) => `${c.file}:${c.line}: ${c.text}`).join('\n') || 'none');
         sectionsX.push(`\n[NEIGHBORS]`);
         sectionsX.push(neighbors.map((n) => {
           const marker = n.name === symbolName && n.line === located.line ? ' <- target' : '';
           return `${String(n.line ?? '?').padStart(5)} ${n.kind} ${n.name}${marker}`;
         }).join('\n') || 'none');
-        return sectionsX.join('\n');
+        return withSourceTruncations(
+          sectionsX.join('\n'),
+          diskCallerTruncations(callerDetail, 'mcp-prepare-edit-disk-caller-cap'),
+        );
       }
       if (candidates.length > 1 && !filePath) {
+        const shownCandidates = candidates.slice(0, 10);
+        const candidateCap = exactItemCap(
+          'mcp-prepare-edit-ambiguity-candidate-cap',
+          candidates.length,
+          shownCandidates.length,
+        );
+        const sourceTruncations = candidateCap ? [candidateCap] : [];
         if (asJson) {
-          return JSON.stringify({
+          const text = JSON.stringify({
             error: 'ambiguous',
             symbol_name: symbolName,
             total: candidates.length,
-            candidates: candidates.slice(0, 10).map(c => ({
+            candidates: shownCandidates.map(c => ({
               file_path: c.file_path,
               line: c.line,
               kind: c.kind,
@@ -549,15 +727,16 @@ const prepare_edit = defineTool({
               stable_id: c.stable_id,
             })),
           });
+          return withSourceTruncations(text, sourceTruncations);
         }
-        const list = candidates.slice(0, 10).map(
+        const list = shownCandidates.map(
           c => `  - ${c.file_path}:${c.line ?? '?'} [${c.kind}]${c.namespace ? ` ns:${c.namespace}` : ''} ${c.signature || c.name}`
         ).join('\n');
-        return [
+        return withSourceTruncations([
           `Ambiguous symbol '${symbolName}' — ${candidates.length} matches. Re-run with file_path to disambiguate:`,
           list,
           candidates.length > 10 ? `... and ${candidates.length - 10} more` : ''
-        ].filter(Boolean).join('\n');
+        ].filter(Boolean).join('\n'), sourceTruncations);
       }
       sym = candidates[0];
     }
@@ -605,6 +784,7 @@ const prepare_edit = defineTool({
     const file = db.getFile(project.id, sym.file_path);
     let imports: string[] = [];
     let testFilePaths: string[] = [];
+    let totalTestFiles = 0;
     if (file) {
       imports = JSON.parse(file.dependencies || '[]') as string[];
       sections.push(`\n[IMPORTS]\n${imports.join(', ') || 'none'}`);
@@ -614,10 +794,28 @@ const prepare_edit = defineTool({
         const df = db.getFile(project.id, d.source_file_path);
         return df?.is_test === 1;
       });
+      totalTestFiles = testFiles.length;
       testFilePaths = testFiles.slice(0, 5).map(t => t.source_file_path);
-      sections.push(`\n[TESTS COVERING] (${testFiles.length})`);
+      const testsShown = testFilePaths.length < testFiles.length
+        ? `, showing ${testFilePaths.length}/${testFiles.length}`
+        : '';
+      sections.push(`\n[TESTS COVERING] (${testFiles.length}${testsShown})`);
       sections.push(testFilePaths.join('\n') || 'none');
     }
+
+    const sourceTruncations: McpSourceTruncation[] = [];
+    const callerCap = exactItemCap(
+      'mcp-prepare-edit-caller-cap',
+      allRefs.length,
+      shownRefs.length,
+    );
+    if (callerCap) sourceTruncations.push(callerCap);
+    const testCap = exactItemCap(
+      'mcp-prepare-edit-test-cap',
+      totalTestFiles,
+      testFilePaths.length,
+    );
+    if (testCap) sourceTruncations.push(testCap);
 
     if (asJson) {
       let body: { file: string; start_line: number; end_line: number; body: string } | null = null;
@@ -626,7 +824,7 @@ const prepare_edit = defineTool({
           body = extractSymbolBody(project.root_path, sym.file_path, sym.line);
         } catch { /* ignore */ }
       }
-      return JSON.stringify({
+      const text = JSON.stringify({
         symbol: {
           name: sym.name,
           kind: sym.kind,
@@ -654,15 +852,20 @@ const prepare_edit = defineTool({
         })),
         imports,
         tests_covering: testFilePaths,
+        tests_covering_total: totalTestFiles,
+        tests_covering_truncated: testFilePaths.length < totalTestFiles,
       });
+      return withSourceTruncations(text, sourceTruncations);
     }
 
-    return sections.join('\n');
+    return withSourceTruncations(sections.join('\n'), sourceTruncations);
   }),
 });
 
 const semantic_neighbors = defineTool({
   name: 'semantic_neighbors',
+  tier: 'navigate',
+  ...mcpAccess('read'),
   description: 'Find top-K symbols semantically similar to a given symbol using vector search. Useful for discovering related implementations, helpers, or wrappers — complements grep_code when names differ but behavior is similar. Requires vector coverage (see get_project_pulse).',
   inputSchema: {
     type: 'object',

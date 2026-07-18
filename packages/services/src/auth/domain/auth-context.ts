@@ -1,5 +1,5 @@
 import type { ScopeSet } from './scope.js';
-import type { McpTier } from './api-token.js';
+import type { McpConnectionPolicy, McpTier } from './api-token.js';
 
 export type TokenType = 'api_token' | 'oauth';
 
@@ -21,4 +21,6 @@ export interface AuthContext {
    * transport uses it to filter/gate tools in addition to scope checks.
    */
   readonly tier?: McpTier | null;
+  /** Optional persistent project/tool/agent policy bound to the API token. */
+  readonly policy?: McpConnectionPolicy | null;
 }

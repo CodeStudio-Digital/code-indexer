@@ -12,18 +12,13 @@ import type {
   DocSectionRead,
 } from '@mcp/code-agent/tools/rag-search-docs.js';
 
-/** Cap on a whole-section read so a pathological section can't blow the context. */
-const SECTION_MAX_CHUNKS = 12;
-/** Cap on headings returned by an outline (multi-page crawls can be huge). */
-const OUTLINE_MAX_HEADINGS = 300;
-
 export function buildDocNavVerbs(docStore: DocStore) {
   return {
     /**
      * Reassemble the WHOLE section the seed chunk belongs to — every chunk the
      * size-splitter produced for the same heading on the same page, in `ord`
-     * order. Capped at SECTION_MAX_CHUNKS so a runaway section can't flood the
-     * agent's context (the tool reports the cap + the remaining chunk_ids).
+     * order. The complete materialized section reaches the runner, which can
+     * persist it exactly before applying its context-aware inline cap.
      */
     readSection: async (input: { chunk_id: number }): Promise<DocSectionRead | null> => {
       const seed = docStore.getChunk(input.chunk_id);
@@ -35,7 +30,7 @@ export function buildDocNavVerbs(docStore: DocStore) {
         seed.source_uri,
       );
       // Defensive: a chunk should always match itself; fall back to the seed.
-      const list = (all.length > 0 ? all : [seed]).slice(0, SECTION_MAX_CHUNKS);
+      const list = all.length > 0 ? all : [seed];
       return {
         source_id: seed.source_id,
         collection: collection?.name ?? '(unknown)',
@@ -73,7 +68,6 @@ export function buildDocNavVerbs(docStore: DocStore) {
         for (const c of chunks) {
           const key = `${c.source_uri ?? ''} ${c.heading_path ?? ''}`;
           if (!cur || key !== curKey) {
-            if (headings.length >= OUTLINE_MAX_HEADINGS) break;
             cur = {
               heading_path: c.heading_path,
               chunk_id: c.id,

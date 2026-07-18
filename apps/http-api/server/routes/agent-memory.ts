@@ -13,7 +13,7 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
   const { db, agentMemoryService } = deps;
 
   /** Query endpoint for out-of-process agents. The http-api process owns the
-   * knowledge embedder and vector worker; callers never open sqlite-vec. The
+   * memory embedder and vector worker; callers never open sqlite-vec. The
    * service itself preserves FTS results when semantic retrieval is offline. */
   app.get('/api/projects/:id/agent-memory/search', async (c) => {
     const projectId = parseIdParam(c);

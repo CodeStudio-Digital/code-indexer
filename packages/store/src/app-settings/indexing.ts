@@ -6,6 +6,13 @@ import type { SettingDef } from './types.js';
  */
 export const INDEXING_SETTINGS: readonly SettingDef[] = [
   {
+    key: 'BRAVE_API_KEY',
+    label: 'Brave Search API key',
+    description: 'Powers the agent\'s web_search tool. Get a key at brave.com/search/api.',
+    type: 'secret',
+    category: 'indexing',
+  },
+  {
     key: 'MCP_AUTO_INDEX_STRUCTURAL',
     label: 'Auto structural index on open',
     description: 'Index symbols + FTS automatically when a project is opened (tree-sitter only — no LLM, no embeddings, $0). 0 disables.',

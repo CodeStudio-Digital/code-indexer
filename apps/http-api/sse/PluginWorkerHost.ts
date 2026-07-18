@@ -9,6 +9,7 @@
  */
 import { Worker } from 'node:worker_threads';
 import { resolveWorkerFile } from './workerFileResolution.js';
+import type { PluginToolResult } from '@mcp/plugin-sdk';
 
 export interface PluginBundleRef {
   namespace: string;
@@ -34,12 +35,7 @@ export interface InvokeContext {
   cwd: string;
 }
 
-interface ToolResult {
-  content: string;
-  isError?: boolean;
-  /** Structured payload for the plugin's own webview (agent never sees it). */
-  data?: unknown;
-}
+type ToolResult = PluginToolResult;
 
 export class PluginWorkerHost {
   private worker: Worker | null = null;
@@ -100,16 +96,17 @@ export class PluginWorkerHost {
 
   private onMessage(m: Record<string, unknown>): void {
     if (m.kind === 'result') {
-      const { id, content, isError, data } = m as {
+      const { id, content, isError, data, sourceTruncations } = m as {
         id: number;
         content: string;
         isError?: boolean;
         data?: unknown;
+        sourceTruncations?: PluginToolResult['sourceTruncations'];
       };
       const p = this.pending.get(id);
       if (p) {
         this.pending.delete(id);
-        p.resolve({ content, isError, data });
+        p.resolve({ content, isError, data, sourceTruncations });
       }
     } else if (m.kind === 'host') {
       void this.handleHost(

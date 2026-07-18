@@ -1,4 +1,4 @@
-export type SemanticProfilePurpose = 'code' | 'knowledge';
+export type SemanticProfilePurpose = 'code' | 'docs' | 'memory';
 
 export type SemanticTargetKind = 'onnx' | 'local_http' | 'provider' | 'disabled';
 
@@ -272,7 +272,8 @@ export async function fetchSemanticGenerations(): Promise<{
     jobs: body.jobs ?? [],
     rerankers: {
       code: body.rerankers?.code ?? missingReranker(),
-      knowledge: body.rerankers?.knowledge ?? missingReranker(),
+      docs: body.rerankers?.docs ?? missingReranker(),
+      memory: body.rerankers?.memory ?? missingReranker(),
     },
   };
 }

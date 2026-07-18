@@ -29,6 +29,7 @@ function sendPayload(res: ExecuteResult, jar: CookieJar, envUpdated: boolean, va
     ms: res.ms,
     url: res.url,
     size: res.size,
+    sizeExact: res.sizeExact,
     truncated: res.truncated,
     tests: [...(res.preScript?.tests ?? []), ...(res.testScript?.tests ?? [])],
     consoleLogs: [...(res.preScript?.consoleLogs ?? []), ...(res.testScript?.consoleLogs ?? [])],

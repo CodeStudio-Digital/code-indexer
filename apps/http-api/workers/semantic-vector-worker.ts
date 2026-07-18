@@ -332,6 +332,10 @@ bridge.handle('vectors.dropGeneration', async (payload) => {
   await trackOperation(() => router.dropGeneration(namespace, generationId));
   return undefined;
 });
+bridge.handle('vectors.dropLegacyKnowledgeTables', async (payload) => {
+  const { namespace } = payload as { namespace: string };
+  return trackOperation(() => router.dropLegacyKnowledgeTables(namespace));
+});
 bridge.handle('vectors.hasGeneration', async (payload) => {
   const { namespace, generationId } = payload as { namespace: string; generationId: number };
   return trackOperation(() => router.hasGeneration(namespace, generationId));

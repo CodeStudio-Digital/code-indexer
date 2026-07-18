@@ -95,6 +95,8 @@ interface SessionTelemetrySummary {
   persisted_chapters: number;
   mechanical_fallbacks: number;
   checkpoint_failures: number;
+  checkpoint_retries: number;
+  checkpoint_blocked: number;
   /** Migration 130 — lifetime durable-compaction counts (auto + manual). */
   compaction_count_auto: number;
   compaction_count_manual: number;
@@ -210,6 +212,15 @@ export function SessionMetricsView({
                   label={t('chat:metrics.session.checkpointFailures')}
                   value={String(data.checkpoint_failures)}
                   intent={data.checkpoint_failures > 0 ? 'warn' : undefined}
+                />
+                <Stat
+                  label={t('chat:metrics.session.checkpointRetries')}
+                  value={String(data.checkpoint_retries)}
+                />
+                <Stat
+                  label={t('chat:metrics.session.checkpointBlocked')}
+                  value={String(data.checkpoint_blocked)}
+                  intent={data.checkpoint_blocked > 0 ? 'warn' : undefined}
                 />
               </Section>
 

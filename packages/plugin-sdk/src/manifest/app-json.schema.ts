@@ -11,12 +11,38 @@ import { CONTRIB_ID_RE, relPath } from './common.js';
 
 const contribId = z.string().regex(CONTRIB_ID_RE, 'id must be kebab/snake-case');
 
+/**
+ * Declarative output-shaping contract forwarded to the agent runtime. Keep
+ * this schema independent from @mcp/code-agent so plugin manifests remain a
+ * data-only contract that can be validated without loading the agent package.
+ */
+export const pluginToolOutputPolicySchema = z
+  .object({
+    mode: z.enum([
+      'generic',
+      'authoritative',
+      'page',
+      'line_range',
+      'rows',
+      'logs',
+      'diff',
+      'search',
+      'structured',
+    ]),
+    reducer: z.enum(['smart', 'none']).optional(),
+    recovery: z.enum(['output_store', 'cursor', 'section', 'rerun', 'none']).optional(),
+    maxInlineChars: z.number().int().positive().optional(),
+    preserveOnError: z.boolean().optional(),
+  })
+  .strict();
+
 export const pluginToolDeclSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   parameters: z.record(z.unknown()).default({}),
   riskLevel: z.enum(['read', 'write', 'execute', 'admin']).optional(),
   mutates: z.boolean().optional(),
+  outputPolicy: pluginToolOutputPolicySchema.optional(),
   activation: z.lazy(() => activationRuleSchema).optional(),
 });
 

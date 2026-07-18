@@ -1,7 +1,7 @@
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
 import type { Project } from '@mcp/shared/types.js';
 import type { ToolContext } from '../context.js';
-import type { McpTool } from '../tool.js';
+import type { McpTool, McpToolResult } from '../tool.js';
 import { resolveProject } from '../utils.js';
 
 /**
@@ -15,7 +15,7 @@ export type ProjectToolHandler = (
   ctx: ToolContext,
   project: Project,
   authCtx?: AuthContext,
-) => Promise<string> | string;
+) => Promise<McpToolResult> | McpToolResult;
 
 /**
  * Wrap a handler so it receives the resolved project. Throws the same

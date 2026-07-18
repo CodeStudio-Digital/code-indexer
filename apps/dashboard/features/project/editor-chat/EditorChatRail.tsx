@@ -30,11 +30,33 @@ interface Props {
   projectId: number;
   projectName: string;
   onClose: () => void;
+  initialSessionId?: number | null;
+  onSelectedSessionChange?: (sessionId: number | null) => void;
+  selectionPrefixSessionId?: number;
+  includeEditorContext?: boolean;
+  initialAgent?: AgentPreset;
+  newSessionTitle?: string;
 }
 
-export function EditorChatRail({ projectId, projectName, onClose }: Props) {
+export function EditorChatRail({
+  projectId,
+  projectName,
+  onClose,
+  initialSessionId,
+  onSelectedSessionChange,
+  selectionPrefixSessionId,
+  includeEditorContext = true,
+  initialAgent,
+  newSessionTitle,
+}: Props) {
   const { t } = useTranslation(['workspace', 'chat', 'common', 'dbClient']);
-  const s = useEditorChatSession(projectId);
+  const s = useEditorChatSession(projectId, {
+    initialSessionId: initialSessionId ?? undefined,
+    selectionPrefixSessionId,
+    includeEditorContext,
+    initialAgent,
+    newSessionTitle,
+  });
   const { fileRefs } = useEditorChatContext(projectId);
   const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(projectId, p);
   const pendingExternalPrompt = useRef<{ prompt: string; title?: string } | null>(null);
@@ -45,6 +67,10 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
     dialogTitle?: string;
     dialogDescription?: string;
   } | null>(null);
+
+  useEffect(() => {
+    onSelectedSessionChange?.(s.selectedId);
+  }, [onSelectedSessionChange, s.selectedId]);
 
   const buildLaunchConfig = useCallback((title = '', agent?: AgentPreset): SessionLaunchConfig => {
     const models = s.getModelsForProvider(s.provider);
@@ -129,14 +155,16 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
   // Select the stable path instead of the entire openFiles array. The Monaco
   // buffer mirrors content into that array on every key; the rail does not need
   // the text and must not rerender its conversation tree while typing.
-  const addablePath = useWorkspaceStore((st) => st.openFiles.find(
-    (file) => file.projectId === st.activeProjectId
+  const addablePath = useWorkspaceStore((st) => includeEditorContext && st.activeProjectId === projectId
+    ? st.openFiles.find(
+    (file) => file.projectId === projectId
       && file.path === st.activeFilePath
       && file.kind !== 'git-log'
       && file.kind !== 'git-stash'
       && file.kind !== 'diff'
       && file.kind !== 'database',
-  )?.path ?? null);
+  )?.path ?? null
+    : null);
   const addableName = addablePath ? addablePath.split('/').pop() ?? addablePath : null;
   const alreadyAdded = addablePath != null && fileRefs.includes(addablePath);
 
@@ -240,8 +268,8 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           onBack={() => s.setSelectedId(null)}
           onClose={onClose}
         />
-        {/* Active-file affordance — detect + one-click sticky add. */}
-        <div className="shrink-0 px-3 py-1.5 border-b flex items-center gap-2 text-[11px] min-w-0">
+        {/* Active-file affordance — only meaningful inside the code editor. */}
+        {includeEditorContext && <div className="shrink-0 px-3 py-1.5 border-b flex items-center gap-2 text-[11px] min-w-0">
           <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
           {addablePath ? (
             <>
@@ -261,7 +289,7 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
           ) : (
             <span className="text-muted-foreground/60">{t('editorChat.noFileOpen')}</span>
           )}
-        </div>
+        </div>}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           <MessageList
             sessionData={s.sessionData}
@@ -279,7 +307,7 @@ export function EditorChatRail({ projectId, projectName, onClose }: Props) {
             snapshotFiles={s.snapshotFiles}
           />
         </div>
-        <SelectionChips projectId={projectId} />
+        {includeEditorContext && <SelectionChips projectId={projectId} />}
         <Composer
           compact
           filePicks={fileRefs}

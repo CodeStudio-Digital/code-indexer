@@ -284,6 +284,7 @@ async function resumeSubordinateInner(
       thinking: resumeThinking,
       thinkingBudgetTokens: configuredRole?.thinkingBudgetTokens,
       reasoningEffort: configuredRole?.reasoningEffort,
+      initialPinnedTools: configuredRole?.initialTools,
       onRunnerReady: (runner) =>
         wireSubordinateInterceptionsForRunner(runner, agentRun.id, agentRun.role, deps.wireDeps),
     } as RunCoderOptions & { companyPromptBlock: string });

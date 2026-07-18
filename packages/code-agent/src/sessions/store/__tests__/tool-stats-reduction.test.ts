@@ -52,6 +52,42 @@ describe('tool stats reduction accounting', () => {
     });
   });
 
+  it('never treats marker-like result text as reduction telemetry', () => {
+    db.prepare(`
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, result_text, output_chars, output_chars_shaped, truncated)
+      VALUES (?, 1, 'run_command', ?, 80, 80, 0)
+    `).run(
+      10,
+      '[truncated: printed by the command] json-crush [smart-reducer: plain text]',
+    );
+
+    const stats = getToolCallStats(db, 1187);
+    const none = stats.savings.byTechnique.find((row) => row.kind === 'none');
+    expect(none).toMatchObject({ technique: 'none', calls: 1 });
+    expect(stats.savings.byTechnique.some((row) => (
+      row.technique === 'legacy-hard-cap'
+      || row.technique === 'legacy-json-crush'
+      || row.technique === 'legacy-semantic'
+    ))).toBe(false);
+  });
+
+  it('accounts producer-declared caps in their own reduction tier', () => {
+    db.prepare(`
+      INSERT INTO coder_tool_calls
+        (id, message_id, tool_name, output_chars, output_chars_shaped, truncated,
+         reduction_kind, reduction_technique)
+      VALUES (?, 1, 'web_fetch', 80, 80, 1, 'source_cap', 'source-cap:web-body-limit')
+    `).run(11);
+
+    const stats = getToolCallStats(db, 1187);
+    expect(stats.savings.byTechnique).toContainEqual(expect.objectContaining({
+      kind: 'source_cap',
+      technique: 'source-cap:web-body-limit',
+      calls: 1,
+    }));
+  });
+
   it('separates root refusals from propagated parent failures and guard savings', () => {
     db.exec(`
       INSERT INTO coder_tool_calls

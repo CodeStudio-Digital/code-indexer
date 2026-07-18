@@ -174,6 +174,21 @@ export interface RunCoderOptions {
    */
   agent?: AgentId;
   /**
+   * Stable picker/session id. For built-ins this equals `agent`; for a custom
+   * agent it is `custom:<id>` while `agent` remains the inherited built-in
+   * preset used for gates, prompt identity and tier defaults.
+   */
+  agentSelectionId?: string;
+  /** User-authored instructions appended as a cache-stable system section. */
+  customAgentPrompt?: string;
+  /**
+   * Exact registry allowlist for a custom agent. Undefined inherits the
+   * preset/profile catalog; an empty array intentionally creates a tool-less
+   * agent. Filtering the registry also enforces the boundary for subagents and
+   * dispatch, rather than merely hiding schemas from the model.
+   */
+  allowedToolNames?: string[];
+  /**
    * Tool tier profile. Restricts the tools array sent to the LLM per turn.
    * - 'bootstrap' (~13 tools): read/search/pulse only — default for new.
    * - 'navigate' (~33 tools): adds write/edit/git-read/deep nav.
@@ -182,6 +197,13 @@ export interface RunCoderOptions {
    * The agent can unlock higher tiers mid-session via `expand_toolset`.
    */
   profile?: CoderProfile | 'auto';
+  /**
+   * Explicit tools pinned into the visible catalog at run start. Intended for
+   * durable role presets. Pins bypass tier/cap visibility but remain subject
+   * to registry, global/session disable, policy and runtime hook boundaries.
+   * This is not an allowlist; find_tools and expand_toolset remain available.
+   */
+  initialPinnedTools?: string[];
   /**
    * Create and enter an isolated git worktree at session start. When set on
    * a fresh session (no prior `worktree_path` persisted), runCoder creates

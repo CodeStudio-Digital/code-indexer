@@ -112,7 +112,10 @@
 // 2026-07-14.1 bump — request-scoped App Studio workflow reads. Tool-result
 // continuations no longer restart coordination, and the workflow snapshot opts
 // into an active unchanged-result loop break.
-export const SYSTEM_PROMPT_VERSION = '20260714.1';
+// 2026-07-16.1 bump — prompt-driven subagent research depth, completion
+// criteria, and soft synthesis checkpoints. Static prefix changed so cached
+// runs cannot retain the previous unbounded-research framing.
+export const SYSTEM_PROMPT_VERSION = '20260716.1';
 
 export interface AssembleSystemPromptArgs {
   basePrompt: string;

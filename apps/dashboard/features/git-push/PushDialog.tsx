@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FileCode2, GitCommit as GitCommitIcon, Loader2, Tag, Upload } from 'lucide-react';
-import type { GitCommitDetail, GitDiffResult, GitPushPreview, GitRunResult } from '@mcp/api-bus';
+import type {
+  GitCommitDetail,
+  GitDiffResult,
+  GitPushActionRequired,
+  GitPushPreview,
+  GitRunResult,
+} from '@mcp/api-bus';
 import { apiCall } from '../../lib/api-client.js';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -21,6 +27,7 @@ import {
   usePushDialogStore,
   type PushDialogRequest,
 } from './push-dialog-store.js';
+import { CommitFileDiff } from './CommitFileDiff.js';
 
 async function loadPreview(request: PushDialogRequest): Promise<GitPushPreview> {
   if (request.kind === 'workspace') return workspaceApi.gitPushPreview(request.sessionId, request.projectId);
@@ -55,7 +62,22 @@ async function loadFileDiff(request: PushDialogRequest, sha: string, path: strin
   });
 }
 
-async function executePush(request: PushDialogRequest, preview: GitPushPreview, pushTags: boolean): Promise<string> {
+interface PushExecutionResult {
+  message: string;
+  updatedBeforePush: boolean;
+}
+
+function pushError(message: string, code?: GitPushActionRequired): Error {
+  const error = new Error(message) as Error & { code?: GitPushActionRequired };
+  error.code = code;
+  return error;
+}
+
+async function executePush(
+  request: PushDialogRequest,
+  preview: GitPushPreview,
+  pushTags: boolean,
+): Promise<PushExecutionResult> {
   if (request.kind === 'workspace') {
     const result = await workspaceApi.gitPush(request.sessionId, request.projectId, {
       remote: preview.remote,
@@ -65,7 +87,7 @@ async function executePush(request: PushDialogRequest, preview: GitPushPreview, 
       setUpstream: preview.setUpstream,
       pushTags,
     });
-    return result.message;
+    return { message: result.message, updatedBeforePush: result.updatedBeforePush };
   }
   const result = await apiCall<GitRunResult>('projectGit.push', {
     projectId: request.projectId,
@@ -78,8 +100,16 @@ async function executePush(request: PushDialogRequest, preview: GitPushPreview, 
     force: request.force,
     pushTags,
   });
-  if (!result.ok) throw new Error(result.stderr.trim() || result.stdout.trim() || 'git push failed');
-  return result.stderr.trim() || result.stdout.trim();
+  if (!result.ok) {
+    throw pushError(
+      result.stderr.trim() || result.stdout.trim() || 'git push failed',
+      result.pushActionRequired,
+    );
+  }
+  return {
+    message: result.stderr.trim() || result.stdout.trim(),
+    updatedBeforePush: result.updatedBeforePush === true,
+  };
 }
 
 export function PushDialogHost() {
@@ -176,12 +206,28 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     setPushing(true);
     setError(null);
     try {
-      const message = await executePush(request, preview, pushTags);
-      toast.success(t('git.pushReview.success'), { description: message || t('git.pushReview.successDescription') });
+      const result = await executePush(request, preview, pushTags);
+      toast.success(t('git.pushReview.success'), {
+        description: result.updatedBeforePush
+          ? t('git.pushReview.successAfterUpdate')
+          : result.message || t('git.pushReview.successDescription'),
+      });
       closePushDialog(request.id);
       try { await request.onPushed?.(); } catch { /* push succeeded; refresh is best-effort */ }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const code = cause && typeof cause === 'object' && 'code' in cause
+        ? (cause as { code?: string }).code
+        : undefined;
+      const message = code === 'git_push_conflicts'
+        ? t('git.pushReview.conflicts')
+        : code === 'git_push_worktree_dirty'
+          ? t('git.pushReview.worktreeDirty')
+          : code === 'git_push_update_required'
+            ? t('git.pushReview.updateRequired')
+            : code === 'git_push_preview_stale'
+              ? t('git.pushReview.previewStale')
+              : cause instanceof Error ? cause.message : String(cause);
+      setError(message);
     } finally {
       setPushing(false);
     }
@@ -284,16 +330,13 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
                       </button>
                     ))}
                   </div>
-                  <div className="min-w-0 flex-1 overflow-auto bg-muted/10">
+                  <div className="min-w-0 flex-1 overflow-hidden bg-muted/10">
                     {patchLoading && <CenteredSpinner />}
                     {!patchLoading && patch === null && (
                       <div className="grid h-full place-items-center px-4 text-center text-[10.5px] text-muted-foreground">{t('git.pushReview.selectFile')}</div>
                     )}
                     {!patchLoading && patch !== null && (
-                      <div className="min-w-max p-3">
-                        {patchTruncated && <div className="mb-2 text-[10px] text-amber-500">{t('git.pushReview.diffTruncated')}</div>}
-                        <pre className="whitespace-pre font-mono text-[10px] leading-4">{patch || t('git.pushReview.emptyDiff')}</pre>
-                      </div>
+                      <CommitFileDiff patch={patch} path={selectedFile ?? ''} truncated={patchTruncated} />
                     )}
                   </div>
                 </div>
@@ -326,7 +369,7 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
             <Button variant="outline" size="sm" disabled={pushing} onClick={() => closePushDialog(request.id)}>{t('git.pushReview.cancel')}</Button>
             <Button size="sm" disabled={!pushable || pushing || loading} onClick={() => void confirmPush()}>
               {pushing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1.5 h-3.5 w-3.5" />}
-              {confirmLabel}
+              {pushing ? t('git.pushReview.syncing') : confirmLabel}
             </Button>
           </div>
         </DialogFooter>

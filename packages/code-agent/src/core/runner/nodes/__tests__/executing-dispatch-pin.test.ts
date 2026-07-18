@@ -76,6 +76,17 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[1].content).not.toContain('[toolset]');
   });
 
+  it('never lets the pin suffix exceed the finalizer inline cap', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('hidden_tool', { handler: async () => ({ content: 'x'.repeat(100) }) }));
+    const args = pinArgs(registry, {
+      finalizeToolResult: () => ({ content: 'x'.repeat(20), inlineCap: 20 }),
+    });
+    const r = await dispatchTools(args);
+    expect(r.results[0].content).toHaveLength(20);
+    expect(args._pins.has('hidden_tool')).toBe(true);
+  });
+
   it('disabled tool is hard-blocked: handler never runs, not pinned, refusalKind gate', async () => {
     const registry = new ToolRegistry();
     let ran = false;

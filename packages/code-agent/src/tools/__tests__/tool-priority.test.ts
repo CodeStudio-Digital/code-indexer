@@ -3,7 +3,7 @@
  *
  * Contract under test:
  *   - selectUnderCap is deterministic (input order never changes the result)
- *   - drop order: custom tier → preview → admin → navigate-cold →
+ *   - drop order: custom tier → non-core preview → admin → navigate-cold →
  *     bootstrap-cold → hot tails last
  *   - NEVER_TRIM tools always survive the model cap
  *   - buildTools output stays globally alphabetical (prompt-cache invariant)
@@ -11,13 +11,13 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
-import { NEVER_TRIM, selectUnderCap } from '../tool-priority.js';
+import { NEVER_TRIM, ROLE_CAPABILITY_FLOOR, selectUnderCap } from '../tool-priority.js';
 import { buildTools } from '../../core/runner/assembly/tools.js';
 import type { ToolRegistry } from '../../core/registry.js';
 import type { ToolContext } from '../../core/tool.js';
 import type { ChatProvider } from '../../providers/adapter.js';
 import type { ToolTier } from '../tiers.js';
-import { getToolTier } from '../tiers.js';
+import { getToolTier, MASTER_TOOLS } from '../tiers.js';
 
 // Long second sentence: terseDescription only trims past 150 chars, so the
 // fixture must cross that threshold for the terse-mode assertions to bite.
@@ -120,7 +120,10 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(names).toContain('edit_file');
     expect(names).toContain('mcp__search');
     expect(names).not.toContain('cf__deploy_worker');
-    expect(names).not.toContain('preview_open');
+    // The minimal open→snapshot/interact→validate browser loop is protected
+    // whenever the preview tier is active; cold preview helpers still trim.
+    expect(names).toContain('preview_open');
+    expect(names).toContain('preview_click');
     expect(names).not.toContain('git_commit');
     expect(names).not.toContain('list_tasks'); // navigate-cold (Phase B)
   });
@@ -150,6 +153,49 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // sits at the tail and dies, while alphabetically-early cold tools survive.
     expect(names).not.toContain('write_file');
     expect(names).toContain('create_file');
+  });
+
+  it('keeps the complete master tier even when it exceeds the model cap', () => {
+    const catalog = [
+      ...BOOTSTRAP_SET,
+      ...MASTER_TOOLS,
+    ].map(named);
+    const result = buildTools({
+      registry: { list: () => catalog } as unknown as ToolRegistry,
+      activeTiers: new Set<ToolTier>(['bootstrap', 'master']),
+      toolContext: {
+        cwd: tmpdir(),
+        projectName: 'master-test',
+        companyContext: { isMaster: true },
+      } as unknown as ToolContext,
+      provider: { name: 'zai', model: 'glm-4.5-flash' } as unknown as ChatProvider,
+    });
+    const names = result.tools.map((tool) => tool.name);
+    for (const masterTool of MASTER_TOOLS) {
+      expect(names, `master tool ${masterTool} must survive`).toContain(masterTool);
+      expect(result.protectedToolNames.has(masterTool), masterTool).toBe(true);
+    }
+    expect(names.length).toBeGreaterThan(32);
+  });
+
+  it('keeps complete active specialist capabilities instead of trimming role identity', () => {
+    const activeTiers = new Set<ToolTier>([
+      'bootstrap', 'api', 'app', 'db', 'diagram', 'qa',
+      'design-system-studio', 'design-system-consumer', 'sprite-studio',
+    ]);
+    const catalog = [...BOOTSTRAP_SET, ...ROLE_CAPABILITY_FLOOR].map(named);
+    const result = buildTools({
+      registry: { list: () => catalog } as unknown as ToolRegistry,
+      activeTiers,
+      toolContext: { cwd: tmpdir(), projectName: 'specialist-test' } as unknown as ToolContext,
+      provider: { name: 'zai', model: 'glm-4.5-flash' } as unknown as ChatProvider,
+    });
+    const names = result.tools.map((tool) => tool.name);
+    for (const capabilityTool of ROLE_CAPABILITY_FLOOR) {
+      expect(names, `capability tool ${capabilityTool} must survive`).toContain(capabilityTool);
+      expect(result.protectedToolNames.has(capabilityTool), capabilityTool).toBe(true);
+    }
+    expect(names.length).toBeGreaterThan(32);
   });
 });
 

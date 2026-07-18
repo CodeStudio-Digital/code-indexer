@@ -28,7 +28,7 @@ afterEach(() => {
 
 type Generation = {
   id: number;
-  purpose: 'code' | 'knowledge';
+  purpose: 'code' | 'docs' | 'memory';
   fingerprint: string;
   embedding_target: Record<string, unknown>;
   dimension: number;
@@ -41,7 +41,7 @@ type Generation = {
 
 type NamespaceState = {
   namespace: string;
-  purpose: 'code' | 'knowledge';
+  purpose: 'code' | 'docs' | 'memory';
   active_generation_id: number | null;
   building_generation_id: number | null;
   expected_items: number;
@@ -136,13 +136,13 @@ function makeHarness(options: {
   let db: any;
 
   const store = {
-    getProfile: vi.fn((purpose: 'code' | 'knowledge'): {
-      purpose: 'code' | 'knowledge';
+    getProfile: vi.fn((purpose: 'code' | 'docs' | 'memory'): {
+      purpose: 'code' | 'docs' | 'memory';
       embedding_target: { kind: string; model?: string };
       reranker_target: { kind: string };
     } => ({
       purpose,
-      embedding_target: { kind: 'onnx', model: purpose === 'code' ? 'code-model' : 'knowledge-model' },
+      embedding_target: { kind: 'onnx', model: `${purpose}-model` },
       reranker_target: { kind: 'disabled' },
     })),
     listGenerations: vi.fn((filter?: { purpose?: string }) => generations
@@ -172,7 +172,7 @@ function makeHarness(options: {
         && (!filter?.purpose || row.purpose === filter.purpose))),
     beginNamespaceGeneration: vi.fn((input: {
       namespace: string;
-      purpose: 'code' | 'knowledge';
+      purpose: 'code' | 'docs' | 'memory';
       generation_id: number;
       expected_items: number;
     }) => {
@@ -423,7 +423,7 @@ function makeHarness(options: {
       ...Object.keys(options.semanticItems ?? {})
         .filter((namespace) => (options.semanticItems?.[namespace] ?? []).length > 0),
     ])]),
-    retireUnreferencedGenerations: vi.fn((purpose?: 'code' | 'knowledge') => {
+    retireUnreferencedGenerations: vi.fn((purpose?: 'code' | 'docs' | 'memory') => {
       const referenced = new Set(Array.from(namespaces.values()).flatMap((row) => [
         row.active_generation_id,
         row.building_generation_id,
@@ -501,7 +501,11 @@ function makeHarness(options: {
     resolve: vi.fn((namespace: string, generationId: number) => {
       const projectMatch = /:p(\d+)$/.exec(namespace);
       const projectId = projectMatch ? Number(projectMatch[1]) : null;
-      const purpose = namespace.startsWith('code:') ? 'code' as const : 'knowledge' as const;
+      const purpose = namespace.startsWith('code:')
+        ? 'code' as const
+        : namespace.startsWith('docs:')
+          ? 'docs' as const
+          : 'memory' as const;
       const dbPath = namespace.startsWith('docs:')
         ? 'D:/global/semantic/docs-vectors.db'
         : namespace === 'memory:user'
@@ -538,6 +542,7 @@ function makeHarness(options: {
       ]) store.deleteNamespace(namespace);
     }),
     dropGeneration: vi.fn(async () => undefined),
+    dropLegacyKnowledgeTables: vi.fn(async () => 0),
     hasGeneration: vi.fn(async () => true),
     compactGenerationDatabase: vi.fn(async () => ({ before_bytes: 10_000, after_bytes: 4_000 })),
     listIds: vi.fn(async (namespace: string, generationId: number) => {
@@ -572,7 +577,8 @@ function makeHarness(options: {
     router,
     vectorStore,
     codeEmbedding: embedding,
-    knowledgeEmbedding: embedding,
+    docsEmbedding: embedding,
+    memoryEmbedding: embedding,
     costTracker: {},
     lshSink: {},
     snapshotService,
@@ -615,7 +621,7 @@ describe('SemanticIndexCoordinator code generations', () => {
 
   it('never starts an automatic provider backfill', () => {
     const h = makeHarness();
-    h.store.getProfile.mockImplementation((purpose: 'code' | 'knowledge') => ({
+    h.store.getProfile.mockImplementation((purpose: 'code' | 'docs' | 'memory') => ({
       purpose,
       embedding_target: purpose === 'code'
         ? { kind: 'provider', providerId: 'remote', model: 'embed', protocol: 'openai-embeddings' }
@@ -1015,7 +1021,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       cursor: { collection_id: 2 },
     });
     h.store.enqueueNamespaceBackfill.mockClear();
-    h.store.getProfile.mockImplementation((purpose: 'code' | 'knowledge') => ({
+    h.store.getProfile.mockImplementation((purpose: 'code' | 'docs' | 'memory') => ({
       purpose,
       embedding_target: { kind: 'disabled' },
       reranker_target: { kind: 'disabled' },
@@ -1027,8 +1033,8 @@ describe('SemanticIndexCoordinator code generations', () => {
       skipped: 'disabled',
       failed_namespaces: [],
     });
-    await expect(h.coordinator.reindex('knowledge')).resolves.toMatchObject({
-      purpose: 'knowledge',
+    await expect(h.coordinator.reindex('docs')).resolves.toMatchObject({
+      purpose: 'docs',
       generation_id: null,
       skipped: 'disabled',
     });
@@ -1040,7 +1046,7 @@ describe('SemanticIndexCoordinator code generations', () => {
 
     expect(pendingDocs).toMatchObject({
       status: 'paused',
-      error: 'knowledge semantic profile is disabled',
+      error: 'docs semantic profile is disabled',
     });
     expect(h.store.createGeneration).not.toHaveBeenCalled();
     expect(h.store.createJob).not.toHaveBeenCalled();
@@ -1438,13 +1444,13 @@ describe('SemanticIndexCoordinator code generations', () => {
     // and cannot create a job or resolve/reopen the project vectors path.
     await Promise.all([
       h.coordinator.ensureCodeProject(1),
-      h.coordinator.ensureKnowledgeNamespace('snapshot:p1'),
-      h.coordinator.ensureKnowledgeNamespace('memory:project:p1'),
+      h.coordinator.ensureMemoryNamespace('snapshot:p1'),
+      h.coordinator.ensureMemoryNamespace('memory:project:p1'),
     ]);
     h.coordinator.noteCodeDelta(1, [{ kind: 'upsert', path: 'src/late.ts' }]);
     expect(h.router.resolve.mock.calls).toHaveLength(routeCallsAtRemoval);
 
-    await h.coordinator.ensureKnowledgeNamespace('memory:user');
+    await h.coordinator.ensureMemoryNamespace('memory:user');
     expect(h.namespaces.has('memory:user')).toBe(true);
 
     workerRelease.resolve();
@@ -1482,7 +1488,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     // The coordinator did not create this marker and its in-memory Set was
     // never touched, yet the durable fence must stop a late writer at once.
     expect(h.coordinator.allowsNamespaceMutation('code:p1')).toBe(false);
-    await h.coordinator.ensureKnowledgeNamespace('snapshot:p1');
+    await h.coordinator.ensureMemoryNamespace('snapshot:p1');
     expect(h.store.beginNamespaceGeneration).not.toHaveBeenCalled();
 
     await expect(h.coordinator.retryPendingProjectRemovals()).resolves.toBe(1);
@@ -1502,10 +1508,10 @@ describe('SemanticIndexCoordinator code generations', () => {
   it('removes a renamed project idempotently without touching global namespaces', async () => {
     const states: NamespaceState[] = [
       ['code:p1', 'code'],
-      ['snapshot:p1', 'knowledge'],
-      ['memory:project:p1', 'knowledge'],
-      ['docs:c2', 'knowledge'],
-      ['memory:user', 'knowledge'],
+      ['snapshot:p1', 'memory'],
+      ['memory:project:p1', 'memory'],
+      ['docs:c2', 'docs'],
+      ['memory:user', 'memory'],
     ].map(([namespace, purpose]) => ({
       namespace,
       purpose,
@@ -1794,6 +1800,7 @@ describe('SemanticIndexCoordinator code generations', () => {
 
     expect(h.vectorStore.dropGeneration).toHaveBeenCalledWith('code:p1', 2);
     expect(h.vectorStore.dropGeneration).not.toHaveBeenCalledWith('code:p1', 3);
+    expect(h.vectorStore.dropLegacyKnowledgeTables).toHaveBeenCalledWith('memory:project:p1');
     expect(h.vectorStore.compactGenerationDatabase).toHaveBeenCalledWith('code:p1', 2);
     expect(result).toMatchObject({
       tables_removed: 1,
@@ -1803,6 +1810,18 @@ describe('SemanticIndexCoordinator code generations', () => {
       skipped_referenced: 1,
       failures: [],
     });
+  });
+
+  it('sweeps retired Knowledge tables from docs, user memory, and project memory databases', async () => {
+    const h = makeHarness();
+
+    await h.coordinator.cleanupUnusedVectors();
+
+    expect(h.vectorStore.dropLegacyKnowledgeTables.mock.calls).toEqual([
+      ['docs:c0'],
+      ['memory:user'],
+      ['memory:project:p1'],
+    ]);
   });
 
   it('refuses project cleanup while that project has a running physical build', async () => {
@@ -1873,12 +1892,12 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.router.dropGeneration).not.toHaveBeenCalled();
   });
 
-  it('deduplicates cleanup and retains a knowledge table while another namespace in the same file references it', async () => {
+  it('deduplicates cleanup and retains a memory table while another namespace in the same file references it', async () => {
     const sharedGeneration: Generation = {
       id: 11,
-      purpose: 'knowledge',
-      fingerprint: 'knowledge-11',
-      embedding_target: { kind: 'onnx', model: 'knowledge' },
+      purpose: 'memory',
+      fingerprint: 'memory-11',
+      embedding_target: { kind: 'onnx', model: 'memory' },
       dimension: 3,
       status: 'ready',
       expected_items: 2,
@@ -1887,12 +1906,12 @@ describe('SemanticIndexCoordinator code generations', () => {
       error: null,
     };
     const snapshot: NamespaceState = {
-      namespace: 'snapshot:p1', purpose: 'knowledge', active_generation_id: 12,
+      namespace: 'snapshot:p1', purpose: 'memory', active_generation_id: 12,
       building_generation_id: null, expected_items: 1, indexed_items: 1,
       failed_items: 0, delta_items: 0, last_error: null,
     };
     const memory: NamespaceState = {
-      namespace: 'memory:project:p1', purpose: 'knowledge', active_generation_id: 11,
+      namespace: 'memory:project:p1', purpose: 'memory', active_generation_id: 11,
       building_generation_id: null, expected_items: 1, indexed_items: 1,
       failed_items: 0, delta_items: 0, last_error: null,
     };
@@ -1914,13 +1933,13 @@ describe('SemanticIndexCoordinator code generations', () => {
     await Promise.all([first, duplicate]);
 
     expect(h.vectorStore.dropGeneration).toHaveBeenCalledTimes(1);
-    expect(h.store.retireUnreferencedGenerations).toHaveBeenCalledWith('knowledge');
+    expect(h.store.retireUnreferencedGenerations).toHaveBeenCalledWith('memory');
   });
 
-  it('activates empty knowledge namespaces instead of pre-staging them forever', async () => {
+  it('activates empty memory namespaces instead of pre-staging them forever', async () => {
     const h = makeHarness({ projects: [1], fileCounts: { 1: 0 } });
 
-    const result = await h.coordinator.reindex('knowledge', true);
+    const result = await h.coordinator.reindex('memory', true);
 
     expect(result.failed_namespaces).toEqual([]);
     expect(result.completed_namespaces).toEqual([
@@ -1938,14 +1957,14 @@ describe('SemanticIndexCoordinator code generations', () => {
     }
   });
 
-  it('refuses a third knowledge space while two generations actively serve the same SQLite', async () => {
+  it('refuses a third memory space while two generations actively serve the same SQLite', async () => {
     const generation = (id: number): Generation => ({
-      id, purpose: 'knowledge', fingerprint: `knowledge-${id}`,
-      embedding_target: { kind: 'onnx', model: `knowledge-${id}` }, dimension: 3,
+      id, purpose: 'memory', fingerprint: `memory-${id}`,
+      embedding_target: { kind: 'onnx', model: `memory-${id}` }, dimension: 3,
       status: 'ready', expected_items: 1, indexed_items: 1, failed_items: 0, error: null,
     });
     const state = (namespace: string, active: number): NamespaceState => ({
-      namespace, purpose: 'knowledge', active_generation_id: active,
+      namespace, purpose: 'memory', active_generation_id: active,
       building_generation_id: null, expected_items: 1, indexed_items: 1,
       failed_items: 0, delta_items: 0, last_error: null,
     });
@@ -1954,8 +1973,8 @@ describe('SemanticIndexCoordinator code generations', () => {
       namespaceStates: [state('snapshot:p1', 1), state('memory:project:p1', 2)],
     });
 
-    await expect(h.coordinator.reindex('knowledge', true))
-      .rejects.toThrow('knowledge generation rollout is incomplete');
+    await expect(h.coordinator.reindex('memory', true))
+      .rejects.toThrow('memory generation rollout is incomplete');
     expect(h.store.createGeneration).not.toHaveBeenCalled();
     expect(h.embedding.embedQuery).not.toHaveBeenCalled();
     expect(h.vectorStore.dropGeneration).not.toHaveBeenCalled();
@@ -2025,9 +2044,9 @@ describe('SemanticIndexCoordinator code generations', () => {
   it('does not point building at the already-active docs generation during prepare', async () => {
     const active: Generation = {
       id: 7,
-      purpose: 'knowledge',
+      purpose: 'docs',
       fingerprint: 'local:stable-code-model',
-      embedding_target: { kind: 'onnx', model: 'knowledge-model' },
+      embedding_target: { kind: 'onnx', model: 'docs-model' },
       dimension: 3,
       status: 'ready',
       expected_items: 1,
@@ -2039,7 +2058,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       docChunks: [{ id: 7, heading_path: null, content: 'Already active.', api_signature: null }],
       existingGeneration: active,
       namespaceStates: [{
-        namespace: 'docs:c2', purpose: 'knowledge', active_generation_id: 7,
+        namespace: 'docs:c2', purpose: 'docs', active_generation_id: 7,
         building_generation_id: null, expected_items: 1, indexed_items: 1,
         failed_items: 0, delta_items: 0, last_error: null,
       }],
@@ -2058,9 +2077,9 @@ describe('SemanticIndexCoordinator code generations', () => {
     const hash = hashEmbeddingInput(buildEmbeddingText(null, null, content, null));
     const generation: Generation = {
       id: 7,
-      purpose: 'knowledge',
+      purpose: 'docs',
       fingerprint: 'local:stable-code-model',
-      embedding_target: { kind: 'onnx', model: 'knowledge-model' },
+      embedding_target: { kind: 'onnx', model: 'docs-model' },
       dimension: 3,
       status: 'building',
       expected_items: 1,
@@ -2078,7 +2097,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       },
       existingGeneration: generation,
       namespaceStates: [{
-        namespace: 'docs:c2', purpose: 'knowledge', active_generation_id: null,
+        namespace: 'docs:c2', purpose: 'docs', active_generation_id: null,
         building_generation_id: 7, expected_items: 1, indexed_items: 0,
         failed_items: 0, delta_items: 0, last_error: null,
       }],
@@ -2237,9 +2256,9 @@ describe('SemanticIndexCoordinator code generations', () => {
   ] as const)('does not capture or build through a live external %s fence', async (namespace, kind) => {
     const generation: Generation = {
       id: 31,
-      purpose: 'knowledge',
+      purpose: 'memory',
       fingerprint: 'local:stable-code-model',
-      embedding_target: { kind: 'onnx', model: 'knowledge-model' },
+      embedding_target: { kind: 'onnx', model: 'memory-model' },
       dimension: 3,
       status: 'building',
       expected_items: 0,
@@ -2249,7 +2268,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     };
     const state: NamespaceState = {
       namespace,
-      purpose: 'knowledge',
+      purpose: 'memory',
       active_generation_id: null,
       building_generation_id: 31,
       expected_items: 0,
@@ -2266,7 +2285,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       fence: { token: `${kind}-live`, owner: 'external-mcp' },
     });
 
-    await expect(h.coordinator.ensureKnowledgeNamespace(namespace))
+    await expect(h.coordinator.ensureMemoryNamespace(namespace))
       .rejects.toThrow(`delta queue pending for ${namespace}`);
 
     expect(h.jobs.get(fence.id)).toMatchObject({
@@ -2278,16 +2297,16 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.store.activateNamespaceGeneration).not.toHaveBeenCalled();
 
     h.store.settleNamespaceMutationFence({ job_id: fence.id, token: `${kind}-live` });
-    await h.coordinator.ensureKnowledgeNamespace(namespace);
+    await h.coordinator.ensureMemoryNamespace(namespace);
     expect(h.jobs.get(fence.id)).toMatchObject({ status: 'completed' });
   });
 
   it('does not activate h0 when a snapshot mutates between logical proof and listIds', async () => {
     const generation: Generation = {
       id: 7,
-      purpose: 'knowledge',
+      purpose: 'memory',
       fingerprint: 'local:stable-code-model',
-      embedding_target: { kind: 'onnx', model: 'knowledge-model' },
+      embedding_target: { kind: 'onnx', model: 'memory-model' },
       dimension: 3,
       status: 'building',
       expected_items: 1,
@@ -2297,7 +2316,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     };
     const state: NamespaceState = {
       namespace: 'snapshot:p1',
-      purpose: 'knowledge',
+      purpose: 'memory',
       active_generation_id: null,
       building_generation_id: 7,
       expected_items: 1,
@@ -2334,7 +2353,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       return { embedded: 1, skipped: 0, failed: 0, total: 1 };
     });
 
-    // verifyKnowledgeItems has already accepted h0 when listIds starts. The
+    // verifyMemoryItems has already accepted h0 when listIds starts. The
     // relational h1 mutation and its durable delta happen synchronously here,
     // before the physical probe returns the still-stable h0 id set.
     h.vectorStore.listIds.mockImplementationOnce(async () => {
@@ -2350,7 +2369,7 @@ describe('SemanticIndexCoordinator code generations', () => {
       return ['sn8'];
     });
 
-    const run = h.coordinator.ensureKnowledgeNamespace('snapshot:p1');
+    const run = h.coordinator.ensureMemoryNamespace('snapshot:p1');
     await vi.waitFor(() => expect(h.snapshotService.backfillEmbeddings).toHaveBeenCalledTimes(2));
 
     expect(h.namespaces.get('snapshot:p1')).toMatchObject({
@@ -2373,13 +2392,13 @@ describe('SemanticIndexCoordinator code generations', () => {
       .toEqual([expect.objectContaining({ status: 'completed', processed_items: 1 })]);
   });
 
-  it('includes project investigations in Knowledge generation coverage', async () => {
+  it('includes project investigations in Memory generation coverage', async () => {
     const investigation = {
       id: 17,
       project_id: 1,
       session_id: 4,
       topic: 'local vector routing',
-      summary: 'investigations share the project Knowledge namespace',
+      summary: 'investigations share the project Memory namespace',
       body: 'details',
       source_label: 'Explore',
       agent_type: 'explore',
@@ -2441,7 +2460,7 @@ describe('SemanticIndexCoordinator code generations', () => {
   it('reconciles a g2 memory extra without deleting from active g1', async () => {
     const generation = (id: number): Generation => ({
       id,
-      purpose: 'knowledge',
+      purpose: 'memory',
       fingerprint: 'local:stable-code-model',
       embedding_target: { kind: 'onnx', model: 'stable-code-model' },
       dimension: 3,
@@ -2454,7 +2473,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     const h = makeHarness({
       existingGenerations: [generation(1), generation(11)],
       namespaceStates: [{
-        namespace: 'memory:project:p1', purpose: 'knowledge',
+        namespace: 'memory:project:p1', purpose: 'memory',
         active_generation_id: 1, building_generation_id: 11,
         expected_items: 1, indexed_items: 0, failed_items: 0,
         delta_items: 0, last_error: null,

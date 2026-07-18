@@ -40,6 +40,48 @@ describe('parsePluginManifest', () => {
 });
 
 describe('parseAppManifest', () => {
+  it('accepts a declarative tool output policy', () => {
+    const app = parseAppManifest({
+      tools: [
+        {
+          name: 'query-logs',
+          description: 'Queries application logs',
+          parameters: { type: 'object', properties: {} },
+          outputPolicy: {
+            mode: 'logs',
+            reducer: 'smart',
+            recovery: 'output_store',
+            maxInlineChars: 32_000,
+            preserveOnError: true,
+          },
+        },
+      ],
+    });
+
+    expect(app.tools?.[0].outputPolicy).toEqual({
+      mode: 'logs',
+      reducer: 'smart',
+      recovery: 'output_store',
+      maxInlineChars: 32_000,
+      preserveOnError: true,
+    });
+  });
+
+  it.each([
+    { mode: 'unknown' },
+    { mode: 'logs', reducer: 'lossy' },
+    { mode: 'logs', recovery: 'magic' },
+    { mode: 'logs', maxInlineChars: 0 },
+    { mode: 'logs', maxInlineChars: 12.5 },
+    { mode: 'logs', extra: true },
+  ])('rejects an invalid tool output policy: %o', (outputPolicy) => {
+    expect(() =>
+      parseAppManifest({
+        tools: [{ name: 'query-logs', description: 'Queries logs', outputPolicy }],
+      }),
+    ).toThrow();
+  });
+
   it('accepts tool windows + commands + themes', () => {
     const app = parseAppManifest({
       toolWindows: [{ id: 'tw', title: 'TW', side: 'left', entry: 'ui/index.html' }],

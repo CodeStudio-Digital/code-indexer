@@ -26,7 +26,22 @@ function setup() {
     getSession: (id: number) => sessions.get(id) ?? null,
     listRecentSessionsGlobal: () => [],
   };
-  const deps = { sessionStore, providerStore: {} } as unknown as ServerDeps;
+  const customAgent = {
+    id: '12345678-abcd-4321-abcd-123456789abc',
+    name: 'Security reviewer',
+    description: 'Reviews risky changes',
+    baseAgentId: 'plan',
+    prompt: 'Focus on trust boundaries.',
+    skillIds: ['security-review'],
+    toolNames: ['read_file'],
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const providerStore = {
+    getAppSetting: (key: string) => key === 'coder_custom_agents_v1' ? JSON.stringify([customAgent]) : null,
+  };
+  const deps = { sessionStore, providerStore } as unknown as ServerDeps;
   const runtime = { activeRuns: new Map() } as unknown as CoderRuntime;
   const app = new Hono();
   mountCoderSessionsRoutes(app, deps, runtime);
@@ -38,7 +53,7 @@ function setup() {
       body: JSON.stringify({ agent }),
     });
 
-  return { app, calls, patchAgent };
+  return { app, calls, patchAgent, customAgent };
 }
 
 describe('coder PATCH /sessions/:id/agent', () => {
@@ -58,6 +73,14 @@ describe('coder PATCH /sessions/:id/agent', () => {
     expect(calls).toEqual([{ id: 1, agent: null }]);
   });
 
+  it('accepts an enabled custom agent selection id', async () => {
+    const { calls, customAgent, patchAgent } = setup();
+    const selectionId = `custom:${customAgent.id}`;
+    const r = await patchAgent(1, selectionId);
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([{ id: 1, agent: selectionId }]);
+  });
+
   it('rejects an unknown agent with 400 and does not persist', async () => {
     const { calls, patchAgent } = setup();
     const r = await patchAgent(1, 'wizard');
@@ -69,6 +92,23 @@ describe('coder PATCH /sessions/:id/agent', () => {
     const { patchAgent } = setup();
     const r = await patchAgent(999, 'build');
     expect(r.status).toBe(404);
+  });
+});
+
+describe('coder GET /agents', () => {
+  it('appends custom agents with the inherited runtime profile', async () => {
+    const { app, customAgent } = setup();
+    const response = await app.request('/api/coder/agents');
+    expect(response.status).toBe(200);
+    const body = await response.json() as { agents: Array<Record<string, unknown>> };
+    expect(body.agents).toContainEqual(expect.objectContaining({
+      id: `custom:${customAgent.id}`,
+      label: customAgent.name,
+      baseAgentId: 'plan',
+      profile: 'navigate',
+      planMode: true,
+      custom: true,
+    }));
   });
 });
 

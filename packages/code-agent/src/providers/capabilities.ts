@@ -18,7 +18,7 @@
  * Runtime priority (highest → lowest):
  *   1. CODER_MODEL_CAPS env var  (JSON: {"model-id": {"maxTools": N, "contextWindow": N}})
  *   2. DB layer loaded via mergeDBCapabilities() on server startup
- *      (carries context_window AND max_tools — admin-set per model)
+ *      (carries context_window, max_tools and default_max_tokens per model)
  *   3. MODEL_REGISTRY static file (model-registry.ts)
  *   4. Prefix fallbacks (context window + max tools) for variants that ship
  *      faster than the static registry is updated.
@@ -57,23 +57,33 @@ const MAX_RESERVED_OUTPUT = 20_000;
 // Carries the admin-tunable per-model values: context_window and max_tools.
 // NOTE: module-global — worker_threads get their own copy, so every worker
 // boot (coder-worker / company-worker) must call mergeDBCapabilities itself.
-let dbLayer: Record<string, { contextWindow?: number; maxTools?: number }> = {};
+let dbLayer: Record<string, {
+  contextWindow?: number;
+  maxTools?: number;
+  maxOutputTokens?: number;
+}> = {};
 
 /**
- * Load context-window / max-tools values from the provider_models DB rows
+ * Load context-window / max-tools / max-output values from provider_models
  * into the in-memory lookup. Call this after the DB is ready and after any
  * model refresh so getModelContextWindow() / getModelMaxTools() return
  * up-to-date values.
  */
 export function mergeDBCapabilities(
-  models: ReadonlyArray<{ model_id: string; context_window: number | null; max_tools?: number | null }>
+  models: ReadonlyArray<{
+    model_id: string;
+    context_window: number | null;
+    max_tools?: number | null;
+    default_max_tokens?: number | null;
+  }>
 ): void {
-  const next: Record<string, { contextWindow?: number; maxTools?: number }> = {};
+  const next: typeof dbLayer = {};
   for (const m of models) {
-    if (m.context_window == null && m.max_tools == null) continue;
+    if (m.context_window == null && m.max_tools == null && m.default_max_tokens == null) continue;
     next[m.model_id] = {
       ...(m.context_window != null ? { contextWindow: m.context_window } : {}),
       ...(m.max_tools != null ? { maxTools: m.max_tools } : {}),
+      ...(m.default_max_tokens != null ? { maxOutputTokens: m.default_max_tokens } : {}),
     };
   }
   dbLayer = next;
@@ -144,12 +154,14 @@ export function getModelContextWindow(model: string): number | null {
 }
 
 /**
- * Look up the max output tokens for a model. Falls back to FALLBACK when
- * unknown. Used by `getEffectiveContextWindow` to reserve output headroom.
+ * Look up the max output tokens for a model. The persisted per-model value
+ * wins over the static registry so the request payload and context reservation
+ * use the same admin-selected limit. Falls back to FALLBACK when unknown.
  */
 export function getMaxOutputTokens(model: string): number {
   const override = loadOverride();
   if (override[model]?.maxOutputTokens != null) return override[model].maxOutputTokens!;
+  if (dbLayer[model]?.maxOutputTokens != null) return dbLayer[model].maxOutputTokens!;
   const reg = MODEL_REGISTRY[model]?.maxOutputTokens;
   if (reg != null) return reg;
   return FALLBACK_MAX_OUTPUT_TOKENS;

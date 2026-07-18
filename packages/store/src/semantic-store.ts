@@ -6,8 +6,17 @@ const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
 type DB = InstanceType<typeof Database>;
 
-export type SemanticPurpose = 'code' | 'knowledge';
+/** Independent build domains. They may share the same configured target and
+ * worker session, but never share generation locks or rollout state. */
+export type SemanticPurpose = 'code' | 'docs' | 'memory';
 export type SemanticCapability = 'embedding' | 'rerank';
+
+export function semanticPurposeForNamespace(namespace: string): SemanticPurpose {
+  if (/^code:p\d+$/.test(namespace)) return 'code';
+  if (/^docs:c\d+$/.test(namespace)) return 'docs';
+  if (/^(?:snapshot:p\d+|memory:project:p\d+|memory:user)$/.test(namespace)) return 'memory';
+  throw new Error(`Unsupported semantic namespace: ${namespace}`);
+}
 
 /** Dtypes accepted by the managed transformers.js ONNX runtime. `q8` is the
  * local default: it keeps the desktop memory envelope predictable while the
@@ -1205,7 +1214,7 @@ export class SemanticStore {
       SET status = 'pending', error = 'worker lease expired; queued for recovery',
         cursor = json_remove(COALESCE(cursor, '{}'), '$.lease_owner', '$.lease_expires_at_ms'),
         updated_at = datetime('now')
-      WHERE namespace IN ('semantic:reindex:code', 'semantic:reindex:knowledge')
+      WHERE namespace IN ('semantic:reindex:code', 'semantic:reindex:docs', 'semantic:reindex:memory')
         AND generation_id IS NULL
         AND kind = 'build'
         AND status = 'running'
@@ -1228,7 +1237,7 @@ export class SemanticStore {
       const namespace = purpose ? `semantic:reindex:${purpose}` : null;
       const row = this.db.prepare(`
         SELECT * FROM semantic_jobs
-        WHERE namespace IN ('semantic:reindex:code', 'semantic:reindex:knowledge')
+        WHERE namespace IN ('semantic:reindex:code', 'semantic:reindex:docs', 'semantic:reindex:memory')
           AND generation_id IS NULL
           AND kind = 'build'
           AND status = 'pending'
@@ -1266,7 +1275,7 @@ export class SemanticStore {
       if (
         !job
         || job.status !== 'running'
-        || (job.namespace !== 'semantic:reindex:code' && job.namespace !== 'semantic:reindex:knowledge')
+        || !['semantic:reindex:code', 'semantic:reindex:docs', 'semantic:reindex:memory'].includes(job.namespace)
         || job.cursor?.lease_owner !== workerId
       ) return false;
       const cursor = { ...job.cursor, lease_expires_at_ms: nowMs + Math.max(1, leaseMs) };

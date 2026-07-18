@@ -4,17 +4,21 @@
  * um skeleton amigável ("Preparando seu app…"); depois, o preview vivo.
  */
 import { useTranslation } from 'react-i18next';
-import { Loader2, MousePointerClick } from 'lucide-react';
+import { Loader2, MessageSquareCode, MousePointerClick } from 'lucide-react';
 import { ProjectPreview } from '../../project/builder/ProjectPreview.js';
 import { useAutoDevServer } from './useAutoDevServer.js';
 
 export function AppPreviewPanel({
   projectId,
   builderPort,
+  singleSessionActive,
+  onOpenSessions,
   onHide,
 }: {
   projectId: number;
   builderPort: number | null;
+  singleSessionActive: boolean;
+  onOpenSessions?: () => void;
   onHide?: () => void;
 }) {
   const { t } = useTranslation('appStudio');
@@ -43,10 +47,16 @@ export function AppPreviewPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 text-[11px] text-muted-foreground">
-        <MousePointerClick className="h-3 w-3" /> {t('preview.hint')}
+        <MousePointerClick className="h-3 w-3" />
+        <span className="min-w-0 flex-1 truncate">{singleSessionActive ? t('preview.hint') : t('v6.sessions.selectionRequired')}</span>
+        {!singleSessionActive && onOpenSessions && (
+          <button type="button" className="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[10px] text-violet-400 hover:bg-violet-500/10" onClick={onOpenSessions}>
+            <MessageSquareCode className="h-3 w-3" />{t('v6.sessions.open')}
+          </button>
+        )}
       </div>
       <div className="min-h-0 flex-1">
-        <ProjectPreview key={projectId} projectId={projectId} pinnedPort={builderPort ?? undefined} selectionEnabled onHide={onHide} />
+        <ProjectPreview key={projectId} projectId={projectId} pinnedPort={builderPort ?? undefined} selectionEnabled={singleSessionActive} onHide={onHide} />
       </div>
     </div>
   );

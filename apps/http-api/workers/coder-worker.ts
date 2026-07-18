@@ -60,6 +60,7 @@ import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core
 import { DocStore } from '../../../packages/store/src/doc-store.js';
 import {
   setGlobalPreviewDevtools,
+  previewRpcTimeoutMs,
   type IPreviewDevtools,
   type PreviewInvoke,
 } from '../../../packages/code-agent/src/tools/preview/index.js';
@@ -317,7 +318,10 @@ setGlobalDocsHintProvider({
 // over the bridge to the `previewDevtools` handler in CoderWorkerPool.ts.
 const previewShim: IPreviewDevtools = {
   invoke: async (req: PreviewInvoke) =>
-    bridge.request<unknown>('previewDevtools', req, { timeoutMs: 30_000 }),
+    bridge.request<unknown>('previewDevtools', req, { timeoutMs: previewRpcTimeoutMs(req) }),
+  cancel: (requestId: string) => {
+    void bridge.request('previewDevtoolsCancel', { requestId }, { timeoutMs: 2_000 }).catch(() => undefined);
+  },
 };
 setGlobalPreviewDevtools(previewShim);
 
@@ -731,6 +735,9 @@ interface RunFreshPayload {
   maxTurns?: number;
   planMode?: boolean;
   agent?: AgentId;
+  agentSelectionId?: string;
+  customAgentPrompt?: string;
+  allowedToolNames?: string[];
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
@@ -791,6 +798,9 @@ bridge.handle('runFresh', async (payload) => {
       maxTurns: opts.maxTurns,
       planMode: opts.planMode,
       agent: opts.agent,
+      agentSelectionId: opts.agentSelectionId,
+      customAgentPrompt: opts.customAgentPrompt,
+      allowedToolNames: opts.allowedToolNames,
       profile: opts.profile,
       worktree: opts.worktree,
       thinking: opts.thinking,

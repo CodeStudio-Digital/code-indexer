@@ -78,6 +78,8 @@ export interface AdminModel {
   supported_reasoning_levels: string[] | null;
   /** Persisted context window in tokens. Null when discovery couldn't resolve it. */
   context_window: number | null;
+  /** Completion cap sent to the provider. Null = model registry fallback. */
+  default_max_tokens: number | null;
   /** Admin-set tool catalog cap per turn. Null = registry/prefix default. */
   max_tools: number | null;
 }

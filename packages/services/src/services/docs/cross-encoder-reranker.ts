@@ -10,11 +10,11 @@
  * threshold and confidence bands get sharper.
  *
  * Reuse: wraps the indexer's existing `RerankerService` (local/provider/null)
- * rather than reimplementing each protocol. The server passes the Knowledge
+ * rather than reimplementing each protocol. The server passes the Docs
  * profile's strict `SemanticProfileRuntime` proxy so failures remain visible
  * to this calibration boundary.
  *
- * The wiring site always uses this adapter with the Knowledge semantic
+ * The wiring site always uses this adapter with the Docs semantic
  * profile. A disabled profile supplies a `null` service and degrades to
  * `reranked=false`, preserving the incoming RRF order without switching to a
  * different model or vector space.

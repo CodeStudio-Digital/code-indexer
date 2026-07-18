@@ -139,8 +139,7 @@ function formatReviewResult(findings: ReviewFinding[], parsed: boolean, raw: str
   if (!parsed) {
     return (
       'Reviewer did not emit a parseable JSON block. Raw output:\n\n' +
-      raw.slice(0, 4000) +
-      (raw.length > 4000 ? '\n[...truncated]' : '')
+      raw
     );
   }
   if (findings.length === 0) {

@@ -42,7 +42,7 @@ const REINDEX_LEASE_MS = 30_000;
 
 function reindexPurpose(job: SemanticJobRow): SemanticPurpose | null {
   const fromCursor = job.cursor?.purpose;
-  if (fromCursor === 'code' || fromCursor === 'knowledge') return fromCursor;
+  if (fromCursor === 'code' || fromCursor === 'docs' || fromCursor === 'memory') return fromCursor;
   const fromNamespace = job.namespace.slice(REINDEX_NAMESPACE_PREFIX.length);
   return isPurpose(fromNamespace) ? fromNamespace : null;
 }
@@ -152,7 +152,7 @@ class SemanticReindexDispatcher {
 }
 
 function isPurpose(value: string): value is SemanticPurpose {
-  return value === 'code' || value === 'knowledge';
+  return value === 'code' || value === 'docs' || value === 'memory';
 }
 
 async function readRerankerStatus(
@@ -441,7 +441,7 @@ export function semanticRouter(
 
   app.get('/semantic/profiles/:purpose', (c) => {
     const purpose = c.req.param('purpose');
-    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code or knowledge' }, 400);
+    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code, docs or memory' }, 400);
     const profile = runtime.store.getProfile(purpose);
     return profile
       ? c.json({ profile })
@@ -450,7 +450,7 @@ export function semanticRouter(
 
   app.put('/semantic/profiles/:purpose', async (c) => {
     const purpose = c.req.param('purpose');
-    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code or knowledge' }, 400);
+    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code, docs or memory' }, 400);
     try {
       const body = await c.req.json<{
         embedding_target?: unknown;
@@ -564,9 +564,10 @@ export function semanticRouter(
         .map((namespace) => namespace.namespace)
         .filter((namespace) => namespace.startsWith('docs:')),
     ];
-    const [codeReranker, knowledgeReranker] = await Promise.all([
+    const [codeReranker, docsReranker, memoryReranker] = await Promise.all([
       readRerankerStatus(runtime, 'code'),
-      readRerankerStatus(runtime, 'knowledge'),
+      readRerankerStatus(runtime, 'docs'),
+      readRerankerStatus(runtime, 'memory'),
     ]);
     return c.json({
       generations: runtime.store.listGenerations(),
@@ -575,7 +576,8 @@ export function semanticRouter(
       storage: [...new Set(globalNamespaces)].map((namespace) => runtime.namespaceStatus(namespace)),
       rerankers: {
         code: codeReranker,
-        knowledge: knowledgeReranker,
+        docs: docsReranker,
+        memory: memoryReranker,
       },
     });
   });
@@ -590,7 +592,7 @@ export function semanticRouter(
 
   app.post('/semantic/profiles/:purpose/reindex', (c) => {
     const purpose = c.req.param('purpose');
-    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code or knowledge' }, 400);
+    if (!isPurpose(purpose)) return c.json({ error: 'purpose must be code, docs or memory' }, 400);
     try {
       const job = reindexDispatcher.enqueue(purpose);
       return c.json({ ok: true, job }, 202);

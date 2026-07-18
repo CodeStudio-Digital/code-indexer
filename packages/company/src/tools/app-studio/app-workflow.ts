@@ -4,7 +4,14 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { err, ok } from '@mcp/code-agent/core/tool.js';
 import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
-import { parseAppPlan, type AppFitnessReport, type AppPlanV1 } from '@mcp/app-studio/plan/types.js';
+import { APP_PLAN_SCHEMA } from '@mcp/app-studio/plan/schema.js';
+import {
+  formatAppPlanValidationIssues,
+  parseAppPlan,
+  validateAppPlan,
+  type AppFitnessReport,
+  type AppPlanV1,
+} from '@mcp/app-studio/plan/types.js';
 import { nextMigrationFilename, normalizeMigrationSlug, validateAppMigrationSql } from '@mcp/app-studio/database/migration.js';
 import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { listSqlMigrations, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/verification/workspace-checks.js';
@@ -104,7 +111,7 @@ export function appGetPlan(binding: AppToolBinding): CoderTool {
     name: 'app_get_plan',
     description: 'Read the current canonical AppPlanV1 and its explainable fitness report.',
     parameters: EMPTY,
-    source: 'native', mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
+    source: 'native', outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }, mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
     handler: async () => {
       const value = bound(binding); if (!value.ok) return err(value.error);
       const { revision, plan, fitness } = latestPlan(value);
@@ -118,7 +125,7 @@ export function appGetPlan(binding: AppToolBinding): CoderTool {
 const PLAN_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
-    plan: { type: 'object', description: 'Complete AppPlanV1 document.' },
+    plan: { ...APP_PLAN_SCHEMA, description: 'Complete AppPlanV1 document.' },
     expected_revision_number: { type: 'integer', minimum: 1 },
     reason: { type: 'string' },
   },
@@ -134,20 +141,23 @@ export function appUpdatePlan(binding: AppToolBinding): CoderTool {
     source: 'native', mutates: true, parallelSafe: false,
     handler: async (args) => {
       const value = bound(binding); if (!value.ok) return err(value.error);
-      const plan = parseAppPlan(args.plan);
-      if (!plan) return err('plan must be a complete AppPlanV1 document.');
-      const fitness = auditAppPlan(plan);
       try {
+        const validation = validateAppPlan(args.plan);
+        if (!validation.ok) return err(formatAppPlanValidationIssues(validation.issues));
+        const fitness = auditAppPlan(validation.plan);
         const revision = value.store.savePlanRevision({
           app_session_id: value.session.id,
-          plan,
+          plan: validation.plan,
           fitness,
           expected_revision_number: typeof args.expected_revision_number === 'number' ? args.expected_revision_number : null,
           created_by: 'app_orchestrator',
         });
         return appResult(`App plan r${revision.revision_number} saved`, { revision_id: revision.id, fitness, approval_required: true });
       } catch (error) {
-        return err((error as Error).message);
+        const message = error instanceof Error && !(error instanceof TypeError)
+          ? error.message
+          : 'App plan processing failed after validation. No revision was saved.';
+        return err(message);
       }
     },
   };

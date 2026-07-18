@@ -78,25 +78,26 @@ async function click(pw: PreviewWindow, selector: string): Promise<unknown> {
   await pw.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y, buttons: 0 });
   await pw.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button: 'left', buttons: 1, clickCount: 1 });
   await pw.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button: 'left', buttons: 0, clickCount: 1 });
-  return { ok: true, x: Math.round(t.x), y: Math.round(t.y) };
+  return { ok: true, x: Math.round(t.x), y: Math.round(t.y), target: { tag: t.tag, role: t.role, name: t.name } };
 }
 
 async function type(pw: PreviewWindow, text: string, selector?: string): Promise<unknown> {
-  if (selector) {
-    const t = await locate(pw, selector, 'focus');
-    if (t.error) return { error: t.error };
-    if (!t.found) return { error: `no element matched '${selector}'` };
-  }
+  const t = await locate(pw, selector ?? ':focus', 'focus');
+  if (t.error) return { error: t.error };
+  if (!t.found || !t.focused) return { error: `no focusable element matched '${selector ?? ':focus'}'` };
+  if (!t.editable) return { error: `matched element '${selector ?? ':focus'}' is not editable` };
   await pw.send('Input.insertText', { text });
-  return { ok: true };
+  return { ok: true, insertedChars: text.length, target: { tag: t.tag, role: t.role, name: t.name } };
 }
 
 async function fill(pw: PreviewWindow, selector: string, value: string): Promise<unknown> {
   const t = await locate(pw, selector, 'fill');
   if (t.error) return { error: t.error };
   if (!t.found) return { error: `no element matched '${selector}'` };
+  if (!t.focused) return { error: `matched element '${selector}' could not be focused` };
+  if (!t.editable) return { error: `matched element '${selector}' is not editable` };
   await pw.send('Input.insertText', { text: value });
-  return { ok: true, value };
+  return { ok: true, insertedChars: value.length, value: '[redacted]', target: { tag: t.tag, role: t.role, name: t.name } };
 }
 
 async function mouseAt(pw: PreviewWindow, x: number, y: number, button: 'left' | 'right', clickCount: number): Promise<void> {
@@ -143,13 +144,14 @@ async function scroll(pw: PreviewWindow, selector: string | undefined, x: number
   return { ok: true, dx: Number(x) || 0, dy: Number(y) || 0 };
 }
 
-async function waitFor(pw: PreviewWindow, selector: string, timeoutMs: number): Promise<unknown> {
+async function waitFor(pw: PreviewWindow, selector: string, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
   const deadline = Date.now() + clamp(timeoutMs, 200, 30_000);
   for (;;) {
+    if (signal?.aborted) return { error: 'preview wait aborted' };
     const t = await locate(pw, selector, 'coords');
     if (t.error) return { error: t.error };
     if (t.found) return { found: true };
-    if (Date.now() >= deadline) return { found: false };
+    if (Date.now() >= deadline) return { error: `timed out waiting for '${selector}' after ${clamp(timeoutMs, 200, 30_000)}ms` };
     await new Promise((res) => setTimeout(res, 150));
   }
 }
@@ -159,6 +161,7 @@ export async function dispatchInteraction(
   pw: PreviewWindow,
   method: 'click' | 'type' | 'fill' | 'wait_for' | 'press' | 'scroll' | 'hover' | 'double_click' | 'right_click',
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   switch (method) {
     case 'click':
@@ -176,11 +179,12 @@ export async function dispatchInteraction(
     case 'fill':
       return fill(pw, String(args.selector ?? ''), String(args.value ?? ''));
     case 'wait_for':
-      return waitFor(pw, String(args.selector ?? ''), Number(args.timeoutMs ?? 5000));
+      return waitFor(pw, String(args.selector ?? ''), Number(args.timeoutMs ?? 5000), signal);
     case 'press': {
       if (args.selector) {
         const t = await locate(pw, String(args.selector), 'focus');
         if (t.error) return { error: t.error };
+        if (!t.found || !t.focused) return { error: `no focusable element matched '${String(args.selector)}'` };
       }
       const mods = Array.isArray(args.modifiers) ? (args.modifiers as unknown[]).map(String) : undefined;
       await pressKey(pw, String(args.key ?? ''), mods);

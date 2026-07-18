@@ -71,7 +71,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     localVectorRouter: {
       getNamespaceStatus: vi.fn((namespace: string) => ({
         namespace,
-        purpose: namespace.startsWith('code:') ? 'code' : 'knowledge',
+        purpose: namespace.startsWith('code:') ? 'code' : 'memory',
         dbPath: 'D:/demo/.mcp-indexer/vectors.db',
         size_bytes: 123,
         active: namespace === 'code:p7' ? { generationId: 8 } : null,

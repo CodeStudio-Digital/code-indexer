@@ -243,6 +243,9 @@ import { semanticIndexing227 } from './227_semantic_indexing.js';
 import { investigationEmbeddingFingerprint228 } from './228_investigation_embedding_fingerprint.js';
 import { distributeInvestigationVectors229 } from './229_distribute_investigation_vectors.js';
 import { semanticLocalQ8Auto230 } from './230_semantic_local_q8_auto.js';
+import { splitSemanticKnowledge238 } from './238_split_semantic_knowledge.js';
+import { subagentResearchPolicy239 } from './239_subagent_research_policy.js';
+import { mcpConnectionProfiles240 } from './240_mcp_connection_profiles.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -516,6 +519,9 @@ export const MIGRATIONS: Migration[] = [
   appStudioCompanyRuntime235,
   companyAgentRunLifecycleStatuses236,
   appStudioV6Reset237,
+  splitSemanticKnowledge238,
+  subagentResearchPolicy239,
+  mcpConnectionProfiles240,
 ];
 
 /**

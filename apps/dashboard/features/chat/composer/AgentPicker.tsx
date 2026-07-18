@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, Compass, ClipboardList, Database, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
-import type { AgentPreset } from '@mcp/api-bus';
+import type { AgentPreset, BuiltInAgentPreset } from '@mcp/api-bus';
 
 /**
  * AgentPicker — compact combobox that selects one of the built-in agent
@@ -23,11 +23,13 @@ interface AgentDef {
   description: string;
   profile: string;
   planMode: boolean;
+  custom?: boolean;
+  baseAgentId?: BuiltInAgentPreset;
 }
 
 type AgentId = AgentPreset;
 
-const AGENT_LABEL: Record<AgentId, string> = {
+const AGENT_LABEL: Record<BuiltInAgentPreset, string> = {
   explore: 'Explore',
   plan: 'Plan',
   build: 'Code',
@@ -40,7 +42,7 @@ const AGENT_LABEL: Record<AgentId, string> = {
   builder: 'UI Builder',
 };
 
-const AGENT_PROMISE: Record<AgentId, string> = {
+const AGENT_PROMISE: Record<BuiltInAgentPreset, string> = {
   explore: 'Answers, not edits',
   plan: 'Proposes a plan, waits for OK',
   build: 'Edits, verifies, reports',
@@ -53,7 +55,7 @@ const AGENT_PROMISE: Record<AgentId, string> = {
   builder: 'Builds the live app UI',
 };
 
-const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
+const ICONS: Record<BuiltInAgentPreset, React.ComponentType<{ className?: string }>> = {
   explore: Compass,
   plan: ClipboardList,
   build: Hammer,
@@ -68,7 +70,7 @@ const ICONS: Record<AgentId, React.ComponentType<{ className?: string }>> = {
 
 // Tailwind text-color class per mode — applied to the leading icon so the
 // composer at a glance signals which mode is active.
-const MODE_TINT: Record<AgentId, string> = {
+const MODE_TINT: Record<BuiltInAgentPreset, string> = {
   explore: 'text-sky-500',
   plan: 'text-violet-500',
   build: 'text-emerald-500',
@@ -93,25 +95,36 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
   const [agents, setAgents] = useState<AgentDef[] | null>(null);
   const [suggestion, setSuggestion] = useState<AgentId | null>(null);
 
-  const agentLabel = (id: AgentId, fallback?: string) =>
-    t(`agentPicker.labels.${id}`, { defaultValue: fallback ?? AGENT_LABEL[id] ?? capitalise(id) });
-  const agentPromise = (id: AgentId, fallback?: string) =>
-    t(`agentPicker.promises.${id}`, { defaultValue: fallback ?? AGENT_PROMISE[id] ?? '' });
+  const agentLabel = (id: AgentId, fallback?: string) => {
+    if (id.startsWith('custom:')) return fallback ?? agents?.find((agent) => agent.id === id)?.label ?? t('agentPicker.customAgent');
+    const builtIn = id as BuiltInAgentPreset;
+    return t(`agentPicker.labels.${builtIn}`, { defaultValue: fallback ?? AGENT_LABEL[builtIn] ?? capitalise(id) });
+  };
+  const agentPromise = (id: AgentId, fallback?: string) => {
+    if (id.startsWith('custom:')) return fallback ?? agents?.find((agent) => agent.id === id)?.description ?? '';
+    const builtIn = id as BuiltInAgentPreset;
+    return t(`agentPicker.promises.${builtIn}`, { defaultValue: fallback ?? AGENT_PROMISE[builtIn] ?? '' });
+  };
 
   useEffect(() => {
     let aborted = false;
-    fetch('/api/coder/agents')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (aborted || !data) return;
-        if (Array.isArray(data.agents)) setAgents(data.agents as AgentDef[]);
-      })
-      .catch(() => {
-        /* network hiccup is non-fatal — the combobox stays empty and the
-           parent should fall back to 'explore' */
-      });
+    const load = () => {
+      fetch('/api/coder/agents')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (aborted || !data) return;
+          if (Array.isArray(data.agents)) setAgents(data.agents as AgentDef[]);
+        })
+        .catch(() => {
+          /* network hiccup is non-fatal — the combobox stays empty and the
+             parent should fall back to 'explore' */
+        });
+    };
+    load();
+    window.addEventListener('coder:custom-agents-changed', load);
     return () => {
       aborted = true;
+      window.removeEventListener('coder:custom-agents-changed', load);
     };
   }, []);
 
@@ -180,15 +193,17 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
   // (a stale persisted agent id predating the validation guards, or a dep
   // hiccup during a dev re-optimization). Fall back to the explore icon so a
   // single missing glyph can't white-screen the whole composer.
-  const SelectedIcon = ICONS[value] ?? Compass;
-  const SuggestionIcon = suggestion ? ICONS[suggestion] : null;
-  const selectedPromise = agentPromise(value);
+  const SelectedIcon = value.startsWith('custom:') ? Bot : (ICONS[value as BuiltInAgentPreset] ?? Compass);
+  const SuggestionIcon = suggestion
+    ? suggestion.startsWith('custom:') ? Bot : ICONS[suggestion as BuiltInAgentPreset]
+    : null;
+  const selectedPromise = agentPromise(value, agents?.find((agent) => agent.id === value)?.description);
   const suggestionLabel = suggestion ? agentLabel(suggestion) : '';
 
   return (
     <div className="flex items-center gap-1.5">
       <div
-        className={`flex items-center gap-1 text-xs ${MODE_TINT[value] ?? 'text-muted-foreground'}`}
+        className={`flex items-center gap-1 text-xs ${value.startsWith('custom:') ? 'text-indigo-500' : (MODE_TINT[value as BuiltInAgentPreset] ?? 'text-muted-foreground')}`}
         title={selectedPromise}
       >
         <SelectedIcon className="h-3.5 w-3.5" />

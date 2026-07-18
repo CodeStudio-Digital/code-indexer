@@ -179,7 +179,7 @@ describe('semantic diagnostic routes', () => {
         ]),
       }),
     ]);
-    expect(semanticProfileRuntime.queryEmbedding).toHaveBeenCalledWith('knowledge');
+    expect(semanticProfileRuntime.queryEmbedding).toHaveBeenCalledWith('docs');
     expect(embed.mock.calls.map(([namespace]) => namespace)).toEqual(['docs:c2', 'docs:c9']);
     expect(search).toHaveBeenCalledTimes(8);
     for (const [, options] of search.mock.calls) {

@@ -27,10 +27,20 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
     parseModelWithMode(model).model ?? spec.defaultModel ?? spec.defaultModels[0];
 
   return {
-    createCoder: (creds, model) => {
+    createCoder: (creds, model, opts) => {
       const parsed = parseModelWithMode(model);
       const baseURL = resolveBaseURL(spec, creds, parsed.mode);
       const baseModel = parsed.model ?? spec.defaultModel ?? spec.defaultModels[0];
+      const modelMaxOutputTokens = Object.fromEntries(
+        (opts?.providerModels ?? [])
+          .filter((entry) => (
+            typeof entry.default_max_tokens === 'number' && entry.default_max_tokens > 0
+          ))
+          .map((entry) => [entry.model_id, entry.default_max_tokens as number]),
+      );
+      const persistedOutputLimits = Object.keys(modelMaxOutputTokens).length > 0
+        ? modelMaxOutputTokens
+        : undefined;
 
       // Fast path: no `request` descriptor → byte-identical to the native wire.
       if (!spec.request) {
@@ -41,6 +51,7 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
           model: baseModel,
           defaultHeaders: resolveHeaders(spec, creds),
           vendor,
+          modelMaxOutputTokens: persistedOutputLimits,
         });
       }
 
@@ -63,6 +74,7 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
         bodyInject: spec.request.body?.inject,
         bodyRemove: spec.request.body?.remove,
         reasoningDeltaKey: spec.request.response?.reasoningDeltaKey,
+        modelMaxOutputTokens: persistedOutputLimits,
       });
     },
   };

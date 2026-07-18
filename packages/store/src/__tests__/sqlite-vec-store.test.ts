@@ -26,6 +26,30 @@ function freshDir(): string {
 }
 
 describe('SqliteVecVectorStore', () => {
+  it('drops only retired Knowledge generation tables during explicit cleanup', async () => {
+    const database = new SqliteVecDatabase(join(freshDir(), 'vectors.db'));
+    try {
+      for (const tableName of ['knowledge_g_1', 'knowledge_g_2', 'memory_g_1', 'knowledgeXg_3']) {
+        const store = new SqliteVecVectorStore({ database, tableName });
+        await store.upsert([
+          rec(tableName, [1, 0], { type: 'memory' }),
+        ], 'memory:user');
+      }
+
+      expect(database.dropVirtualTablesWithPrefix('knowledge_g_')).toBe(2);
+      const tables = database.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      const names = tables.map((row) => row.name);
+      expect(names).not.toContain('knowledge_g_1');
+      expect(names).not.toContain('knowledge_g_2');
+      expect(names).toContain('memory_g_1');
+      expect(names).toContain('knowledgeXg_3');
+    } finally {
+      database.close();
+    }
+  });
+
   it('discards the pre-generation default table when a generation table opens', async () => {
     const path = join(freshDir(), 'vectors.db');
     const legacy = new SqliteVecVectorStore({ path });

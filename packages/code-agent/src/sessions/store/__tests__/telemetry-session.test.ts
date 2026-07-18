@@ -131,4 +131,32 @@ describe('getSessionTelemetrySummary', () => {
       reduction_ratio: 800 / 1800,
     });
   });
+
+  it('reports checkpoint root failures separately from retries and blocked cascades', () => {
+    db.exec(`
+      CREATE TABLE coder_compaction_attempts (
+        session_id INTEGER NOT NULL,
+        trigger TEXT NOT NULL,
+        status TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        summarizer_ran INTEGER NOT NULL,
+        error_message TEXT
+      );
+      INSERT INTO coder_compaction_attempts
+        (session_id, trigger, status, strategy, summarizer_ran, error_message)
+      VALUES
+        (1221, 'milestone:error-resolved', 'checkpoint_failed', 'summarizer', 1, 'unaligned'),
+        (1221, 'checkpoint_retry:milestone:error-resolved', 'checkpoint_failed', 'summarizer', 0, 'unaligned'),
+        (1221, 'checkpoint_retry:milestone:error-resolved', 'checkpoint_failed', 'summarizer', 0, 'unaligned'),
+        (1221, 'cumulative', 'checkpoint_failed', 'summarizer', 1, 'prior checkpoint still pending: unaligned');
+    `);
+
+    expect(getSessionTelemetrySummary(db, 1221)).toMatchObject({
+      compaction_attempts: 2,
+      llm_summaries: 2,
+      checkpoint_failures: 1,
+      checkpoint_retries: 2,
+      checkpoint_blocked: 1,
+    });
+  });
 });

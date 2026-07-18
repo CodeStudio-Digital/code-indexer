@@ -40,6 +40,7 @@ let BASE = '';
 beforeAll(async () => {
   server = createServer((req, res) => {
     if (req.url === '/users') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":1}'); }
+    else if (req.url === '/large') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(`${'x'.repeat(80_000)}UNREAD_TAIL`); }
     else { res.writeHead(404); res.end('nf'); }
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -94,5 +95,29 @@ describe('api_* tools', () => {
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('200');
     expect(r.content).toContain('"id":1');
+  });
+
+  it('marks an acquisition-capped response in both text and structured metadata', async () => {
+    const previous = process.env.MCP_API_CLIENT_READ_CAP;
+    process.env.MCP_API_CLIENT_READ_CAP = '65536';
+    try {
+      setApiClientStore(fakeStore([{ ...REQ, id: 2, path_template: '/large' }]));
+      const r = await tool('api_run_request').handler({ requestId: 2 }, ctx());
+
+      expect(r.content).toContain('[source truncated: network read ceiling reached');
+      expect(r.content).not.toContain('UNREAD_TAIL');
+      expect(r.sourceTruncations).toEqual([
+        expect.objectContaining({
+          technique: 'network-acquisition-cap',
+          inputSizeExact: false,
+          outputSize: 65_536,
+          unit: 'bytes',
+          recoverable: false,
+        }),
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.MCP_API_CLIENT_READ_CAP;
+      else process.env.MCP_API_CLIENT_READ_CAP = previous;
+    }
   });
 });

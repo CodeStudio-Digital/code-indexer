@@ -58,6 +58,7 @@ export interface MasterResumeOpts {
   fallbackModels?: AllowedModel[];
   /** Skills and prompt configured for the App's app_orchestrator role. */
   skills?: RoleSkills;
+  initialTools?: string[];
   systemPromptOverride?: string;
 }
 
@@ -288,6 +289,7 @@ export async function resumeMaster(
         thinking: opts.thinking,
         thinkingBudgetTokens: opts.thinkingBudgetTokens,
         reasoningEffort: opts.reasoningEffort,
+        initialPinnedTools: opts.initialTools,
         onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
       } as RunCoderOptions & { companyPromptBlock: string }),
       masterRun.id,

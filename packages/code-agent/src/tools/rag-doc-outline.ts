@@ -25,6 +25,7 @@ export const ragDocOutlineTool: CoderTool = {
     "USE: to navigate a doc top-down (collection → source → section) when rag_search_docs queries aren't landing, or to see what a doc actually covers before searching.\n" +
     'Collection names come from the <indexed-docs> block or rag_search_docs results; source_ids come from this tool.',
   source: 'native',
+  outputPolicy: { mode: 'structured', reducer: 'smart', recovery: 'output_store' },
   parameters: {
     type: 'object',
     properties: {

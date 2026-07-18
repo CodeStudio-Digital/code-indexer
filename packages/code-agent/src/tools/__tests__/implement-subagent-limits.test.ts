@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import { runParallelAgents, runSubagent } from '../implement-subagent.js';
 
 function tool(name = 'mock_tool'): CoderTool {
@@ -184,6 +184,53 @@ describe('runSubagent limits', () => {
     expect(result.reason).not.toBe('tool_budget');
     expect(result.reason).not.toBe('error');
     expect(result.finalText).not.toContain('task tool limit reached');
+  });
+
+  it('nudges synthesis after a soft target without cutting the run or marking it partial', async () => {
+    const systemPrompts: string[] = [];
+    let call = 0;
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        systemPrompts.push(request.system);
+        call++;
+        if (call === 1) {
+          yield { type: 'tool_call_start', id: 'tu_soft', name: 'mock_tool' };
+          yield { type: 'tool_call_end', id: 'tu_soft', name: 'mock_tool', input: {} };
+          yield { type: 'done', stop_reason: 'tool_use' };
+          return;
+        }
+        yield { type: 'text_delta', text: 'evidence-backed summary' };
+        yield { type: 'done', stop_reason: 'end_turn' };
+      },
+    };
+    const phases: string[] = [];
+    const result = await runSubagent(parent(provider), {
+      systemPrompt: 'You are a test investigator.',
+      profile: 'explore',
+      researchPolicy: {
+        depth: 'quick',
+        source: 'explicit',
+        softToolTarget: 1,
+        softTimeTargetMs: 0,
+        completionCriteria: ['Answer the delegated question'],
+      },
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'inspect once' }] }],
+      maxTurns: 0,
+      limits: { maxToolCalls: 0, timeoutMs: 0, stallMs: 5_000 },
+      onProgress: (progress) => {
+        if (progress.phase) phases.push(progress.phase);
+      },
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(result.finalText).toContain('evidence-backed summary');
+    expect(systemPrompts[0]).not.toContain('SYNTHESIS CHECKPOINT');
+    expect(systemPrompts[1]).toContain('SYNTHESIS CHECKPOINT');
+    expect(phases).toContain('synthesis_nudge');
   });
 
   it('runs past 100 turns when turn/tool/time caps are zero', async () => {

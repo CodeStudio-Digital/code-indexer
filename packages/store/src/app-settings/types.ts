@@ -40,7 +40,7 @@ export interface SettingDef {
 
 /** All categories, in display order. */
 export const SETTING_CATEGORIES: readonly { id: SettingCategory; label: string }[] = [
-  { id: 'llm', label: 'LLM & API keys' },
+  { id: 'llm', label: 'Model overrides' },
   { id: 'mcp', label: 'MCP & workers' },
   { id: 'indexing', label: 'Indexing & search' },
   { id: 'sandbox', label: 'Sandbox & containers' },

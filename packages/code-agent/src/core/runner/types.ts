@@ -203,6 +203,8 @@ export interface RunnerOptions {
     ctx: {
       taskText: string;
       recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
+      /** Pins must survive relevance selection just like the model/tool cap. */
+      protectedToolNames?: ReadonlySet<string>;
     },
   ) => Promise<Array<{ name: string; description: string; parameters: import('../tool.js').JsonSchema }>>;
   /**

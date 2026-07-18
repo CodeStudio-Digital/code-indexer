@@ -32,6 +32,10 @@ export interface DocSearchBackend {
       /** API signature (api_reference docs). */
       api_signature: string | null;
       snippet: string;
+      /** Exact source-body metrics supplied by current search backends. */
+      snippet_source_chars?: number;
+      snippet_retained_chars?: number;
+      snippet_truncated?: boolean;
       /** Raw fusion score — opaque. Prefer `relevance` when present. */
       score: number;
       /** Calibrated 0-1 relevance from the reranker; null when uncalibrated. */
@@ -53,6 +57,10 @@ export interface DocSearchBackend {
       scope?: 'project' | 'all';
       /** Names of the collections searched when scope === 'project'. */
       scoped_collections?: string[];
+      /** Candidates present immediately before the requested top-K was applied. */
+      results_before_limit?: number;
+      /** Whether the requested top-K omitted at least one candidate. */
+      results_truncated?: boolean;
     };
   }>;
   /**

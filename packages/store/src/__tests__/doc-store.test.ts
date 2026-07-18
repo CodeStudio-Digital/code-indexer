@@ -37,13 +37,13 @@ function recordSemanticVectors(h: Handle, collectionId: number, chunkIds: readon
   let generationId = state?.active_generation_id ?? null;
   if (!generationId) {
     const generation = semantic.createGeneration({
-      purpose: 'knowledge', fingerprint: 'knowledge:test',
+      purpose: 'docs', fingerprint: 'docs:test',
       embedding_target: { kind: 'disabled' }, dimension: 3,
     });
     generationId = generation.id;
     semantic.updateGeneration(generationId, { status: 'ready' });
     semantic.beginNamespaceGeneration({
-      namespace, purpose: 'knowledge', generation_id: generationId,
+      namespace, purpose: 'docs', generation_id: generationId,
       expected_items: chunkIds.length,
     });
   }

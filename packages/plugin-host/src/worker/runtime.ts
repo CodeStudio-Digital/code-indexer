@@ -63,7 +63,12 @@ export async function invokePluginTool(
   }
   try {
     const r = await tool.handler(args, ctx);
-    return { content: String(r.content ?? ''), isError: r.isError, data: r.data };
+    return {
+      content: String(r.content ?? ''),
+      isError: r.isError,
+      data: r.data,
+      sourceTruncations: r.sourceTruncations,
+    };
   } catch (e) {
     return { content: e instanceof Error ? e.message : String(e), isError: true };
   }

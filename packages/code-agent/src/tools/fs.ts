@@ -474,6 +474,7 @@ const readFile: CoderTool = {
   name: 'read_file',
   description: maybeTerse(READ_FILE_NATIVE_DESC),
   source: 'native',
+  outputPolicy: { mode: 'line_range', reducer: 'none', recovery: 'cursor' },
   parameters: {
     type: 'object',
     properties: {
@@ -560,17 +561,42 @@ const readFile: CoderTool = {
     const slice = lines.slice(startLine - 1, endLine);
     const numbered = slice.map((line, i) => `${(startLine + i).toString().padStart(5)}\t${line}`).join('\n');
     const ext = path.split('.').pop() ?? '';
+    const omittedBefore = startLine - 1;
     const remaining = total - endLine;
+    const omitted = omittedBefore > 0 || remaining > 0;
     const tag = isAutoFull
       ? ' [auto-full: file ≤800 lines]'
       : remaining > 0 && total > AUTO_FULL_THRESHOLD
         ? ' [auto-full off — file > 800 lines, pass force=true to read all]'
         : '';
     const richHeader = `${path} | ${total} lines | ${ext}\n[lines ${startLine}-${endLine}]${tag}\n`;
-    const footer = remaining > 0
-      ? `\n... ${truncationMarker(`${remaining} more lines`, 'pass force=true, a start_line/end_line range, or symbol')}`
+    const omittedDetail = omittedBefore > 0
+      ? remaining > 0
+        ? `${omittedBefore} earlier and ${remaining} later lines omitted`
+        : `${omittedBefore} earlier lines omitted`
+      : `${remaining} more lines`;
+    const footer = omitted
+      ? `\n... ${truncationMarker(
+          omittedDetail,
+          omittedBefore > 0
+            ? 'pass force=true, another start_line/end_line range, or symbol'
+            : 'pass force=true, a start_line/end_line range, or symbol',
+        )}`
       : '';
-    return ok(richHeader + numbered + footer);
+    return {
+      content: richHeader + numbered + footer,
+      ...(omitted
+        ? {
+            sourceTruncations: [{
+              technique: 'read-file-line-window',
+              inputSize: total,
+              outputSize: slice.length,
+              unit: 'lines' as const,
+              recoverable: true,
+            }],
+          }
+        : {}),
+    };
   },
 };
 

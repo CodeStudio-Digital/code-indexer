@@ -42,6 +42,20 @@ function setup(): { root: string; remote: string } {
   return { root, remote };
 }
 
+function advanceRemote(remote: string, file: string, contents: string): string {
+  const other = mkdtempSync(join(tmpdir(), 'mcp-workspace-collaborator-'));
+  dirs.push(other);
+  git(other, 'clone', '--branch', 'main', remote, '.');
+  git(other, 'config', 'user.email', 'collaborator@example.com');
+  git(other, 'config', 'user.name', 'Remote Collaborator');
+  git(other, 'config', 'commit.gpgsign', 'false');
+  writeFileSync(join(other, file), contents);
+  git(other, 'add', file);
+  git(other, 'commit', '-m', 'remote workspace change');
+  git(other, 'push', 'origin', 'main');
+  return git(other, 'rev-parse', 'HEAD');
+}
+
 describe('reviewed workspace push', () => {
   it('uses the previewed target for commits and optional tags', async () => {
     const { root, remote } = setup();
@@ -69,5 +83,42 @@ describe('reviewed workspace push', () => {
     expect(pushed.ok).toBe(true);
     expect(git(remote, 'rev-parse', 'refs/heads/main')).toBe(git(root, 'rev-parse', 'HEAD'));
     expect(git(remote, 'rev-parse', 'refs/tags/workspace-v1')).toBe(git(root, 'rev-parse', 'refs/tags/workspace-v1'));
+  });
+
+  it('updates a stale local branch with rebase and retries the push', async () => {
+    const { root, remote } = setup();
+    const remoteHead = advanceRemote(remote, 'remote-workspace.txt', 'remote work\n');
+    const preview = await gitPushPreview(root);
+
+    const pushed = await gitPush(root, {
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+      setUpstream: preview.setUpstream,
+    });
+
+    expect(pushed).toMatchObject({ ok: true, updatedBeforePush: true });
+    expect(git(root, 'merge-base', '--is-ancestor', remoteHead, 'HEAD')).toBe('');
+    expect(git(remote, 'rev-parse', 'refs/heads/main')).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(git(root, 'show', 'HEAD:workspace.txt')).toContain('review me');
+  });
+
+  it('keeps a conflicting rebase for resolution and does not retry the push', async () => {
+    const { root, remote } = setup();
+    advanceRemote(remote, 'workspace.txt', 'base\nremote version\n');
+    const preview = await gitPushPreview(root);
+
+    const pushed = await gitPush(root, {
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+      setUpstream: preview.setUpstream,
+    });
+
+    expect(pushed).toMatchObject({ ok: false, pushActionRequired: 'git_push_conflicts' });
+    expect(git(root, 'diff', '--name-only', '--diff-filter=U')).toBe('workspace.txt');
+    expect(git(remote, 'show', 'main:workspace.txt')).toContain('remote version');
   });
 });

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { MASTER_TOOLS } from '@mcp/code-agent/tools/tiers.js';
 import { isMasterAllowed } from '../master-filter.js';
 
 const native = (name: string): CoderTool =>
@@ -48,6 +49,12 @@ describe('isMasterAllowed — C4 batch/graph tools survive the filter', () => {
   it('keeps kanban_plan_graph via the kanban_ prefix', () => {
     expect(isMasterAllowed(native('kanban_plan_graph'))).toBe(true);
   });
+
+  it('keeps every tool that defines the ordinary master tier', () => {
+    for (const name of MASTER_TOOLS) {
+      expect(isMasterAllowed(native(name)), name).toBe(true);
+    }
+  });
 });
 
 describe('isMasterAllowed — external MCP is default-deny', () => {
@@ -70,8 +77,8 @@ describe('isMasterAllowed — external MCP is default-deny', () => {
 
 describe('isMasterAllowed — App Studio capability boundary', () => {
   it('exposes app tools only to the specialised App master', () => {
-    expect(isMasterAllowed(native('app_get_workflow'))).toBe(false);
-    expect(isMasterAllowed(native('app_get_workflow'), { allowAppStudio: true })).toBe(true);
+    expect(isMasterAllowed(native('app_get_state'))).toBe(false);
+    expect(isMasterAllowed(native('app_get_state'), { allowAppStudio: true })).toBe(true);
   });
 
   it('removes execute_tasks from the persistent App master', () => {
@@ -89,7 +96,7 @@ describe('isMasterAllowed — App Studio capability boundary', () => {
   });
 
   it('does not let an external connector impersonate an App capability', () => {
-    expect(isMasterAllowed(external('app_get_workflow', {
+    expect(isMasterAllowed(external('app_get_state', {
       mutates: false,
       riskLevel: 'read',
     }), { allowAppStudio: true })).toBe(false);

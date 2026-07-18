@@ -11,6 +11,7 @@ import {
 import { copyText } from '../../lib/clipboard.js';
 import {
   createApiToken, listApiTokens, revokeApiToken, type ApiTokenRow, type McpTier,
+  listMcpConnectionProfiles, type McpConnectionProfile,
 } from './auth-api.js';
 
 const ALL_SCOPES = ['mcp:read', 'mcp:write', 'mcp:admin'];
@@ -30,18 +31,27 @@ const TIER_LABELS: Record<TierPreset, string> = {
 export function ApiTokensPanel() {
   const { t } = useTranslation('admin');
   const [tokens, setTokens] = useState<ApiTokenRow[]>([]);
+  const [profiles, setProfiles] = useState<McpConnectionProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [issued, setIssued] = useState<{ id: string; rawToken: string; tier: McpTier | null } | null>(null);
+  const [issued, setIssued] = useState<{ id: string; rawToken: string; tier: McpTier | null; profileId: string | null } | null>(null);
 
   const [formName, setFormName] = useState('');
   const [formTier, setFormTier] = useState<TierPreset>('bootstrap');
   const [formScopes, setFormScopes] = useState<string[]>(['mcp:read', 'mcp:write']);
   const [formDays, setFormDays] = useState<string>('');
+  const [formProfileId, setFormProfileId] = useState<string>('');
 
   const load = async () => {
     setLoading(true);
-    try { setTokens(await listApiTokens()); }
+    try {
+      const [nextTokens, nextProfiles] = await Promise.all([
+        listApiTokens(),
+        listMcpConnectionProfiles(),
+      ]);
+      setTokens(nextTokens);
+      setProfiles(nextProfiles);
+    }
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
@@ -61,12 +71,14 @@ export function ApiTokensPanel() {
       // to the audit log.
       scopes: tier ? undefined : formScopes,
       expiresInDays: Number.isFinite(expiresInDays) ? expiresInDays : undefined,
+      profileId: formProfileId || null,
     });
     setIssued(out);
     setFormName('');
     setFormDays('');
     setFormTier('bootstrap');
     setFormScopes(['mcp:read', 'mcp:write']);
+    setFormProfileId('');
     await load();
   };
 
@@ -113,6 +125,11 @@ export function ApiTokensPanel() {
                   </Badge>
                 )}
                 {tok.revoked_at && <Badge variant="destructive">{revokedLabel}</Badge>}
+                {tok.profile_id && (
+                  <Badge variant="outline" className="font-mono text-[10px]">
+                    {profiles.find((profile) => profile.id === tok.profile_id)?.name ?? tok.profile_id}
+                  </Badge>
+                )}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5 flex gap-3">
                 {/* Show scopes only when no tier is bound — tier names
@@ -180,6 +197,21 @@ export function ApiTokensPanel() {
                 </div>
               </div>
             )}
+            <div>
+              <label className="text-sm font-medium block mb-1">
+                {t('auth.apiTokens.profile', 'Connection profile')}
+              </label>
+              <select
+                value={formProfileId}
+                onChange={(event) => setFormProfileId(event.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="">{t('auth.apiTokens.noProfile', 'No profile (legacy unrestricted projects)')}</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>{profile.name}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="text-sm font-medium">{t('auth.apiTokens.expiresInDays')}</label>
               <Input type="number" min="1" value={formDays} onChange={(e) => setFormDays(e.target.value)} />

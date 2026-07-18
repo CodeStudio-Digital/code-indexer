@@ -63,6 +63,10 @@ import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { applySmartReducerDetailed, type ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
+import {
+  resolveRegisteredToolOutputPolicy,
+  type ResolvedToolOutputPolicy,
+} from '@mcp/code-agent/core/tool-output-policy.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
@@ -304,16 +308,54 @@ function normalizeMessageForCacheWithPreservedIds(
   m: AgentMessage,
   cap: number = PUSH_TIME_CAP,
   preservedToolUseIds?: ReadonlySet<string>,
+  toolNamesByUseId?: ReadonlyMap<string, string>,
+  resolveOutput?: (toolName: string) => { policy: ResolvedToolOutputPolicy; cap: number },
+  store?: { put(content: string): string | null },
 ): AgentMessage {
   if (m.role !== 'tool' && m.role !== 'user') return m;
   let mutated = false;
   const content = m.content.map((b): ContentBlock => {
     if (b.type !== 'tool_result') return b;
-    if (b.truncated) return b; // already deterministic, leave alone
-    if (preservedToolUseIds?.has(b.tool_use_id)) return b;
-    if (b.content.length <= cap) return b;
+    const toolName = toolNamesByUseId?.get(b.tool_use_id);
+    const resolved = toolName && resolveOutput ? resolveOutput(toolName) : undefined;
+    const effectiveCap = resolved?.cap ?? cap;
+    if (b.content.length <= effectiveCap) return b;
+    const policy = resolved?.policy ?? resolveRegisteredToolOutputPolicy(
+      toolName ?? 'unknown',
+      undefined,
+      preservedToolUseIds?.has(b.tool_use_id) === true,
+    );
+    // When a previously-truncated block no longer fits (for example after a
+    // model/context downgrade), retain its existing recovery id and re-cap the
+    // inline representation. The missing raw middle cannot be re-spilled and
+    // storing the old preview would create a misleading snapshot-of-snapshot.
+    const existingOutputId = b.content.match(/\boutput_id=([a-f0-9]{6,64})\b/i)?.[1]
+      ?? b.content.match(/get_tool_output\(\s*["']([a-f0-9]{6,64})["']/i)?.[1]
+      ?? b.content.match(/get_tool_output\(\s*\{[^}]*\boutput_id\s*:\s*["']([a-f0-9]{6,64})["']/i)?.[1];
+    const outputId = b.truncated || existingOutputId
+      ? existingOutputId
+      : toolName !== 'get_tool_output' && policy.recovery !== 'none'
+        ? store?.put(b.content) ?? undefined
+        : undefined;
+    const originalSize = b.truncated && typeof b.originalSize === 'number'
+      ? b.originalSize
+      : b.content.length;
+    const capped = capToolContent(
+      b.content,
+      effectiveCap,
+      outputId,
+      toolName,
+      policy.capStrategy,
+      policy.recovery,
+      originalSize,
+    );
     mutated = true;
-    return buildToolResultBlock(b.tool_use_id, b.content, b.is_error, cap);
+    return {
+      ...b,
+      content: capped.content,
+      truncated: true,
+      originalSize: capped.originalSize,
+    };
   });
   return mutated ? { ...m, content } : m;
 }
@@ -322,20 +364,31 @@ export function normalizeMessagesForCache(
   messages: AgentMessage[],
   cap: number = PUSH_TIME_CAP,
   preserveToolOutputNames?: ReadonlySet<string>,
+  resolveOutput?: (toolName: string) => { policy: ResolvedToolOutputPolicy; cap: number },
+  store?: { put(content: string): string | null },
 ): AgentMessage[] {
-  if (!preserveToolOutputNames || preserveToolOutputNames.size === 0) {
+  if ((!preserveToolOutputNames || preserveToolOutputNames.size === 0) && !resolveOutput) {
     return messages.map((m) => normalizeMessageForCache(m, cap));
   }
   const preservedToolUseIds = new Set<string>();
+  const toolNamesByUseId = new Map<string, string>();
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
     for (const b of m.content) {
-      if (b.type === 'tool_use' && preserveToolOutputNames.has(b.name)) {
-        preservedToolUseIds.add(b.id);
+      if (b.type === 'tool_use') {
+        toolNamesByUseId.set(b.id, b.name);
+        if (preserveToolOutputNames?.has(b.name)) preservedToolUseIds.add(b.id);
       }
     }
   }
-  return messages.map((m) => normalizeMessageForCacheWithPreservedIds(m, cap, preservedToolUseIds));
+  return messages.map((m) => normalizeMessageForCacheWithPreservedIds(
+    m,
+    cap,
+    preservedToolUseIds,
+    toolNamesByUseId,
+    resolveOutput,
+    store,
+  ));
 }
 
 /**
@@ -702,6 +755,8 @@ export class CoderRunner extends EventEmitter {
    * arguments and the side-file `toolOutputStore` gate.
    */
   public readonly effectivePushTimeCap: number;
+  /** Tool names whose authoritative outputs use the expanded inline budget. */
+  private readonly authoritativeToolOutputNames: ReadonlySet<string>;
 
   /**
    * Resolved tunables for this run. Defaults to `envTunables()` when
@@ -825,14 +880,23 @@ export class CoderRunner extends EventEmitter {
       : this.tunables.unrestrictedPushTimeCap;
     this.effectivePushTimeCap =
       capLevel === 'economic' ? (opts.pushTimeCap ?? capBase) : capFor(capLevel, capBase, capCeiling);
+    this.authoritativeToolOutputNames = new Set([
+      ...(opts.preserveToolOutputNames ?? []),
+      ...opts.registry.list()
+        .filter((tool) => resolveRegisteredToolOutputPolicy(tool.name, tool).mode === 'authoritative')
+        .map((tool) => tool.name),
+    ]);
     this.messages = normalizeMessagesForCache(
       opts.initialMessages ?? [],
       this.effectivePushTimeCap,
-      opts.preserveToolOutputNames,
+      this.authoritativeToolOutputNames,
+      (toolName) => this.resolveToolOutputCap(toolName),
+      this.opts.toolContext.toolOutputStore,
     );
     this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
     this.opts.toolContext.runner = this;
+    this.opts.toolContext.toolOutputInlineCap = this.resolveToolOutputCap('get_tool_output').cap;
     this.opts.toolContext.toolCallLedger ??= new ToolCallLedger();
     this.opts.toolContext.planMode = opts.planMode;
     // Tier filtering: prefer explicit activeTiers, fall back to profile,
@@ -860,6 +924,16 @@ export class CoderRunner extends EventEmitter {
     handler: RunnerOptions['onCompactionCheckpoint'],
   ): void {
     this.opts.onCompactionCheckpoint = handler;
+  }
+
+  /** Selection policy inherited by isolated sub-runners. */
+  getToolSelectionFilter(): RunnerOptions['toolSelectionFilter'] {
+    return this.opts.toolSelectionFilter;
+  }
+
+  /** Dynamic/plugin tier map inherited by isolated sub-runners. */
+  getExternalToolTiers(): RunnerOptions['externalToolTiers'] {
+    return this.opts.externalToolTiers;
   }
 
   /** Queue a semantic milestone; repeated signals coalesce until consumed. */
@@ -1108,6 +1182,7 @@ export class CoderRunner extends EventEmitter {
   /** Replace the active provider mid-session. Takes effect on the next turn. */
   swapProvider(newProvider: ChatProvider): void {
     this.opts.provider = newProvider;
+    this.opts.toolContext.toolOutputInlineCap = this.resolveToolOutputCap('get_tool_output').cap;
     this.emit('provider_swapped', newProvider.name, newProvider.model);
   }
 
@@ -1604,16 +1679,17 @@ export class CoderRunner extends EventEmitter {
             toolMutates,
           });
         },
-        reduceToolResult: (toolName, content) => {
-          if (this.shouldPreserveToolOutput(toolName)) {
+        reduceToolResult: (toolName, content, meta) => {
+          const { policy, cap } = this.resolveToolOutputCap(toolName);
+          if (policy.reducer === 'none') {
             return {
               content,
               report: {
                 kind: 'none' as const,
-                technique: 'preserved',
+                technique: `policy:${policy.mode}`,
                 rawChars: content.length,
                 shapedChars: content.length,
-                cap: this.effectivePushTimeCap,
+                cap,
                 preserved: ['full'],
               },
             };
@@ -1626,13 +1702,16 @@ export class CoderRunner extends EventEmitter {
                 technique: 'rollout-bypass',
                 rawChars: content.length,
                 shapedChars: content.length,
-                cap: this.effectivePushTimeCap,
+                cap,
                 preserved: ['full_before_hard_cap'],
               },
             };
           }
-          return applySmartReducerDetailed(toolName, content, this.effectivePushTimeCap, {
+          return applySmartReducerDetailed(toolName, content, cap, {
             query: this.getLastUserText(),
+            args: meta?.input,
+            isError: meta?.isError,
+            contentFormat: meta?.contentFormat,
           });
         },
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
@@ -2042,15 +2121,9 @@ export class CoderRunner extends EventEmitter {
     shapedContent: string;
     isError: boolean;
     reductionReport?: ReductionReport;
-  }): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; reductionReport: ReductionReport } {
-    // P3 — clamp the user's cap with a context-relative ceiling so a single
-    // tool_result can't exceed the protected tail and deadlock compaction
-    // (`compact_exhausted`). `Infinity` ceiling (knob off) → user cap only.
-    // Resolved from the CURRENT provider model so it tracks `swapProvider`.
-    const userCap = this.shouldPreserveToolOutput(args.toolName)
-      ? Math.max(this.effectivePushTimeCap, this.opts.preservedToolOutputCap ?? PRESERVED_TOOL_OUTPUT_CAP)
-      : this.effectivePushTimeCap;
-    const cap = resolveFinalizeCap(userCap, this.opts.provider.model, this.opts.contextWindow);
+    sourceTruncations?: import('@mcp/code-agent/core/tool.js').ToolSourceTruncation[];
+  }): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; inlineCap: number; reductionReport: ReductionReport } {
+    const { policy, cap } = this.resolveToolOutputCap(args.toolName);
     return finalizeToolOutput({
       toolName: args.toolName,
       rawContent: args.rawContent,
@@ -2059,11 +2132,39 @@ export class CoderRunner extends EventEmitter {
       cap,
       store: this.opts.toolContext.toolOutputStore,
       reductionReport: args.reductionReport,
+      sourceTruncations: args.sourceTruncations,
+      policy,
     });
   }
 
-  private shouldPreserveToolOutput(toolName: string): boolean {
-    return this.opts.preserveToolOutputNames?.has(toolName) === true;
+  private resolveToolOutputCap(toolName: string): {
+    policy: ResolvedToolOutputPolicy;
+    cap: number;
+  } {
+    const tool = this.opts.registry.get(toolName);
+    // Backward compatibility: hosts have long used preserveToolOutputNames
+    // for dynamic/extension tools that cannot declare an outputPolicy. Treat
+    // those names as authoritative in the live path too (not only on resume),
+    // so they still bypass lossy reducers and receive the expanded budget.
+    const policy: ResolvedToolOutputPolicy = resolveRegisteredToolOutputPolicy(
+      toolName,
+      tool,
+      this.authoritativeToolOutputNames.has(toolName),
+    );
+    let targetCap = policy.mode === 'authoritative'
+      ? Math.max(this.effectivePushTimeCap, this.opts.preservedToolOutputCap ?? PRESERVED_TOOL_OUTPUT_CAP)
+      : this.effectivePushTimeCap;
+    if (policy.maxInlineChars !== undefined) {
+      // `maxInlineChars` is a ceiling, including for authoritative tools. The
+      // latter start from an expanded default budget, but an explicit smaller
+      // per-tool maximum must still win at elevated session cap levels.
+      targetCap = Math.min(targetCap, policy.maxInlineChars);
+    }
+    return {
+      policy,
+      // Keep the context-relative ceiling as the non-negotiable safety net.
+      cap: resolveFinalizeCap(targetCap, this.opts.provider.model, this.opts.contextWindow),
+    };
   }
 
   private postProcessToolResultForBridge(args: {

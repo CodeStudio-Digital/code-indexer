@@ -7,7 +7,6 @@ import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import { isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
@@ -22,6 +21,7 @@ import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { closePreviewWindow, closePreviewSession } from '../../../sse/closeCoderPreview.js';
+import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { notifyBuilderRunEnded } from '../../../sse/builder-checkpoint.js';
 import {
   coderWorkerEnabled,
@@ -52,6 +52,11 @@ import {
   runtimeEventsToJsonl,
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
+import {
+  resolveAgentSelection,
+  type AgentSelectionId,
+  type ResolvedAgentSelection,
+} from '../../../custom-agents.js';
 
 /**
  * Cheap, stable content fingerprint for the preflight-seed cache (mig 180). A
@@ -70,7 +75,7 @@ interface SendMessageBody {
   plan_mode?: boolean;
   attachments?: CoderAttachment[];
   /** Agent preset. Takes precedence over profile/plan_mode when unset. */
-  agent?: AgentId;
+  agent?: AgentSelectionId;
   /** Tool tier profile: bootstrap | navigate | full | auto. */
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /**
@@ -147,7 +152,7 @@ function projectRootForSession(deps: ServerDeps, sessionId: number): string | nu
 interface ContinueBody {
   plan_mode?: boolean;
   max_turns?: number;
-  agent?: AgentId;
+  agent?: AgentSelectionId;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** Force the vision fallback (image → text) on a resumed run. */
   describe_images?: boolean;
@@ -209,13 +214,21 @@ export function mountCoderStreamRoutes(
     });
   }
 
-  function resolveRunAgent(id: number, requested: unknown): AgentId | undefined {
+  function resolveRunAgent(id: number, requested: unknown): ResolvedAgentSelection | null {
     const session = sessionStore.getSession(id);
-    const persisted = typeof session?.agent === 'string' && isAgentId(session.agent) ? session.agent : undefined;
-    if (persisted === 'app_orchestrator') {
+    const persisted = resolveAgentSelection(providerStore, session?.agent);
+    if (persisted?.baseAgentId === 'app_orchestrator') {
       return persisted;
     }
-    return typeof requested === 'string' && isAgentId(requested) ? requested : undefined;
+    const resolved = resolveAgentSelection(providerStore, requested) ?? persisted;
+    if (resolved) return resolved;
+    // A disabled/deleted custom agent can still be referenced by an old
+    // session. Resume it as Explore and let runCoder persist that fallback so
+    // the picker and runtime converge instead of constructing an agentless run.
+    if (typeof session?.agent === 'string' && session.agent.startsWith('custom:')) {
+      return resolveAgentSelection(providerStore, 'explore');
+    }
+    return null;
   }
 
   /** Resolved provider `kind` for the session (drives PDF-native gating). */
@@ -240,16 +253,14 @@ export function mountCoderStreamRoutes(
 
   /**
    * Whether the `preview` DevTools tier should auto-activate for this session.
-   * True for any PROJECT-scoped coder session — opening/inspecting/driving the
-   * project's running app is broadly relevant to project work, and a builder
-   * project always wants it. Non-project / company sessions leave it
-   * `undefined` and unlock on demand via `find_tools` → `expand_toolset('preview')`,
-   * so the multi-agent surface isn't bloated by 16 tools per agent.
+   * True for a PROJECT-scoped coder session only when the desktop process has
+   * actually installed the Preview DevTools backend. This avoids advertising
+   * browser tools in headless/API runs where every call would fail.
    */
   function resolvePreviewAvailable(id: number): boolean | undefined {
     const session = sessionStore.getSession(id);
     if (!session) return undefined;
-    return session.project_id != null ? true : undefined;
+    return session.project_id != null && getGlobalPreviewDevtools() ? true : undefined;
   }
 
   function applyGeneratedSessionTitle(id: number, title: string | undefined): boolean {
@@ -522,7 +533,10 @@ export function mountCoderStreamRoutes(
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
-    const runAgent = resolveRunAgent(id, body.agent);
+    const resolvedAgent = resolveRunAgent(id, body.agent);
+    const runAgent = resolvedAgent?.baseAgentId;
+    const agentSelectionId = resolvedAgent?.selectionId;
+    const customAgent = resolvedAgent?.custom;
     // The request keeps precedence for explicit callers. When omitted (for
     // example during a remount race), fall back to the conversation's sticky
     // toggle so the next run cannot silently lose the user's last choice.
@@ -538,7 +552,7 @@ export function mountCoderStreamRoutes(
       emitWorkerLog(existing, 'info', 'route', 'POST /messages', {
         content_preview: body.content?.slice(0, 80) ?? '',
         resume: !!body.resume,
-        agent: runAgent,
+        agent: agentSelectionId ?? runAgent,
         requested_agent: body.agent ?? null,
         profile: body.profile,
         interject: !!body.interject,
@@ -552,10 +566,11 @@ export function mountCoderStreamRoutes(
     // bloat the persisted user message with thousands of tokens of skill
     // instructions on every turn. The picks are persisted alongside the
     // message in `coder_messages.selected_skill_ids_json` (migration 095).
-    const selectedSkillIds =
-      body.selected_skill_ids && body.selected_skill_ids.length > 0
-        ? body.selected_skill_ids
-        : undefined;
+    const selectedSkillIds = (() => {
+      const combined = [...(customAgent?.skillIds ?? []), ...(body.selected_skill_ids ?? [])];
+      const unique = [...new Set(combined.map((id) => id.trim()).filter(Boolean))];
+      return unique.length > 0 ? unique : undefined;
+    })();
 
     // Office/OpenDocument files stay native on general file-input transports
     // (OpenAI/Codex/OpenRouter) and use a portable local text extraction path
@@ -697,6 +712,9 @@ export function mountCoderStreamRoutes(
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
           agent: runAgent,
+          agentSelectionId,
+          customAgentPrompt: customAgent?.prompt,
+          allowedToolNames: customAgent?.toolNames ?? undefined,
           profile: body.profile,
           worktree: body.worktree,
           thinking,
@@ -892,6 +910,9 @@ export function mountCoderStreamRoutes(
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
           agent: runAgent,
+          agentSelectionId,
+          customAgentPrompt: customAgent?.prompt,
+          allowedToolNames: customAgent?.toolNames ?? undefined,
           profile: body.profile,
           worktree: body.worktree,
           thinking,
@@ -985,7 +1006,10 @@ export function mountCoderStreamRoutes(
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
-    const runAgent = resolveRunAgent(id, body.agent);
+    const resolvedAgent = resolveRunAgent(id, body.agent);
+    const runAgent = resolvedAgent?.baseAgentId;
+    const agentSelectionId = resolvedAgent?.selectionId;
+    const customAgent = resolvedAgent?.custom;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Pre-spawn log: bus is about to be created below. We can't emit
     // here because no bus exists yet — but the route-entry hit will
@@ -1047,7 +1071,7 @@ export function mountCoderStreamRoutes(
     // Log the route hit on the fresh bus — the dashboard will see the
     // POST /continue entry seq=0 with the resume context.
     emitWorkerLog(bus, 'info', 'route', 'POST /continue', {
-      agent: runAgent,
+      agent: agentSelectionId ?? runAgent,
       requested_agent: body.agent ?? null,
       profile: body.profile,
       plan_mode: body.plan_mode,
@@ -1075,6 +1099,9 @@ export function mountCoderStreamRoutes(
           maxTurns: body.max_turns,
           planMode: body.plan_mode,
           agent: runAgent,
+          agentSelectionId,
+          customAgentPrompt: customAgent?.prompt,
+          allowedToolNames: customAgent?.toolNames ?? undefined,
           profile: body.profile,
           resume: true,
           modelSupportsVision: resolveModelSupportsVision(id),

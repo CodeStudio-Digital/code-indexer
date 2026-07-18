@@ -56,6 +56,8 @@ export interface ExecuteResult {
   ms: number;
   url: string;
   size: number;
+  /** False when size is only the observed lower bound of a cancelled transfer. */
+  sizeExact: boolean;
   truncated: boolean;
   /** Merged pre+test variable updates (UNSET sentinel = delete). */
   variableUpdates: Record<string, string>;
@@ -142,7 +144,7 @@ export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult
 
   return {
     status: res.status, statusText: res.statusText, headers: res.headers, body: res.body,
-    ms, url: url.href, size: res.size, truncated: res.truncated,
+    ms, url: url.href, size: res.size, sizeExact: res.sizeExact, truncated: res.truncated,
     variableUpdates: { ...(preScript?.variableUpdates ?? {}), ...(testScript?.variableUpdates ?? {}) },
     preScript, testScript,
   };

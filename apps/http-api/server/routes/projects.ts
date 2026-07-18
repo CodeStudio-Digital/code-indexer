@@ -242,7 +242,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       || profile?.embedding_target.kind === 'local_http';
     const rerankerDiagnostics = await (
       deps.semanticProfileRuntime as typeof deps.semanticProfileRuntime & {
-        rerankerDiagnostics?: (purpose: 'code' | 'knowledge') => Promise<unknown> | unknown;
+        rerankerDiagnostics?: (purpose: 'code' | 'docs' | 'memory') => Promise<unknown> | unknown;
       }
     ).rerankerDiagnostics?.('code') ?? null;
     const diagnostics = rerankerDiagnostics && typeof rerankerDiagnostics === 'object'

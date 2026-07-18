@@ -32,6 +32,8 @@ export interface RunnerEvents {
     input?: Record<string, unknown>;
     refusalKind?: string;
     reductionReport?: import('@mcp/code-agent/core/smart-reducers.js').ReductionReport;
+    sourceTruncations?: import('@mcp/code-agent/core/tool.js').ToolSourceTruncation[];
+    truncated?: boolean;
     outputId?: string;
     ledgerEntry?: import('@mcp/code-agent/core/tool-call-ledger.js').ToolCallLedgerEntry;
     guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
@@ -295,6 +297,9 @@ export interface RunnerEvents {
       provider?: string;
       model?: string;
       task?: string;
+      researchDepth?: 'quick' | 'standard' | 'deep' | 'exhaustive';
+      softToolTarget?: number;
+      softTimeTargetMs?: number;
       status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
       attempt?: number;
     }>;
@@ -326,6 +331,9 @@ export interface RunnerEvents {
     usage?: ChatUsage;
     summary?: string;
     error?: string;
+    researchDepth?: 'quick' | 'standard' | 'deep' | 'exhaustive';
+    softToolTarget?: number;
+    softTimeTargetMs?: number;
   }) => void;
   /** Emitted when all agents in a parallel group have finished. */
   agents_group_end: (payload: {

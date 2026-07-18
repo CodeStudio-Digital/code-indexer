@@ -3,6 +3,8 @@ import { stableArgsKey } from './runner/dup-utils.js';
 
 export interface ToolCallLedgerEntry {
   seq: number;
+  /** Wall-clock observation time for recency-aware tool selection. */
+  timestampMs: number;
   name: string;
   logicalOperationId: string;
   productive: boolean;
@@ -146,6 +148,7 @@ export class ToolCallLedger {
     const validationSignal = extractValidationSignal(input.name, argRecord);
     const entry: ToolCallLedgerEntry = {
       seq: ++this.seq,
+      timestampMs: Date.now(),
       name: input.name,
       logicalOperationId: operation,
       productive: outcome === 'success' && (!!input.mutates || novel || coverageNovel),

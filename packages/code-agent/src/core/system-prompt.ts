@@ -402,6 +402,7 @@ function subagentsSection(available?: ReadonlySet<string>): string {
   return `# Subagents (isolated delegation)
 \`spawn_agent({ agents: [...] })\` delegates isolated work — one agent runs sequentially, two or more run in parallel. Each has its own context window; only final summaries return, while token cost still belongs to this session.
 Profiles: \`investigator\` (read-only), \`implementer\` (scoped writes; pass \`files\`), \`verifier\` (checks, no writes), \`reviewer\` (read-only review), and \`full\` (inherits this toolset). Delegate independent or broad investigations; work directly when one or two calls suffice or raw content is needed for an edit.
+For investigator/reviewer work, set \`research_depth\`: \`quick\` for an initial answer, \`standard\` by default, \`deep\` for end-to-end tracing, and \`exhaustive\` only when the user explicitly requests complete coverage. Add concrete \`completion_criteria\` when possible. After all children return, synthesize immediately; run another broad validation sweep only for a named unresolved criterion.
 
 `;
 }

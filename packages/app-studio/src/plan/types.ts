@@ -1,3 +1,8 @@
+import {
+  validateAppPlanDocument,
+  type AppPlanSchemaIssue,
+} from './schema.js';
+
 export const APP_PLAN_VERSION = 1 as const;
 
 export type AppPlanRevisionStatus = 'draft' | 'approved' | 'superseded';
@@ -144,6 +149,20 @@ export interface AppFitnessReport {
   counts: { passed: number; warnings: number; errors: number };
 }
 
+export type AppPlanValidationResult =
+  | { ok: true; plan: AppPlanV1 }
+  | { ok: false; issues: AppPlanSchemaIssue[] };
+
+export class AppPlanValidationError extends Error {
+  readonly issues: AppPlanSchemaIssue[];
+
+  constructor(issues: AppPlanSchemaIssue[]) {
+    super(formatAppPlanValidationIssues(issues));
+    this.name = 'AppPlanValidationError';
+    this.issues = issues;
+  }
+}
+
 export function emptyAppPlan(locale = 'pt-BR'): AppPlanV1 {
   return {
     v: APP_PLAN_VERSION,
@@ -160,15 +179,26 @@ export function emptyAppPlan(locale = 'pt-BR'): AppPlanV1 {
   };
 }
 
+export function validateAppPlan(value: string | unknown): AppPlanValidationResult {
+  const result = validateAppPlanDocument(value);
+  return result.ok
+    ? { ok: true, plan: result.value as unknown as AppPlanV1 }
+    : result;
+}
+
+export function formatAppPlanValidationIssues(issues: AppPlanSchemaIssue[], limit = 12): string {
+  const visible = issues.slice(0, limit).map((issue) => `${issue.path} ${issue.message}`);
+  const remainder = issues.length - visible.length;
+  return `Invalid AppPlanV1: ${visible.join('; ')}${remainder > 0 ? `; and ${remainder} more issue(s)` : ''}`;
+}
+
+export function requireAppPlan(value: string | unknown): AppPlanV1 {
+  const result = validateAppPlan(value);
+  if (!result.ok) throw new AppPlanValidationError(result.issues);
+  return result.plan;
+}
+
 export function parseAppPlan(value: string | unknown): AppPlanV1 | null {
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) as unknown : value;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const plan = parsed as Partial<AppPlanV1>;
-    if (plan.v !== APP_PLAN_VERSION) return null;
-    if (!plan.intent || !plan.scope || !plan.experience || !plan.data || !plan.engineering || !plan.delivery) return null;
-    return plan as AppPlanV1;
-  } catch {
-    return null;
-  }
+  const result = validateAppPlan(value);
+  return result.ok ? result.plan : null;
 }

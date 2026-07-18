@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { getMaxOutputTokens } from '@mcp/code-agent/providers/capabilities.js';
 import {
   renderTextDocument,
   safeDocumentFilename,
@@ -25,6 +26,8 @@ export class OpenAIChatProvider implements ChatProvider {
   private bodyInject?: Record<string, unknown>;
   private bodyRemove?: string[];
   private reasoningDeltaKey?: string;
+  /** Provider-instance overrides keyed by bare model id. */
+  private modelMaxOutputTokens?: Readonly<Record<string, number>>;
 
   constructor(opts: {
     name?: string;
@@ -43,6 +46,8 @@ export class OpenAIChatProvider implements ChatProvider {
     bodyRemove?: string[];
     /** Non-standard reasoning delta key (from `request.response.reasoningDeltaKey`). */
     reasoningDeltaKey?: string;
+    /** Persisted provider_models.default_max_tokens values for this instance. */
+    modelMaxOutputTokens?: Readonly<Record<string, number>>;
   }) {
     this.name = opts.name ?? 'openai';
     this.model = opts.model;
@@ -50,6 +55,7 @@ export class OpenAIChatProvider implements ChatProvider {
     this.bodyInject = opts.bodyInject;
     this.bodyRemove = opts.bodyRemove;
     this.reasoningDeltaKey = opts.reasoningDeltaKey;
+    this.modelMaxOutputTokens = opts.modelMaxOutputTokens;
 
     // Merge a custom auth header in, suppressing the SDK's native Authorization
     // when a differently-named header carries the credential (null omits it).
@@ -108,9 +114,11 @@ export class OpenAIChatProvider implements ChatProvider {
       if (/^glm-(?:5(?:[.\-]|$)|4\.[567])/.test(this.model)) {
         zaiExtras.thinking = { type: req.thinking ? 'enabled' : 'disabled' };
       }
-      const maxTokensEnv = process.env.ZAI_MAX_TOKENS;
-      const parsed = maxTokensEnv ? Number(maxTokensEnv) : NaN;
-      zaiExtras.max_tokens = Number.isFinite(parsed) && parsed > 0 ? parsed : 32_000;
+      // Keep the wire payload aligned with the model capability used for
+      // context reservation. A provider-instance DB override wins; otherwise
+      // use the DB/registry/fallback resolution chain.
+      zaiExtras.max_tokens =
+        this.modelMaxOutputTokens?.[this.model] ?? getMaxOutputTokens(this.model);
     }
 
     // DeepSeek-V4: only explicitly enable thinking when the runner requests it.

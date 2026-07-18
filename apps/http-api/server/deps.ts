@@ -26,6 +26,7 @@ import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { NullVectorStore, type VectorStore } from '@mcp/store/vectors.js';
 import {
   SemanticStore,
+  semanticPurposeForNamespace,
   type EmbeddingTarget,
   type RerankerTarget,
 } from '@mcp/store/semantic-store.js';
@@ -193,7 +194,8 @@ export interface ProviderDeps {
 
 export interface SearchDeps {
   embeddingService: EmbeddingService;
-  knowledgeEmbeddingService: EmbeddingService;
+  docsEmbeddingService: EmbeddingService;
+  memoryEmbeddingService: EmbeddingService;
   vectorStore: VectorStore;
   semanticStore: SemanticStore;
   localVectorRouter: LocalVectorRouter;
@@ -515,7 +517,11 @@ export interface PipelineDeps {
    */
   buildToolSelectionFilter: () => undefined | ((
     tools: ThinTool[],
-    ctx: { taskText: string; recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }> },
+    ctx: {
+      taskText: string;
+      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
+      protectedToolNames?: ReadonlySet<string>;
+    },
   ) => Promise<ThinTool[]>);
   /**
    * Companion to `buildToolSelectionFilter` — the runtime calls this
@@ -648,7 +654,7 @@ export function createDeps(): ServerDeps {
       const namespaces = [...pendingMutationDrains];
       pendingMutationDrains.clear();
       for (const namespace of namespaces) {
-        void semanticCoordinatorForMutations?.catchUpKnowledgeNamespace(namespace).catch((error) =>
+        void semanticCoordinatorForMutations?.catchUpMemoryNamespace(namespace).catch((error) =>
           console.warn(`[semantic] mutation catch-up paused for ${namespace}: ${(error as Error).message}`));
       }
     }, 0);
@@ -658,7 +664,13 @@ export function createDeps(): ServerDeps {
     semanticStore,
     {
       owner: semanticMutationOwner,
-      enabled: () => semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+      enabled: (namespace) => {
+        try {
+          return semanticStore.getProfile(semanticPurposeForNamespace(namespace))?.embedding_target.kind !== 'disabled';
+        } catch {
+          return false;
+        }
+      },
       onDurableMutation: (namespace, phase) => {
         // The running fence deliberately blocks activation while its source
         // row is changing. Reconcile only after commit (settled), or for an
@@ -716,9 +728,11 @@ export function createDeps(): ServerDeps {
     },
   );
   const codeEmbeddingService = semanticProfileRuntime.embedding('code');
-  const knowledgeEmbeddingService = semanticProfileRuntime.embedding('knowledge');
+  const docsEmbeddingService = semanticProfileRuntime.embedding('docs');
+  const memoryEmbeddingService = semanticProfileRuntime.embedding('memory');
   const codeQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('code');
-  const knowledgeQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('knowledge');
+  const docsQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('docs');
+  const memoryQueryEmbeddingService = semanticProfileRuntime.queryEmbedding('memory');
   // HybridSearch owns the fail-open boundary so it can report the concrete
   // fallback reason in per-query diagnostics. A fail-open profile proxy here
   // would hide worker/provider failures and make the UI claim reranking ran.
@@ -726,7 +740,8 @@ export function createDeps(): ServerDeps {
   // Documentation applies calibrated relevance thresholds. Its reranker must
   // surface failures so CrossEncoderReranker can keep the RRF set explicitly
   // uncalibrated; code search remains fail-open inside HybridSearch.
-  const knowledgeReranker = semanticProfileRuntime.reranker('knowledge', { strict: true });
+  const docsReranker = semanticProfileRuntime.reranker('docs', { strict: true });
+  const memoryReranker = semanticProfileRuntime.reranker('memory', { strict: true });
   // Never open sqlite-vec from Electron's main process. If the dedicated
   // worker entry is unavailable, keep structural/FTS search alive and let
   // semantic jobs pause visibly until the worker can be restored.
@@ -740,8 +755,9 @@ export function createDeps(): ServerDeps {
       codeEmbeddingService,
       vectorOverride,
       codeQueryEmbeddingService,
-      knowledgeQueryEmbeddingService,
+      memoryQueryEmbeddingService,
       pipelineProviderResolver,
+      memoryReranker,
     );
   registerShutdownTask('semantic-runtime-dispose', () => semanticProfileRuntime.dispose());
   registerShutdownTask('semantic-vector-worker', () =>
@@ -797,7 +813,7 @@ export function createDeps(): ServerDeps {
 
   const snapshotService = new SnapshotService(
     db,
-    knowledgeEmbeddingService,
+    memoryEmbeddingService,
     searchableVectorStore,
     semanticMutationSink,
   );
@@ -828,10 +844,11 @@ export function createDeps(): ServerDeps {
   // the project-scope port the runner consumes.
   const agentMemoryService = new AgentMemoryService(
     db,
-    knowledgeEmbeddingService,
+    memoryEmbeddingService,
     searchableVectorStore,
-    knowledgeQueryEmbeddingService,
+    memoryQueryEmbeddingService,
     semanticMutationSink,
+    memoryReranker,
   );
   const agentMemoryRetriever = new AgentMemoryRetriever(agentMemoryService, db, {
     topK: 5,
@@ -866,9 +883,9 @@ export function createDeps(): ServerDeps {
   const sessionStore = new SessionStore(db.raw(), semanticMutationSink);
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
-    knowledgeEmbeddingService,
+    memoryEmbeddingService,
     searchableVectorStore,
-    knowledgeQueryEmbeddingService,
+    memoryQueryEmbeddingService,
   );
   const companyStore = new CompanyStore(db.raw());
   const companySandboxStore = new CompanySandboxStore(db.raw());
@@ -1082,14 +1099,14 @@ export function createDeps(): ServerDeps {
   const toolEmbeddingStore = new InMemoryToolEmbeddingStore();
   const toolSelectionEmbed: EmbeddingFn = Object.assign(
     async (text: string) => {
-      // Internal selectors belong to the Knowledge profile. Cache consumers
+      // Internal selectors belong to the Memory profile. Cache consumers
       // pin the dynamic fingerprint below so a profile edit cannot mix spaces.
-      const result = await knowledgeEmbeddingService.embedQuery(text);
+      const result = await memoryEmbeddingService.embedQuery(text);
       return Float32Array.from(result.vector);
     },
     {
       fingerprint: (): string =>
-        knowledgeEmbeddingService.fingerprint?.() ?? 'semantic:knowledge:unfingerprinted',
+        memoryEmbeddingService.fingerprint?.() ?? 'semantic:memory:unfingerprinted',
     },
   );
 
@@ -1151,7 +1168,7 @@ export function createDeps(): ServerDeps {
   //
   // - `docQueryRewriter`: produces 2-3 variants merged via RRF. Backed
   //   by sub_agent_result_cache (24h TTL) and pipeline_telemetry.
-  // - `docReranker`: re-orders candidates via the Knowledge profile's
+  // - `docReranker`: re-orders candidates via the Docs profile's
   //   cross-encoder before the final top-K is selected.
   //
   // Both degrade gracefully (no binding configured → no-op) so they are
@@ -1161,14 +1178,14 @@ export function createDeps(): ServerDeps {
     cache: subAgentResultCacheStore,
     // telemetry disabled (pipeline_telemetry tab removed)
   });
-  // The Knowledge semantic profile is the sole source of truth. Its strict
+  // The Docs semantic profile is the sole source of truth. Its strict
   // proxy lets CrossEncoderReranker distinguish inference failures from real
   // calibrated scores; disabled still resolves to NullReranker and preserves
   // the incoming RRF order without falling back to a pipeline LLM.
-  const docReranker = new CrossEncoderReranker(knowledgeReranker);
+  const docReranker = new CrossEncoderReranker(docsReranker);
   const docHybridSearch = new DocHybridSearch(
     docStore,
-    knowledgeQueryEmbeddingService,
+    docsQueryEmbeddingService,
     vectorStore,
     undefined,
     { rewriter: docQueryRewriter, reranker: docReranker },
@@ -1180,7 +1197,7 @@ export function createDeps(): ServerDeps {
   const docProgressTracker = new DocIngestProgressTracker();
   const indexDocsUseCase = new IndexDocumentationUseCase({
     docStore,
-    embeddingService: knowledgeEmbeddingService,
+    embeddingService: docsEmbeddingService,
     vectorStore,
     pipelineProviderResolver,
     renderBackend: docRenderer,
@@ -1256,7 +1273,8 @@ export function createDeps(): ServerDeps {
     router: localVectorRouter,
     vectorStore: vectorOverride,
     codeEmbedding: codeEmbeddingService,
-    knowledgeEmbedding: knowledgeEmbeddingService,
+    docsEmbedding: docsEmbeddingService,
+    memoryEmbedding: memoryEmbeddingService,
     costTracker,
     lshSink: lshIndexingSink,
     snapshotService,
@@ -1271,7 +1289,7 @@ export function createDeps(): ServerDeps {
   });
   semanticCoordinatorForMutations = semanticCoordinator;
   // Session Drive keeps only text/metadata in the central ledger. Semantic
-  // mutations are durable deltas on the project's shared Knowledge namespace;
+  // mutations are durable deltas on the project's shared Memory namespace;
   // search resolves the active generation through the worker-backed index.
   const investigationSemantic: InvestigationSemanticIndexPort = {
     wakeUpsert: (row) => {
@@ -1336,6 +1354,10 @@ export function createDeps(): ServerDeps {
   // later via `observeToolSelectionOutcome` when the runtime sees what
   // tools were actually called.
   const toolSelectionFilterEnabled = process.env.MCP_PIPELINES_TOOL_SELECTION === '1';
+  const toolSelectionKRaw = Number.parseInt(process.env.MCP_PIPELINES_TOOL_SELECTION_K ?? '', 10);
+  const toolSelectionK = Number.isFinite(toolSelectionKRaw)
+    ? Math.min(128, Math.max(8, toolSelectionKRaw))
+    : 32;
   // Agent Decision Engine → tool-selection bridge. Default OFF: when enabled,
   // the classified task intent nudges preferred/discouraged tools in the thin
   // selection path. Off (or low classifier confidence) → byte-identical to the
@@ -1377,7 +1399,11 @@ export function createDeps(): ServerDeps {
 
   const buildToolSelectionFilter = (): undefined | ((
     tools: ThinTool[],
-    ctx: { taskText: string; recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }> },
+    ctx: {
+      taskText: string;
+      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
+      protectedToolNames?: ReadonlySet<string>;
+    },
   ) => Promise<ThinTool[]>) => {
     if (!toolSelectionFilterEnabled) return undefined;
     return async (tools, ctx) => {
@@ -1390,6 +1416,13 @@ export function createDeps(): ServerDeps {
         recentToolCalls: ctx.recentToolCalls,
         embed: toolSelectionEmbed,
         embeddingStore: toolEmbeddingStore,
+        k: toolSelectionK,
+        protectedNames: ctx.protectedToolNames,
+        onError: (error) => {
+          console.warn(
+            `[coder] smart tool-selection failed open: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        },
         toolPolicy: agentDecisionToolPolicyEnabled
           ? toolPolicyForTask(ctx.taskText)
           : undefined,
@@ -1406,7 +1439,7 @@ export function createDeps(): ServerDeps {
               queryId: `tool-selection-${queryHash}`,
               taskText: ctx.taskText,
               recentToolEvents: ctx.recentToolCalls,
-              k: 12,
+              k: toolSelectionK,
               agentDecision,
             },
           },
@@ -1486,7 +1519,8 @@ export function createDeps(): ServerDeps {
     webhookDispatcher,
     modelDiscovery,
     embeddingService,
-    knowledgeEmbeddingService,
+    docsEmbeddingService,
+    memoryEmbeddingService,
     vectorStore,
     semanticStore,
     localVectorRouter,

@@ -22,10 +22,28 @@ function invoke(sessionId: number, method: PreviewInvoke['method']): void {
   }
 }
 
+function invokeKey(key: string, method: PreviewInvoke['method']): void {
+  const svc = getGlobalPreviewDevtools();
+  if (!svc) return;
+  try {
+    void Promise.resolve(svc.invoke({ key, method })).catch(() => undefined);
+  } catch {
+    /* preview backend unavailable — nothing to close */
+  }
+}
+
 export function closePreviewWindow(sessionId: number): void {
   invoke(sessionId, 'closeWindow');
 }
 
 export function closePreviewSession(sessionId: number): void {
   invoke(sessionId, 'closeSession');
+}
+
+export function closeCompanyPreviewWindows(sessionId: number): void {
+  invokeKey(`company-session-${sessionId}`, 'closeWindowPrefix');
+}
+
+export function closeCompanyPreviewSession(sessionId: number): void {
+  invokeKey(`company-session-${sessionId}`, 'closeSessionPrefix');
 }

@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import { runSubagent } from '../implement-subagent.js';
+import { buildExpandTools } from '../expand.js';
 
 function captureProvider(): ChatProvider {
   let turn = 0;
@@ -25,6 +26,107 @@ function captureProvider(): ChatProvider {
 }
 
 describe('runSubagent context inheritance', () => {
+  it('keeps plugin tools in their own tier and inherits smart selection', async () => {
+    const seenCatalogs: string[][] = [];
+    let turn = 0;
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        turn += 1;
+        seenCatalogs.push(request.tools.map((tool) => tool.name));
+        if (turn === 1) {
+          yield { type: 'tool_call_start', id: 'expand-1', name: 'expand_toolset' };
+          yield {
+            type: 'tool_call_end',
+            id: 'expand-1',
+            name: 'expand_toolset',
+            input: { tier: 'plugin-acme', reason: 'task needs Acme' },
+          };
+          yield { type: 'done', stop_reason: 'tool_use' };
+          return;
+        }
+        yield { type: 'text_delta', text: 'done' };
+        yield { type: 'done', stop_reason: 'end_turn' };
+      },
+    };
+    const pluginTool: CoderTool = {
+      name: 'plugin__acme__lookup',
+      description: 'Look up Acme records',
+      parameters: { type: 'object', properties: {} },
+      source: 'mcp_external',
+      mutates: false,
+      runtimeTier: { id: 'plugin-acme', displayName: 'Acme plugin' },
+      handler: async () => ({ content: 'ok' }),
+    };
+    const expand = buildExpandTools(new Map([
+      ['plugin-acme', { displayName: 'Acme plugin', toolCount: 1 }],
+    ]))[0];
+    const selection = vi.fn(async (tools: ChatRequest['tools']) => tools);
+
+    const result = await runSubagent({
+      provider,
+      tools: [pluginTool, expand],
+      ctx: { cwd: process.cwd(), projectName: 'test' } as ToolContext,
+      toolSelectionFilter: selection,
+    }, {
+      systemPrompt: 'Explore Acme.',
+      profile: 'explore',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'inspect the Acme record' }] }],
+      maxTurns: 4,
+      limits: { maxToolCalls: 4, timeoutMs: 5_000, stallMs: 5_000 },
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(selection).toHaveBeenCalled();
+    expect(seenCatalogs[0]).not.toContain(pluginTool.name);
+    expect(seenCatalogs[0]).toContain('expand_toolset');
+    expect(seenCatalogs[1]).toContain(pluginTool.name);
+  });
+
+  it('keeps the full specialist surface exact and bypasses smart selection', async () => {
+    const seenCatalogs: string[][] = [];
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        seenCatalogs.push(request.tools.map((tool) => tool.name));
+        yield { type: 'text_delta', text: 'done' };
+        yield { type: 'done', stop_reason: 'end_turn' };
+      },
+    };
+    const pluginTool: CoderTool = {
+      name: 'plugin__acme__lookup',
+      description: 'Look up Acme records',
+      parameters: { type: 'object', properties: {} },
+      source: 'mcp_external',
+      mutates: false,
+      runtimeTier: { id: 'plugin-acme', displayName: 'Acme plugin' },
+      handler: async () => ({ content: 'ok' }),
+    };
+    const selection = vi.fn(async (tools: ChatRequest['tools']) => tools.slice(0, 1));
+
+    await runSubagent({
+      provider,
+      tools: [pluginTool],
+      ctx: { cwd: process.cwd(), projectName: 'test' } as ToolContext,
+      toolSelectionFilter: selection,
+    }, {
+      systemPrompt: 'Full access.',
+      profile: 'full',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'use the full exact surface' }] }],
+      maxTurns: 2,
+      limits: { maxToolCalls: 1, timeoutMs: 5_000, stallMs: 5_000 },
+    });
+
+    expect(selection).not.toHaveBeenCalled();
+    expect(seenCatalogs[0]).toContain(pluginTool.name);
+  });
+
   it('passes global workspace and execution context fields to subagent tools', async () => {
     let seenContext: ToolContext | undefined;
     const captureTool: CoderTool = {

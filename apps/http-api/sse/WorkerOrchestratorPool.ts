@@ -30,6 +30,7 @@ import { WorkerHost } from '@mcp/orchestrator-host';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import { closeCompanyPreviewSession, closeCompanyPreviewWindows } from './closeCoderPreview.js';
 import type { VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
@@ -309,6 +310,7 @@ export class WorkerOrchestratorPool {
 
   /** Gracefully evict a session — sends `stop` and waits for worker exit. */
   async evict(sessionId: number): Promise<void> {
+    closeCompanyPreviewSession(sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     this.entries.delete(sessionId);
@@ -372,6 +374,7 @@ export class WorkerOrchestratorPool {
       defaultRequestTimeoutMs: 60_000, // LLM-bound calls can take a while
       onCrash: (err) => {
         this.log('error', `[pool] worker session=${sessionId} crashed permanently: ${err.message}`);
+        closeCompanyPreviewSession(sessionId);
         this.entries.delete(sessionId);
         // Unblock any SSE stream attached to this session so it closes
         // cleanly instead of hanging until the client disconnects.
@@ -482,6 +485,12 @@ export class WorkerOrchestratorPool {
       if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
       return svc.invoke(payload as PreviewInvoke);
     });
+    const offPreviewDevtoolsCancel = bridge.handle('previewDevtoolsCancel', async (payload) => {
+      const svc = getGlobalPreviewDevtools();
+      const requestId = (payload as { requestId?: unknown })?.requestId;
+      if (svc?.cancel && typeof requestId === 'string') await svc.cancel(requestId);
+      return { ok: true };
+    });
     // Vision fallback — same main-process describer as the coder pool.
     const offVisionDescribe = bridge.handle('visionDescribe', async (payload) => {
       const v = this.opts.docDeps?.vision;
@@ -550,6 +559,7 @@ export class WorkerOrchestratorPool {
     const offEnd = bridge.on('bus.end', (payload) => {
       const env = payload as { event: 'done' | 'error'; data: unknown };
       markEnded(bus, env.event, env.data);
+      closeCompanyPreviewWindows(sessionId);
     });
 
     // ─── Supervisor wire-back (Sprint 4 Phase 1.6) ───────────────
@@ -607,6 +617,7 @@ export class WorkerOrchestratorPool {
       try { offDocsResearch(); } catch { /* best-effort */ }
       try { offRecommend(); } catch { /* best-effort */ }
       try { offPreviewDevtools(); } catch { /* best-effort */ }
+      try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }
       try { offSecrets(); } catch { /* best-effort */ }

@@ -62,6 +62,7 @@ export const ragSearchDocsTool: CoderTool = {
     "DON'T: use to search the current project's code — that's `mcp__search` / `mcp__grep_code`.\n" +
     "DON'T: ask a follow-up the snippet already answers — read the snippet (or rag_read_doc the chunk), cite it back to the user with the source.",
   source: 'native',
+  outputPolicy: { mode: 'search', reducer: 'smart', recovery: 'section' },
   parameters: {
     type: 'object',
     properties: {
@@ -173,7 +174,15 @@ export const ragSearchDocsTool: CoderTool = {
       lines.push('', r.snippet);
       return lines.join('\n');
     });
-    const footer = 'Snippets are truncated — use rag_read_doc({chunk_id}) to read any section in full (with surrounding sections).';
+    const truncatedSnippets = results.filter((result) => (
+      result.snippet_truncated === true
+      && Number.isFinite(result.snippet_source_chars)
+      && Number.isFinite(result.snippet_retained_chars)
+      && Number(result.snippet_source_chars) > Number(result.snippet_retained_chars)
+    ));
+    const footer = truncatedSnippets.length > 0
+      ? 'Some snippets are source previews — use rag_read_doc({chunk_id}) to read any section in full (with surrounding sections).'
+      : 'Use rag_read_doc({chunk_id}) when you need the complete section or its surrounding sections.';
     // When NO result carries a calibrated relevance, the reranker didn't run
     // (no model loaded, or ≤1 candidate): the order is raw fusion rank, not a
     // 0-1 confidence. Warn so the agent judges by CONTENT, not position.
@@ -181,7 +190,40 @@ export const ragSearchDocsTool: CoderTool = {
     const calNote = uncalibrated
       ? '\nNote: relevance is UNCALIBRATED (raw fusion rank, not a 0-1 confidence) — the reranker did not score these. Judge each snippet on its content, not its rank, and broaden the query if the top hit looks weak.'
       : '';
-    return ok(`${header}\n\n${blocks.join('\n\n---\n\n')}\n\n${footer}${calNote}`);
+    const content = `${header}\n\n${blocks.join('\n\n---\n\n')}\n\n${footer}${calNote}`;
+    const sourceTruncations: NonNullable<ToolResult['sourceTruncations']> = [];
+    if (truncatedSnippets.length > 0) {
+      sourceTruncations.push({
+        technique: 'docs-search-snippet-preview',
+        inputSize: truncatedSnippets.reduce(
+          (sum, result) => sum + Number(result.snippet_source_chars),
+          0,
+        ),
+        outputSize: truncatedSnippets.reduce(
+          (sum, result) => sum + Number(result.snippet_retained_chars),
+          0,
+        ),
+        unit: 'chars',
+        recoverable: true,
+      });
+    }
+    if (
+      diag.results_truncated === true
+      && Number.isFinite(diag.results_before_limit)
+      && Number(diag.results_before_limit) > results.length
+    ) {
+      sourceTruncations.push({
+        technique: 'docs-search-result-limit',
+        inputSize: Number(diag.results_before_limit),
+        outputSize: results.length,
+        unit: 'items',
+        recoverable: true,
+      });
+    }
+    return {
+      content,
+      ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
+    };
   },
 };
 

@@ -38,7 +38,7 @@ export interface DurableSemanticMutationSinkOptions {
   owner?: string;
   /** Cross-process fences are recovered only after this lease expires. */
   leaseMs?: number;
-  enabled?: () => boolean;
+  enabled?: (namespace: string) => boolean;
   /** Best-effort wake-up; durability has already landed when this runs. */
   onDurableMutation?: (
     namespace: string,
@@ -76,12 +76,12 @@ export function createDurableSemanticMutationSink(
 
   return {
     noteMutation: (input) => {
-      if (!enabled()) return;
+      if (!enabled(input.namespace)) return;
       store.noteNamespaceMutation(input);
       notify(input.namespace, 'noted');
     },
     beginMutation: (input) => {
-      if (!enabled()) return null;
+      if (!enabled(input.namespace)) return null;
       const token = randomUUID();
       const job = store.noteNamespaceMutation({
         ...input,

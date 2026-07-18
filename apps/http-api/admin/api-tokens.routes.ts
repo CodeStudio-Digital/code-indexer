@@ -7,6 +7,7 @@ interface CreateTokenBody {
   scopes?: unknown;
   expiresInDays?: unknown;
   tier?: unknown;
+  profileId?: unknown;
 }
 
 /**
@@ -54,6 +55,9 @@ export function createApiTokensRouter(bundle: AuthBundle): Hono {
     if (!name.trim()) return c.json({ error: 'name is required' }, 400);
 
     const tier = parseTier(body.tier);
+    const profileId = typeof body.profileId === 'string' && body.profileId.trim()
+      ? body.profileId.trim()
+      : null;
 
     // When a tier is selected, the admin UI doesn't bother surfacing
     // scope toggles — the tier is the authoritative gate. We still
@@ -69,16 +73,22 @@ export function createApiTokensRouter(bundle: AuthBundle): Hono {
       ? body.expiresInDays
       : undefined;
 
-    const out = bundle.issueApiToken.execute({ name, scopes, expiresInDays, tier });
+    let out;
+    try {
+      out = bundle.issueApiToken.execute({ name, scopes, expiresInDays, tier, profileId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json({ error: message }, 400);
+    }
     bundle.audit.execute({
       principal: out.id,
       tokenType: 'api_token',
       event: 'token_issued',
       status: 201,
       toolName: null,
-      meta: { name, scopes, tier, expiresInDays: expiresInDays ?? null },
+      meta: { name, scopes, tier, profileId, expiresInDays: expiresInDays ?? null },
     });
-    return c.json({ id: out.id, rawToken: out.rawToken, tier }, 201);
+    return c.json({ id: out.id, rawToken: out.rawToken, tier, profileId }, 201);
   });
 
   app.get('/api-tokens', (c) => {
@@ -91,6 +101,7 @@ export function createApiTokensRouter(bundle: AuthBundle): Hono {
       last_used_at: t.lastUsedAt,
       revoked_at: t.revokedAt,
       tier: t.tier,
+      profile_id: t.profileId,
       // token_hash is intentionally NOT returned
     }));
     return c.json({ tokens });

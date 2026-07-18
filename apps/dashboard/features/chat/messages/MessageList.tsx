@@ -94,12 +94,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
     // message was never persisted (pre-fix sessions where a mid-run compaction
     // dropped it) — without it they render as a perpetual loading spinner.
     for (const tr of sessionData.tool_results ?? []) {
-      const suffix =
-        tr._truncated && tr._originalLength
-          ? `\n\n… [truncated for transport — ${tr._originalLength - (tr.content?.length ?? 0)} more chars in DB]`
-          : '';
       m.set(tr.tool_use_id, {
-        content: (tr.content ?? '') + suffix,
+        content: tr.content ?? '',
         isError: Boolean(tr.is_error),
         truncated: Boolean(tr._truncated),
         originalLength: tr._originalLength,
@@ -109,12 +105,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
       if (msg.role !== 'tool') continue;
       for (const b of msg.content) {
         if (b.type === 'tool_result' && b.tool_use_id) {
-          const suffix =
-            b._truncated && b._originalLength
-              ? `\n\n… [truncated for transport — ${b._originalLength - (b.content?.length ?? 0)} more chars in DB]`
-              : '';
           m.set(b.tool_use_id, {
-            content: (b.content ?? '') + suffix,
+            content: b.content ?? '',
             isError: Boolean(b.is_error),
             truncated: Boolean(b._truncated),
             originalLength: b._originalLength,

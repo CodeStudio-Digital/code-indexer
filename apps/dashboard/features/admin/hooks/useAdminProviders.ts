@@ -11,6 +11,7 @@ import {
   setFallbackProvider as setFallbackProviderApi,
   setModelReasoningLevel,
   setModelContextWindow as setModelContextWindowApi,
+  setModelMaxOutputTokens as setModelMaxOutputTokensApi,
   setModelMaxTools as setModelMaxToolsApi,
   backfillContextWindows as backfillContextWindowsApi,
   setSubagentTarget as setSubagentTargetApi,
@@ -193,6 +194,24 @@ export function useAdminProviders() {
     }
   };
 
+  const setModelMaxOutputTokens = async (
+    providerId: string,
+    modelId: string,
+    mode: string,
+    value: number | null,
+  ) => {
+    try {
+      await setModelMaxOutputTokensApi(providerId, modelId, mode, value);
+      await loadModels(providerId);
+    } catch (e) {
+      await notify({
+        title: 'Output limit update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const backfillContextWindows = async () => {
     try {
       const result = await backfillContextWindowsApi();
@@ -280,6 +299,7 @@ export function useAdminProviders() {
     deleteModel,
     setModelEffort,
     setModelContextWindow,
+    setModelMaxOutputTokens,
     setModelMaxTools,
     backfillContextWindows,
     setSubagentTarget,

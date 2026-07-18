@@ -11,7 +11,11 @@ import {
 function namespace(namespace: string, dbPath: string, sizeBytes: number): SemanticNamespaceStatusView {
   return {
     namespace,
-    purpose: namespace.startsWith('code:') ? 'code' : 'knowledge',
+    purpose: namespace.startsWith('code:')
+      ? 'code'
+      : namespace.startsWith('docs:')
+        ? 'docs'
+        : 'memory',
     dbPath,
     size_bytes: sizeBytes,
     active: null,

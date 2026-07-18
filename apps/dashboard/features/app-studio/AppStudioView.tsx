@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Panel, PanelGroup, type ImperativePanelHandle } from 'react-resizable-panels';
 import { ArrowLeft, Loader2, MessageSquare, Pause, Play, Square } from 'lucide-react';
@@ -11,9 +11,10 @@ import { runAppAction, type AppStage } from './app-studio-api.js';
 import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStudioRail.js';
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
 import { AppStudioSurfaceFind } from './AppStudioSurfaceFind.js';
-import { AppStudioRightPanel, AppStudioRightRail } from './AppStudioRightRail.js';
+import { AppStudioRightPanel, AppStudioRightRail, type AppStudioSidePanel } from './AppStudioRightRail.js';
 
 const TAB_KEY = 'mcp.app-studio.tab.v6';
+const SINGLE_SESSION_KEY = 'mcp.app-studio.single-session.v1';
 const TAB_IDS: AppStudioTab[] = ['plan', 'app', 'data', 'publish'];
 const STAGE_KEYS: Record<AppStage, string> = { planning: 'v6.stages.planning', building: 'v6.stages.building', reviewing: 'v6.stages.reviewing', ready: 'v6.stages.ready', live: 'v6.stages.live' };
 
@@ -22,6 +23,13 @@ function initialTab(): AppStudioTab {
     const value = window.localStorage.getItem(TAB_KEY) as AppStudioTab | null;
     return value && TAB_IDS.includes(value) ? value : 'plan';
   } catch { return 'plan'; }
+}
+
+function readSingleSession(appSessionId: number): number | null {
+  try {
+    const value = Number(window.localStorage.getItem(`${SINGLE_SESSION_KEY}.${appSessionId}`));
+    return Number.isInteger(value) && value > 0 ? value : null;
+  } catch { return null; }
 }
 
 export function AppStudioView({
@@ -38,19 +46,29 @@ export function AppStudioView({
   const { t } = useTranslation('appStudio');
   const { detail, error, refresh } = useAppStudioSession(sessionId);
   const [tab, setTabState] = useState<AppStudioTab>(initialTab);
-  const [chatOpen, setChatOpen] = useState(() => !window.matchMedia('(max-width: 767px)').matches || !!initialIdeaPrompt?.trim());
+  const [sidePanel, setSidePanel] = useState<AppStudioSidePanel | null>(() => !window.matchMedia('(max-width: 767px)').matches || !!initialIdeaPrompt?.trim() ? 'chat' : null);
+  const [singleSessionId, setSingleSessionIdState] = useState<number | null>(() => readSingleSession(sessionId));
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const [action, setAction] = useState<'pause' | 'resume' | 'cancel' | null>(null);
   const panelRef = useRef<ImperativePanelHandle>(null);
   const setTab = (next: AppStudioTab) => { setTabState(next); try { window.localStorage.setItem(TAB_KEY, next); } catch { /* ignore */ } };
+  const setSingleSessionId = useCallback((next: number | null) => {
+    setSingleSessionIdState(next);
+    try {
+      const key = `${SINGLE_SESSION_KEY}.${sessionId}`;
+      if (next == null) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, String(next));
+    } catch { /* ignore */ }
+  }, [sessionId]);
 
+  useEffect(() => { setSingleSessionIdState(readSingleSession(sessionId)); }, [sessionId]);
   useEffect(() => {
     const media = window.matchMedia('(max-width: 767px)');
     const update = () => setCompact(media.matches);
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  useEffect(() => { if (!compact) chatOpen ? panelRef.current?.expand() : panelRef.current?.collapse(); }, [chatOpen, compact]);
+  useEffect(() => { if (!compact) sidePanel ? panelRef.current?.expand() : panelRef.current?.collapse(); }, [sidePanel, compact]);
 
   const runControl = async (next: 'pause' | 'resume' | 'cancel') => {
     if (next === 'cancel' && !(await confirm({ title: t('v6.cancelTitle'), description: t('v6.cancelBody'), confirmLabel: t('v6.cancelBuild'), tone: 'destructive' }))) return;
@@ -62,7 +80,7 @@ export function AppStudioView({
   if (!detail?.project) return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('create.creating')}</div>;
 
   const masterSessionId = detail.master_session_id ?? initialMasterSessionId ?? null;
-  const right = <AppStudioRightPanel active="chat" appSessionId={sessionId} companySessionId={detail.session.company_session_id} projectId={detail.project.id} projectName={detail.project.name} masterSessionId={masterSessionId} initialPrompt={initialIdeaPrompt} onCollapse={() => setChatOpen(false)} />;
+  const right = sidePanel ? <AppStudioRightPanel active={sidePanel} appSessionId={sessionId} companySessionId={detail.session.company_session_id} projectId={detail.project.id} projectName={detail.project.name} masterSessionId={masterSessionId} initialPrompt={initialIdeaPrompt} singleSessionId={singleSessionId} onSingleSessionChange={setSingleSessionId} onCollapse={() => setSidePanel(null)} /> : null;
   const stageLabel = t(STAGE_KEYS[detail.stage]);
 
   return (
@@ -81,13 +99,13 @@ export function AppStudioView({
         <div className="relative min-w-0 flex-1 p-1.5">
           <PanelGroup direction="horizontal" autoSaveId={`mcp-app-studio-v6-${sessionId}`} className="min-h-0 min-w-0">
             <Panel id="app-surface" order={1} defaultSize={compact ? 100 : 70} minSize={compact ? 100 : 48}>
-              <WorkbenchSurface className="flex h-full min-h-0 flex-col"><AppStudioSurfaceFind key={tab}>{tab === 'app' ? <AppPreviewPanel projectId={detail.project.id} builderPort={detail.builder_port} onHide={() => setTab('plan')} /> : <AppStudioTabContent tab={tab} detail={detail} onChanged={() => void refresh()} />}</AppStudioSurfaceFind></WorkbenchSurface>
+              <WorkbenchSurface className="flex h-full min-h-0 flex-col"><AppStudioSurfaceFind key={tab}>{tab === 'app' ? <AppPreviewPanel projectId={detail.project.id} builderPort={detail.builder_port} singleSessionActive={singleSessionId != null} onOpenSessions={() => setSidePanel('sessions')} onHide={() => setTab('plan')} /> : <AppStudioTabContent tab={tab} detail={detail} onChanged={() => void refresh()} />}</AppStudioSurfaceFind></WorkbenchSurface>
             </Panel>
-            {!compact && <><WorkbenchResizeHandle direction="horizontal" disabled={!chatOpen} className={!chatOpen ? 'w-0 cursor-default' : undefined} /><Panel ref={panelRef} id="app-chat" order={2} defaultSize={chatOpen ? 30 : 0} minSize={22} maxSize={46} collapsible collapsedSize={0} onCollapse={() => setChatOpen(false)}><WorkbenchSurface className="h-full">{right}</WorkbenchSurface></Panel></>}
+            {!compact && <><WorkbenchResizeHandle direction="horizontal" disabled={!sidePanel} className={!sidePanel ? 'w-0 cursor-default' : undefined} /><Panel ref={panelRef} id="app-side-panel" order={2} defaultSize={sidePanel ? 30 : 0} minSize={22} maxSize={46} collapsible collapsedSize={0} onCollapse={() => setSidePanel(null)}><WorkbenchSurface className="h-full">{right}</WorkbenchSurface></Panel></>}
           </PanelGroup>
-          {compact && chatOpen && <aside className="absolute inset-1.5 z-40 shadow-xl"><WorkbenchSurface className="h-full">{right}</WorkbenchSurface></aside>}
+          {compact && sidePanel && <aside className="absolute inset-1.5 z-40 shadow-xl"><WorkbenchSurface className="h-full">{right}</WorkbenchSurface></aside>}
         </div>
-        <AppStudioRightRail active={chatOpen ? 'chat' : null} onToggle={() => setChatOpen((open) => !open)} />
+        <AppStudioRightRail active={sidePanel} onToggle={(panel) => setSidePanel((current) => current === panel ? null : panel)} />
       </div>
       <StatusBarShell><span className={`h-1.5 w-1.5 rounded-full ${detail.stage === 'live' ? 'bg-emerald-500' : detail.stage === 'reviewing' ? 'bg-amber-400' : 'bg-violet-400'}`} /><span>{detail.session.name}</span><span className="opacity-40">·</span><span>{stageLabel}</span><MessageSquare className="ml-auto h-3 w-3" /></StatusBarShell>
     </WorkbenchShell>

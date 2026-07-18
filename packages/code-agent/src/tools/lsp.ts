@@ -34,10 +34,11 @@ function viaBackend(
 
 function formatLocations(kind: string, locs: AgentLspLocation[], origin: string): string {
   const lines = [`Found ${locs.length} ${kind}(s):`];
-  for (const l of locs.slice(0, 50)) {
+  // The backend already materialized every location. Preserve them all here;
+  // the runner can store the exact rendered result before context shaping.
+  for (const l of locs) {
     lines.push(`  ${l.file}:${l.range.start.line}:${l.range.start.column}`);
   }
-  if (locs.length > 50) lines.push(`  … ${locs.length - 50} more`);
   lines.push(`(via ${origin})`);
   return lines.join('\n');
 }

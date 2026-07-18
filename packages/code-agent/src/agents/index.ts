@@ -20,8 +20,9 @@
  *   admin   — everything unlocked. Full tier, no plan mode. Use for git
  *             mutations, snapshot management, indexing — rarely default.
  *
- * Per-project customization lives outside this file: `.mcp-indexer/agents/
- * {id}.json` can override any field except `id`.
+ * User-defined agents live outside this static registry. The HTTP layer stores
+ * them in `app_settings`, resolves their built-in base preset, and passes only
+ * the runtime overrides (prompt, automatic skills, tool allowlist) to runCoder.
  */
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
@@ -74,7 +75,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'explore',
     label: 'Explore',
     description:
-      'Read-only investigation. Bootstrap tools only (~17). Use for "explain", "find", "where", "how does X work".',
+      'Read-only investigation with the compact core catalog. Context-specific capabilities are injected only when this agent runs inside that surface.',
     profile: 'bootstrap',
     planMode: false,
     maxTurns: 50,
@@ -84,7 +85,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'plan',
     label: 'Plan',
     description:
-      'Read + planning. Navigate tier (~47 tools) with plan mode ON — the agent must submit_plan and get approval before any mutating tool.',
+      'Read + planning with plan mode ON — the agent must submit_plan and get approval before any mutating tool.',
     profile: 'navigate',
     planMode: true,
     defaultTemperature: 0.4,
@@ -93,7 +94,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'build',
     label: 'Code',
     description:
-      'Read + edit + shell + git-read. Navigate tier (~47 tools), no plan gate. Use when you trust end-to-end execution (small features, bugfixes).',
+      'Read + edit + shell + git-read, without a plan gate. Runtime-specific capabilities are added by the active workspace context.',
     profile: 'navigate',
     planMode: false,
     defaultTemperature: 0.2,
@@ -102,7 +103,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'admin',
     label: 'Ops',
     description:
-      'Everything unlocked. Full tier (~60 tools) including git_commit and index_project. Use only when the user explicitly asks for admin actions.',
+      'Full core catalog including privileged operations. Context-specific capabilities are still injected only by the active workspace.',
     profile: 'full',
     planMode: false,
     defaultTemperature: 0.1,

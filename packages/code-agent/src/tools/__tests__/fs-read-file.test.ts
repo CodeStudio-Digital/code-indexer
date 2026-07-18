@@ -94,6 +94,13 @@ describe('read_file — large-file truncation + force', () => {
     expect(res.content).toContain('[auto-full off — file > 800 lines, pass force=true to read all]');
     expect(res.content).toContain('[truncated: 600 more lines — pass force=true, a start_line/end_line range, or symbol]');
     expect(res.content).not.toContain('row 401');
+    expect(res.sourceTruncations).toEqual([{
+      technique: 'read-file-line-window',
+      inputSize: 1000,
+      outputSize: 400,
+      unit: 'lines',
+      recoverable: true,
+    }]);
   });
 
   it('force=true returns the whole file', async () => {
@@ -103,6 +110,20 @@ describe('read_file — large-file truncation + force', () => {
     expect(res.content).toContain('[lines 1-1000]');
     expect(res.content).toContain('row 1000');
     expect(res.content).not.toContain('[truncated:');
+    expect(res.sourceTruncations).toBeUndefined();
+  });
+
+  it('declares an omitted prefix even when the requested range reaches EOF', async () => {
+    writeFileSync(join(root, 'tail.log'), Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join('\n'));
+    const res = await run(readFile, { path: 'tail.log', start_line: 11, end_line: 20 });
+    expect(res.content).toContain('[truncated: 10 earlier lines omitted');
+    expect(res.sourceTruncations).toEqual([{
+      technique: 'read-file-line-window',
+      inputSize: 20,
+      outputSize: 10,
+      unit: 'lines',
+      recoverable: true,
+    }]);
   });
 
 });

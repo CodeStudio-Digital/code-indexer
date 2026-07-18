@@ -23,6 +23,7 @@
  * Each registered safe tool becomes `await tools.<name>(args)`. Result is
  * the tool's text content, or thrown Error when the tool reports isError.
  */
+import { Buffer } from 'node:buffer';
 import { runInNewContext, type Context } from 'node:vm';
 import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -33,7 +34,6 @@ import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/cor
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
-import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
@@ -43,11 +43,15 @@ import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
 import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
+import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_TOOL_CALLS = 50;
 const MAX_OUTPUT_BYTES = 50_000;
+const PRIORITY_ERROR_LOG_RATIO = 0.2;
+const MIN_PRIORITY_ERROR_LOG_BYTES = 1_024;
+const MAX_PRIORITY_ERROR_LOG_BYTES = 16_384;
 
 /**
  * Promises returned by an active code_exec toolsProxy. The module-level
@@ -97,7 +101,7 @@ const CODE_EXEC_DESC =
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
   'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and task-lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
-  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB output cap.\n' +
+  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
   'Example — required reads plus one optional symbol probe:\n' +
   '```\n' +
@@ -276,6 +280,7 @@ export function buildCodeExecTool(
     name: 'code_exec',
     description: maybeTerse(CODE_EXEC_DESC),
     source: 'native',
+    outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
     mutates: false,
     // The wrapper itself owns no mutable resource. Nested shell/write calls
     // reserve the shared unsafe lane individually; reserving it for the parent
@@ -344,8 +349,13 @@ export function buildCodeExecTool(
       // from "typo / absent Node global".
       const allToolNames = new Set(allNames);
       const logBuffer: string[] = [];
+      const priorityErrorBuffer: string[] = [];
       let toolCalls = 0;
-      let outputBytes = 0;
+      let emittedLogBytes = 0;
+      let retainedLogBytes = 0;
+      let omittedLogBytes = 0;
+      let omittedLogLines = 0;
+      let priorityErrorBytes = 0;
       let stateEpoch = 0;
       let executionClosing = false;
       let executionAborting = false;
@@ -373,17 +383,91 @@ export function buildCodeExecTool(
         return release;
       };
 
-      const appendLog = (...parts: unknown[]): void => {
-        const line = parts.map((p) => {
-          if (typeof p === 'string') return p;
-          try { return JSON.stringify(p); } catch { return String(p); }
-        }).join(' ');
-        outputBytes += line.length + 1;
-        if (outputBytes > effectiveMaxOutput) {
-          throw new Error(`code_exec: output cap (${effectiveMaxOutput} bytes) exceeded`);
+      const priorityErrorLimit = Math.max(
+        MIN_PRIORITY_ERROR_LOG_BYTES,
+        Math.min(MAX_PRIORITY_ERROR_LOG_BYTES, Math.floor(effectiveMaxOutput * PRIORITY_ERROR_LOG_RATIO)),
+      );
+
+      const formatLogLine = (parts: unknown[]): string => parts.map((p) => {
+        if (typeof p === 'string') return p;
+        try { return JSON.stringify(p); } catch { return String(p); }
+      }).join(' ');
+
+      const retainPriorityError = (line: string): void => {
+        const prefix = '[console.error] ';
+        const full = `${prefix}${line}`;
+        const fullBytes = Buffer.byteLength(`${full}\n`, 'utf8');
+        const utf8Tail = (value: string, maxBytes: number): string => {
+          const bytes = Buffer.from(value, 'utf8');
+          let start = Math.max(0, bytes.length - Math.max(0, maxBytes));
+          while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1;
+          return bytes.subarray(start).toString('utf8');
+        };
+        const entry = fullBytes <= priorityErrorLimit
+          ? full
+          : `${prefix}[tail preserved] ${utf8Tail(line, Math.max(1, priorityErrorLimit - 64))}`;
+        const entryBytes = Buffer.byteLength(`${entry}\n`, 'utf8');
+        priorityErrorBuffer.push(entry);
+        priorityErrorBytes += entryBytes;
+        while (priorityErrorBytes > priorityErrorLimit && priorityErrorBuffer.length > 1) {
+          const removed = priorityErrorBuffer.shift()!;
+          priorityErrorBytes -= Buffer.byteLength(`${removed}\n`, 'utf8');
         }
-        logBuffer.push(line);
       };
+
+      const appendCapturedLog = (level: 'log' | 'warn' | 'error', parts: unknown[]): void => {
+        const line = formatLogLine(parts);
+        const lineBytes = Buffer.byteLength(`${line}\n`, 'utf8');
+        emittedLogBytes += lineBytes;
+        if (retainedLogBytes + lineBytes <= effectiveMaxOutput) {
+          logBuffer.push(line);
+          retainedLogBytes += lineBytes;
+          return;
+        }
+
+        omittedLogLines++;
+        omittedLogBytes += lineBytes;
+        // A late diagnostic is often the only useful part of a noisy script.
+        // Keep a small bounded tail for console.error without allowing verbose
+        // logging to consume unbounded host memory or abort the script.
+        if (level === 'error') retainPriorityError(line);
+      };
+
+      const appendLog = (...parts: unknown[]): void => {
+        appendCapturedLog('log', parts);
+      };
+
+      const renderCapturedLogs = (): string => {
+        const sections: string[] = [];
+        if (logBuffer.length > 0) sections.push(logBuffer.join('\n'));
+        if (omittedLogLines > 0) {
+          sections.push(
+            `[logs truncated: ${omittedLogLines} line(s), ${omittedLogBytes} byte(s) ` +
+            `omitted from sequential output; log_cap=${effectiveMaxOutput} bytes]`,
+          );
+        }
+        if (priorityErrorBuffer.length > 0) {
+          sections.push(`[errors preserved after log cap]\n${priorityErrorBuffer.join('\n')}`);
+        }
+        return sections.join('\n');
+      };
+
+      // Excess console lines are discarded as they arrive. The output store
+      // accepts only a complete string, so persisting the retained preview
+      // would create a false promise of lossless recovery. Keep this source
+      // cap explicitly irreversible until a bounded streaming spool exists.
+      const withLogTruncation = (result: ToolResult): ToolResult => omittedLogLines > 0
+        ? {
+            ...result,
+            sourceTruncations: [{
+              technique: 'bounded-console-cap',
+              inputSize: emittedLogBytes,
+              outputSize: retainedLogBytes + priorityErrorBytes,
+              unit: 'bytes',
+              recoverable: false,
+            }],
+          }
+        : result;
 
       // Build the per-call policy context once; it reflects runner state at
       // the moment code_exec was dispatched. plan_approved / task_scope can
@@ -456,6 +540,7 @@ export function buildCodeExecTool(
             content: string;
             isError: boolean;
             durationMs: number;
+            sourceTruncations?: ToolResult['sourceTruncations'];
             refusalKind?: string;
             error?: ToolErrorInfo;
             affectsFailureStreak?: boolean;
@@ -481,6 +566,7 @@ export function buildCodeExecTool(
               durationMs: input.durationMs,
               resultChars: input.content.length,
               resultPreview: input.content,
+              sourceTruncations: input.sourceTruncations,
               ...(input.refusalKind ? { refusalKind: input.refusalKind } : {}),
               logicalOperationId: ledgerEntry?.logicalOperationId,
               productive: ledgerEntry?.productive,
@@ -760,6 +846,7 @@ export function buildCodeExecTool(
                   content: nestedContent,
                   isError: !!result.isError,
                   durationMs: Date.now() - started,
+                  sourceTruncations: normalizeSourceTruncations(result.sourceTruncations),
                   ...(result.isError
                     ? { error: result.error ?? inferToolErrorInfo(t.name, result.content) }
                     : {}),
@@ -949,7 +1036,11 @@ export function buildCodeExecTool(
             }
           : {}),
         log: appendLog,
-        console: { log: appendLog, warn: appendLog, error: appendLog },
+        console: {
+          log: (...parts: unknown[]) => appendCapturedLog('log', parts),
+          warn: (...parts: unknown[]) => appendCapturedLog('warn', parts),
+          error: (...parts: unknown[]) => appendCapturedLog('error', parts),
+        },
         JSON,
         Math,
         Number,
@@ -1062,12 +1153,12 @@ export function buildCodeExecTool(
         // Parse-time failures get hints too — `import x from 'y'` dies here
         // ("Cannot use import statement"), never reaching the async catch.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
-        return err(`code_exec parse/sync error: ${msg}${hint}`, {
+        return withLogTruncation(err(`code_exec parse/sync error: ${msg}${hint}`, {
           code: 'CODE_EXEC_PARSE_ERROR',
           kind: 'invalid_input',
           retryable: false,
           suggestedAction: 'Correct the JavaScript syntax before retrying.',
-        });
+        }));
       }
 
       let returnValue: unknown;
@@ -1084,7 +1175,8 @@ export function buildCodeExecTool(
         // Matching is on message text, never instanceof: errors thrown inside
         // node:vm carry the sandbox realm's constructors.
         const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
-        const stderr = logBuffer.length > 0 ? `\n[output before failure]\n${logBuffer.join('\n')}` : '';
+        const capturedLogs = renderCapturedLogs();
+        const stderr = capturedLogs ? `\n[output before failure]\n${capturedLogs}` : '';
         const batch = buildNestedBatchReport();
         const errorInfo = isNestedRefusal(e)
           ? refusalErrorInfo(e.refusalKind)
@@ -1113,7 +1205,7 @@ export function buildCodeExecTool(
           },
         };
         if (isNestedRefusal(e)) result.guardVerdict = e.guardVerdict;
-        return result;
+        return withLogTruncation(result);
       } finally {
         if (clockTimer) clearTimeout(clockTimer);
       }
@@ -1124,11 +1216,19 @@ export function buildCodeExecTool(
       await closeAndSettle();
 
       const lines: string[] = [];
-      lines.push(`code_exec: ${toolCalls} tool call(s), ${(outputBytes / 1024).toFixed(1)} KB output, exposed=${exposedNames.length} tools`);
-      if (logBuffer.length > 0) {
+      const omissionSummary = omittedLogLines > 0
+        ? `, console_truncated=${omittedLogLines} line(s)/${omittedLogBytes} byte(s)`
+        : '';
+      lines.push(
+        `code_exec: ${toolCalls} tool call(s), ${(emittedLogBytes / 1024).toFixed(1)} KB console emitted, ` +
+        `${((retainedLogBytes + priorityErrorBytes) / 1024).toFixed(1)} KB retained` +
+        `${omissionSummary}, exposed=${exposedNames.length} tools`,
+      );
+      const capturedLogs = renderCapturedLogs();
+      if (capturedLogs) {
         lines.push('');
         lines.push('[output]');
-        lines.push(logBuffer.join('\n'));
+        lines.push(capturedLogs);
       }
       if (returnValue !== undefined) {
         lines.push('');
@@ -1140,11 +1240,10 @@ export function buildCodeExecTool(
         }
       }
       const out = lines.join('\n');
-      if (out.length > effectiveMaxOutput) {
-        const outputId = ctx.toolOutputStore?.put(out) ?? undefined;
-        return ok(capToolContent(out, effectiveMaxOutput, outputId, 'code_exec').content);
-      }
-      return ok(out);
+      // Console capture is already memory-bounded above. A large structured
+      // return must reach the central finalizer unchanged so it is spilled
+      // once, reduced with full context, and measured truthfully.
+      return withLogTruncation(ok(out));
     },
   };
 }

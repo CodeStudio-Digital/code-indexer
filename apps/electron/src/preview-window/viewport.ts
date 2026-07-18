@@ -14,15 +14,21 @@ export const VIEWPORT_PRESETS: Record<string, Viewport> = {
   tablet: { width: 768, height: 1024, deviceScaleFactor: 2, mobile: true },
   mobile: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true },
 };
+const DEFAULT_WIDTH = 1366;
+const DEFAULT_HEIGHT = 768;
 
 /** Resolve a {preset|width|height|deviceScaleFactor|mobile} request → Viewport. */
 export function resolveViewport(args: Record<string, unknown>, base: Viewport): Viewport {
   const preset = typeof args.preset === 'string' ? VIEWPORT_PRESETS[args.preset.toLowerCase()] : undefined;
   const start = preset ?? base;
+  const finite = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
   return {
-    width: args.width != null ? Number(args.width) : start.width,
-    height: args.height != null ? Number(args.height) : start.height,
-    deviceScaleFactor: args.deviceScaleFactor != null ? Number(args.deviceScaleFactor) : start.deviceScaleFactor,
+    width: args.width != null ? finite(args.width, start.width) : start.width,
+    height: args.height != null ? finite(args.height, start.height) : start.height,
+    deviceScaleFactor: args.deviceScaleFactor != null ? finite(args.deviceScaleFactor, start.deviceScaleFactor) : start.deviceScaleFactor,
     mobile: args.mobile != null ? !!args.mobile : start.mobile,
   };
 }
@@ -30,7 +36,9 @@ export function resolveViewport(args: Record<string, unknown>, base: Viewport): 
 /** Clamp a desired content size to the primary display work area. */
 export function clampToScreen(w: number, h: number): { width: number; height: number } {
   const wa = screen.getPrimaryDisplay().workAreaSize;
-  return { width: Math.min(Math.max(320, w), wa.width), height: Math.min(Math.max(320, h), wa.height) };
+  const width = Number.isFinite(w) ? w : DEFAULT_WIDTH;
+  const height = Number.isFinite(h) ? h : DEFAULT_HEIGHT;
+  return { width: Math.round(Math.min(Math.max(320, width), wa.width)), height: Math.round(Math.min(Math.max(320, height), wa.height)) };
 }
 
 /**
@@ -40,10 +48,24 @@ export function clampToScreen(w: number, h: number): { width: number; height: nu
  * Windows/Electron builds), so true touch/mobile-UA emulation is deferred.
  */
 export function applyViewport(pw: PreviewWindow, v: Viewport): Viewport {
+  const requestedWidth = v.width;
+  const requestedHeight = v.height;
+  let actual = clampToScreen(v.width, v.height);
   if (!pw.win.isDestroyed()) {
-    const { width, height } = clampToScreen(v.width, v.height);
-    try { pw.win.setContentSize(width, height); } catch { /* best-effort */ }
+    try {
+      pw.win.setContentSize(actual.width, actual.height);
+      const [width, height] = pw.win.getContentSize();
+      actual = { width, height };
+    } catch { /* best-effort */ }
   }
-  pw.viewport = v;
-  return v;
+  const applied: Viewport = {
+    ...v,
+    width: actual.width,
+    height: actual.height,
+    requestedWidth,
+    requestedHeight,
+    emulated: false,
+  };
+  pw.viewport = applied;
+  return applied;
 }

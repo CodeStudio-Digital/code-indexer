@@ -162,7 +162,12 @@ describe('semantic admin API', () => {
       execution_provider: 'cpu',
       last_latency_ms: 23,
     });
-    expect(status.rerankers.knowledge).toEqual({
+    expect(status.rerankers.docs).toEqual({
+      target_kind: 'missing',
+      diagnostics: null,
+      error: null,
+    });
+    expect(status.rerankers.memory).toEqual({
       target_kind: 'missing',
       diagnostics: null,
       error: null,

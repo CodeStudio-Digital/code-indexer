@@ -1,48 +1,45 @@
 /**
- * Tier catalog for company- and builder-mode tools.
+ * Functional tool catalogs whose availability depends on the current runtime.
  *
- * Split out of tiers.ts (which owns the core tiering logic) so the core file
- * stays focused: these two sets are pure DATA enumerating tools that live in
- * the @mcp/company package and are registered ONLY in their respective session
- * classes. They exist so `getToolTier` has an explicit entry for every tool —
- * closing the "silent bootstrap fallback" gotcha (a registered-but-untiered
- * tool used to ship on turn 1 of every session). `getToolTier` maps both sets
- * to `bootstrap` to preserve exact historical behavior; a future change could
- * give them their own non-auto-promoted tier if company/builder sessions adopt
- * progressive disclosure too.
+ * These sets deliberately do NOT map to `bootstrap`. Each family owns a
+ * dedicated tier which runCoder auto-activates only when the matching runtime
+ * capability is present. This keeps the global bootstrap catalog about the
+ * coding agent itself instead of making it a grab-bag of every product surface.
  */
 
-/**
- * Company tools — registered only in company sessions (master/subordinate),
- * gated by `opts.companyContext` in index.ts. Always-on within those sessions.
- */
+/** Collaboration shared by Company masters and subordinates. */
 export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
+  // Master-directed interaction (subordinate-only registration).
+  'ask_master',
+  'submit_plan_to_master',
+  'submit_tasks_to_master',
+  'submit_specification_to_master',
+  'send_to_agent',
+  'send_to_master',
+  'respond_to_inbox',
+  'read_my_inbox',
+  'check_inbox_answer',
+  // Shared board + subordinate Kanban surface.
+  'post_to_board',
+  'read_board',
+  'set_agent_status',
+  'kanban_read_my_card',
+  'kanban_post_comment',
+  'kanban_update_objectives',
+  'kanban_move_to_review',
   // Shared drive — persistent file pool across the company template.
   'read_shared_file',
   'write_shared_file',
   'append_shared_file',
   'delete_shared_file',
   'list_shared_files',
-  // Cross-agent comms (code-agent tools, registered in the company block).
+  // Cross-agent comms (code-agent tools, registered only in Company runs).
   'send_message',
   'send_input',
   'list_agents',
   'wait_agents',
   'followup_task',
-  // Cross-agent comms / inbox (@mcp/company).
-  'send_to_agent',
-  'send_to_master',
-  'read_my_inbox',
-  'check_inbox_answer',
-  // Subordinate spec escalation.
-  'submit_specification_to_master',
-  // QA (subordinate, gated by the qa-playwright skill's allowed-tools).
-  'qa_get_browser_endpoint',
-  'qa_publish_result',
-  'qa_start_run',
-  // Session-shared env vars (DB-backed). Registered for EVERY company session
-  // in index.ts (not only builder ones) — master read-only via master-filter,
-  // subordinates read+write. Backed by `company_session_envs`, no container.
+  // Session-shared env vars (DB-backed; no sandbox required).
   'env_list',
   'env_read',
   'env_set',
@@ -50,81 +47,73 @@ export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
   'env_validate',
 ]);
 
+/** Generic QA workflow, auto-active for QA/qa-playwright roles. */
+export const QA_TOOLS: ReadonlySet<string> = new Set([
+  'qa_get_browser_endpoint',
+  'qa_publish_result',
+  'qa_start_run',
+]);
+
 /**
- * Sandbox-bound tools — registered only when the session carries a live
- * sandbox binding (index.ts `if (companyContext?.sandbox)`), i.e.
- * service-bound company subordinates. Always-on within those sessions.
+ * Sandbox-bound builder tools. Pipeline orchestration is master-owned and
+ * therefore lives in MASTER_TOOLS; this set contains only surfaces backed by
+ * the subordinate/master sandbox binding.
  */
-export const BUILDER_TOOLS: ReadonlySet<string> = new Set([
-  // db_list/db_query/db_schema moved to the core `db` tier (tiers.ts
-  // DB_TOOLS) — the v2 db_* tools are registered for EVERY session and
-  // unlocked via expand_toolset('db'), not gated to sandbox sessions.
+export const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   // In-container docs (<workdir>/docs/).
   'docs_delete',
   'docs_index_update',
   'docs_list',
   'docs_read',
   'docs_write',
-  // NOTE: env_* tools moved to COMPANY_TOOLS — they're registered for every
-  // company session (external-backend sessions need them too), not only when
-  // a sandbox binding is present.
-  // Sandbox + pipeline/service control.
+  // Sandbox/service inspection and lifecycle.
   'read_sandbox_logs',
-  'get_pipeline_status',
-  'list_pipelines',
   'list_services',
-  'start_pipeline',
-  'stop_pipeline',
-  // service_* (B5) — registered under the same sandbox-binding gate as
-  // list_services; in-handler authorization decides who may control what.
   'service_logs',
   'service_restart',
   'service_start',
   'service_stop',
 ]);
 
+/** Backwards-compatible data export; the runtime tier is named `sandbox`. */
+export const BUILDER_TOOLS = SANDBOX_TOOLS;
+
 /**
- * App Studio tools are registered only for `builder_json.kind === 'app'`.
- * Keeping the catalog explicit prevents them from riding the unknown-tool
- * bootstrap fallback and lets cap-priority tests reason about the executor.
+ * Persistent App Studio v6 control plane. This list intentionally mirrors
+ * `packages/company/src/tools/app-studio/index.ts::allTools` exactly. The 34
+ * pre-v6 architecture/spec/UX/wireframe tools were removed with the v6 reset
+ * and must not remain as phantom catalog entries.
  */
 export const APP_STUDIO_TOOLS: ReadonlySet<string> = new Set([
-  'app_get_context',
-  'app_get_workflow',
-  'app_get_spec',
-  'app_get_spec_history',
-  'app_get_product_model',
-  'app_upsert_product_domain',
-  'app_upsert_product_capability',
-  'app_upsert_product_scenario',
-  'app_upsert_product_research_source',
-  'app_set_product_scope',
-  'app_research_product_domain',
-  'app_product_audit',
-  'app_save_spec',
-  'app_propose_spec_revision',
-  'app_spec_audit',
-  'app_get_architecture',
-  'app_save_architecture',
-  'app_architecture_audit',
-  'app_search_architecture_docs',
-  'app_fetch_architecture_doc',
-  'app_run_test_cycle',
-  'app_save_tdd_test',
-  'app_get_ux',
-  'app_save_ux',
-  'app_ux_audit',
-  'app_fetch_ux_reference',
-  'app_get_wireframe',
-  'app_save_wireframe',
-  'app_wireframe_audit',
-  'app_get_db_assets',
-  'app_save_db_migration',
-  'app_save_db_seed',
-  'app_provision_db',
+  'app_get_state',
+  'app_get_plan',
+  'app_update_plan',
   'app_upsert_work_items',
   'app_request_decision',
-  'app_request_approval',
+  'app_request_plan_approval',
   'app_dispatch_ready_work',
   'app_record_work_evidence',
+  'app_get_db_state',
+  'app_update_database',
+  'app_run_checks',
+]);
+
+/** Design System Studio authoring/publishing workflow. */
+export const DESIGN_SYSTEM_STUDIO_TOOLS: ReadonlySet<string> = new Set([
+  'ds_get_session_info',
+  'ds_record_component',
+  'ds_list_components',
+  'ds_audit_package',
+  'ds_set_version_status',
+  'ds_publish_version',
+  'ds_get_pipeline',
+  'ds_submit_stage',
+  'ds_analyze_import',
+]);
+
+/** Read-only Design System capability linked into a consumer project. */
+export const DESIGN_SYSTEM_CONSUMER_TOOLS: ReadonlySet<string> = new Set([
+  'ds_components',
+  'ds_component',
+  'ds_docs',
 ]);

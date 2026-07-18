@@ -13,6 +13,7 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import type {
   CompactionCheckpoint,
   CompactionCheckpointResult,
@@ -29,6 +30,7 @@ import {
   persistChapterCheckpoint,
   serializeSessionCompaction,
 } from '@mcp/code-agent/core/runner/compaction/chapter-checkpoint.js';
+import { DurableCheckpointCoordinator } from '@mcp/code-agent/core/runner/compaction/checkpoint-retry.js';
 import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction/threshold.js';
 import {
   summaryV3ToV2,
@@ -101,7 +103,7 @@ import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.j
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
-import { buildQaTools } from '@mcp/company/tools/qa/index.js';
+import { buildQaTools, roleHasQaPlaywrightSkill } from '@mcp/company/tools/qa/index.js';
 import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/index.js';
 import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
 import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
@@ -116,7 +118,13 @@ import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
 import { withCompanyToolsMetadata } from '@mcp/company/tools/metadata.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
 import { registerCompanyHooks } from '@mcp/code-agent/core/company-hooks.js';
-import { profileToTiers, getToolTier, type CoderProfile, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import {
+  contextualTiersForRuntime,
+  profileToTiers,
+  getToolTier,
+  type CoderProfile,
+  type ToolTier,
+} from '@mcp/code-agent/tools/tiers.js';
 import { parseToolsetState, resolveSessionProfile } from '@mcp/code-agent/tools/profile-resolution.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
@@ -275,7 +283,7 @@ function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStor
       {
         owner: `coder:${process.pid}:${randomUUID()}`,
         enabled: () =>
-          semanticStore.getProfile('knowledge')?.embedding_target.kind !== 'disabled',
+          semanticStore.getProfile('memory')?.embedding_target.kind !== 'disabled',
       },
     );
     const store = new SessionStore(db.raw(), investigationMutationSink);
@@ -330,7 +338,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       title: opts.session.create.title,
       provider: opts.session.create.provider,
       model: opts.session.create.model ?? defaultModelFor(opts.session.create.provider),
-      agent: opts.agent ?? null,
+      agent: opts.agentSelectionId ?? opts.agent ?? null,
     });
   }
 
@@ -339,9 +347,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const storedAgent: AgentId | null =
     session.agent && isAgentId(session.agent) ? session.agent : null;
   const effectiveAgentId: AgentId | null = opts.agent ?? storedAgent;
-  if (opts.agent && opts.agent !== storedAgent) {
-    store.setSessionAgent(session.id, opts.agent);
-    session = { ...session, agent: opts.agent };
+  const requestedSelectionId = opts.agentSelectionId ?? opts.agent;
+  if (requestedSelectionId && requestedSelectionId !== session.agent) {
+    store.setSessionAgent(session.id, requestedSelectionId);
+    session = { ...session, agent: requestedSelectionId };
   }
 
   // Apply agent defaults for any unspecified knob. This way explicit opts win
@@ -458,6 +467,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const allowAppCompanyTools = isAppStudioCompany
     && (appCompanyCapabilities?.allowAppTools ?? opts.companyContext?.appStudioSessionId != null);
   const allowCompanyKanban = appCompanyCapabilities?.allowCompanyKanban ?? !isAppStudioCompany;
+  const normalizedCompanyRole = opts.companyContext?.agentRole.trim().toLowerCase() ?? '';
+  const hasGenericQaCapability = opts.companyContext != null
+    && !opts.companyContext.isMaster
+    && !isAppStudioCompany
+    && (
+      normalizedCompanyRole === 'qa'
+      || (() => {
+        try {
+          return roleHasQaPlaywrightSkill(
+            opts.companyContext!.orchestrator.getSessionConfigJson(),
+            opts.companyContext!.agentRole,
+          );
+        } catch {
+          return false;
+        }
+      })()
+    );
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
   // A synthetic union root is not itself a Git repository. Keep the existing
@@ -606,11 +632,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // company context, gated by the feature flag + the on-disk marker. The tools
   // reach the real work through `getGlobalSpriteStudioHost()` (main impl +
   // worker bridge shim).
-  if (
+  const spriteStudioWorkspace =
     !opts.companyContext &&
     config.features.spriteStudioEnabled &&
-    existsSync(joinPath(project.root_path, '.sprite-studio'))
-  ) {
+    existsSync(joinPath(project.root_path, '.sprite-studio'));
+  if (spriteStudioWorkspace) {
     registry.registerAll(buildSpriteStudioTools(project.id));
   }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
@@ -810,6 +836,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ]);
   }
 
+  // Custom agents can opt into an exact tool surface. Apply this after every
+  // native/MCP/plugin tool has registered and before subagent snapshots are
+  // captured, so the allowlist is an execution boundary rather than a UI-only
+  // hint. `undefined` means inherit; `[]` intentionally removes every tool.
+  if (opts.allowedToolNames !== undefined) {
+    const allowed = new Set(opts.allowedToolNames);
+    registry.filterInPlace((tool) => allowed.has(tool.name));
+  }
+
   // Load disabled tools early so the subagent parentTools snapshot is already
   // filtered. Must happen before registry.list() is captured below.
   let globalDisabledTools: ReadonlySet<string> | undefined;
@@ -877,7 +912,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       resolveEffortForProfile = (id) => resolver.effortFor(id);
     } catch { /* non-fatal — falls back to parent provider */ }
 
-    subagentDeps = { provider, parentTools, sessionStore: store, subagentProvider, resolveProviderForProfile, resolveEffortForProfile };
+    subagentDeps = {
+      provider,
+      parentTools,
+      sessionStore: store,
+      subagentProvider,
+      resolveProviderForProfile,
+      resolveEffortForProfile,
+      toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
+      externalToolTiers: runtimeToolTiers,
+    };
   }
 
   // Company tools — registered when this runner is part of a company session.
@@ -905,10 +949,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (allowCompanyKanban) {
         registerCompanyTools(buildSubordinateKanbanTools(orchestrator, agentRole, agentRunId));
       }
-      // Generic QA tools synchronize results into Company Kanban. App teams
-      // use app_run_test_cycle + app_record_work_evidence instead and must not
-      // create a second work graph.
-      if (!isAppStudioCompany) {
+      // Generic QA tools synchronize results into Company Kanban. Register
+      // them only for the role that owns the QA capability; other roles no
+      // longer carry a dormant QA surface in their registry. App teams use
+      // app_run_checks + app_record_work_evidence instead.
+      if (hasGenericQaCapability) {
         registerCompanyTools(buildQaTools(orchestrator, agentRole, agentRunId));
       }
       // ds_* tools são exclusivas do DS Studio (sessão single) — o pipeline
@@ -1708,6 +1753,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     availableTools,
   });
 
+  if (opts.customAgentPrompt?.trim()) {
+    systemPrompt = appendStaticPromptSection(
+      systemPrompt,
+      `# Custom agent instructions\n${opts.customAgentPrompt.trim()}`,
+    );
+  }
+
   // Append company prompt block (master orchestration or subordinate instructions)
   if (opts.companyPromptBlock) {
     systemPrompt = appendStaticPromptSection(systemPrompt, opts.companyPromptBlock);
@@ -1833,42 +1885,25 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     : initialMessagesEarly;
 
   const activeTiers = profileToTiers(preResolvedProfile);
-  // Auto-activate the `master` tier for company-master sessions. Master
-  // orchestration tools (spawn_subordinate_agent, list_subordinates,
-  // kanban_list_cards, kanban_get_card, etc.) live in their own tier so
-  // they're discoverable via `find_tools` / `expand_toolset` and don't
-  // pollute non-master sessions. The tier is opt-in for everyone else
-  // via `expand_toolset('master')`.
-  if (opts.companyContext?.isMaster) {
-    activeTiers.add('master');
-  }
-  // Auto-activate the `preview` tier (DevTools tools) ONLY when the caller
-  // says preview is contextually relevant (`opts.previewAvailable` — set for
-  // builder / dev-server project sessions in stream.ts). We deliberately do
-  // NOT fall back to `getGlobalPreviewDevtools()`: the worker installs the
-  // bridge shim unconditionally, so that would make the tier always-on and
-  // ship 16 tools to every session. Other sessions (generic chat, company)
-  // unlock it on demand via `find_tools` → `expand_toolset('preview')`.
-  if (opts.previewAvailable) {
-    activeTiers.add('preview');
-  }
-  // Auto-activate the `api` tier for the API verification agent so the api_*
-  // tools are present from turn 1 (stable for the whole run → prompt-cache
-  // safe). Other sessions unlock on demand via `expand_toolset('api')`.
-  if (effectiveAgentId === 'api') {
-    activeTiers.add('api');
-  }
-  // Auto-activate the `diagram` tier for the draw.io diagram agent so the
-  // diagram_* tools are present from turn 1. Other sessions unlock on demand
-  // via `expand_toolset('diagram')`.
-  if (effectiveAgentId === 'diagram') {
-    activeTiers.add('diagram');
-  }
-  // Database analysis is the purpose of the dedicated app_db preset, so its
-  // driver-backed tools must be present on turn 1 instead of requiring the
-  // specialist to discover and expand its own defining capability.
-  if (effectiveAgentId === 'app_db') {
-    activeTiers.add('db');
+  // Functional capabilities are separate from the global bootstrap identity.
+  // Registration remains the authority boundary; this derivation only makes
+  // capabilities already owned by THIS runtime visible from turn 1. Visual
+  // Company roles and the database role inherit their defining preview/db
+  // tiers directly instead of relying on preset pins.
+  for (const tier of contextualTiersForRuntime({
+    company: opts.companyContext != null,
+    sandbox: opts.companyContext?.sandbox != null,
+    qa: hasGenericQaCapability,
+    app: allowAppCompanyTools,
+    designSystemStudio: dsWorkspace != null && config.features.designSystemEnabled,
+    designSystemConsumer: dsConsumer != null && config.features.designSystemEnabled,
+    spriteStudio: spriteStudioWorkspace,
+    isMaster: opts.companyContext?.isMaster === true,
+    previewAvailable: opts.previewAvailable,
+    agentId: effectiveAgentId,
+    companyRole: opts.companyContext?.agentRole,
+  })) {
+    activeTiers.add(tier);
   }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
@@ -1890,6 +1925,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // (mig 142) so a pin earned in a prior run survives even after the message
   // that used it was compacted out of the loaded tail — pinned membership
   // must stay byte-stable across runs for the provider prompt-cache prefix.
+  const configuredInitialPins = new Set(opts.initialPinnedTools ?? []);
   const initialPinnedTools = [
     ...new Set([
       ...(persistedToolset?.pins ?? []),
@@ -1897,6 +1933,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // Preflight pins — already validated against the catalog by the host
       // service; pins traverse the tier filter and survive the tool cap.
       ...(preflightSeed?.pinTools ?? []),
+      // Durable role presets (Company/App Studio). Like preflight pins these
+      // seed visibility, not authority: registry/disabled/policy boundaries
+      // still apply and find_tools/expand_toolset can grow the surface.
+      ...(opts.initialPinnedTools ?? []),
       // P4 — native read_file is navigate-tier (mcp__read_file owns the
       // bootstrap read surface). Without the bridge there is NO read tool on
       // turn 1, so seed the disk fallback as a pin. Constant-per-session
@@ -1906,13 +1946,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   ];
   if (stickyToolset && initialPinnedTools.length > 0) {
     const known = new Set(persistedToolset?.pins ?? []);
-    const freshPins = initialPinnedTools.filter((p) => !known.has(p));
+    // Role-configured pins are supplied again on every run. Keeping them out
+    // of sticky state means removing one in the role editor takes effect on
+    // the next cycle instead of widening that session forever.
+    const freshPins = initialPinnedTools.filter((p) => (
+      !known.has(p) && !configuredInitialPins.has(p)
+    ));
     if (freshPins.length > 0) {
       try { store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
     }
   }
   if (initialPinnedTools.length > 0 && process.env.CODER_LOG_TOOLS_COUNT === '1') {
-    console.log(`[coder] initial pins (persisted+history+preflight): ${initialPinnedTools.slice().sort().join(',')}`);
+    console.log(`[coder] initial pins (persisted+history+preflight+role): ${initialPinnedTools.slice().sort().join(',')}`);
   }
 
   // ─── Runtime hooks ─────────────────────────────────────────────
@@ -2716,23 +2761,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
      */
     checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
-  /**
-   * Cheap heuristic for the `truncated` flag in coder_tool_calls. Every
-   * model-facing cut now goes through `truncationMarker()` (`[truncated: …]`);
-   * `output_truncated=true` is exec_command/write_stdin's structured header.
-   * The two legacy prefixes keep old transcripts/paths matching. False
-   * negatives are fine — the dashboard treats this as a noisy-tool signal,
-   * not a billing input.
-   */
-  const isTruncatedOutput = (s: string): boolean => {
-    if (!s) return false;
-    return (
-      s.includes('[truncated:') ||
-      s.includes('output_truncated=true') ||
-      s.includes('[output truncated') ||
-      s.includes('[clamped from ')
-    );
-  };
   let pendingTurn: PendingTurn | null = null;
   let flushChain: Promise<void> = Promise.resolve();
 
@@ -2894,13 +2922,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           output_chars_shaped: null,
           output_format: 'text',
           structured_output_chars: null,
-          truncated: false,
+          truncated: (e.sourceTruncations?.length ?? 0) > 0,
           refusal_kind: e.refusalKind ?? null,
           turn_telemetry_id: null,
           parent_tool_use_id: e.parentToolUseId,
-          reduction_kind: null,
-          reduction_technique: null,
-          reduction_meta_json: null,
+          reduction_kind: e.sourceTruncations?.length ? 'source_cap' : null,
+          reduction_technique: e.sourceTruncations?.[0]?.technique ?? null,
+          reduction_meta_json: e.sourceTruncations?.length
+            ? JSON.stringify({ sourceTruncations: e.sourceTruncations })
+            : null,
           output_id: null,
           run_id: runner.runId,
           parent_run_id: null,
@@ -2955,11 +2985,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       output_chars_shaped: content.length,
       output_format: result.contentFormat ?? 'text',
       structured_output_chars: result.structuredOutputChars ?? null,
-      truncated: isTruncatedOutput(content),
+      truncated: hasStructuredToolTruncation(result),
       refusal_kind: result.refusalKind ?? null,
-      reduction_kind: result.reductionReport?.kind ?? null,
-      reduction_technique: result.reductionReport?.technique ?? null,
-      reduction_meta_json: result.reductionReport ? JSON.stringify(result.reductionReport) : null,
+      reduction_kind: result.reductionReport?.kind
+        ?? (result.sourceTruncations?.length ? 'source_cap' : null),
+      reduction_technique: result.reductionReport?.technique
+        ?? result.sourceTruncations?.[0]?.technique
+        ?? null,
+      reduction_meta_json: result.reductionReport
+        ? JSON.stringify(result.reductionReport)
+        : result.sourceTruncations?.length
+          ? JSON.stringify({ sourceTruncations: result.sourceTruncations })
+          : null,
       output_id: result.outputId ?? result.reductionReport?.outputId ?? null,
       run_id: runner.runId,
       parent_run_id: null,
@@ -3025,7 +3062,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // pair we align that summarized head with the visible DB prefix and append
   // the chapter + boundary atomically. There is no history_compacted-triggered
   // second summarization anymore.
-  let pendingDurableCheckpoint: CompactionCheckpoint | null = null;
   const commitDurableCheckpoint = async (
     checkpoint: CompactionCheckpoint,
   ): Promise<CompactionCheckpointResult> => {
@@ -3084,61 +3120,48 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       };
     }
   };
-  const retryPendingDurableCheckpoint = async (): Promise<CompactionCheckpointResult | null> => {
-    if (!pendingDurableCheckpoint) return null;
-    const checkpoint = pendingDurableCheckpoint;
-    const chars = checkpoint.headMessages.reduce((total, message) => {
-      try { return total + JSON.stringify(message.content).length; } catch { return total; }
-    }, 0);
-    const attemptId = store.startCompactionAttempt({
-      session_id: session.id,
-      run_id: runner.runId,
-      turn: runner.turn,
-      turn_telemetry_id: runner.lastTurnTelemetryId,
-      trigger: `checkpoint_retry:${checkpoint.trigger ?? 'context_threshold'}`,
-      provider_chain: [],
-      prompt_tokens_before: Math.ceil(chars / 4),
-      history_chars_before: chars,
-    });
-    const retried = await commitDurableCheckpoint(checkpoint);
-    store.finishCompactionAttempt(attemptId, {
-      status: retried.status === 'committed' || retried.status === 'compatibility'
-        ? 'summarized'
-        : retried.status === 'disabled'
-          ? 'noop'
-          : 'checkpoint_failed',
-      strategy: 'summarizer',
-      summarizer_ran: false,
-      history_chars_after: chars,
-      chapter_id: retried.chapterId ?? null,
-      boundary_id: retried.boundaryId ?? null,
-      error_message: retried.reason ?? null,
-    });
-    if (retried.status === 'committed' || retried.status === 'compatibility' || retried.status === 'disabled') {
-      pendingDurableCheckpoint = null;
-    }
-    return retried;
-  };
-  runner.setCompactionCheckpointHandler(async (checkpoint) => {
-    const prior = await retryPendingDurableCheckpoint();
-    if (pendingDurableCheckpoint) {
-      return {
-        status: 'failed',
-        boundaryId: prior?.boundaryId ?? null,
-        reason: `prior checkpoint still pending: ${prior?.reason ?? prior?.status ?? 'unknown'}`,
-      };
-    }
-    const committed = await commitDurableCheckpoint(checkpoint);
-    if (committed.status === 'failed' || committed.status === 'noop') {
-      pendingDurableCheckpoint = checkpoint;
-    }
-    return committed;
+  const checkpointCoordinator = new DurableCheckpointCoordinator(commitDurableCheckpoint, {
+    maxAttempts: 3,
+    baseBackoffTurns: 2,
+    executeRetry: async (checkpoint, _attempt, commit) => {
+      const chars = checkpoint.headMessages.reduce((total, message) => {
+        try { return total + JSON.stringify(message.content).length; } catch { return total; }
+      }, 0);
+      const attemptId = store.startCompactionAttempt({
+        session_id: session.id,
+        run_id: runner.runId,
+        turn: runner.turn,
+        turn_telemetry_id: runner.lastTurnTelemetryId,
+        trigger: `checkpoint_retry:${checkpoint.trigger ?? 'context_threshold'}`,
+        provider_chain: [],
+        prompt_tokens_before: Math.ceil(chars / 4),
+        history_chars_before: chars,
+      });
+      const retried = await commit(checkpoint);
+      store.finishCompactionAttempt(attemptId, {
+        status: retried.status === 'committed' || retried.status === 'compatibility'
+          ? 'summarized'
+          : retried.status === 'disabled'
+            ? 'noop'
+            : 'checkpoint_failed',
+        strategy: 'summarizer',
+        summarizer_ran: false,
+        history_chars_after: chars,
+        chapter_id: retried.chapterId ?? null,
+        boundary_id: retried.boundaryId ?? null,
+        error_message: retried.reason ?? null,
+      });
+      return retried;
+    },
   });
-  // A failed alignment is usually caused by an assistant/tool pair that was
-  // still buffered. Retry after the next turn-start flush as well as at run
-  // end; this does not block or suppress later checkpoints.
+  runner.setCompactionCheckpointHandler((checkpoint) => (
+    checkpointCoordinator.submit(checkpoint, runner.turn)
+  ));
+  // Only transient storage failures remain pending. Retry at most twice after
+  // exponential turn backoff; alignment no-ops wait for a newer checkpoint to
+  // rebase the durable head instead of replaying an immutable bad snapshot.
   runner.on('turn_start', () => {
-    if (pendingDurableCheckpoint) void retryPendingDurableCheckpoint();
+    if (checkpointCoordinator.hasPending) void checkpointCoordinator.retry(runner.turn);
   });
 
   // Phase-route skip summary handler removed along with PhaseRouter.
@@ -3197,7 +3220,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .run()
     .then(async (res) => {
       await flushPendingTurn();
-      await retryPendingDurableCheckpoint();
+      await checkpointCoordinator.retry(runner.turn, true);
       // Terminal Quality runs after the runner emitted `done` (the response is
       // already visible) but before this handle resolves and the worker is
       // released. Exactly one provider attempt; no subagent/abort/error calls.
@@ -3232,7 +3255,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     })
     .catch(async (e) => {
       await flushPendingTurn();
-      await retryPendingDurableCheckpoint();
+      await checkpointCoordinator.retry(runner.turn, true);
       store.updateSessionStatus(session.id, 'error');
       throw e;
     })
@@ -3248,7 +3271,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // the model called by name get pinned at dispatch) before the store
       // closes, so the next resume rebuilds the same tool array.
       if (stickyToolset && runner.pinnedTools.size > 0) {
-        try { store.mergeSessionToolsetState(session.id, { addPins: [...runner.pinnedTools] }); } catch { /* best-effort */ }
+        const earnedPins = [...runner.pinnedTools].filter((name) => !configuredInitialPins.has(name));
+        if (earnedPins.length > 0) {
+          try { store.mergeSessionToolsetState(session.id, { addPins: earnedPins }); } catch { /* best-effort */ }
+        }
       }
       // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
       // central connection now (getSharedCentral). They are NOT closed per-run —

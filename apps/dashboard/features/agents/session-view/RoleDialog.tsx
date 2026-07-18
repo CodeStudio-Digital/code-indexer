@@ -161,6 +161,12 @@ export function RoleDialog({
         }}
         onUpdate={(p) => patch(p)}
         onClose={() => void commit()}
+        inheritedToolTiers={[
+          'company',
+          ...(draft.role === 'qa' || draft.skills?.includes('qa-playwright') ? ['qa'] : []),
+          ...(['qa', 'frontend', 'ux', 'fullstack'].includes(draft.role) ? ['preview'] : []),
+          ...(draft.role === 'database' ? ['db'] : []),
+        ]}
       />
       {error && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[61] max-w-md rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-lg">

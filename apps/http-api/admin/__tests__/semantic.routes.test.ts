@@ -262,7 +262,7 @@ function createHarness() {
   }));
   const namespaceStatus = vi.fn((namespace: string) => ({
     namespace,
-    purpose: 'knowledge' as const,
+    purpose: namespace.startsWith('docs:') ? 'docs' as const : 'memory' as const,
     dbPath: namespace === 'memory:user'
       ? 'D:/data/semantic/memory-vectors.db'
       : 'D:/data/semantic/docs-vectors.db',
@@ -324,7 +324,7 @@ describe('semantic admin profiles', () => {
     });
   });
 
-  it('lists the two persisted semantic profiles', async () => {
+  it('lists the three persisted semantic profiles', async () => {
     const { app, store } = createHarness();
     store.profiles = [
       {
@@ -335,7 +335,14 @@ describe('semantic admin profiles', () => {
         updated_at: NOW,
       },
       {
-        purpose: 'knowledge',
+        purpose: 'docs',
+        embedding_target: { kind: 'disabled' },
+        reranker_target: { kind: 'disabled' },
+        created_at: NOW,
+        updated_at: NOW,
+      },
+      {
+        purpose: 'memory',
         embedding_target: { kind: 'disabled' },
         reranker_target: { kind: 'disabled' },
         created_at: NOW,
@@ -346,7 +353,7 @@ describe('semantic admin profiles', () => {
     const response = await app.request('/semantic/profiles');
     expect(response.status).toBe(200);
     const body = (await response.json()) as { profiles: SemanticProfileRow[] };
-    expect(body.profiles.map((profile) => profile.purpose)).toEqual(['code', 'knowledge']);
+    expect(body.profiles.map((profile) => profile.purpose)).toEqual(['code', 'docs', 'memory']);
   });
 
   it('gets one profile by purpose and validates missing/invalid purposes', async () => {
@@ -363,7 +370,7 @@ describe('semantic admin profiles', () => {
     expect(found.status).toBe(200);
     expect((await found.json() as { profile: SemanticProfileRow }).profile.purpose).toBe('code');
 
-    expect((await app.request('/semantic/profiles/knowledge')).status).toBe(404);
+    expect((await app.request('/semantic/profiles/docs')).status).toBe(404);
     expect((await app.request('/semantic/profiles/other')).status).toBe(400);
   });
 
@@ -605,7 +612,7 @@ describe('semantic admin profiles', () => {
 
   it('allows an explicitly disabled profile without a runtime probe', async () => {
     const { app, store, reindex } = createHarness();
-    const response = await app.request('/semantic/profiles/knowledge', json('PUT', {
+    const response = await app.request('/semantic/profiles/memory', json('PUT', {
       embedding_target: { kind: 'disabled' },
       reranker_target: { kind: 'disabled' },
     }));
@@ -784,7 +791,7 @@ describe('semantic generations and reindexing', () => {
     try {
       const { store, reindex } = createHarness();
       await vi.advanceTimersByTimeAsync(0);
-      const external = store.enqueueReindexJob('knowledge');
+      const external = store.enqueueReindexJob('memory');
 
       await vi.advanceTimersByTimeAsync(5_000);
       await vi.advanceTimersByTimeAsync(0);
@@ -842,7 +849,7 @@ describe('semantic generations and reindexing', () => {
       updated_at: NOW,
     }, {
       namespace: 'docs:c12',
-      purpose: 'knowledge',
+      purpose: 'docs',
       active_generation_id: 8,
       building_generation_id: null,
       expected_items: 25,
@@ -889,7 +896,7 @@ describe('semantic generations and reindexing', () => {
       created_at: NOW,
       updated_at: NOW,
     }, {
-      purpose: 'knowledge',
+      purpose: 'docs',
       embedding_target: { kind: 'disabled' },
       reranker_target: { kind: 'disabled' },
       created_at: NOW,
@@ -913,7 +920,7 @@ describe('semantic generations and reindexing', () => {
           },
           error: null,
         },
-        knowledge: { target_kind: 'disabled', diagnostics: null, error: null },
+        docs: { target_kind: 'disabled', diagnostics: null, error: null },
       },
     });
     expect(rerankerDiagnostics).toHaveBeenCalledTimes(1);
@@ -922,7 +929,7 @@ describe('semantic generations and reindexing', () => {
 
   it('isolates worker diagnostic failures by semantic profile', async () => {
     const { app, store, rerankerDiagnostics } = createHarness();
-    store.profiles = (['code', 'knowledge'] as SemanticPurpose[]).map((purpose) => ({
+    store.profiles = (['code', 'docs'] as SemanticPurpose[]).map((purpose) => ({
       purpose,
       embedding_target: { kind: 'disabled' },
       reranker_target: { kind: 'onnx', model: 'auto', dtype: 'q8' },
@@ -955,7 +962,7 @@ describe('semantic generations and reindexing', () => {
           diagnostics: null,
           error: 'semantic worker unavailable',
         },
-        knowledge: {
+        docs: {
           target_kind: 'onnx',
           diagnostics: {
             resolved_model: 'mixedbread-ai/mxbai-rerank-xsmall-v1',
@@ -994,14 +1001,14 @@ describe('semantic generations and reindexing', () => {
     expect(invalid.status).toBe(400);
 
     reindex.mockRejectedValueOnce(new Error('build already running'));
-    const failed = await app.request('/semantic/profiles/knowledge/reindex', { method: 'POST' });
+    const failed = await app.request('/semantic/profiles/memory/reindex', { method: 'POST' });
     expect(failed.status).toBe(202);
-    await vi.waitFor(() => expect(store.jobs.find((job) => job.namespace.endsWith('knowledge')))
+    await vi.waitFor(() => expect(store.jobs.find((job) => job.namespace.endsWith('memory')))
       .toMatchObject({ status: 'paused', error: 'build already running', failed_items: 1 }));
 
-    const resumed = await app.request('/semantic/profiles/knowledge/reindex', { method: 'POST' });
+    const resumed = await app.request('/semantic/profiles/memory/reindex', { method: 'POST' });
     expect(resumed.status).toBe(202);
-    await vi.waitFor(() => expect(store.jobs.find((job) => job.namespace.endsWith('knowledge'))?.status)
+    await vi.waitFor(() => expect(store.jobs.find((job) => job.namespace.endsWith('memory'))?.status)
       .toBe('completed'));
   });
 
@@ -1009,10 +1016,10 @@ describe('semantic generations and reindexing', () => {
     const { app, reindex, store } = createHarness();
     const staleCode = store.enqueueReindexJob('code');
 
-    const response = await app.request('/semantic/profiles/knowledge/reindex', { method: 'POST' });
+    const response = await app.request('/semantic/profiles/memory/reindex', { method: 'POST' });
 
     expect(response.status).toBe(202);
-    await vi.waitFor(() => expect(reindex).toHaveBeenCalledWith('knowledge'));
+    await vi.waitFor(() => expect(reindex).toHaveBeenCalledWith('memory'));
     expect(reindex).not.toHaveBeenCalledWith('code');
     expect(store.jobs.find((job) => job.id === staleCode.id)).toMatchObject({ status: 'pending' });
   });

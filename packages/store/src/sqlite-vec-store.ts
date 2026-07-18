@@ -78,7 +78,7 @@ export class SqliteVecDatabase {
   /**
    * The pre-generation architecture stored every vector in the default
    * `vectors` table. Generation-aware stores never serve that table and must
-   * not carry it forever beside code_g_N/knowledge_g_N. Drop it once per
+   * not carry it forever beside code_g_N/docs_g_N/memory_g_N. Drop it once per
    * physical connection after sqlite-vec is loaded; the relational sources
    * are the only migration input and will be embedded into fresh tables.
    */
@@ -116,6 +116,25 @@ export class SqliteVecDatabase {
     this.checkpoint();
     this.db.exec('VACUUM');
     this.checkpoint();
+  }
+
+  /** Drop generation tables left by a retired table-name domain. Only vec0
+   * virtual-table roots are selected; SQLite removes their shadow tables as
+   * part of DROP TABLE. */
+  dropVirtualTablesWithPrefix(prefix: string): number {
+    if (!/^[A-Za-z][A-Za-z0-9_]{1,31}$/.test(prefix)) {
+      throw new Error(`Unsafe sqlite-vec table prefix: ${prefix}`);
+    }
+    const rows = this.db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND substr(name, 1, length(?)) = ?
+        AND sql LIKE 'CREATE VIRTUAL TABLE%'
+      ORDER BY name
+    `).all(prefix, prefix) as Array<{ name: string }>;
+    for (const row of rows) {
+      this.db.exec(`DROP TABLE IF EXISTS ${assertSafeVectorTableName(row.name)}`);
+    }
+    return rows.length;
   }
 
   close(): void {

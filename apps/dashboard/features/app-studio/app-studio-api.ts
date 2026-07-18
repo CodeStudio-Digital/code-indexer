@@ -23,6 +23,36 @@ export interface AppTeamSessionView {
   master_agent_run_id: number;
 }
 
+export interface AppTeamModelRef {
+  provider: string;
+  model: string;
+}
+
+export interface AppTeamRoleConfig {
+  role: string;
+  enabled: boolean;
+  provider: string;
+  model: string;
+  tier: 'bootstrap' | 'navigate' | 'full';
+  projectIds?: number[];
+  skills?: string[];
+  initialTools?: string[];
+  availableToolNames?: string[];
+  systemPromptOverride?: string;
+  temperature?: number;
+  reasoningEffort?: string;
+  thinking?: boolean;
+  thinkingBudgetTokens?: number;
+  fallbackModels: AppTeamModelRef[];
+}
+
+export interface AppTeamConfigView {
+  company_session_id: number;
+  status: AppTeamSessionView['company_status'];
+  operational_rules: string;
+  roles: AppTeamRoleConfig[];
+}
+
 export interface AppPlanRevisionView {
   id: number;
   app_session_id: number;
@@ -97,10 +127,23 @@ export interface AppStudioSessionDetail {
 
 export type AppStudioListEntry = AppStudioSessionDetail;
 
-async function unwrap<T>(response: Response): Promise<T> {
+function responseErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== 'object') return fallback;
+  const body = payload as { error?: unknown; message?: unknown };
+  if (typeof body.error === 'string' && body.error.trim()) return body.error;
+  if (body.error && typeof body.error === 'object') {
+    const nested = body.error as { message?: unknown };
+    if (typeof nested.message === 'string' && nested.message.trim()) return nested.message;
+  }
+  if (typeof body.message === 'string' && body.message.trim()) return body.message;
+  return fallback;
+}
+
+async function unwrap<T>(responsePromise: Response | Promise<Response>): Promise<T> {
+  const response = await responsePromise;
   if (!response.ok) {
-    let message = response.statusText;
-    try { message = ((await response.json()) as { error?: string }).error ?? message; } catch { /* non-json */ }
+    let message = response.statusText || 'Request failed';
+    try { message = responseErrorMessage(await response.json(), message); } catch { /* non-json */ }
     throw new Error(`${response.status}: ${message}`);
   }
   return response.json() as Promise<T>;
@@ -112,6 +155,21 @@ export async function listAppStudioSessions(): Promise<AppStudioListEntry[]> {
 
 export function getAppStudioSession(id: number): Promise<AppStudioSessionDetail> {
   return unwrap(fetch(`/api/app-studio/apps/${id}`));
+}
+
+export function getAppTeamConfig(id: number): Promise<AppTeamConfigView> {
+  return unwrap(fetch(`/api/app-studio/apps/${id}/team/config`));
+}
+
+export function updateAppTeamConfig(
+  id: number,
+  patch: { operational_rules?: string; roles?: AppTeamRoleConfig[] },
+): Promise<AppTeamConfigView> {
+  return unwrap(fetch(`/api/app-studio/apps/${id}/team/config`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  }));
 }
 
 export async function deleteAppStudioSession(id: number): Promise<void> {

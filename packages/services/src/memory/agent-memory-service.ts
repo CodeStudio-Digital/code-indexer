@@ -12,6 +12,7 @@ import {
   type EmbeddingService,
 } from '@mcp/indexer/search/embeddings.js';
 import type { VectorItemState, VectorStore, VectorWriteTarget } from '@mcp/store/vectors.js';
+import type { RerankerService } from '@mcp/indexer/search/reranker-types.js';
 import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
 import { projectMemoryNamespace, userMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import type {
@@ -80,6 +81,7 @@ export class AgentMemoryService {
     private readonly vectorStore: VectorStore | null = null,
     private readonly queryEmbeddingService: EmbeddingService | null = embeddingService,
     private readonly semanticMutationSink: SemanticMutationSink | null = null,
+    private readonly reranker: RerankerService | null = null,
   ) {}
 
   private noteMutation(
@@ -425,10 +427,41 @@ export class AgentMemoryService {
       else scoreMap.set(r.id, { row: r, score: delta });
     }
 
-    return Array.from(scoreMap.values())
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((e) => ({ ...e.row, score: e.score }));
+    const fused = Array.from(scoreMap.values()).sort((a, b) => b.score - a.score);
+    if (this.reranker && this.reranker.name !== 'null' && fused.length > 0) {
+      const depth = Math.min(
+        fused.length,
+        this.reranker.candidatePoolSize?.(limit) ?? Math.max(limit * 2, 20),
+      );
+      const candidates = fused.slice(0, depth);
+      try {
+        const reranked = await this.reranker.rerank(
+          q,
+          candidates.map(({ row, score }) => ({
+            id: String(row.id),
+            text: `${row.name}\n${row.description}\n${row.content}`,
+            originalScore: score,
+          })),
+          Math.min(limit, candidates.length),
+        );
+        const byId = new Map(candidates.map((entry) => [String(entry.row.id), entry]));
+        const seen = new Set<string>();
+        if (reranked.length !== Math.min(limit, candidates.length) || reranked.some((row) => {
+          if (!byId.has(row.id) || seen.has(row.id) || !Number.isFinite(row.score)) return true;
+          seen.add(row.id);
+          return false;
+        })) throw new Error(`${this.reranker.name} returned an incomplete memory result set`);
+        return reranked
+          .map((result) => ({ ...byId.get(result.id)!.row, score: result.score }))
+          .sort((a, b) => b.score - a.score);
+      } catch (err) {
+        console.warn(`[agent-memory-search] ${this.reranker.name} rerank unavailable; preserving RRF order: ${
+          err instanceof Error ? err.message : String(err)
+        }`);
+      }
+    }
+
+    return fused.slice(0, limit).map((entry) => ({ ...entry.row, score: entry.score }));
   }
 
   /** Backfill: embed every memory missing a vector (one pass, best-effort). */

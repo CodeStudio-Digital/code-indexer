@@ -62,7 +62,7 @@ describe('benchmark live embedding binding', () => {
     };
     const store = {
       getActiveGeneration: vi.fn((namespace: string) =>
-        namespace === 'docs:c2' ? { id: 18, purpose: 'knowledge' } : null),
+        namespace === 'docs:c2' ? { id: 18, purpose: 'docs' } : null),
       listItems: vi.fn(({ namespace }: { namespace: string }) =>
         namespace === 'docs:c2' ? [{}, {}, {}] : []),
     };
@@ -76,7 +76,7 @@ describe('benchmark live embedding binding', () => {
 
     expect(store.getActiveGeneration.mock.calls.map(([namespace]) => namespace))
       .toEqual(['docs:c1', 'docs:c2', 'docs:c3']);
-    expect(runtime.queryEmbedding).toHaveBeenCalledWith('knowledge');
+    expect(runtime.queryEmbedding).toHaveBeenCalledWith('docs');
     expect(runtime.currentEmbeddingTarget).not.toHaveBeenCalled();
     expect(result).toEqual({
       embeddingService: queryService,

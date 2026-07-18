@@ -17,7 +17,12 @@
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import type { ToolContext, CoderTool, GuardVerdict } from '@mcp/code-agent/core/tool.js';
+import type {
+  ToolContext,
+  CoderTool,
+  GuardVerdict,
+  ToolSourceTruncation,
+} from '@mcp/code-agent/core/tool.js';
 import type { DetailedReduction, ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
 import {
@@ -38,6 +43,7 @@ import type { DupCallEntry } from '../machine/types.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
 import { resolveToolMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
+import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
 
 /**
  * Per-invocation timeout is delegated to `resolveToolTimeoutMs` (the
@@ -94,6 +100,8 @@ export interface DispatchedToolResult {
   originalSize?: number;
   reductionReport?: ReductionReport;
   outputId?: string;
+  /** Explicit producer-side omission metadata; never inferred from content. */
+  sourceTruncations?: ToolSourceTruncation[];
   ledgerEntry?: ToolCallLedgerEntry;
   /** Structured guard/reuse/shadow metadata carried into persistence. */
   guardVerdict?: GuardVerdict;
@@ -135,7 +143,15 @@ export interface DispatchArgs {
    */
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
   /** Smart-reducer applied to the raw result content before push. */
-  reduceToolResult?: (toolName: string, content: string) => string | DetailedReduction;
+  reduceToolResult?: (
+    toolName: string,
+    content: string,
+    meta?: {
+      input: Record<string, unknown>;
+      isError: boolean;
+      contentFormat: 'text' | 'markdown' | 'json';
+    },
+  ) => string | DetailedReduction;
   /**
    * Live final shaping: spill the raw original to the side-file store + apply
    * the generic fail-safe cap with an output_id marker. Returns the content to
@@ -148,7 +164,8 @@ export interface DispatchArgs {
     shapedContent: string;
     isError: boolean;
     reductionReport?: ReductionReport;
-  }) => { content: string; truncated?: boolean; originalSize?: number; outputId?: string; reductionReport?: ReductionReport };
+    sourceTruncations?: ToolSourceTruncation[];
+  }) => { content: string; truncated?: boolean; originalSize?: number; outputId?: string; inlineCap?: number; reductionReport?: ReductionReport };
   /**
    * Post-result hook for runner-owned state that needs the real tool_use id
    * and raw content (mutation-aware reread diffs, write tracking, etc.).
@@ -604,6 +621,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let invocationStructuredChars: number | null = null;
     let invocationExtraBlocks: ContentBlock[] | undefined;
     let invocationGuardVerdict: GuardVerdict | undefined;
+    let invocationSourceTruncations: ToolSourceTruncation[] = [];
     let refusalKind: RefusalKind | undefined;
 
     // Periodic heartbeat — keeps the dashboard StuckBanner alive during
@@ -692,6 +710,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }
       invocationExtraBlocks = result.extraUserBlocks;
       invocationGuardVerdict = result.guardVerdict;
+      invocationSourceTruncations = normalizeSourceTruncations(result.sourceTruncations);
       if (invocationGuardVerdict?.action === 'block') {
         refusalKind = (invocationGuardVerdict.refusalKind as RefusalKind | undefined) ?? 'dedup';
         if (invocationGuardVerdict.shouldReflect) {
@@ -745,7 +764,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let shapedContent = invocationContent;
     let reductionReport: ReductionReport | undefined;
     try {
-      const reduced = args.reduceToolResult?.(tu.name, invocationContent) ?? invocationContent;
+      const reduced = args.reduceToolResult?.(tu.name, invocationContent, {
+        input: tu.input,
+        isError: invocationIsError,
+        contentFormat: invocationContentFormat,
+      }) ?? invocationContent;
       if (typeof reduced === 'string') shapedContent = reduced;
       else {
         shapedContent = reduced.content;
@@ -860,6 +883,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let finalTruncated: boolean | undefined;
     let finalOriginalSize: number | undefined;
     let finalOutputId: string | undefined;
+    let finalInlineCap: number | undefined;
     if (args.finalizeToolResult) {
       const fin = args.finalizeToolResult({
         toolName: tu.name,
@@ -867,11 +891,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         shapedContent: finalContent,
         isError: finalIsError,
         reductionReport,
+        sourceTruncations: invocationSourceTruncations,
       });
       finalShaped = fin.content;
       finalTruncated = fin.truncated;
       finalOriginalSize = fin.originalSize;
       finalOutputId = fin.outputId;
+      finalInlineCap = fin.inlineCap;
       reductionReport = fin.reductionReport ?? reductionReport;
     }
 
@@ -880,8 +906,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // tool is what matters, and pinning stops repeated suffixes (the live
     // `pinnedTools` reference makes a second call in this batch non-hidden).
     if (hiddenFromModel) {
-      finalShaped +=
+      const suffix =
         `\n\n[toolset] '${tu.name}' was not in your visible tool list; it executed anyway and is now pinned — it will appear in your tools from the next turn.`;
+      const compactSuffix = `\n[toolset pinned: ${tu.name}]`;
+      if (finalInlineCap == null || finalShaped.length + suffix.length <= finalInlineCap) {
+        finalShaped += suffix;
+      } else if (finalShaped.length + compactSuffix.length <= finalInlineCap) {
+        finalShaped += compactSuffix;
+      }
       args.onToolPinned?.(tu.name);
     }
 
@@ -971,6 +1003,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
       ...(reductionReport ? { reductionReport } : {}),
       ...(finalOutputId ? { outputId: finalOutputId } : {}),
+      ...(invocationSourceTruncations.length > 0
+        ? { sourceTruncations: invocationSourceTruncations }
+        : {}),
       ...(ledgerEntry ? { ledgerEntry } : {}),
       ...(finalGuardVerdict ? { guardVerdict: finalGuardVerdict } : {}),
       stateEpoch: invocationGuard.stateEpoch,

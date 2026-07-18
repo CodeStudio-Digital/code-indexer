@@ -13,6 +13,16 @@ import type {
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /** What a plugin tool handler returns. The host maps it to the agent's ToolResult. */
+export interface PluginSourceTruncation {
+  technique: string;
+  inputSize: number;
+  /** False when inputSize is a lower bound rather than an exact source size. */
+  inputSizeExact?: boolean;
+  outputSize: number;
+  unit: 'chars' | 'bytes' | 'lines' | 'rows' | 'items';
+  recoverable: boolean;
+}
+
 export interface PluginToolResult {
   /** Human/agent-readable summary (what the LLM sees). */
   content: string;
@@ -24,6 +34,8 @@ export interface PluginToolResult {
    * through `plugins.invokeTool` to the plugin's iframe. JSON-serializable.
    */
   data?: unknown;
+  /** Explicit producer-side omission metadata; the host never infers this from content text. */
+  sourceTruncations?: PluginSourceTruncation[];
 }
 
 /** Restricted context handed to a tool handler. Runs inside the plugin worker. */

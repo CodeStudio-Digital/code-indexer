@@ -24,6 +24,7 @@ import {
   limitsForAgent,
   taskWithWorkspaceBriefing,
   toRetentionAgent,
+  systemPromptForAgent,
 } from '@mcp/code-agent/tools/spawn-agent-core.js';
 import {
   renderParallelHeader,
@@ -63,6 +64,9 @@ export async function runBackgroundEphemeral(
   const slots: BackgroundAgentSlot[] = agents.map((a, i) => ({
     index: i, label: a.label, profileId: a.profile.id, task: a.task,
     status: 'pending', toolCallCount: 0,
+    researchDepth: a.researchPolicy?.depth,
+    softToolTarget: a.researchPolicy?.softToolTarget,
+    softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
   }));
   const created = manager.create({ sessionId, jobId, groupId, provider: info.provider, model: info.model, agents: slots });
   if ('error' in created) return err(`spawn_agent: ${created.error}`);
@@ -70,7 +74,17 @@ export async function runBackgroundEphemeral(
 
   ctx.runner?.emit('agents_group_start', {
     groupId, jobId, background: true, provider: info.provider, model: info.model,
-    agents: agents.map((a, i) => ({ index: i, label: a.label, provider: agentInfos[i]?.provider, model: agentInfos[i]?.model, task: a.task, status: 'pending' })),
+    agents: agents.map((a, i) => ({
+      index: i,
+      label: a.label,
+      provider: agentInfos[i]?.provider,
+      model: agentInfos[i]?.model,
+      task: a.task,
+      status: 'pending' as const,
+      researchDepth: a.researchPolicy?.depth,
+      softToolTarget: a.researchPolicy?.softToolTarget,
+      softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
+    })),
   });
 
   // Detached context: job-owned signal + non-interactive gate.
@@ -87,7 +101,8 @@ export async function runBackgroundEphemeral(
     provider: agentProviders[i],
     reasoningEffort: effortForProfile(deps, a.profile),
     spawnId: groupId,
-    systemPrompt: a.profile.systemPrompt,
+    systemPrompt: systemPromptForAgent(a),
+    researchPolicy: a.researchPolicy,
     allowlist: a.profile.allowlist,
     pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files?.length ? a.files : undefined,
     pathScopeMode: a.profile.pathScopeMode,
@@ -119,7 +134,16 @@ async function runBackgroundJob(
   const manager = getSubagentJobManager();
   try {
     const { results, totalUsage } = await runParallelAgents(
-      { provider: deps.provider, tools: deps.parentTools, ctx: jobCtx, sessionId, sessionStore: deps.sessionStore, agentLoopV2: ctx.runner?.agentLoopV2 ?? false },
+      {
+        provider: deps.provider,
+        tools: deps.parentTools,
+        ctx: jobCtx,
+        sessionId,
+        sessionStore: deps.sessionStore,
+        agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        toolSelectionFilter: deps.toolSelectionFilter,
+        externalToolTiers: deps.externalToolTiers,
+      },
       specs,
       MICRO_AGENT_PROFILES.explore.systemPrompt,
       MICRO_AGENT_PROFILES.explore.allowlist,

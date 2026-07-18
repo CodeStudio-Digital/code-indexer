@@ -18,7 +18,7 @@ async function run(
   try {
     const r = (await invokePreview(ctx, method, args)) as { error?: string };
     if (r && typeof r === 'object' && r.error) return err(r.error);
-    return ok(`${label}\n${JSON.stringify(r, null, 2).slice(0, 2000)}`);
+    return ok(`${label}\n${JSON.stringify(r, null, 2) ?? String(r)}`);
   } catch (e) {
     return err(e instanceof Error ? e.message : String(e));
   }
@@ -31,11 +31,11 @@ export const previewClickTool: CoderTool = {
   source: 'native',
   parameters: {
     type: 'object',
-    properties: { selector: { type: 'string', description: 'A CSS selector OR `text="visible text"` to match by label (e.g. `text="Sign in"`). `:has-text("…")` is also accepted.' } },
+    properties: { selector: { type: 'string', description: 'Prefer `ref=aN` from preview_snapshot. CSS, `text="visible text"`, and `:has-text("…")` are fallbacks.' } },
     required: ['selector'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   repeatable: true,
@@ -45,18 +45,18 @@ export const previewClickTool: CoderTool = {
 export const previewFillTool: CoderTool = {
   name: 'preview_fill',
   description:
-    'Fill a form field by CSS selector — focuses it, selects existing content, and types `value` (real input → controlled React inputs update). Ideal for login/email/password fields. Use preview_press({key:"Enter"}) or preview_click to submit.',
+    'Fill a form field by snapshot ref or selector — focuses it, selects existing content, and types `value` (real input → controlled React inputs update). Ideal for login/email/password fields. Use preview_press({key:"Enter"}) or preview_click to submit.',
   source: 'native',
   parameters: {
     type: 'object',
     properties: {
-      selector: { type: 'string', description: 'CSS selector OR `text="label"` of the input/textarea.' },
+      selector: { type: 'string', description: 'Prefer `ref=aN` from preview_snapshot. CSS or `text="label"` are fallbacks; labels resolve to their form control.' },
       value: { type: 'string', description: 'Text to set as the field value (replaces existing).' },
     },
     required: ['selector', 'value'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   handler: (args, ctx) => run(ctx, 'fill', { selector: String(args.selector ?? ''), value: String(args.value ?? '') }, 'Filled:'),
@@ -71,12 +71,12 @@ export const previewTypeTool: CoderTool = {
     type: 'object',
     properties: {
       text: { type: 'string', description: 'Text to insert at the caret.' },
-      selector: { type: 'string', description: 'Optional CSS selector OR `text="label"` to focus before typing.' },
+      selector: { type: 'string', description: 'Optional `ref=aN`, CSS, or `text="label"` to focus before typing.' },
     },
     required: ['text'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   handler: (args, ctx) =>
@@ -94,12 +94,12 @@ export const previewPressTool: CoderTool = {
     properties: {
       key: { type: 'string', description: 'A character, a named key, or a combo like "Meta+k" / "Shift+Tab".' },
       modifiers: { type: 'array', items: { type: 'string' }, description: 'Optional extra modifiers: ctrl, meta, alt, shift, mod (Cmd on macOS else Ctrl).' },
-      selector: { type: 'string', description: 'Optional CSS selector OR `text="label"` to focus before the key press.' },
+      selector: { type: 'string', description: 'Optional `ref=aN`, CSS, or `text="label"` to focus before the key press.' },
     },
     required: ['key'],
     additionalProperties: false,
   },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   repeatable: true,
@@ -124,7 +124,7 @@ export const previewWaitForTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      selector: { type: 'string', description: 'CSS selector OR `text="label"` to wait for.' },
+      selector: { type: 'string', description: '`ref=aN`, CSS selector, or `text="label"` to wait for.' },
       timeoutMs: { type: 'number', description: 'Max wait in ms (200–30000). Default 5000.' },
     },
     required: ['selector'],
@@ -133,6 +133,7 @@ export const previewWaitForTool: CoderTool = {
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
+  timeoutMs: 40_000,
   repeatable: true,
   handler: (args, ctx) =>
     run(ctx, 'wait_for', { selector: String(args.selector ?? ''), timeoutMs: args.timeoutMs }, 'Wait:'),

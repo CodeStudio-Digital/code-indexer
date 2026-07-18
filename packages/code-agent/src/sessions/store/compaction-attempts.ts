@@ -112,17 +112,32 @@ export function chapterStatus(db: DB, sessionId: number): ConversationChapterSta
 
   const attemptCounts = tableExists(db, 'coder_compaction_attempts')
     ? db.prepare(`
-        SELECT COUNT(*) AS attempts,
+        SELECT COALESCE(SUM(CASE
+            WHEN trigger NOT LIKE 'checkpoint_retry:%' THEN 1 ELSE 0 END), 0) AS attempts,
           COALESCE(SUM(CASE
             WHEN summarizer_ran = 1 AND strategy = 'summarizer'
               AND status IN ('summarized', 'checkpoint_failed') THEN 1 ELSE 0 END), 0) AS summarized,
           COALESCE(SUM(status = 'deterministic_fallback'), 0) AS deterministic_fallbacks,
-          COALESCE(SUM(status = 'checkpoint_failed'), 0) AS checkpoint_failures,
+          COALESCE(SUM(CASE
+            WHEN status = 'checkpoint_failed'
+              AND trigger NOT LIKE 'checkpoint_retry:%'
+              AND COALESCE(error_message, '') NOT LIKE 'prior checkpoint still pending:%'
+            THEN 1 ELSE 0 END), 0) AS checkpoint_failures,
+          COALESCE(SUM(trigger LIKE 'checkpoint_retry:%'), 0) AS checkpoint_retries,
+          COALESCE(SUM(COALESCE(error_message, '') LIKE 'prior checkpoint still pending:%'), 0) AS checkpoint_blocked,
           COALESCE(SUM(status = 'noop'), 0) AS noops,
-          COALESCE(SUM(CASE WHEN error_message IS NOT NULL THEN 1 ELSE 0 END), 0) AS failures
+          COALESCE(SUM(CASE
+            WHEN error_message IS NOT NULL
+              AND trigger NOT LIKE 'checkpoint_retry:%'
+              AND error_message NOT LIKE 'prior checkpoint still pending:%'
+            THEN 1 ELSE 0 END), 0) AS failures
         FROM coder_compaction_attempts WHERE session_id = ?
       `).get(sessionId) as ConversationChapterStatus['counters']
-    : { attempts: 0, summarized: 0, deterministic_fallbacks: 0, checkpoint_failures: 0, noops: 0, failures: 0 };
+    : {
+        attempts: 0, summarized: 0, deterministic_fallbacks: 0,
+        checkpoint_failures: 0, checkpoint_retries: 0, checkpoint_blocked: 0,
+        noops: 0, failures: 0,
+      };
   const lastAttempt = latest(db, sessionId);
   const degraded = lastAttempt?.status === 'deterministic_fallback'
     || lastAttempt?.status === 'checkpoint_failed'

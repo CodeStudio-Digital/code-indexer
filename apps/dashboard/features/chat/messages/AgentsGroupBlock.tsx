@@ -49,7 +49,10 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
       a.deadlineMs !== b.deadlineMs ||
       a.lastToolName !== b.lastToolName ||
       a.usage !== b.usage ||
-      a.attempt !== b.attempt
+      a.attempt !== b.attempt ||
+      a.researchDepth !== b.researchDepth ||
+      a.softToolTarget !== b.softToolTarget ||
+      a.softTimeTargetMs !== b.softTimeTargetMs
     )
       return false;
   }
@@ -159,6 +162,7 @@ interface AgentRowProps {
 }
 
 function AgentRow({ agent, onOpen }: AgentRowProps) {
+  const { t } = useTranslation('chat');
   const StatusIcon =
     agent.status === 'running' || agent.status === 'pending'
       ? Loader2
@@ -213,6 +217,18 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
           />
         </div>
         <span className="font-mono text-foreground/80 truncate">{agent.label}</span>
+        {agent.researchDepth && (
+          <Badge
+            variant="outline"
+            className="shrink-0 text-[10px] text-muted-foreground"
+            title={t('agents.researchTarget', {
+              tools: agent.softToolTarget ?? t('agents.defaultTarget'),
+              time: agent.softTimeTargetMs != null ? formatMs(agent.softTimeTargetMs) : t('agents.defaultTarget'),
+            })}
+          >
+            {t(`agents.researchDepth.${agent.researchDepth}`)}
+          </Badge>
+        )}
         {agent.attempt != null && agent.attempt >= 2 && (
           <Badge variant="outline" className="shrink-0 text-[10px] border-warning/50 text-warning">
             retry #{agent.attempt}

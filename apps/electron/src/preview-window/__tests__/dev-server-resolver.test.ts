@@ -101,6 +101,28 @@ describe('resolveDevUrl — start (owned)', () => {
     await resolveDevUrl(bridge, 1);
     expect(start).toHaveBeenCalledWith({ projectId: 1, command: 'npm run dev', label: 'dev', manager: 'npm' });
   });
+
+  it('cancels polling and stops a server it started', async () => {
+    const controller = new AbortController();
+    const stop = vi.fn(async () => undefined);
+    const bridge = makeBridge({
+      detectDevCommand: async () => ({ command: 'pnpm dev', label: 'dev', manager: 'pnpm' }),
+      start: async () => task({ taskId: 'owned', terminalId: 'tOwned' }),
+      stop,
+      readBuffer: () => {
+        controller.abort();
+        return [{ type: 'data', data: 'still compiling...\n' }];
+      },
+    });
+
+    const pending = resolveDevUrl(bridge, 1, {
+      signal: controller.signal,
+      bootPollMs: 5_000,
+      pollIntervalMs: 5,
+    });
+    await expect(pending).rejects.toThrow(/aborted/i);
+    expect(stop).toHaveBeenCalledWith('owned');
+  });
 });
 
 describe('pickDevRunner', () => {

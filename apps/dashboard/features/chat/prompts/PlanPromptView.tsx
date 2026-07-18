@@ -28,6 +28,23 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
       setTimeout(() => setCopied(false), 1500);
     }
   };
+  const respond = async (
+    resolution: Exclude<PlanResolution, 'validation_error'>,
+    verdict: { approved: boolean; aborted?: boolean; feedback?: string },
+  ) => {
+    // The restart-resume path keeps this promise open while the new agent run
+    // streams. Reflect the accepted click immediately; otherwise the old card
+    // keeps looking pending (and remains clickable) until that run finishes.
+    setResolved(resolution);
+    try {
+      await onResponse(verdict);
+    } catch (error) {
+      // A transport failure means the verdict was not acknowledged. Restore
+      // the controls so the user can retry instead of showing a false outcome.
+      setResolved(undefined);
+      throw error;
+    }
+  };
   return (
     <div className="my-3 rounded-xl border border-warning/40 bg-warning/5 p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -75,8 +92,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
               size="sm"
               variant="success"
               onClick={async () => {
-                await onResponse({ approved: true, feedback });
-                setResolved('approved');
+                await respond('approved', { approved: true, feedback });
               }}
             >
               <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
@@ -86,8 +102,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
               size="sm"
               variant="outline"
               onClick={async () => {
-                await onResponse({ approved: false, feedback });
-                setResolved('revision_requested');
+                await respond('revision_requested', { approved: false, feedback });
               }}
             >
               <Pencil className="h-3.5 w-3.5" /> {t('chat:plan.revise')}
@@ -97,8 +112,7 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
               size="sm"
               variant="destructive"
               onClick={async () => {
-                await onResponse({ approved: false, aborted: true, feedback });
-                setResolved('rejected');
+                await respond('rejected', { approved: false, aborted: true, feedback });
               }}
             >
               <X className="h-3.5 w-3.5" /> {t('chat:plan.reject')}

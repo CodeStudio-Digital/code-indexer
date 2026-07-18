@@ -39,7 +39,7 @@ export function SettingsSidebar({
   return (
     <nav className="w-52 shrink-0 space-y-0.5 sticky top-2 self-start">
       {row('all', t('chrome.allCategories'), total)}
-      {categories.map((c) =>
+      {categories.filter((c) => (counts.get(c.id) ?? 0) > 0).map((c) =>
         row(c.id, t(`category.${c.id}`, { defaultValue: c.label }), counts.get(c.id) ?? 0),
       )}
     </nav>

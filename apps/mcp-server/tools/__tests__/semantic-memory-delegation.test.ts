@@ -44,7 +44,7 @@ describe('mcp project-memory semantic delegation', () => {
 
     expect(h.searchProjectMemory).toHaveBeenCalledWith(7, 'how should tests run?', 5);
     expect(h.localSearch).not.toHaveBeenCalled();
-    expect(JSON.parse(output)).toMatchObject({ semantic: true, total: 1 });
+    expect(JSON.parse(typeof output === 'string' ? output : output.text)).toMatchObject({ semantic: true, total: 1 });
   });
 
   it('falls back to local memory FTS when the owner is unavailable', async () => {
@@ -54,8 +54,9 @@ describe('mcp project-memory semantic delegation', () => {
     }, h.ctx);
 
     expect(h.localSearch).toHaveBeenCalledWith('project', 7, 'testing convention', 5);
-    expect(output).toContain('Testing convention');
-    expect(output).toContain('FTS-only');
-    expect(output).toContain('server stopped');
+    const text = typeof output === 'string' ? output : output.text;
+    expect(text).toContain('Testing convention');
+    expect(text).toContain('FTS-only');
+    expect(text).toContain('server stopped');
   });
 });

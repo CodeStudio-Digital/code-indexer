@@ -38,6 +38,13 @@ import {
   MICRO_AGENT_PROFILES,
   microAgentProfileForTaskKind,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import {
+  appendResearchContract,
+  applyParentGoalBudget,
+  buildResearchPolicy,
+  type ResearchDepth,
+  type SubagentResearchPolicy,
+} from '@mcp/code-agent/tools/subagent-research-policy.js';
 import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
 import { effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 import {
@@ -134,15 +141,39 @@ interface KindArtifacts {
   allowlist: SubagentAllowlist;
   pathScope?: string[];
   pathScopeMode?: PathScopeMode;
+  researchPolicy?: SubagentResearchPolicy;
 }
 
-function resolveKindArtifacts(task: CoderTask): KindArtifacts {
+function resolveKindArtifacts(task: CoderTask, ctx: ToolContext, agentCount = 1): KindArtifacts {
   const profile = microAgentProfileForTaskKind(task.kind);
+  const depthByComplexity: Record<CoderTask['estimated_complexity'], ResearchDepth> = {
+    small: 'quick',
+    medium: 'standard',
+    large: 'deep',
+  };
+  const baseResearch = task.kind === 'investigate'
+    ? {
+        ...buildResearchPolicy({
+          task: `${task.title}\n${task.description}`,
+          explicitDepth: depthByComplexity[task.estimated_complexity],
+        }),
+        source: 'inferred' as const,
+      }
+    : undefined;
+  const goal = ctx.getGoalState?.();
+  const researchPolicy = baseResearch
+    ? applyParentGoalBudget(
+        baseResearch,
+        goal?.status === 'in_progress' ? goal.budgetTokens ?? undefined : undefined,
+        agentCount,
+      )
+    : undefined;
   return {
-    systemPrompt: profile.systemPrompt,
+    systemPrompt: appendResearchContract(profile.systemPrompt, researchPolicy),
     allowlist: profile.allowlist,
     pathScope: profile.pathScopeMode === 'enforce-writes' && task.files.length > 0 ? task.files : undefined,
     pathScopeMode: profile.pathScopeMode,
+    researchPolicy,
   };
 }
 
@@ -540,7 +571,7 @@ async function runGroupParallel(
   }
 
   const specs: ParallelAgentSpec[] = await Promise.all(tasks.map(async (t) => {
-    const art = resolveKindArtifacts(t);
+    const art = resolveKindArtifacts(t, ctx, tasks.length);
     const profile = t.agent_profile ?? (t.kind === 'investigate' ? 'explore' : t.kind === 'verify' ? 'verify' : 'implement');
     return {
       task: buildTaskBriefing(t),
@@ -550,6 +581,7 @@ async function runGroupParallel(
       provider: await providerForProfile(deps, profile),
       reasoningEffort: effortForProfile(deps, profile),
       systemPrompt: art.systemPrompt,
+      researchPolicy: art.researchPolicy,
       allowlist: art.allowlist,
       pathScope: art.pathScope,
       pathScopeMode: art.pathScopeMode,
@@ -560,7 +592,14 @@ async function runGroupParallel(
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
   ctx.runner?.emit('agents_group_start', {
     groupId,
-    agents: tasks.map((t, i) => ({ index: i, label: specs[i].label, task: specs[i].task })),
+    agents: tasks.map((t, i) => ({
+      index: i,
+      label: specs[i].label,
+      task: specs[i].task,
+      researchDepth: specs[i].researchPolicy?.depth,
+      softToolTarget: specs[i].researchPolicy?.softToolTarget,
+      softTimeTargetMs: specs[i].researchPolicy?.softTimeTargetMs,
+    })),
   });
 
   let parallelRun: Awaited<ReturnType<typeof runParallelAgents>>;
@@ -572,6 +611,8 @@ async function runGroupParallel(
         ctx,
         sessionId: ctx.runner?.sessionId,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        toolSelectionFilter: deps.toolSelectionFilter,
+        externalToolTiers: deps.externalToolTiers,
       },
       specs,
       MICRO_AGENT_PROFILES.implement.systemPrompt, // global fallback (never used - per-spec wins)
@@ -683,7 +724,7 @@ async function runOneTask(
   ctx.updateTaskStatus?.(task.id, { status: 'running', started_at: taskStartedAt, mode_used: 'subagent' });
   ctx.runner?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
 
-  const art = resolveKindArtifacts(task);
+  const art = resolveKindArtifacts(task, ctx);
   const limits = resolveTaskLimit(task);
 
   // PR-C: each attempt re-spawns a fresh subagent with the same briefing.
@@ -732,12 +773,15 @@ async function runOneTask(
           sessionId: ctx.runner?.sessionId,
           sessionStore: deps.sessionStore,
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+          toolSelectionFilter: deps.toolSelectionFilter,
+          externalToolTiers: deps.externalToolTiers,
         },
         {
           profile: taskProfile,
           provider: await providerForProfile(deps, taskProfile),
           reasoningEffort: effortForProfile(deps, taskProfile),
           systemPrompt: art.systemPrompt,
+          researchPolicy: art.researchPolicy,
           label: task.title,
           allowlist: art.allowlist,
           initialMessages,

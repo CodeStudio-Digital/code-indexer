@@ -5,6 +5,7 @@ import {
   PROJECT_REMOVAL_NAMESPACE_PREFIX,
   projectIdFromRemovalNamespace,
   projectRemovalNamespace,
+  semanticPurposeForNamespace,
   type LocalVectorRouter,
   type SemanticGenerationRow,
   type SemanticJobRow,
@@ -68,6 +69,7 @@ interface CoordinatorDeps {
   vectorStore: VectorStore & {
     removeProject?(projectId: number): Promise<void>;
     dropGeneration?(namespace: string, generationId: number): Promise<void>;
+    dropLegacyKnowledgeTables?(namespace: string): Promise<number>;
     hasGeneration?(namespace: string, generationId: number): Promise<boolean>;
     compactGenerationDatabase?(
       namespace: string,
@@ -82,7 +84,8 @@ interface CoordinatorDeps {
     ): Promise<number>;
   };
   codeEmbedding: EmbeddingService;
-  knowledgeEmbedding: EmbeddingService;
+  docsEmbedding: EmbeddingService;
+  memoryEmbedding: EmbeddingService;
   costTracker: CostTracker;
   lshSink: LshIndexingSink;
   snapshotService: SnapshotService;
@@ -222,7 +225,7 @@ export class SemanticIndexCoordinator {
   }>();
   private readonly projectTombstones = new Set<number>();
   private readonly docsMutationOwner = randomUUID();
-  private readonly knowledgeMutationOwner: string;
+  private readonly memoryMutationOwner: string;
   private docsBackfillTimer: ReturnType<typeof setTimeout> | null = null;
   private docsBackfillRun: Promise<number> | null = null;
   private projectRemovalRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -230,7 +233,7 @@ export class SemanticIndexCoordinator {
   private disposed = false;
 
   constructor(private readonly deps: CoordinatorDeps) {
-    this.knowledgeMutationOwner = deps.mutationFenceOwner ?? randomUUID();
+    this.memoryMutationOwner = deps.mutationFenceOwner ?? randomUUID();
     // No request can own this fresh process id yet, so every differently-owned
     // fence is crash residue. Server boot synchronously recovers stale source
     // rows before timers or routes can drive the pending catch-up.
@@ -238,7 +241,7 @@ export class SemanticIndexCoordinator {
       'docs:c',
       this.docsMutationOwner,
     );
-    this.recoverExpiredKnowledgeMutationFences();
+    this.recoverExpiredMemoryMutationFences();
     // Keep completed removal markers fenced until the caller deletes the
     // project row. This survives a crash in the gap after vectors.db is gone.
     for (const job of deps.semanticStore.listJobs()) {
@@ -429,6 +432,35 @@ export class SemanticIndexCoordinator {
       skipped_referenced: 0,
       failures: [],
     };
+
+    // Migration 238 cannot touch worker-owned vector files. Make their old
+    // `knowledge_g_*` tables visible to the existing explicit cleanup action
+    // even though the retired central generations were intentionally removed.
+    const dropLegacy = this.deps.vectorStore.dropLegacyKnowledgeTables;
+    if (dropLegacy) {
+      const legacyNamespaces = projectId === undefined
+        ? [
+            'docs:c0',
+            'memory:user',
+            ...this.deps.db.listProjects()
+              .filter((project) => !project.is_synthetic)
+              .map((project) => projectMemoryNamespace(project.id)),
+          ]
+        : [projectMemoryNamespace(projectId)];
+      for (const namespace of legacyNamespaces) {
+        try {
+          const removed = await dropLegacy.call(this.deps.vectorStore, namespace);
+          result.tables_removed += removed;
+          if (removed > 0) {
+            const sizes = await compact.call(this.deps.vectorStore, namespace, 1);
+            result.databases_compacted += 1;
+            result.bytes_reclaimed += Math.max(0, sizes.before_bytes - sizes.after_bytes);
+          }
+        } catch (error) {
+          result.failures.push({ namespace, generation_id: 0, error: errorMessage(error) });
+        }
+      }
+    }
     const compactTargets = new Map<string, { namespace: string; generationId: number }>();
 
     for (const group of groups.values()) {
@@ -746,14 +778,17 @@ export class SemanticIndexCoordinator {
   }
 
   /** Targeted catch-up used by synchronous snapshot/memory mutation sinks.
-   * Namespace locking keeps it compatible with a concurrent full Knowledge
+   * Namespace locking keeps it compatible with a concurrent full Memory
    * rollout, while the durable job remains the crash/restart source of truth. */
-  ensureKnowledgeNamespace(namespace: string): Promise<void> {
-    if (this.embeddingDisabled('knowledge')) return Promise.resolve();
+  ensureMemoryNamespace(namespace: string): Promise<void> {
+    if (semanticPurposeForNamespace(namespace) !== 'memory') {
+      return Promise.reject(new Error(`Unsupported Memory mutation namespace: ${namespace}`));
+    }
+    if (this.embeddingDisabled('memory')) return Promise.resolve();
     if (!this.allowsNamespaceMutation(namespace)) return Promise.resolve();
     return this.serial(namespace, async () => {
-      if (this.embeddingDisabled('knowledge') || !this.allowsNamespaceMutation(namespace)) return;
-      const generation = await this.ensureGeneration('knowledge', false);
+      if (this.embeddingDisabled('memory') || !this.allowsNamespaceMutation(namespace)) return;
+      const generation = await this.ensureGeneration('memory', false);
       try {
         const snapshot = /^snapshot:p(\d+)$/.exec(namespace);
         const projectMemory = /^memory:project:p(\d+)$/.exec(namespace);
@@ -764,7 +799,7 @@ export class SemanticIndexCoordinator {
         } else if (namespace === userMemoryNamespace()) {
           await this.buildMemoryNamespace('user', 0, generation, false);
         } else {
-          throw new Error(`Unsupported Knowledge mutation namespace: ${namespace}`);
+          throw new Error(`Unsupported Memory mutation namespace: ${namespace}`);
         }
       } finally {
         this.refreshGenerationProgress(generation.id);
@@ -774,13 +809,14 @@ export class SemanticIndexCoordinator {
 
   /** Mutation wake-up that preserves the on-demand invariant. Generation-less
    * deltas remain durable but do not load an embedding model on project open. */
-  catchUpKnowledgeNamespace(namespace: string): Promise<void> {
-    if (this.embeddingDisabled('knowledge') || !this.allowsNamespaceMutation(namespace)) {
+  catchUpMemoryNamespace(namespace: string): Promise<void> {
+    if (semanticPurposeForNamespace(namespace) !== 'memory') return Promise.resolve();
+    if (this.embeddingDisabled('memory') || !this.allowsNamespaceMutation(namespace)) {
       return Promise.resolve();
     }
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     if (!state?.active_generation_id && !state?.building_generation_id) return Promise.resolve();
-    return this.ensureKnowledgeNamespace(namespace);
+    return this.ensureMemoryNamespace(namespace);
   }
 
   /** Create the durable pre-mutation fence used by documentation ingestion
@@ -798,7 +834,7 @@ export class SemanticIndexCoordinator {
       if (!this.docsCollectionExists(collectionId)) {
         throw new Error(`Documentation collection ${collectionId} not found`);
       }
-      if (this.embeddingDisabled('knowledge')) return;
+      if (this.embeddingDisabled('docs')) return;
       const token = randomUUID();
       const job = this.deps.semanticStore.noteNamespaceMutation({
         namespace: docNamespace(collectionId),
@@ -857,11 +893,11 @@ export class SemanticIndexCoordinator {
     if (!this.docsCollectionExists(collectionId)) {
       throw new Error(`Documentation collection ${collectionId} not found`);
     }
-    if (this.embeddingDisabled('knowledge')) return;
+    if (this.embeddingDisabled('docs')) return;
     try {
       await this.serial(namespace, async () => {
-        if (this.embeddingDisabled('knowledge')) return;
-        const generation = await this.ensureGeneration('knowledge', false);
+        if (this.embeddingDisabled('docs')) return;
+        const generation = await this.ensureGeneration('docs', false);
         const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
         // An incremental ingest writes into the already-serving generation.
         // Pointing `building` at that same id violates migration 227's CHECK
@@ -869,7 +905,7 @@ export class SemanticIndexCoordinator {
         if (state?.active_generation_id !== generation.id) {
           this.prepareNamespaceGeneration(
             namespace,
-            'knowledge',
+            'docs',
             generation.id,
             this.deps.docStore.countChunksByCollection(collectionId),
           );
@@ -877,7 +913,7 @@ export class SemanticIndexCoordinator {
         this.refreshGenerationProgress(generation.id);
       });
     } catch (error) {
-      if (this.embeddingDisabled('knowledge')) return;
+      if (this.embeddingDisabled('docs')) return;
       this.queueDocsBackfill(collectionId, error);
       throw error;
     }
@@ -890,11 +926,11 @@ export class SemanticIndexCoordinator {
     if (!this.docsCollectionExists(collectionId)) {
       throw new Error(`Documentation collection ${collectionId} not found`);
     }
-    if (this.embeddingDisabled('knowledge')) return;
+    if (this.embeddingDisabled('docs')) return;
     try {
       await this.serial(namespace, async () => {
-        if (this.embeddingDisabled('knowledge')) return;
-        const generation = await this.ensureGeneration('knowledge', false);
+        if (this.embeddingDisabled('docs')) return;
+        const generation = await this.ensureGeneration('docs', false);
         try {
           await this.buildDocsNamespace(collectionId, generation, false);
         } finally {
@@ -902,7 +938,7 @@ export class SemanticIndexCoordinator {
         }
       });
     } catch (error) {
-      if (this.embeddingDisabled('knowledge')) return;
+      if (this.embeddingDisabled('docs')) return;
       this.queueDocsBackfill(collectionId, error);
       throw error;
     }
@@ -912,14 +948,14 @@ export class SemanticIndexCoordinator {
    * The job survives app restarts and is safe to retry because both namespace
    * preparation and embedding upserts are idempotent. */
   retryPendingDocsBackfills(): Promise<number> {
-    if (this.embeddingDisabled('knowledge')) {
+    if (this.embeddingDisabled('docs')) {
       this.pauseDocsBackfillsForDisabled();
       return Promise.resolve(0);
     }
     if (this.docsBackfillRun) return this.docsBackfillRun;
     const run = this.drainPendingDocsBackfills().finally(() => {
       if (this.docsBackfillRun === run) this.docsBackfillRun = null;
-      if (!this.embeddingDisabled('knowledge') && this.hasPendingDocsBackfills()) {
+      if (!this.embeddingDisabled('docs') && this.hasPendingDocsBackfills()) {
         this.scheduleDocsBackfillRetry();
       }
     });
@@ -1149,14 +1185,14 @@ export class SemanticIndexCoordinator {
     await this.projectRemovalRecoveryRun?.catch(() => undefined);
   }
 
-  private recoverExpiredKnowledgeMutationFences(now = Date.now()): number {
+  private recoverExpiredMemoryMutationFences(now = Date.now()): number {
     return [
       'snapshot:p',
       'memory:project:p',
       'memory:user',
     ].reduce((total, prefix) => total + this.deps.semanticStore.recoverNamespaceMutationFences(
       prefix,
-      this.knowledgeMutationOwner,
+      this.memoryMutationOwner,
       now,
     ), 0);
   }
@@ -1224,10 +1260,16 @@ export class SemanticIndexCoordinator {
 
   /** The profile row is the authoritative operator intent. The Null service
    * check keeps legacy/manual coordinator wiring FTS-only as well. */
+  private embeddingForPurpose(purpose: SemanticPurpose): EmbeddingService {
+    if (purpose === 'code') return this.deps.codeEmbedding;
+    if (purpose === 'docs') return this.deps.docsEmbedding;
+    return this.deps.memoryEmbedding;
+  }
+
   private embeddingDisabled(purpose: SemanticPurpose): boolean {
     const profile = this.deps.semanticStore.getProfile(purpose);
     if (profile) return profile.embedding_target.kind === 'disabled';
-    const embedding = purpose === 'code' ? this.deps.codeEmbedding : this.deps.knowledgeEmbedding;
+    const embedding = this.embeddingForPurpose(purpose);
     if (embedding instanceof NullEmbeddingService) return true;
     try {
       return embedding.fingerprint?.() === 'null';
@@ -1248,16 +1290,16 @@ export class SemanticIndexCoordinator {
 
   private pauseDocsBackfillsForDisabled(): void {
     for (const job of this.pendingDocsBackfillJobs()) {
-      if (job.status === 'paused' && job.error === 'knowledge semantic profile is disabled') continue;
+      if (job.status === 'paused' && job.error === 'docs semantic profile is disabled') continue;
       this.deps.semanticStore.updateJob(job.id, {
         status: 'paused',
-        error: 'knowledge semantic profile is disabled',
+        error: 'docs semantic profile is disabled',
       });
     }
   }
 
   private queueDocsBackfill(collectionId: number, error: unknown): void {
-    if (this.embeddingDisabled('knowledge') || !this.docsCollectionExists(collectionId)) return;
+    if (this.embeddingDisabled('docs') || !this.docsCollectionExists(collectionId)) return;
     this.deps.semanticStore.enqueueNamespaceBackfill({
       namespace: docNamespace(collectionId),
       priority: 80,
@@ -1285,7 +1327,7 @@ export class SemanticIndexCoordinator {
   private scheduleDocsBackfillRetry(delayMs = DOCS_BACKFILL_RETRY_MS): void {
     if (
       this.disposed
-      || this.embeddingDisabled('knowledge')
+      || this.embeddingDisabled('docs')
       || this.docsBackfillTimer
       || this.docsBackfillRun
     ) return;
@@ -1298,13 +1340,13 @@ export class SemanticIndexCoordinator {
   }
 
   private async drainPendingDocsBackfills(): Promise<number> {
-    if (this.embeddingDisabled('knowledge')) {
+    if (this.embeddingDisabled('docs')) {
       this.pauseDocsBackfillsForDisabled();
       return 0;
     }
     let completed = 0;
     for (const job of this.pendingDocsBackfillJobs()) {
-      if (this.embeddingDisabled('knowledge')) {
+      if (this.embeddingDisabled('docs')) {
         this.pauseDocsBackfillsForDisabled();
         return completed;
       }
@@ -1329,11 +1371,11 @@ export class SemanticIndexCoordinator {
       try {
         await this.prepareDocsCollection(collectionId);
         await this.ensureDocsCollection(collectionId);
-        if (this.embeddingDisabled('knowledge')) {
+        if (this.embeddingDisabled('docs')) {
           this.deps.semanticStore.updateJob(job.id, {
             status: 'paused',
             cursor,
-            error: 'knowledge semantic profile is disabled',
+            error: 'docs semantic profile is disabled',
           });
           return completed;
         }
@@ -1382,10 +1424,11 @@ export class SemanticIndexCoordinator {
         if (this.deps.withProjectLock) await this.deps.withProjectLock(project.id, build);
         else await build();
       }
-    } else {
+    } else if (purpose === 'docs') {
       for (const collection of this.deps.docStore.listCollections()) {
         await run(docNamespace(collection.id), () => this.buildDocsNamespace(collection.id, generation, force));
       }
+    } else {
       for (const project of this.deps.db.listProjects()) {
         if (project.is_synthetic) continue;
         await run(snapshotNamespace(project.id), () => this.buildSnapshotNamespace(project.id, generation, force));
@@ -1415,7 +1458,7 @@ export class SemanticIndexCoordinator {
   }
 
   private async resolveGeneration(purpose: SemanticPurpose, force: boolean): Promise<SemanticGenerationRow> {
-    const embedding = purpose === 'code' ? this.deps.codeEmbedding : this.deps.knowledgeEmbedding;
+    const embedding = this.embeddingForPurpose(purpose);
     if (embedding instanceof NullEmbeddingService || embedding.fingerprint?.() === 'null') {
       throw new Error(`${purpose} embedding profile is disabled`);
     }
@@ -2154,7 +2197,7 @@ export class SemanticIndexCoordinator {
       const total = this.deps.docStore.countChunksByCollection(collectionId);
       const activating = before?.active_generation_id !== generation.id;
       if (activating) {
-        this.prepareNamespaceGeneration(namespace, 'knowledge', generation.id, total);
+        this.prepareNamespaceGeneration(namespace, 'docs', generation.id, total);
       }
       const job = this.deps.semanticStore.createJob({
         generation_id: generation.id,
@@ -2278,18 +2321,18 @@ export class SemanticIndexCoordinator {
     const namespace = snapshotNamespace(projectId);
     this.assertNamespaceProjectActive(namespace);
     for (let pass = 0; pass < 3; pass++) {
-      if (this.hasLiveKnowledgeMutationFence(namespace)) {
+      if (this.hasLiveMemoryMutationFence(namespace)) {
         throw new DeltaBuildPendingError(namespace);
       }
       const before = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
-      const captured = this.captureKnowledgeMutationJobs(namespace);
+      const captured = this.captureMemoryMutationJobs(namespace);
       if (!force
         && before?.active_generation_id === generation.id
         && before.delta_items === 0
         && captured.length === 0) return;
       const total = this.deps.db.listSnapshotsForSemanticIndex(projectId).length;
       const activating = before?.active_generation_id !== generation.id;
-      if (activating) this.prepareNamespaceGeneration(namespace, 'knowledge', generation.id, total);
+      if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
       const job = this.deps.semanticStore.createJob({
         generation_id: generation.id,
         namespace,
@@ -2344,11 +2387,11 @@ export class SemanticIndexCoordinator {
     const namespace = scope === 'user' ? userMemoryNamespace() : projectMemoryNamespace(projectId);
     this.assertNamespaceProjectActive(namespace);
     for (let pass = 0; pass < 3; pass++) {
-      if (this.hasLiveKnowledgeMutationFence(namespace)) {
+      if (this.hasLiveMemoryMutationFence(namespace)) {
         throw new DeltaBuildPendingError(namespace);
       }
       const before = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
-      const captured = this.captureKnowledgeMutationJobs(namespace);
+      const captured = this.captureMemoryMutationJobs(namespace);
       if (!force
         && before?.active_generation_id === generation.id
         && before.delta_items === 0
@@ -2358,7 +2401,7 @@ export class SemanticIndexCoordinator {
         : [];
       const total = this.memorySourceRows(scope, projectId).length + investigationRows.length;
       const activating = before?.active_generation_id !== generation.id;
-      if (activating) this.prepareNamespaceGeneration(namespace, 'knowledge', generation.id, total);
+      if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
       const job = this.deps.semanticStore.createJob({
         generation_id: generation.id,
         namespace,
@@ -2466,7 +2509,7 @@ export class SemanticIndexCoordinator {
   /** Capture the durable watermark for a full snapshot/memory pass. Running
    * jobs are crash residue because namespace execution is serialized; return
    * them to pending before claiming the immutable watermark. */
-  private captureKnowledgeMutationJobs(namespace: string): SemanticJobRow[] {
+  private captureMemoryMutationJobs(namespace: string): SemanticJobRow[] {
     const relevant = (job: SemanticJobRow): boolean =>
       job.namespace === namespace
       && (job.kind === 'delta' || (job.kind === 'backfill' && job.generation_id === null))
@@ -2493,7 +2536,7 @@ export class SemanticIndexCoordinator {
     return captured.map((job) => this.deps.semanticStore.getJob(job.id) ?? job);
   }
 
-  private hasLiveKnowledgeMutationFence(namespace: string): boolean {
+  private hasLiveMemoryMutationFence(namespace: string): boolean {
     return this.deps.semanticStore.listJobs({ namespace }).some((job) =>
       job.kind === 'delta'
       && job.status === 'running'
@@ -2509,7 +2552,7 @@ export class SemanticIndexCoordinator {
     const generationFingerprint = this.deps.semanticStore.getGeneration(generationId)?.fingerprint;
     const fingerprint = generationFingerprint
       ? embeddingFingerprintForGeneration(generationFingerprint)
-      : this.deps.knowledgeEmbedding.fingerprint?.() ?? 'embedding:unknown';
+      : this.deps.memoryEmbedding.fingerprint?.() ?? 'embedding:unknown';
     const expected = new Map<string, string>();
     for (const snapshot of this.deps.db.listSnapshotsForSemanticIndex(projectId)) {
       const hash = snapshotEmbeddingTextHash(snapshot, fingerprint);
@@ -2518,7 +2561,7 @@ export class SemanticIndexCoordinator {
         expected.set(`snapshot:${snapshot.id}\0${index}`, hash);
       }
     }
-    return this.verifyKnowledgeItems(generationId, namespace, expected, 'snapshot');
+    return this.verifyMemoryItems(generationId, namespace, expected, 'snapshot');
   }
 
   private memorySourceRows(scope: 'project' | 'user', projectId: number) {
@@ -2538,7 +2581,7 @@ export class SemanticIndexCoordinator {
     const generationFingerprint = this.deps.semanticStore.getGeneration(generationId)?.fingerprint;
     const fingerprint = generationFingerprint
       ? embeddingFingerprintForGeneration(generationFingerprint)
-      : this.deps.knowledgeEmbedding.fingerprint?.() ?? 'embedding:unknown';
+      : this.deps.memoryEmbedding.fingerprint?.() ?? 'embedding:unknown';
     const expected = new Map<string, string>();
     for (const memory of this.memorySourceRows(scope, projectId)) {
       const hash = agentMemoryEmbeddingTextHash(memory, fingerprint);
@@ -2555,10 +2598,10 @@ export class SemanticIndexCoordinator {
         );
       }
     }
-    return this.verifyKnowledgeItems(generationId, namespace, expected, 'memory');
+    return this.verifyMemoryItems(generationId, namespace, expected, 'memory');
   }
 
-  private async verifyKnowledgeItems(
+  private async verifyMemoryItems(
     generationId: number,
     namespace: string,
     expected: ReadonlyMap<string, string>,
@@ -2673,7 +2716,7 @@ export class SemanticIndexCoordinator {
   }
 
   /** Drop an obsolete generation table only when no active/building namespace
-   * in the same physical SQLite still points at it. Knowledge namespaces can
+   * in the same physical SQLite still points at it. Memory namespaces can
    * share a table (snapshots + project memory, or multiple doc collections),
    * so a global reference check alone is either too early or unnecessarily
    * late. The physical table key also deduplicates concurrent cleanup RPCs. */

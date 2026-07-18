@@ -127,7 +127,16 @@ export function parsePersistedAgentsGroup(
         }
       : undefined,
     agents: agents.map((a, i) => {
-      const raw = a as { label?: string; task?: string; type?: string; profile?: string; tool_profile?: string };
+      const raw = a as {
+        label?: string;
+        task?: string;
+        type?: string;
+        profile?: string;
+        tool_profile?: string;
+        research_depth?: string;
+        target_tool_calls?: number;
+        target_minutes?: number;
+      };
       const parsed = agentResults.get(i);
       return {
         index: i,
@@ -148,6 +157,11 @@ export function parsePersistedAgentsGroup(
         task: typeof raw.task === 'string' ? raw.task : undefined,
         attempt: parsed?.attempt,
         reason: parsed?.reason,
+        researchDepth: ['quick', 'standard', 'deep', 'exhaustive'].includes(raw.research_depth ?? '')
+          ? raw.research_depth as 'quick' | 'standard' | 'deep' | 'exhaustive'
+          : undefined,
+        softToolTarget: typeof raw.target_tool_calls === 'number' ? raw.target_tool_calls : undefined,
+        softTimeTargetMs: typeof raw.target_minutes === 'number' ? raw.target_minutes * 60_000 : undefined,
         agentType:
           parsed?.type ??
           (typeof raw.type === 'string'

@@ -258,6 +258,9 @@ export class SessionStore {
   // ─── Plans ─────────────────────────────────────────────────────
   recordPlan(input: plans.RecordPlanInput): CoderPlanRow { return plans.record(this.db, input); }
   resolvePlan(toolUseId: string, status: CoderPlanStatus, feedback?: string): void { plans.resolve(this.db, toolUseId, status, feedback); }
+  resolveLatestPendingPlan(sessionId: number, status: CoderPlanStatus, feedback?: string): boolean {
+    return plans.resolveLatestPending(this.db, sessionId, status, feedback);
+  }
   listPlans(sessionId: number): CoderPlanRow[] { return plans.list(this.db, sessionId); }
   getPlan(id: number): CoderPlanRow | null { return plans.get(this.db, id); }
 

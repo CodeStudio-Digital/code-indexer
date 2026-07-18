@@ -64,6 +64,15 @@ export interface CoderTool {
   source: 'native' | 'mcp' | 'mcp_external';
   /** Optional opt-in tier declared by a dynamic tool contributor. */
   runtimeTier?: RuntimeToolTierMetadata;
+  /**
+   * Model-facing output contract. The runner uses this to choose semantic
+   * reduction, inline budget and recovery behaviour instead of applying one
+   * blind head/tail cap to every tool family.
+   *
+   * Dynamic/plugin tools should declare this alongside `runtimeTier`. When it
+   * is omitted the runner falls back to conservative name/content inference.
+   */
+  outputPolicy?: ToolOutputPolicy;
   handler: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
   /**
    * Whether the tool changes any state outside its own response: filesystem
@@ -177,6 +186,8 @@ export interface NestedToolCallRecord {
   resultChars: number;
   /** First ~2k chars of the result/error — telemetry preview, not transcript. */
   resultPreview: string;
+  /** Explicit omission metadata from the nested tool producer. */
+  sourceTruncations?: ToolSourceTruncation[];
   /** Guard refusal tag when the observer blocked the call (dedup/failure-streak). */
   refusalKind?: string;
   logicalOperationId?: string;
@@ -282,6 +293,12 @@ export interface ToolContext {
    * can fetch the full content later. Undefined inside subagents and tests.
    */
   toolOutputStore?: import('@mcp/code-agent/overlay/tool-output-store.js').ToolOutputStore;
+  /**
+   * Exact inline ceiling resolved by the active runner/model. Pagination tools
+   * use it BEFORE slicing so their page is not truncated a second time by the
+   * finalizer. Undefined in lightweight tests and standalone tool hosts.
+   */
+  toolOutputInlineCap?: number;
   /** Shared direct+nested accounting; it does not enforce budgets. */
   toolCallLedger?: import('./tool-call-ledger.js').ToolCallLedger;
   /**
@@ -578,6 +595,60 @@ export interface ToolErrorInfo {
   suggestedAction?: string;
 }
 
+/** What kind of information a tool returns to the model. */
+export type ToolOutputMode =
+  | 'generic'
+  | 'authoritative'
+  | 'page'
+  | 'line_range'
+  | 'rows'
+  | 'logs'
+  | 'diff'
+  | 'search'
+  | 'structured';
+
+/** How content omitted from the inline representation can be recovered. */
+export type ToolOutputRecovery =
+  | 'output_store'
+  | 'cursor'
+  | 'section'
+  | 'rerun'
+  | 'none';
+
+export interface ToolOutputPolicy {
+  mode: ToolOutputMode;
+  /** Skip semantic reducers for already-shaped/authoritative payloads. */
+  reducer?: 'smart' | 'none';
+  /** Preferred recovery contract when the full value does not fit inline. */
+  recovery?: ToolOutputRecovery;
+  /** Optional per-tool target. It is always clamped by context safety. */
+  maxInlineChars?: number;
+  /** Preserve full error evidence in the output store even when it fits. */
+  preserveOnError?: boolean;
+}
+
+/**
+ * Machine-readable evidence that a producer intentionally omitted source
+ * data before the central reducer saw it. Text markers remain model-facing
+ * guidance only and must never be parsed as telemetry truth.
+ */
+export interface ToolSourceTruncation {
+  technique: string;
+  inputSize: number;
+  /**
+   * Whether `inputSize` is the exact pre-cap size. False means it is a
+   * truthful lower bound (for example a transfer cancelled as soon as one
+   * socket chunk crossed the acquisition ceiling). Defaults to true for
+   * older producers that only emit exact materialized sizes.
+   */
+  inputSizeExact?: boolean;
+  outputSize: number;
+  unit: 'chars' | 'bytes' | 'lines' | 'rows' | 'items';
+  recoverable: boolean;
+  /** Exact snapshot id, only when it represents the complete source value. */
+  outputId?: string;
+}
+
 export interface ToolResult {
   content: string;
   isError?: boolean;
@@ -590,6 +661,8 @@ export interface ToolResult {
    * `code_exec` and size telemetry. It is never appended to model history.
    */
   structuredData?: unknown;
+  /** Explicit producer-side cuts, carried separately from display text. */
+  sourceTruncations?: ToolSourceTruncation[];
   /** Structured guard metadata, including observe-mode would-block signals. */
   guardVerdict?: GuardVerdict;
   /**

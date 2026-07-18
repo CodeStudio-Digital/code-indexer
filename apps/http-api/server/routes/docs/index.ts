@@ -888,7 +888,7 @@ export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
       steps.push({ name: 'vector_store_available', ok: false, error: (e as Error).message });
     }
 
-    const queryEmbedding = semanticProfileRuntime.queryEmbedding('knowledge');
+    const queryEmbedding = semanticProfileRuntime.queryEmbedding('docs');
     const namespaces: Array<{
       namespace: string;
       collection: { id: number; name: string };

@@ -124,7 +124,7 @@ export const workspaceApi = {
       { message },
     ),
   gitPush: (sid: number, pid: number, options?: { remote?: string; branch?: string; targetBranch?: string; expectedHead?: string; setUpstream?: boolean; pushTags?: boolean }) =>
-    postJson<{ ok: boolean; message: string; setUpstream: boolean; status: GitStatusResponse }>(
+    postJson<{ ok: boolean; message: string; setUpstream: boolean; updatedBeforePush: boolean; status: GitStatusResponse }>(
       `${base(sid, pid)}/git/push`,
       options,
     ),

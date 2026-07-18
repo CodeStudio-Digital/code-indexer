@@ -661,7 +661,7 @@ export function createApp() {
   const auth = composeAuth(deps.config);
 
   app.route('/api/admin', createApiTokensRouter(auth));
-  app.route('/api/admin', createMcpHttpStatusRouter(deps.config));
+  app.route('/api/admin', createMcpHttpStatusRouter(deps.config, deps.db, deps.providerStore));
   app.route('/api/admin', createAppSettingsRouter(deps.config.dbPath));
   app.route('/api/admin', createOAuthClientsRouter(auth));
   app.route('/api/admin', createAuditLogRouter(deps.config));
@@ -759,7 +759,7 @@ export function createApp() {
       }, 202);
     }
     queueMicrotask(() => {
-      void deps.semanticCoordinator.catchUpKnowledgeNamespace(namespace).catch((error) =>
+      void deps.semanticCoordinator.catchUpMemoryNamespace(namespace).catch((error) =>
         console.warn(`[semantic] targeted reconcile paused for ${namespace}: ${error instanceof Error ? error.message : String(error)}`));
     });
     return c.json({ ok: true, namespace, scheduled: true }, 202);

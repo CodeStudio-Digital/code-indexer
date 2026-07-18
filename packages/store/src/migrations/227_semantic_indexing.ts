@@ -48,7 +48,7 @@ export const semanticIndexing227: Migration = {
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS semantic_profiles (
-        purpose TEXT PRIMARY KEY CHECK (purpose IN ('code', 'knowledge')),
+        purpose TEXT PRIMARY KEY CHECK (purpose IN ('code', 'docs', 'memory')),
         embedding_target TEXT NOT NULL CHECK (json_valid(embedding_target)),
         reranker_target TEXT NOT NULL CHECK (json_valid(reranker_target)),
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -74,7 +74,7 @@ export const semanticIndexing227: Migration = {
 
       CREATE TABLE IF NOT EXISTS semantic_generations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        purpose TEXT NOT NULL CHECK (purpose IN ('code', 'knowledge')),
+        purpose TEXT NOT NULL CHECK (purpose IN ('code', 'docs', 'memory')),
         fingerprint TEXT NOT NULL,
         embedding_target TEXT NOT NULL CHECK (json_valid(embedding_target)),
         dimension INTEGER NOT NULL CHECK (dimension > 0),
@@ -95,7 +95,7 @@ export const semanticIndexing227: Migration = {
 
       CREATE TABLE IF NOT EXISTS semantic_namespace_generations (
         namespace TEXT PRIMARY KEY,
-        purpose TEXT NOT NULL CHECK (purpose IN ('code', 'knowledge')),
+        purpose TEXT NOT NULL CHECK (purpose IN ('code', 'docs', 'memory')),
         active_generation_id INTEGER REFERENCES semantic_generations(id) ON DELETE SET NULL,
         building_generation_id INTEGER REFERENCES semantic_generations(id) ON DELETE SET NULL,
         expected_items INTEGER NOT NULL DEFAULT 0 CHECK (expected_items >= 0),
@@ -166,7 +166,8 @@ export const semanticIndexing227: Migration = {
       VALUES (?, ?, ?)
     `);
     seedProfile.run('code', DEFAULT_EMBEDDING, DEFAULT_RERANKER);
-    seedProfile.run('knowledge', DEFAULT_EMBEDDING, DEFAULT_RERANKER);
+    seedProfile.run('docs', DEFAULT_EMBEDDING, DEFAULT_RERANKER);
+    seedProfile.run('memory', DEFAULT_EMBEDDING, DEFAULT_RERANKER);
 
     const seedModel = db.prepare(`
       INSERT OR IGNORE INTO semantic_model_catalog

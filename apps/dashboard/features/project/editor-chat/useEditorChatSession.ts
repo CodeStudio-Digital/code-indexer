@@ -63,7 +63,8 @@ interface EditorChatSessionOptions {
 const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'app_db', 'api', 'diagram', 'builder']);
 
 function isValidAgentId(agent: unknown): agent is AgentId {
-  return typeof agent === 'string' && VALID_AGENT_IDS.has(agent as AgentId);
+  return typeof agent === 'string'
+    && (VALID_AGENT_IDS.has(agent as AgentId) || /^custom:[a-zA-Z0-9-]{8,80}$/.test(agent));
 }
 
 export function useEditorChatSession(projectId: number, options: EditorChatSessionOptions = {}) {

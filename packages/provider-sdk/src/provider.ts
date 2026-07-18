@@ -140,6 +140,8 @@ export interface ProviderDiscoveryResult {
 /** Persisted model metadata the host may pass to runtime builders. */
 export interface ProviderRuntimeModelMetadata {
   model_id: string;
+  /** Provider-advertised or admin-selected completion cap for this model. */
+  default_max_tokens?: number | null;
   default_reasoning_level?: string | null;
   supported_reasoning_levels?: string[] | null;
   apply_patch_tool_type?: string | null;

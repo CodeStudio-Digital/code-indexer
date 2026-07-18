@@ -11,6 +11,7 @@ export * from './utils/map-with-concurrency.js';
 export * from './utils/native-fetch.js';
 export * from './attachments/policy.js';
 export * from './editor/completion-prefilter.js';
+export * from './git/push-with-auto-update.js';
 export * from './sse/SSEFramer.js';
 export * from './sse/BackoffStrategy.js';
 export * from './sse/ReconnectingSSEClient.js';

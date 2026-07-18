@@ -78,6 +78,7 @@ export type RoleConfig = {
    *  `primary`/`chain`/`conditional`. Resolved via `resolveRoleSkills`
    *  before use. */
   skills?: RoleSkills;
+  initialTools?: string[];
   systemPromptOverride?: string;
   /**
    * Concrete project ids this role is bound to in THIS session.
@@ -285,7 +286,7 @@ export class MasterLifecycle implements IMasterNotifier {
     this._roleConfigs = configs;
   }
 
-  getRoleDefaults(role: string): { enabled?: boolean; provider?: string; model?: string; tier?: string; skills?: RoleSkills; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; reasoningEffort?: string; fallbackModels?: AllowedModel[] } | null {
+  getRoleDefaults(role: string): { enabled?: boolean; provider?: string; model?: string; tier?: string; skills?: RoleSkills; initialTools?: string[]; systemPromptOverride?: string; projectIds?: number[]; temperature?: number; thinking?: boolean; thinkingBudgetTokens?: number; reasoningEffort?: string; fallbackModels?: AllowedModel[] } | null {
     const cfg = this._roleConfigs.find((r) => r.role === role);
     return cfg ? {
       enabled: cfg.enabled,
@@ -293,6 +294,7 @@ export class MasterLifecycle implements IMasterNotifier {
       model: cfg.model,
       tier: cfg.tier,
       skills: cfg.skills,
+      initialTools: cfg.initialTools,
       systemPromptOverride: cfg.systemPromptOverride,
       projectIds: cfg.projectIds,
       temperature: cfg.temperature,
@@ -436,6 +438,7 @@ export class MasterLifecycle implements IMasterNotifier {
         reasoningEffort: runtime.reasoningEffort,
         fallbackModels: runtime.fallbackModels,
         skills: runtime.skills,
+        initialTools: runtime.initialTools,
         systemPromptOverride: runtime.roleOverride,
       };
     }
@@ -498,6 +501,7 @@ export class MasterLifecycle implements IMasterNotifier {
         reasoningEffort: runtime.reasoningEffort,
         fallbackModels: runtime.fallbackModels,
         skills: runtime.skills,
+        initialTools: runtime.initialTools,
         systemPromptOverride: runtime.roleOverride,
       };
     }

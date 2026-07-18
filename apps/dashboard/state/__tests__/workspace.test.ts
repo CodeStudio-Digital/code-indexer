@@ -11,6 +11,7 @@ import {
   hydrateLayout,
   __resetPaneSeqForTests,
   type OpenFile,
+  type OpenSftpFile,
   type EditorPaneState,
 } from '../workspace.js';
 
@@ -37,6 +38,22 @@ const file = (projectId: number, path: string): OpenFile => ({
   content: null,
   dirty: false,
   lastModified: null,
+});
+
+const sftpFile = (projectId: number, path: string): OpenSftpFile => ({
+  kind: 'sftp',
+  projectId,
+  path: `sftp:test-host:${path}`,
+  remotePath: path,
+  spec: {
+    hostId: 'test-host',
+    host: 'example.test',
+    username: 'tester',
+    auth: { method: 'agent' },
+  },
+  hostLabel: 'Test host',
+  content: 'original',
+  dirty: false,
 });
 
 /** Seed a single pane holding `paths` for `projectId` (the common single-project setup). */
@@ -273,7 +290,7 @@ describe('useWorkspaceStore — split de painéis', () => {
   });
 });
 
-describe('abas virtuais (upsertVirtualTab)', () => {
+describe('abas do editor abertas por outras superfícies', () => {
   beforeEach(reset);
 
   afterEach(() => {
@@ -327,6 +344,7 @@ describe('abas virtuais (upsertVirtualTab)', () => {
     ['diff', () => useWorkspaceStore.getState().openDiff({ kind: 'diff', projectId: 7, path: 'diff:a.ts', title: 'a.ts', patch: 'P1', source: 'other' })],
     ['branch log', () => useWorkspaceStore.getState().openGitLog({ kind: 'git-log', projectId: 7, path: 'gitlog:main', title: 'Log: main', branch: 'main', isRemote: false })],
     ['stash', () => useWorkspaceStore.getState().openGitStash({ kind: 'git-stash', projectId: 7, path: 'gitstash:0', title: 'Stash abc', stashRef: 'stash@{0}' })],
+    ['arquivo SFTP', () => useWorkspaceStore.getState().openSftpFile(sftpFile(7, '/srv/app/Dockerfile'))],
   ])('pede a superficie do editor ao abrir %s', (_label, open) => {
     const browserWindow = new EventTarget();
     const listener = vi.fn();

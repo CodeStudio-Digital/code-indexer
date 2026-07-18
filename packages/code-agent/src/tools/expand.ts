@@ -31,14 +31,12 @@ export interface CustomTierInfo {
 export function buildExpandTools(
   customTiers?: ReadonlyMap<string, CustomTierInfo>,
 ): CoderTool[] {
-  // Build dynamic enum: core expandable tiers + custom tiers. `master`
-  // is included so company-master agents (and recovery agents) can
-  // explicitly load orchestration tools — though the runner already
-  // auto-activates it whenever `companyContext.isMaster === true`, so
-  // most masters never need to call it themselves.
-  // 'db' is expandable (unlike 'api'/'preview' it has no agent/host flag that
-  // auto-activates it), so any session can reach the Databases-tab tools.
-  const coreExpandable = ['navigate', 'admin', 'master', 'preview', 'diagram', 'db'];
+  // Every built-in functional tier is addressable. Contextual tiers are
+  // normally auto-active when their runtime capability is present, but
+  // keeping them in this contract makes find_tools → expand_toolset coherent
+  // for recovery/custom-agent flows. Registration remains the hard boundary:
+  // expanding a tier cannot conjure tools that were not registered.
+  const coreExpandable = [...CORE_TIER_NAMES].filter((tier) => tier !== 'bootstrap');
   const customNames = customTiers ? [...customTiers.keys()].sort() : [];
   const allTiers = [...coreExpandable, ...customNames];
 
@@ -62,15 +60,18 @@ export function buildExpandTools(
     'related delegation tools. Auto-activated for company-master sessions; call this ' +
     'explicitly if the master surface looks missing (e.g. after recovery agent boot).\n' +
     '- "preview": live-app DevTools over a dedicated window — preview_open/navigate, ' +
-    'preview_console/network/eval/screenshot/inspect_css/performance/memory/storage, and ' +
-    'preview_click/fill/type/press/wait_for/scroll/hover. Unlock to SEE, inspect, or drive ' +
+    'preview_snapshot/console/network/eval/screenshot/inspect_css/performance/memory/storage, and ' +
+    'preview_click/fill/type/press/wait_for/scroll/hover/double_click/right_click. Unlock to SEE, inspect, or drive ' +
     'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.\n' +
     '- "diagram": author draw.io diagrams — diagram_create/update/read/list/export. Saves real ' +
     '.drawio files rendered in a live embedded editor. Unlock to draw architecture, flowcharts, ' +
     'network/ER/sequence/C4. Auto-active for the `diagram` agent.\n' +
     '- "db": operate the databases registered in the Databases tab — db_list, progressive db_schema ' +
     '(paged catalog or one table), db_query (single SQL statement, writes require approval) and db_command ' +
-    '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.';
+    '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.\n' +
+    '- Contextual capabilities (`company`, `sandbox`, `qa`, `app`, `design-system-studio`, ' +
+    '`design-system-consumer`, `sprite-studio`) are auto-activated by their owning runtime. ' +
+    'Expand them manually only during recovery or an explicitly configured custom-agent flow.';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';

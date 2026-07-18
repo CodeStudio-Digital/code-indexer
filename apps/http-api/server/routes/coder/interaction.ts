@@ -17,6 +17,7 @@ import {
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
+import { resolveAgentSelection } from '../../../custom-agents.js';
 
 interface AnswerBody {
   answer: string;
@@ -393,8 +394,8 @@ export function mountCoderInteractionRoutes(
     sessionStore.appendMessage(id, toolMsg);
     // Mirror the verdict into coder_plans so the Plans tab reflects the
     // resolved status even when the live runner was no longer in memory.
-    sessionStore.resolvePlan(
-      pending.toolUseId,
+    sessionStore.resolveLatestPendingPlan(
+      id,
       aborted ? 'aborted' : approved ? 'approved' : 'rejected',
       body.feedback,
     );
@@ -404,7 +405,7 @@ export function mountCoderInteractionRoutes(
     // agent's defaults via the AGENTS lookup in runCoder.
     if (approved) {
       const session = sessionStore.getSession(id);
-      if (session?.agent === 'plan') {
+      if (resolveAgentSelection(deps.providerStore, session?.agent)?.baseAgentId === 'plan') {
         try {
           sessionStore.setSessionAgent(id, 'build');
           const reminder: AgentMessage = {

@@ -299,7 +299,7 @@ describe('SemanticProfileRuntime session cache', () => {
       documentTemplate: 'passage: {text}',
       maxTokens: 512,
     };
-    const knowledgeTarget = {
+    const memoryTarget = {
       maxTokens: 512,
       documentTemplate: 'passage: {text}',
       queryTemplate: 'query: {text}',
@@ -310,7 +310,7 @@ describe('SemanticProfileRuntime session cache', () => {
     } as EmbeddingTarget;
     const profiles = new Map<SemanticPurpose, SemanticProfileRow>([
       ['code', profile('code', codeTarget)],
-      ['knowledge', profile('knowledge', knowledgeTarget)],
+      ['memory', profile('memory', memoryTarget)],
     ]);
     const created = vi.fn((_target, createFallback) => createFallback());
     const runtime = new SemanticProfileRuntime(
@@ -323,11 +323,11 @@ describe('SemanticProfileRuntime session cache', () => {
     );
 
     runtime.embedding('code').fingerprint?.();
-    runtime.embedding('knowledge').fingerprint?.();
+    runtime.embedding('memory').fingerprint?.();
     expect(created).toHaveBeenCalledTimes(1);
 
     expect(runtime.reranker('code').name).toBe('local');
-    expect(runtime.reranker('knowledge').name).toBe('local');
+    expect(runtime.reranker('memory').name).toBe('local');
     expect((runtime as unknown as { rerankers: Map<string, unknown> }).rerankers.size).toBe(1);
     await runtime.dispose();
   });
@@ -347,8 +347,8 @@ describe('SemanticProfileRuntime session cache', () => {
       },
       EMPTY_PROVIDERS,
     );
-    const failOpen = runtime.reranker('knowledge');
-    const strict = runtime.reranker('knowledge', { strict: true });
+    const failOpen = runtime.reranker('memory');
+    const strict = runtime.reranker('memory', { strict: true });
 
     expect(strict).not.toBe(failOpen);
     expect(strict.cacheRevision!()).toBe(failOpen.cacheRevision!());
@@ -424,7 +424,7 @@ describe('SemanticProfileRuntime session cache', () => {
       started_at: NOW,
       completed_at: NOW,
     };
-    const activeKnowledge: SemanticGenerationRow = { ...active, id: 18, purpose: 'knowledge' };
+    const activeMemory: SemanticGenerationRow = { ...active, id: 18, purpose: 'memory' };
     const createdModels: string[] = [];
     const runtime = new SemanticProfileRuntime(
       {
@@ -436,7 +436,7 @@ describe('SemanticProfileRuntime session cache', () => {
             namespace === 'snapshot:p7'
             || namespace === 'memory:project:p7'
             || namespace === 'memory:user'
-          ) return activeKnowledge;
+          ) return activeMemory;
           return null;
         },
       },
@@ -457,14 +457,14 @@ describe('SemanticProfileRuntime session cache', () => {
     expect(await queryEmbedding.embedQueryForNamespace!('code:p7', 'query')).toMatchObject({
       vector: [17], generationId: 17,
     });
-    const knowledgeQueryEmbedding = runtime.queryEmbedding('knowledge');
+    const memoryQueryEmbedding = runtime.queryEmbedding('memory');
     for (const namespace of ['snapshot:p7', 'memory:project:p7', 'memory:user']) {
-      expect((await knowledgeQueryEmbedding.embedQueryForNamespace!(namespace, 'query')).vector)
+      expect((await memoryQueryEmbedding.embedQueryForNamespace!(namespace, 'query')).vector)
         .toEqual([17]);
     }
     desired = { ...desiredTarget, model: 'future/model' };
     expect((await queryEmbedding.embedQueryForNamespace!('code:p7', 'query')).vector).toEqual([17]);
-    expect((await knowledgeQueryEmbedding.embedQueryForNamespace!('snapshot:p7', 'query')).vector)
+    expect((await memoryQueryEmbedding.embedQueryForNamespace!('snapshot:p7', 'query')).vector)
       .toEqual([17]);
     await expect(queryEmbedding.embedQueryForNamespace!('code:p8', 'query'))
       .rejects.toThrow(/No active semantic generation/);

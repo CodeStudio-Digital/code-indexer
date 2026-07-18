@@ -6,7 +6,7 @@
  * because we can't rely on `cat` (missing on Windows) or `node -e "..."`
  * inline (shell quoting differs across cmd.exe / sh).
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -226,20 +226,53 @@ describe('exec_command + write_stdin', () => {
     expect(list.content).toContain('| <status> |');
   });
 
-  it('caps output to max_output_tokens and flags truncation', async () => {
-    // A tight cap forces FIFO truncation.
+  it('caps output while preserving its beginning, true tail and exact omission count', async () => {
+    const put = vi.fn(() => 'must-not-be-used');
+    const storeCtx = {
+      ...makeCtx(),
+      toolOutputStore: { put },
+    } as unknown as ToolContext;
     const r1 = await execCommand.handler(
       { cmd: `node ${scriptPath}`, yield_time_ms: 500, max_output_tokens: 1000 },
-      makeCtx(),
+      storeCtx,
     );
     const sid = extractSessionId(r1.content);
-    // Push a payload larger than the cap.
-    const big = 'A'.repeat(2_000) + '\n';
+    const big =
+      `HEAD-${'🙂'.repeat(400)}` +
+      `MIDDLE-SENTINEL${'B'.repeat(1_500)}` +
+      '-TRUE-TAIL\n';
     const r2 = await writeStdin.handler(
       { session_id: sid, chars: big, yield_time_ms: 1500 },
-      makeCtx(),
+      storeCtx,
     );
     expect(r2.isError).toBeFalsy();
     expect(r2.content).toContain('output_truncated=true');
+    expect(r2.content).toContain('echo:HEAD-');
+    expect(r2.content).toContain('-TRUE-TAIL');
+    expect(r2.content).not.toContain('MIDDLE-SENTINEL');
+    expect(r2.content).not.toContain('�');
+
+    const headerEnd = r2.content.indexOf('\n\n');
+    const body = r2.content.slice(headerEnd + 2);
+    const marker = body.match(
+      /\n\[truncated: (\d+) chars omitted; preserved beginning and true tail\]\n/,
+    );
+    expect(marker).not.toBeNull();
+    const omitted = Number(marker![1]);
+    const retained = body.replace(marker![0], '');
+    expect(omitted).toBe(`echo:${big}`.length - retained.length);
+    expect(r2.content).toContain(`output_omitted_chars=${omitted}`);
+    expect(body.length).toBeLessThanOrEqual(1_000);
+    expect(r2.sourceTruncations).toEqual([
+      expect.objectContaining({
+        technique: 'bounded-stream-cap',
+        unit: 'chars',
+        recoverable: false,
+        outputSize: body.length,
+      }),
+    ]);
+    expect(r2.sourceTruncations![0]!.inputSize).toBe(`echo:${big}`.length);
+    expect(r2.sourceTruncations![0]!.outputId).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
   });
 });

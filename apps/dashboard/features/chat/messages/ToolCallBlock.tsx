@@ -10,6 +10,8 @@ import { analyzeSqlForDisplay, parseDbQueryInput } from './db-query-view.js';
 
 interface ToolCallBlockProps {
   call: ToolCallEvent;
+  /** Session id enables lazy loading of a transport-trimmed persisted result. */
+  sessionId?: number;
   /**
    * PermissionGate verdict callback. When set AND `call.approvals` is
    * non-empty, the approval card renders pinned below the header (outside
@@ -51,10 +53,11 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
     a.progressNote === b.progressNote &&
     // Approval requests attach/detach mid-flight (PermissionGate pauses).
     a.approvals === b.approvals
+    && prev.sessionId === next.sessionId
   );
 });
 
-function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockProps) {
+function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolCallBlockProps) {
   const { t } = useTranslation('chat');
   const isDbQuery = call.name === 'db_query';
   const [open, setOpen] = useState(() => isDbQuery && (call.status === 'running' || call.status === 'awaiting_approval'));
@@ -62,6 +65,42 @@ function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockPro
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
   const dbQuery = isDbQuery ? parseDbQueryInput(call.input) : null;
   const dbAnalysis = dbQuery ? analyzeSqlForDisplay(dbQuery.sql) : null;
+  const [fullResult, setFullResult] = useState<ToolCallEvent['result']>();
+  const [loadingFullResult, setLoadingFullResult] = useState(false);
+  const [fullResultError, setFullResultError] = useState<string | null>(null);
+  const displayedResult = fullResult ?? call.result;
+  const canLoadFullResult = Boolean(
+    !fullResult
+    && !loadingFullResult
+    && call.result?.truncated
+    && sessionId
+    && call.id,
+  );
+
+  useEffect(() => {
+    setFullResult(undefined);
+    setLoadingFullResult(false);
+    setFullResultError(null);
+  }, [call.id, sessionId, call.result?.content, call.result?.truncated]);
+
+  const loadFullResult = async () => {
+    if (!sessionId || !call.id) return;
+    setLoadingFullResult(true);
+    setFullResultError(null);
+    try {
+      const response = await fetch(
+        `/api/coder/sessions/${sessionId}/tool-results/${encodeURIComponent(call.id)}/full`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { content?: string; is_error?: boolean };
+      setFullResult({ content: data.content ?? '', isError: Boolean(data.is_error) });
+    } catch (error) {
+      console.warn('[tool-result] failed to load full result', error);
+      setFullResultError(t('messages.toolResultFullError'));
+    } finally {
+      setLoadingFullResult(false);
+    }
+  };
 
   // Local 1-second tick while the tool is running, so "running Xs" advances
   // smoothly between the 5s server-side heartbeats. Disabled (and cleaned up)
@@ -191,22 +230,48 @@ function ToolCallBlockInner({ call, onToolApproval, children }: ToolCallBlockPro
               </pre>
             </div>
           )}
-          {call.result && (
+          {displayedResult && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-                {call.result.isError ? t('messages.toolResultError') : t('messages.toolResult')}
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {displayedResult.isError ? t('messages.toolResultError') : t('messages.toolResult')}
+                </div>
+                {call.result?.truncated && !fullResult && (
+                  <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <span>
+                      {t('messages.toolResultPreview', {
+                        shown: call.result.content.length,
+                        total: call.result.originalLength ?? call.result.content.length,
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!canLoadFullResult}
+                      onClick={() => void loadFullResult()}
+                      className="inline-flex items-center gap-1 rounded border bg-background px-2 py-1 font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {loadingFullResult && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {loadingFullResult
+                        ? t('messages.toolResultLoadingFull')
+                        : t('messages.toolResultLoadFull')}
+                    </button>
+                  </div>
+                )}
               </div>
               <pre
                 className={cn(
                   'font-mono text-[11px] bg-card border rounded-md p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-96 overflow-y-auto',
-                  call.result.isError && 'border-destructive/40 text-destructive',
+                  displayedResult.isError && 'border-destructive/40 text-destructive',
                 )}
               >
-                {call.result.content}
+                {displayedResult.content}
               </pre>
-              {call.result.image && (
+              {fullResultError && (
+                <p className="mt-1 text-[10px] text-destructive">{fullResultError}</p>
+              )}
+              {displayedResult.image && (
                 <img
-                  src={`data:${call.result.image.mediaType};base64,${call.result.image.base64}`}
+                  src={`data:${displayedResult.image.mediaType};base64,${displayedResult.image.base64}`}
                   alt={t('messages.toolScreenshotAlt', { defaultValue: 'Tool screenshot' })}
                   className="mt-2 max-w-full rounded-md border"
                 />

@@ -35,7 +35,7 @@ type AgentId = AgentPreset;
 // Visual cue: tints the composer's left border by the active mode so the
 // user sees-at-a-glance which agent is loaded. The functional gates
 // (confirm-before-irreversible, tier filtering) live in the runner.
-const BORDER_TINT: Record<AgentId, string> = {
+const BORDER_TINT: Partial<Record<AgentId, string>> = {
   explore: 'border-l-sky-500',
   plan: 'border-l-violet-500',
   build: 'border-l-emerald-500',

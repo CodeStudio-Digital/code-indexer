@@ -20,9 +20,11 @@ interface OperationalRulesEditorProps {
   value: string;
   /** Re-fetch the session so the saved value round-trips back into `value`. */
   refetch: () => void;
+  /** App Studio supplies its scoped facade instead of the Company control-plane route. */
+  onSave?: (value: string) => Promise<void>;
 }
 
-export function OperationalRulesEditor({ sessionId, value, refetch }: OperationalRulesEditorProps) {
+export function OperationalRulesEditor({ sessionId, value, refetch, onSave }: OperationalRulesEditorProps) {
   const { t } = useTranslation('agents');
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -42,7 +44,8 @@ export function OperationalRulesEditor({ sessionId, value, refetch }: Operationa
     setSaving(true);
     setSaved(false);
     try {
-      await apiPatch(`/company/sessions/${sessionId}/config`, { operational_rules: draft });
+      if (onSave) await onSave(draft);
+      else await apiPatch(`/company/sessions/${sessionId}/config`, { operational_rules: draft });
       setSaved(true);
       refetch();
     } catch (e) {

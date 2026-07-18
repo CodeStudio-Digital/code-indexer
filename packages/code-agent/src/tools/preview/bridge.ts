@@ -21,6 +21,8 @@ export interface PreviewInvoke {
     // for reuse; closeSession also stops the owned server (session evict).
     | 'closeWindow'
     | 'closeSession'
+    | 'closeWindowPrefix'
+    | 'closeSessionPrefix'
     | 'navigate'
     | 'viewport'
     | 'console'
@@ -31,6 +33,7 @@ export interface PreviewInvoke {
     | 'performance'
     | 'memory'
     | 'storage'
+    | 'snapshot'
     | 'click'
     | 'type'
     | 'fill'
@@ -44,10 +47,14 @@ export interface PreviewInvoke {
     // Used by builder checkpoints for timeline thumbnails.
     | 'thumbnail';
   args?: Record<string, unknown>;
+  /** Correlates cancellation across worker -> host. */
+  requestId?: string;
 }
 
 export interface IPreviewDevtools {
   invoke(req: PreviewInvoke): Promise<unknown>;
+  /** Best-effort cancellation for long-running open/wait/eval operations. */
+  cancel?(requestId: string): void | Promise<void>;
 }
 
 let globalPreview: IPreviewDevtools | null = null;
@@ -64,6 +71,18 @@ export function getGlobalPreviewDevtools(): IPreviewDevtools | null {
 export const PREVIEW_UNAVAILABLE =
   'Preview DevTools are unavailable here. They only work in the desktop app — ask the user to run the MCP IDE desktop build, then open a dev server.';
 
+/** IPC ceiling must be longer than the operation's own timeout. In particular,
+ * url-less open may spend 45s booting the dev server before navigation. */
+export function previewRpcTimeoutMs(req: PreviewInvoke): number {
+  if (req.method === 'open') return 90_000;
+  if (req.method === 'navigate') return 35_000;
+  if (req.method === 'console') return Math.min(30_000, Math.max(0, Number(req.args?.waitMs) || 0)) + 5_000;
+  if (req.method === 'network') return Math.min(30_000, Math.max(0, Number(req.args?.waitForMs) || 0)) + 5_000;
+  if (req.method === 'wait_for') return Math.min(30_000, Math.max(200, Number(req.args?.timeoutMs) || 5_000)) + 5_000;
+  if (req.method === 'eval') return Math.min(30_000, Math.max(100, Number(req.args?.timeoutMs) || 10_000)) + 5_000;
+  return 30_000;
+}
+
 /**
  * Stable per-agent window key derived from the tool context, so each agent
  * (coder chat OR company subordinate/master) owns its own preview window(s).
@@ -72,6 +91,9 @@ export function previewKey(ctx: ToolContext): string {
   const cc = ctx.companyContext as
     | { agentRunId?: number; companySessionId?: number }
     | undefined;
+  if (cc?.agentRunId != null && cc.companySessionId != null) {
+    return `company-session-${cc.companySessionId}-agent-${cc.agentRunId}`;
+  }
   if (cc?.agentRunId != null) return `company-agent-${cc.agentRunId}`;
   if (cc?.companySessionId != null) return `company-session-${cc.companySessionId}`;
   return `coder-${ctx.sessionId ?? 'main'}`;
@@ -86,5 +108,30 @@ export async function invokePreview(
 ): Promise<unknown> {
   const backend = getGlobalPreviewDevtools();
   if (!backend) throw new Error(PREVIEW_UNAVAILABLE);
-  return backend.invoke({ key: previewKey(ctx), method, args });
+  const key = previewKey(ctx);
+  const requestId = `preview-${key}-${Date.now().toString(36)}-${(++previewRequestSeq).toString(36)}`;
+  if (ctx.signal?.aborted) throw new Error('Preview operation aborted.');
+  const pending = backend.invoke({ key, method, args, requestId });
+  if (!ctx.signal) return pending;
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      ctx.signal!.removeEventListener('abort', onAbort);
+      void Promise.resolve(backend.cancel?.(requestId)).catch(() => undefined);
+      reject(new Error('Preview operation aborted.'));
+    };
+    ctx.signal!.addEventListener('abort', onAbort, { once: true });
+    if (ctx.signal!.aborted) onAbort();
+    pending.then(
+      (value) => {
+        ctx.signal!.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        ctx.signal!.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
+
+let previewRequestSeq = 0;

@@ -1,10 +1,15 @@
 import { isPrivateHost } from '@mcp/shared/utils/ssrf.js';
+import { decodeCompleteUtf8Prefix } from '@mcp/shared/utils/http-engine.js';
 import TurndownService from 'turndown';
 // @ts-expect-error — turndown-plugin-gfm ships no TS types.
 import { gfm } from 'turndown-plugin-gfm';
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type {
+  CoderTool,
+  ToolContext,
+  ToolResult,
+  ToolSourceTruncation,
+} from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
  * Web tools — web_fetch and web_search.
@@ -18,34 +23,45 @@ import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
  * - Zero new runtime dependencies (uses native fetch, a small HTML→markdown
  *   converter inline, and falls back to scraping when no API key is set).
  * - Deterministic output shape so prompt cache stays stable across retries.
- * - Hard output caps to prevent a single page from flooding the history.
+ * - Runner-owned output shaping, so oversized pages are spilled before they
+ *   are reduced and remain recoverable through get_tool_output.
  * - Short TTL in-memory cache keyed by (url, search-query) so the agent can
  *   re-check the same page within a session without paying twice.
  */
 
-const OUTPUT_CAP = Number(process.env.CODER_WEB_OUTPUT_CAP ?? 15_000);
 const FETCH_TIMEOUT_MS = Number(process.env.CODER_WEB_TIMEOUT_MS ?? 20_000);
 const CACHE_TTL_MS = Number(process.env.CODER_WEB_CACHE_TTL_MS ?? 15 * 60 * 1000);
+const MAX_CACHE_ENTRY_CHARS = Number(process.env.CODER_WEB_CACHE_ENTRY_MAX ?? 1_000_000);
+const DEFAULT_WEB_READ_BYTES = 2 * 1024 * 1024;
+const MAX_WEB_READ_BYTES = 10 * 1024 * 1024;
 
 // In-memory cache. Keyed by a string prefix + the raw key (URL or query).
 interface CacheEntry {
   at: number;
   text: string;
+  sourceTruncations?: ToolSourceTruncation[];
 }
 const cache = new Map<string, CacheEntry>();
 
-function cacheGet(key: string): string | null {
+function cacheGet(key: string): CacheEntry | null {
   const hit = cache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.at > CACHE_TTL_MS) {
     cache.delete(key);
     return null;
   }
-  return hit.text;
+  return hit;
 }
 
-function cachePut(key: string, text: string): void {
-  cache.set(key, { at: Date.now(), text });
+function cachePut(key: string, text: string, sourceTruncations?: ToolSourceTruncation[]): void {
+  // Do not retain pathological pages in the process-wide cache. This limits
+  // memory without changing the tool result that flows to the runner/spill.
+  if (text.length > MAX_CACHE_ENTRY_CHARS) return;
+  cache.set(key, {
+    at: Date.now(),
+    text,
+    ...(sourceTruncations?.length ? { sourceTruncations } : {}),
+  });
   if (cache.size > 50) {
     // Evict oldest.
     const firstKey = cache.keys().next().value;
@@ -98,19 +114,14 @@ function htmlToMarkdown(html: string): string {
   }
 }
 
-function applyCap(text: string): string {
-  if (text.length <= OUTPUT_CAP) return text;
-  return (
-    text.slice(0, OUTPUT_CAP) +
-    `\n\n${truncationMarker(`${text.length - OUTPUT_CAP} chars elided`, 'the page was too long for inline capture')}`
-  );
-}
-
-async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+): Promise<{ response: Response; finish: () => void }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: controller.signal,
       redirect: 'follow',
@@ -120,9 +131,85 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
         ...(init?.headers ?? {}),
       },
     });
-  } finally {
+    // Keep the timer and signal alive until the caller finishes consuming the
+    // body. fetch() resolves at headers; clearing here left a slow/stalled body
+    // unbounded forever.
+    return { response, finish: () => clearTimeout(timer) };
+  } catch (error) {
     clearTimeout(timer);
+    throw error;
   }
+}
+
+async function readResponseTextBounded(
+  response: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean; inputBytes: number; inputSizeExact: boolean }> {
+  const rawContentLength = response.headers.get('content-length');
+  const contentEncoding = (response.headers.get('content-encoding') ?? '').trim().toLowerCase();
+  // Undici/fetch exposes a decoded body but commonly preserves the wire-level
+  // Content-Length. Those dimensions are incomparable for gzip/br/deflate, so
+  // only an identity response can turn the header into an exact source size.
+  const contentLengthMatchesBody = !contentEncoding || contentEncoding === 'identity';
+  const parsedContentLength = rawContentLength && /^\d+$/.test(rawContentLength.trim())
+    ? Number(rawContentLength)
+    : Number.NaN;
+  const declaredLength = contentLengthMatchesBody
+    && Number.isSafeInteger(parsedContentLength)
+    && parsedContentLength >= 0
+    ? parsedContentLength
+    : undefined;
+  if (!response.body) {
+    const text = await response.text();
+    const bytes = new TextEncoder().encode(text);
+    return {
+      text: decodeCompleteUtf8Prefix(bytes, maxBytes),
+      truncated: bytes.length > maxBytes,
+      inputBytes: bytes.length,
+      inputSizeExact: true,
+    };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let keptBytes = 0;
+  let observedBytes = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      observedBytes += value.byteLength;
+      const remaining = Math.max(0, maxBytes - keptBytes);
+      if (remaining > 0) {
+        const kept = value.subarray(0, remaining);
+        chunks.push(kept);
+        keptBytes += kept.byteLength;
+      }
+      if (observedBytes > maxBytes) {
+        truncated = true;
+        await reader.cancel('web_fetch acquisition ceiling reached');
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(keptBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return {
+    text: decodeCompleteUtf8Prefix(bytes, maxBytes),
+    truncated,
+    inputBytes: truncated && declaredLength != null && declaredLength >= observedBytes
+      ? declaredLength
+      : observedBytes,
+    inputSizeExact: !truncated || (declaredLength != null && declaredLength >= observedBytes),
+  };
 }
 
 // ── web_fetch ─────────────────────────────────────────────────────
@@ -137,14 +224,19 @@ export const webFetch: CoderTool = {
     "DON'T: use for code search across the project (use mcp__search or mcp__grep_code).\n" +
     "DON'T: scrape paginated result pages one-by-one — use web_search for that.\n" +
     'REFUSES localhost/127.0.0.1 and private/loopback hosts (SSRF defense) — to test a LOCAL backend, use http_request instead.\n' +
-    `Output is capped at ~${OUTPUT_CAP} chars. Results are cached in-memory for ${Math.round(CACHE_TTL_MS / 60_000)} minutes.`,
+    `Oversized results are stored by the runner and can be paged with get_tool_output. Results up to ${MAX_CACHE_ENTRY_CHARS} chars are cached in-memory for ${Math.round(CACHE_TTL_MS / 60_000)} minutes.`,
   source: 'native',
+  outputPolicy: { mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   parameters: {
     type: 'object',
     properties: {
       url: {
         type: 'string',
         description: 'The full URL to fetch. Must start with http:// or https://.',
+      },
+      max_bytes: {
+        type: 'number',
+        description: `Network acquisition ceiling (default ${DEFAULT_WEB_READ_BYTES}, max ${MAX_WEB_READ_BYTES}). Reaching it stops the transfer and marks the source as truncated.`,
       },
     },
     required: ['url'],
@@ -171,33 +263,61 @@ export const webFetch: CoderTool = {
       );
     }
 
-    const cacheKey = `fetch:${parsed.toString()}`;
+    const requestedMaxBytes = Number(args.max_bytes ?? DEFAULT_WEB_READ_BYTES);
+    const maxBytes = Number.isFinite(requestedMaxBytes)
+      ? Math.min(MAX_WEB_READ_BYTES, Math.max(1024, Math.floor(requestedMaxBytes)))
+      : DEFAULT_WEB_READ_BYTES;
+    const cacheKey = `fetch:${parsed.toString()}|max=${maxBytes}`;
     const hit = cacheGet(cacheKey);
-    if (hit) return ok(hit + '\n\n[cached]');
+    if (hit) {
+      return {
+        content: hit.text + '\n\n[cached]',
+        sourceTruncations: hit.sourceTruncations,
+      };
+    }
 
     try {
-      const res = await fetchWithTimeout(parsed.toString());
-      if (!res.ok) {
-        return err(`web_fetch: HTTP ${res.status} ${res.statusText} for ${parsed.toString()}`);
-      }
-      const contentType = res.headers.get('content-type') ?? '';
-      const raw = await res.text();
-      let body: string;
-      if (contentType.includes('application/json')) {
-        try {
-          body = JSON.stringify(JSON.parse(raw), null, 2);
-        } catch {
+      const timed = await fetchWithTimeout(parsed.toString());
+      try {
+        const res = timed.response;
+        if (!res.ok) {
+          return err(`web_fetch: HTTP ${res.status} ${res.statusText} for ${parsed.toString()}`);
+        }
+        const contentType = res.headers.get('content-type') ?? '';
+        const acquired = await readResponseTextBounded(res, maxBytes);
+        const raw = acquired.text;
+        let body: string;
+        if (contentType.includes('application/json')) {
+          try {
+            body = JSON.stringify(JSON.parse(raw), null, 2);
+          } catch {
+            body = raw;
+          }
+        } else if (contentType.includes('text/html') || /<html[\s>]/i.test(raw)) {
+          body = htmlToMarkdown(raw);
+        } else {
           body = raw;
         }
-      } else if (contentType.includes('text/html') || /<html[\s>]/i.test(raw)) {
-        body = htmlToMarkdown(raw);
-      } else {
-        body = raw;
+        const header = `# ${parsed.toString()}\n\nContent-Type: ${contentType || '(unknown)'}\n\n---\n\n`;
+        const sourceMarker = acquired.truncated
+          ? `\n\n[source truncated: web transfer stopped at max_bytes=${maxBytes}; source size ${acquired.inputSizeExact ? `was ${acquired.inputBytes}` : `is at least ${acquired.inputBytes}`} bytes. Retry a narrower resource or raise max_bytes.]`
+          : '';
+        const out = header + body + sourceMarker;
+        const sourceTruncations: ToolSourceTruncation[] | undefined = acquired.truncated
+          ? [{
+              technique: 'network-acquisition-cap',
+              inputSize: acquired.inputBytes,
+              ...(acquired.inputSizeExact ? {} : { inputSizeExact: false }),
+              outputSize: new TextEncoder().encode(raw).byteLength,
+              unit: 'bytes',
+              recoverable: false,
+            }]
+          : undefined;
+        cachePut(cacheKey, out, sourceTruncations);
+        return { content: out, sourceTruncations };
+      } finally {
+        timed.finish();
       }
-      const header = `# ${parsed.toString()}\n\nContent-Type: ${contentType || '(unknown)'}\n\n---\n\n`;
-      const out = applyCap(header + body);
-      cachePut(cacheKey, out);
-      return ok(out);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return err(`web_fetch failed: ${msg}`);
@@ -219,22 +339,27 @@ interface SearchResult {
  */
 async function searchBrave(query: string, key: string): Promise<SearchResult[]> {
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`;
-  const res = await fetchWithTimeout(url, {
+  const timed = await fetchWithTimeout(url, {
     headers: {
       'X-Subscription-Token': key,
       Accept: 'application/json',
     },
   });
-  if (!res.ok) throw new Error(`Brave ${res.status}: ${res.statusText}`);
-  const data = (await res.json()) as {
-    web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
-  };
-  const results = data.web?.results ?? [];
-  return results.slice(0, 10).map((r) => ({
-    title: String(r.title ?? ''),
-    url: String(r.url ?? ''),
-    snippet: htmlToMarkdown(String(r.description ?? '')).slice(0, 300),
-  }));
+  try {
+    const res = timed.response;
+    if (!res.ok) throw new Error(`Brave ${res.status}: ${res.statusText}`);
+    const data = (await res.json()) as {
+      web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
+    };
+    const results = data.web?.results ?? [];
+    return results.slice(0, 10).map((r) => ({
+      title: String(r.title ?? ''),
+      url: String(r.url ?? ''),
+      snippet: htmlToMarkdown(String(r.description ?? '')),
+    }));
+  } finally {
+    timed.finish();
+  }
 }
 
 /**
@@ -243,30 +368,35 @@ async function searchBrave(query: string, key: string): Promise<SearchResult[]> 
  */
 async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const res = await fetchWithTimeout(url);
-  if (!res.ok) throw new Error(`DDG ${res.status}: ${res.statusText}`);
-  const html = await res.text();
-  const results: SearchResult[] = [];
-  // Parse result blocks: each link has class "result__a" with href, followed
-  // by a snippet with class "result__snippet". Intentionally forgiving regex.
-  const re = /<a[^>]+class=["'][^"']*result__a[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html)) !== null && results.length < 10) {
-    const href = match[1];
-    const title = htmlToMarkdown(match[2]).trim();
-    const snippet = htmlToMarkdown(match[3]).trim().slice(0, 300);
-    // DDG wraps URLs in a /l/?uddg=<encoded> redirect — unwrap.
-    let finalUrl = href;
-    try {
-      const parsed = new URL(href, 'https://duckduckgo.com');
-      const uddg = parsed.searchParams.get('uddg');
-      if (uddg) finalUrl = decodeURIComponent(uddg);
-    } catch {
-      /* keep raw */
+  const timed = await fetchWithTimeout(url);
+  try {
+    const res = timed.response;
+    if (!res.ok) throw new Error(`DDG ${res.status}: ${res.statusText}`);
+    const html = await res.text();
+    const results: SearchResult[] = [];
+    // Parse result blocks: each link has class "result__a" with href, followed
+    // by a snippet with class "result__snippet". Intentionally forgiving regex.
+    const re = /<a[^>]+class=["'][^"']*result__a[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(html)) !== null && results.length < 10) {
+      const href = match[1];
+      const title = htmlToMarkdown(match[2]).trim();
+      const snippet = htmlToMarkdown(match[3]).trim();
+      // DDG wraps URLs in a /l/?uddg=<encoded> redirect — unwrap.
+      let finalUrl = href;
+      try {
+        const parsed = new URL(href, 'https://duckduckgo.com');
+        const uddg = parsed.searchParams.get('uddg');
+        if (uddg) finalUrl = decodeURIComponent(uddg);
+      } catch {
+        /* keep raw */
+      }
+      results.push({ title, url: finalUrl, snippet });
     }
-    results.push({ title, url: finalUrl, snippet });
+    return results;
+  } finally {
+    timed.finish();
   }
-  return results;
 }
 
 function formatResults(results: SearchResult[]): string {
@@ -301,6 +431,7 @@ export const webSearch: CoderTool = {
     "DON'T: use as a substitute for web_fetch when you already know the URL.\n" +
     "Backend: Brave Search when BRAVE_API_KEY is set (free tier 2000/mo), DuckDuckGo HTML scraping fallback otherwise. Output is cached for 15min.",
   source: 'native',
+  outputPolicy: { mode: 'search', reducer: 'smart', recovery: 'rerun' },
   parameters: {
     type: 'object',
     properties: {
@@ -334,7 +465,7 @@ export const webSearch: CoderTool = {
 
     const cacheKey = `search:${query}|${(allow ?? []).join(',')}|${(block ?? []).join(',')}`;
     const hit = cacheGet(cacheKey);
-    if (hit) return ok(hit + '\n\n[cached]');
+    if (hit) return ok(hit.text + '\n\n[cached]');
 
     const braveKey = process.env.BRAVE_API_KEY;
     let results: SearchResult[] = [];
@@ -365,9 +496,8 @@ export const webSearch: CoderTool = {
 
     const filtered = domainFilter(results, allow, block);
     const body = `[backend: ${backend}]\nquery: ${query}\n\n${formatResults(filtered)}`;
-    const capped = applyCap(body);
-    cachePut(cacheKey, capped);
-    return ok(capped);
+    cachePut(cacheKey, body);
+    return ok(body);
   },
 };
 
