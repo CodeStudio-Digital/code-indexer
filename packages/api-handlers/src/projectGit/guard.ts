@@ -8,7 +8,7 @@ export const PROJECT_GIT_RPC_METHODS = [
   'commit', 'branchList', 'branchCheckout', 'branchesDetailed', 'branchCreate',
   'branchDelete', 'branchRename', 'merge', 'rebase', 'reset', 'revert',
   'cherryPick', 'mergeState', 'conflictFile', 'resolveConflict', 'mergeContinue',
-  'mergeAbort', 'gitOptimizations', 'configureGitOptimizations', 'pushPreview', 'push', 'fetch',
+  'mergeAbort', 'gitOptimizations', 'configureGitOptimizations', 'pushPreview', 'push', 'createPullRequest', 'fetch',
   'pull', 'updateBranch', 'stashList', 'stashSave', 'stashPop', 'stashApply',
   'stashDrop', 'stashShow', 'stashDetail', 'stashFileDiff', 'aiPlan', 'aiExecute',
   'aiCommitMessage', 'detectRemote',
@@ -48,12 +48,12 @@ export const PROJECT_GIT_MUTATIONS = new Set<ProjectGitRpcMethod>([
   'stageHunk', 'stage', 'unstage', 'discard', 'commit', 'branchCheckout',
   'branchCreate', 'branchDelete', 'branchRename', 'merge', 'rebase', 'reset',
   'revert', 'cherryPick', 'resolveConflict', 'mergeContinue', 'mergeAbort',
-  'configureGitOptimizations', 'push', 'fetch', 'pull', 'updateBranch',
+  'configureGitOptimizations', 'push', 'createPullRequest', 'fetch', 'pull', 'updateBranch',
   'stashSave', 'stashPop', 'stashApply', 'stashDrop', 'aiExecute',
 ]);
 
 const PATH_KEYS = ['path'] as const;
-const REF_KEYS = ['sha', 'branch', 'targetBranch', 'expectedHead', 'name', 'oldName', 'newName', 'from', 'onto', 'target', 'commit'] as const;
+const REF_KEYS = ['sha', 'branch', 'targetBranch', 'expectedHead', 'name', 'oldName', 'newName', 'from', 'onto', 'target', 'commit', 'head', 'base'] as const;
 const MAX_PATHS = 2_000;
 const MAX_PATH_LENGTH = 4_096;
 const MAX_REF_LENGTH = 1_024;
@@ -121,6 +121,15 @@ export function validateProjectGitInput(method: ProjectGitRpcMethod, input: unkn
     bad(`message must be at most ${MAX_MESSAGE_LENGTH} characters`);
   }
   if (method === 'commit' && (typeof value.message !== 'string' || !value.message.trim())) bad('commit message required');
+  if (value.identityMode !== undefined && !['project', 'managed'].includes(String(value.identityMode))) bad('git identity mode is invalid');
+  if (value.managedGrant !== undefined && (
+    typeof value.managedGrant !== 'string' || value.managedGrant.length < 32 || value.managedGrant.length > 256 || /[\0\r\n]/.test(value.managedGrant)
+  )) bad('managed Git grant is invalid');
+  if (method === 'createPullRequest') {
+    if (value.identityMode !== 'managed') bad('pull request creation requires the explicit managed identity');
+    if (typeof value.title !== 'string' || !value.title.trim() || value.title.length > 256) bad('pull request title is invalid');
+    if (value.body !== undefined && (typeof value.body !== 'string' || value.body.length > MAX_MESSAGE_LENGTH)) bad('pull request body is invalid');
+  }
   if (method === 'aiPlan' && (typeof value.intent !== 'string' || !value.intent.trim() || value.intent.length > 2_000)) {
     bad('intent must contain between 1 and 2000 characters');
   }

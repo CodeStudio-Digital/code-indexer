@@ -39,6 +39,7 @@ import type {
   LocalProjectSynthSource,
   LocalProjectStatus,
 } from '@mcp/store/company-local-project-store.js';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 // ─────────────────────────────────────────────────────────── store wiring
 
@@ -189,6 +190,10 @@ export class LocalProcessManager {
         stdio: ['ignore', 'pipe', 'pipe'],
         // Windows needs shell:false to keep argv semantics.
         shell: false,
+        // POSIX process groups let shutdown terminate the whole npm/vite/etc.
+        // tree. Windows uses taskkill /T and does not require detachment.
+        detached: globalThis.process.platform !== 'win32',
+        windowsHide: true,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -325,13 +330,9 @@ export class LocalProcessManager {
     }
 
     if (child && !child.killed) {
-      // SIGTERM first, fall back to SIGKILL after 5s. On Windows, `SIGTERM`
-      // is mapped to process.kill — which terminates unconditionally.
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already dead */
-      }
+      const pid = child.pid;
+      // Signal the whole tree while the parent relationship still exists.
+      killProcessTree(pid, 'SIGTERM');
       await new Promise<void>((resolve) => {
         let done = false;
         const finish = () => {
@@ -340,11 +341,7 @@ export class LocalProcessManager {
           resolve();
         };
         const timer = setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* ignore */
-          }
+          killProcessTree(pid, 'SIGKILL');
           finish();
         }, 5_000);
         child.once('exit', () => {
@@ -437,6 +434,10 @@ let singleton: LocalProcessManager | null = null;
 
 export function getLocalProcessManager(): LocalProcessManager {
   if (!singleton) singleton = new LocalProcessManager();
+  return singleton;
+}
+
+export function tryGetLocalProcessManager(): LocalProcessManager | null {
   return singleton;
 }
 

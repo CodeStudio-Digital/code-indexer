@@ -97,6 +97,8 @@ export interface PublishTarballResult {
 export class VerdaccioService {
   private readonly store: VerdaccioStore;
   private startInFlight: Promise<VerdaccioState> | null = null;
+  private startingContainerId: string | null = null;
+  private shuttingDown = false;
 
   constructor(deps: VerdaccioDeps) {
     this.store = deps.store;
@@ -118,6 +120,7 @@ export class VerdaccioService {
   }
 
   async enable(): Promise<VerdaccioState> {
+    if (this.shuttingDown) throw new Error('Verdaccio is shutting down');
     if (this.startInFlight) return this.startInFlight;
     this.startInFlight = this.doEnable();
     try {
@@ -178,6 +181,8 @@ export class VerdaccioService {
         isolation: { ...DEFAULT_SANDBOX_ISOLATION },
       });
       containerId = created.containerId;
+      this.startingContainerId = containerId;
+      if (this.shuttingDown) throw new Error('Verdaccio is shutting down');
 
       // The verdaccio image ships `/verdaccio/storage` owned by uid
       // 10001 (`verdacci` user inside the image), but our sandbox
@@ -239,12 +244,15 @@ export class VerdaccioService {
         );
       }
 
+      if (this.shuttingDown) throw new Error('Verdaccio is shutting down');
+
       cfg = this.store.setStatus({
         status: 'running',
         container_id: containerId,
         last_error: null,
         started_at: new Date().toISOString(),
       });
+      this.startingContainerId = null;
       // Record the persisted storage path so the admin panel can show
       // it and the operator knows where backups live.
       if (cfg.storage_path !== storageBind) {
@@ -301,14 +309,15 @@ export class VerdaccioService {
 
       return toState(cfg);
     } catch (e) {
+      this.startingContainerId = null;
       const msg = e instanceof Error ? e.message : String(e);
       if (containerId) {
         try { await driver.destroy(containerId); } catch { /* swallow */ }
       }
       this.store.setStatus({
-        status: 'error',
+        status: this.shuttingDown ? 'stopped' : 'error',
         container_id: null,
-        last_error: msg,
+        last_error: this.shuttingDown ? null : msg,
       });
       console.warn(`[verdaccio] enable failed: ${msg}`);
       throw e;
@@ -338,6 +347,24 @@ export class VerdaccioService {
   async restart(): Promise<VerdaccioState> {
     await this.disable();
     return this.enable();
+  }
+
+  /** Stop the container while preserving the persisted `enabled` preference. */
+  async shutdown(): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    const cfg = this.store.getConfig();
+    const ids = new Set([cfg.container_id, this.startingContainerId].filter((id): id is string => !!id));
+    if (ids.size > 0) {
+      try {
+        const driver = await resolveDriver();
+        await Promise.allSettled([...ids].map((id) => driver.destroy(id)));
+      } catch (e) {
+        console.warn(`[verdaccio] shutdown failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    this.startingContainerId = null;
+    this.store.setStatus({ status: 'stopped', container_id: null, last_error: null });
   }
 
   async recoverOnBoot(): Promise<void> {

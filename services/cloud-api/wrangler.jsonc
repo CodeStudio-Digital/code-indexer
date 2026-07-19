@@ -9,7 +9,7 @@
   //   Phase 3: + Stripe secrets;  Phase 6: + ratelimit bindings
   "name": "codestudio-cloud-api",
   "main": "src/index.ts",
-  "compatibility_date": "2024-12-01",
+  "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "0748c7a37faefcdbd0b2ab71580791cd",
   // Sample 10% of requests for logs in prod (cost). Security alerting does NOT
@@ -66,6 +66,15 @@
     "OAUTH_PUBLIC_BASE_URL": "https://codestudio-cloud-api.maiconspo6792.workers.dev",
     // Points at the LIVE Pages deployment until account.codestudio.dev is mapped to
     // the Pages project. Switch back to the custom domain once DNS is set up.
-    "PORTAL_BASE_URL": "https://codestudio-account-portal.pages.dev"
+    "PORTAL_BASE_URL": "https://codestudio-account-portal.pages.dev",
+    // Public GitHub App identity. Credentials and signing material are secrets.
+    "GITHUB_APP_ID": "4329188",
+    "GITHUB_APP_SLUG": "megabrainstudio",
+    "GITHUB_APP_HOST": "github.com",
+    "GITHUB_APP_WEB_URL": "https://github.com",
+    "GITHUB_APP_API_URL": "https://api.github.com"
+    // Configure GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET,
+    // GITHUB_APP_PRIVATE_KEY_JWK and optionally GITHUB_APP_STATE_SECRET with
+    // `wrangler secret put`; never commit them here.
   }
 }

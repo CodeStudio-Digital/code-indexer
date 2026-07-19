@@ -61,6 +61,13 @@ export class TunnelManager {
           : input.kind === 'remote'
             ? await this.startRemote(client, input, meta)
             : await this.startDynamic(client, input, meta);
+      const stop = active.stop;
+      const onConnectionClose = (): void => this.stop(meta.id);
+      client.once('close', onConnectionClose);
+      active.stop = () => {
+        client.removeListener('close', onConnectionClose);
+        stop();
+      };
       this.tunnels.set(meta.id, active);
       return meta;
     } catch (err) {
@@ -82,6 +89,10 @@ export class TunnelManager {
 
   list(): SshTunnel[] {
     return [...this.tunnels.values()].map((t) => t.meta);
+  }
+
+  stopAll(): void {
+    for (const id of [...this.tunnels.keys()]) this.stop(id);
   }
 
   /** Bind a net listener, resolving only after it is actually listening; reject on bind failure. */

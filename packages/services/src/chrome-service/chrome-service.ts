@@ -94,6 +94,8 @@ export class ChromeService {
   private readonly httpApiPort: number | undefined;
   private readonly qaRunStore: IQaTestRunStore | undefined;
   private startInFlight: Promise<ChromeServiceState> | null = null;
+  private startingContainerId: string | null = null;
+  private shuttingDown = false;
 
   constructor(deps: ChromeServiceDeps) {
     this.store = deps.store;
@@ -184,6 +186,7 @@ export class ChromeService {
    * the same in-flight promise.
    */
   async enable(): Promise<ChromeServiceState> {
+    if (this.shuttingDown) throw new Error('Chrome Service is shutting down');
     if (this.startInFlight) return this.startInFlight;
     this.startInFlight = this.doEnable();
     try {
@@ -246,6 +249,8 @@ export class ChromeService {
         env: { PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright' },
       });
       containerId = created.containerId;
+      this.startingContainerId = containerId;
+      if (this.shuttingDown) throw new Error('Chrome Service is shutting down');
 
       // Launch run-server in the background. The image's CMD is
       // `bash`; we spawn the server explicitly via `nohup ... &`.
@@ -277,12 +282,15 @@ export class ChromeService {
         );
       }
 
+      if (this.shuttingDown) throw new Error('Chrome Service is shutting down');
+
       cfg = this.store.setStatus({
         status: 'running',
         container_id: containerId,
         last_error: null,
         started_at: new Date().toISOString(),
       });
+      this.startingContainerId = null;
       console.log(
         `[chrome-service] up — image=${cfg.image} host_port=${cfg.host_port} ws=${buildHostFacingWsEndpoint(getResolvedRuntime(), cfg.host_port)}`,
       );
@@ -292,15 +300,16 @@ export class ChromeService {
 
       return toState(cfg);
     } catch (e) {
+      this.startingContainerId = null;
       const msg = e instanceof Error ? e.message : String(e);
       // Best-effort destroy of the container we managed to create.
       if (containerId) {
         try { await driver.destroy(containerId); } catch { /* swallow */ }
       }
       this.store.setStatus({
-        status: 'error',
+        status: this.shuttingDown ? 'stopped' : 'error',
         container_id: null,
-        last_error: msg,
+        last_error: this.shuttingDown ? null : msg,
       });
       // B7 — the service just transitioned to `error`; any run that was
       // mid-flight lost its browser. Fail them fast (typed) instead of
@@ -385,6 +394,28 @@ export class ChromeService {
   async restart(): Promise<ChromeServiceState> {
     await this.disable();
     return this.enable();
+  }
+
+  /**
+   * Stop host resources without changing the operator's `enabled` preference.
+   * The next app boot can therefore recover the service, but no container is
+   * left running after this process exits.
+   */
+  async shutdown(): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    const cfg = this.store.getConfig();
+    const ids = new Set([cfg.container_id, this.startingContainerId].filter((id): id is string => !!id));
+    if (ids.size > 0) {
+      try {
+        const driver = await resolveDriver();
+        await Promise.allSettled([...ids].map((id) => driver.destroy(id)));
+      } catch (e) {
+        console.warn(`[chrome-service] shutdown failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    this.startingContainerId = null;
+    this.store.setStatus({ status: 'stopped', container_id: null, last_error: null });
   }
 
   /**

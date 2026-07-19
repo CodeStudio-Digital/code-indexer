@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import { gitTools } from '../git.js';
+import { gitTools, withManagedCommitAttribution } from '../git.js';
 
 const gitStatus = gitTools.find((t) => t.name === 'git_status')!;
 const gitLog = gitTools.find((t) => t.name === 'git_log')!;
@@ -67,5 +67,39 @@ describe('git_log', () => {
     const res = await gitLog.handler({ limit: 5 }, ctxFor(repo));
     expect(res.isError).toBeFalsy();
     expect(res.content).toContain('initial commit');
+  });
+});
+
+describe('managed commit attribution', () => {
+  it('adds the verified GitHub bot noreply identity when managed attribution is enabled', () => {
+    expect(withManagedCommitAttribution('feat: agent change', {
+      MEGABRAIN_GIT_IDENTITY_DEFAULT: 'managed',
+      MEGABRAIN_GIT_PUBLIC_ATTRIBUTION: '1',
+    })).toBe(
+      'feat: agent change\n\n' +
+      'Co-authored-by: MegaBrainStudio <306376051+megabrainstudio[bot]@users.noreply.github.com>',
+    );
+  });
+
+  it('keeps the user commit untouched when project identity or private attribution is selected', () => {
+    expect(withManagedCommitAttribution('fix: local', {
+      MEGABRAIN_GIT_IDENTITY_DEFAULT: 'project',
+      MEGABRAIN_GIT_PUBLIC_ATTRIBUTION: '1',
+    })).toBe('fix: local');
+    expect(withManagedCommitAttribution('fix: private', {
+      MEGABRAIN_GIT_IDENTITY_DEFAULT: 'managed',
+      MEGABRAIN_GIT_PUBLIC_ATTRIBUTION: '0',
+    })).toBe('fix: private');
+  });
+
+  it('does not duplicate an existing MegaBrain co-author trailer', () => {
+    const attributed = withManagedCommitAttribution('docs: explain', {
+      MEGABRAIN_GIT_IDENTITY_DEFAULT: 'managed',
+      MEGABRAIN_GIT_PUBLIC_ATTRIBUTION: '1',
+    });
+    expect(withManagedCommitAttribution(attributed, {
+      MEGABRAIN_GIT_IDENTITY_DEFAULT: 'managed',
+      MEGABRAIN_GIT_PUBLIC_ATTRIBUTION: '1',
+    })).toBe(attributed);
   });
 });

@@ -36,6 +36,7 @@
 import { createRequire } from 'node:module';
 import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { childRegistry } from './child-process-registry.js';
 
 const require = createRequire(import.meta.url);
@@ -245,9 +246,24 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       },
     });
 
-    const dataSub = term.onData((data) => post({ type: 'data', data }));
-    const exitSub = term.onExit(({ exitCode, signal }) => {
+    let cleaned = false;
+    let dataSub: { dispose(): void } | null = null;
+    let exitSub: { dispose(): void } | null = null;
+    const cleanup = (kill: boolean): void => {
+      if (cleaned) return;
+      cleaned = true;
+      // Tree-first is intentional: after the shell exits Windows can no
+      // longer discover npm/vite/esbuild descendants by walking its pid.
+      if (kill) killProcessTree(term.pid);
+      try { dataSub?.dispose(); } catch { /* already disposed */ }
+      try { exitSub?.dispose(); } catch { /* already disposed */ }
+      try { if (kill) term.kill(); } catch { /* already dead */ }
       unregister();
+    };
+
+    dataSub = term.onData((data) => post({ type: 'data', data }));
+    exitSub = term.onExit(({ exitCode, signal }) => {
+      cleanup(false);
       post({ type: 'exit', code: exitCode, signal });
       try {
         port2.postMessage({ type: 'done' });
@@ -265,14 +281,11 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       } else if (frame.type === 'resize' && typeof frame.cols === 'number' && typeof frame.rows === 'number') {
         try { term.resize(frame.cols, frame.rows); } catch { /* pty dying */ }
       } else if (frame.type === 'close') {
-        try { term.kill(); } catch { /* already dead */ }
+        cleanup(true);
       }
     });
     port2.on('close', () => {
-      unregister();
-      dataSub.dispose();
-      exitSub.dispose();
-      try { term.kill(); } catch { /* already dead */ }
+      cleanup(true);
     });
   });
 }

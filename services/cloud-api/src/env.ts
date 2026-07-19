@@ -1,11 +1,12 @@
 import type { EmailServiceBinding } from './infra/email-sender.js';
 
+/** Resource bindings are generated from wrangler.jsonc. Secrets and optional
+ * local-dev overrides remain declared below because Wrangler cannot infer
+ * secrets that have not been installed in a developer's account. */
+type GeneratedResourceBindings = Pick<CloudflareBindings, 'DB' | 'CACHE' | 'ASSETS' | 'LOGIN_THROTTLE'>;
+
 /** Cloudflare bindings + vars/secrets available to the Worker (grow per phase). */
-export interface Env {
-  DB: D1Database;
-  CACHE: KVNamespace;
-  ASSETS: R2Bucket;
-  LOGIN_THROTTLE: DurableObjectNamespace;
+export interface Env extends GeneratedResourceBindings {
   /** Generic fixed-window rate limiter (email/feedback abuse + cost guard).
    *  Absent ⇒ rate limiting is skipped (local dev before the binding is added). */
   RATE_LIMIT?: DurableObjectNamespace;
@@ -68,4 +69,22 @@ export interface Env {
    *  key = SHA-256 of this). Absent ⇒ org SSO config/login 404s (fail-soft). Set via
    *  `wrangler secret put SSO_CONFIG_KEY`. Rotating it invalidates stored secrets. */
   SSO_CONFIG_KEY?: string;
+  // ── Optional managed GitHub App identity. The OAuth client and RSA private
+  //    JWK belong to the GitHub App itself (not the separate sign-in provider).
+  //    All secrets are configured with `wrangler secret put`.
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_SLUG?: string;
+  GITHUB_APP_CLIENT_ID?: string;
+  GITHUB_APP_CLIENT_SECRET?: string;
+  /** JSON-encoded private RSA JWK imported by Web Crypto. Never expose this to
+   *  Electron, the renderer, a Git remote, command args, or logs. */
+  GITHUB_APP_PRIVATE_KEY_JWK?: string;
+  /** Dedicated HMAC secret for install/authorize state; falls back to the
+   *  existing OAuth state secret when omitted. */
+  GITHUB_APP_STATE_SECRET?: string;
+  /** One configured GitHub host per App. Enterprise hosts need their own App and
+   *  endpoint; native project credentials remain the default for every host. */
+  GITHUB_APP_HOST?: string;
+  GITHUB_APP_WEB_URL?: string;
+  GITHUB_APP_API_URL?: string;
 }

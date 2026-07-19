@@ -4,10 +4,7 @@ import { formatSpecResult } from '@mcp/code-agent/tools/spec/index.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam } from '../_helpers.js';
-import {
-  coderWorkerEnabled,
-  getCoderWorkerPool,
-} from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 
@@ -20,8 +17,8 @@ interface SpecResponseBody {
 /**
  * SDD mode counterpart of `/plan-response`. Routes the human verdict on a
  * `submit_spec` (or `submit_specification_to_master`) submission back to the
- * paused runner. Mirrors the worker / in-process / resume-path fallthrough
- * sequence used by `/plan-response`.
+ * paused runner. Mirrors the worker / persisted-resume sequence used by
+ * `/plan-response`.
  *
  * Kept as a sibling route file instead of inflating `interaction.ts`.
  */
@@ -31,16 +28,15 @@ export function mountCoderSpecResponseRoute(
   runtime: CoderRuntime,
 ): void {
   const { sessionStore } = deps;
-  const { activeRuns, findPendingInteraction } = runtime;
+  const { findPendingInteraction } = runtime;
+  const workerPool = getCoderWorkerPool();
 
   app.post('/api/coder/sessions/:id/spec-response', async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<SpecResponseBody>();
     const approved = !!body.approved;
     const requested = body.requested_changes;
-    const inWorkerMode = coderWorkerEnabled();
-
-    const bus = inWorkerMode ? getCoderWorkerPool().getBus(id) : activeRuns.get(id);
+    const bus = workerPool.getBus(id);
     emitWorkerLog(bus, 'info', 'route', `POST /spec-response`, {
       approved,
       has_feedback: !!requested,
@@ -48,21 +44,13 @@ export function mountCoderSpecResponseRoute(
 
     const payload = JSON.stringify({ approved, requested_changes: requested });
 
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(id, payload);
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(payload);
-      if (ok) return c.json({ ok });
+    try {
+      const ok = await workerPool.provideUserInput(id, payload);
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     const pending = findPendingInteraction(id);
@@ -104,10 +92,6 @@ export function mountCoderSpecResponseRoute(
       }
     }
 
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 }

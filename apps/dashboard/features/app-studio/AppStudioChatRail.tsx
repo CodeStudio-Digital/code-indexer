@@ -1,17 +1,21 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, MessagesSquare } from 'lucide-react';
+import { ChevronRight, ListChecks, MessagesSquare } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { BoardPanel } from '../agents/BoardPanel.js';
 import { MasterComposer } from '../agents/MasterComposer.js';
 import type { useCompanyStream } from '../../hooks/useCompanyStream.js';
+import type { AppStudioSessionDetail } from './app-studio-api.js';
+import { AppStudioOrchestrationBoard } from './AppStudioOrchestrationBoard.js';
 
 export function AppStudioChatRail({
   companySessionId,
   projectName,
   masterSessionId,
   initialPrompt,
+  detail,
   companyStream,
+  onChanged,
   onCollapse,
 }: {
   appSessionId: number;
@@ -20,11 +24,14 @@ export function AppStudioChatRail({
   projectName: string;
   masterSessionId: number | null;
   initialPrompt?: string | null;
+  detail: AppStudioSessionDetail;
   companyStream?: ReturnType<typeof useCompanyStream>;
+  onChanged: () => void;
   onCollapse?: () => void;
 }) {
   const { t } = useTranslation(['appStudio', 'agents']);
   const sent = useRef(false);
+  const [view, setView] = useState<'orchestration' | 'conversation'>('orchestration');
 
   const send = async (text: string, attachments: Parameters<NonNullable<typeof companyStream>['resume']>[1] = [], options?: { thinking?: boolean }) => {
     if (!companyStream) throw new Error('The App team is unavailable.');
@@ -56,15 +63,26 @@ export function AppStudioChatRail({
         {onCollapse && <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onCollapse}><ChevronRight className="h-3.5 w-3.5" /></Button>}
       </header>
       {companyStream.error && <div className="border-b border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-700">{companyStream.error}</div>}
+      <div className="flex shrink-0 gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] p-1">
+        <button type="button" className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded text-[10px] font-medium ${view === 'orchestration' ? 'bg-accent text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setView('orchestration')}>
+          <ListChecks className="h-3.5 w-3.5" />{t('appStudio:v6.orchestration.tab')}
+        </button>
+        <button type="button" className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded text-[10px] font-medium ${view === 'conversation' ? 'bg-accent text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setView('conversation')}>
+          <MessagesSquare className="h-3.5 w-3.5" />{t('appStudio:v6.orchestration.conversationTab')}
+          {companyStream.boardMessages.length > 0 && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px]">{companyStream.boardMessages.length}</span>}
+        </button>
+      </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        <BoardPanel
-          messages={companyStream.boardMessages}
-          masterPrompts={Array.from(companyStream.masterPrompts.values())}
-          onAnswerQuestion={(promptId, answer) => companyStream.respondToMasterQuestion(promptId, answer)}
-          onRespondPlan={(promptId, approved, feedback) => companyStream.respondToMasterPlan(promptId, approved, feedback)}
-          sessionId={companySessionId}
-          sessionName={projectName}
-        />
+        {view === 'orchestration' ? <AppStudioOrchestrationBoard detail={detail} onChanged={onChanged} /> : (
+          <BoardPanel
+            messages={companyStream.boardMessages}
+            masterPrompts={Array.from(companyStream.masterPrompts.values())}
+            onAnswerQuestion={(promptId, answer) => companyStream.respondToMasterQuestion(promptId, answer)}
+            onRespondPlan={(promptId, approved, feedback) => companyStream.respondToMasterPlan(promptId, approved, feedback)}
+            sessionId={companySessionId}
+            sessionName={projectName}
+          />
+        )}
       </div>
       <div className="shrink-0 border-t p-2">
         <MasterComposer sessionId={companySessionId} onSend={send} placeholder={t('agents:company.inputPlaceholderMaster')} />

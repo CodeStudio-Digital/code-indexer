@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import v8 from 'node:v8';
+import { dirname, join, resolve } from 'node:path';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { loadConfig } from '@mcp/shared/utils/config.js';
@@ -93,6 +95,8 @@ import { setDesignSystemStore, setDesignSystemSkillStore } from '@mcp/company/to
 import { setAppStudioDbClientStore, setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
+import { ResearchBrowserService } from '@mcp/services/research-browser/service.js';
+import { setGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
 import { VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 import {
   setSandboxServiceEnvStore,
@@ -102,6 +106,7 @@ import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
 import { mountAppStudioRoutes } from './server/routes/app-studio/index.js';
 import { mountSpriteStudioRoutes } from './server/routes/sprite-studio/index.js';
+import { stopSpriteBusSweep } from './server/routes/sprite-studio/bus-registry.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
@@ -121,16 +126,22 @@ import {
 import {
   setCoderWorkerDocDeps,
   setCoderWorkerMcpPool,
-  coderWorkerEnabled,
+  describeCoderWorkerStatus,
   getCoderWorkerPool,
 } from './sse/coderWorkerPoolSingleton.js';
 import { createStructuralIndexerExecutor } from './sse/IndexerWorkerClient.js';
-import { startPerfSampler } from './server/perf/perf-sampler.js';
-import { startFreezeWatchdog } from './server/perf/freeze-log.js';
+import { startPerfSampler, stopPerfSampler } from './server/perf/perf-sampler.js';
+import { startFreezeWatchdog, stopFreezeWatchdog } from './server/perf/freeze-log.js';
+import { startPersistentPerfDiagnostics } from './server/perf/persistent-diagnostics.js';
 import { getMemoryLedger } from './server/perf/memory-ledger.js';
 import { mountPerfRoutes } from './server/routes/admin/perf.js';
 import { createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
 import { registerShutdownTask } from './server/shutdown-tasks.js';
+import {
+  forceDisposeAppProcessResources,
+  shutdownAppRuntime,
+} from './server/runtime-shutdown.js';
+import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import {
   createLspHandlers,
   createContext,
@@ -149,8 +160,6 @@ import { startCoderWatchdog } from './sse/coder-watchdog.js';
 import { startMemorySweeper, memorySweeperEnabled } from './sse/memory-sweeper.js';
 import { startMemoryConsolidator, memoryConsolidateEnabled } from './sse/memory-consolidator.js';
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
-import { closeDbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
-import { closeIndexJobPool } from '@mcp/indexer/workers/indexJob/client.js';
 
 // ─── Company auto-resume (Phase 1 — metabolism at rest) ──────────────
 //
@@ -221,6 +230,14 @@ function scheduleCompanyAutoResume(sessionIds: number[]): void {
 }
 
 export function createApp() {
+  registerShutdownTask('exec-command-sessions-stop', () => disposeExecCommandSessions('app-shutdown'));
+  if (heapLogTimer) {
+    registerShutdownTask('heap-monitor-stop', () => {
+      if (!heapLogTimer) return;
+      clearInterval(heapLogTimer);
+      heapLogTimer = null;
+    });
+  }
   // Settings bootstrap MUST run before anything else reads
   // `process.env.*`. The store reads every saved row from the DB and
   // copies it into `process.env`, so a `Number(process.env.MCP_API_PORT)`
@@ -242,6 +259,17 @@ export function createApp() {
       }`,
     );
   }
+
+  const coderWorker = describeCoderWorkerStatus();
+  if (!coderWorker.enabled) {
+    throw new Error(
+      `[fatal] Coder worker pool unavailable: ${coderWorker.reason ?? 'unknown'}. ` +
+      'In-process coder execution is not supported.',
+    );
+  }
+  // Resolve the mandatory pool during boot. A missing worker must fail closed
+  // before routes are mounted, never after a user has submitted a message.
+  getCoderWorkerPool();
 
   const deps = createDeps();
 
@@ -373,6 +401,7 @@ export function createApp() {
     qaRunStore: deps.qaTestRunStore,
   });
   setChromeService(chromeService);
+  setGlobalResearchBrowser(new ResearchBrowserService(() => chromeService.connectBrowser()));
   // Hand the same ChromeService to the doc indexer's BrowserBackend so
   // bot-blocked fetches can escalate to Chromium via the existing WS
   // endpoint instead of spinning up a private browser per request.
@@ -514,7 +543,8 @@ export function createApp() {
   // all complete well inside it. Synchronous import — the enclosing
   // function isn't async; dynamic import was the original bug.
   try {
-    startCoderWatchdog({ sessionStore: deps.sessionStore });
+    const coderWatchdog = startCoderWatchdog({ sessionStore: deps.sessionStore });
+    registerShutdownTask('coder-watchdog-stop', () => coderWatchdog.stop());
   } catch (e) {
     console.warn(`[coder/watchdog] failed to start: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -523,27 +553,21 @@ export function createApp() {
   // quiet (the moment most sessions actually "end"). Same lifecycle posture
   // as the watchdog: unref()-ed timer, best-effort, flag-gated
   // (MCP_MEMORY_SWEEPER=0 disables).
-  // One-shot Agent Memory embedding back-fill — migrated/legacy rows (and any
-  // saved while no embedding backend was configured) get their vectors so
-  // semantic recall works, not just FTS. Best-effort, bounded, off the hot path.
-  if (deps.agentMemoryService.hasEmbeddingBackend()) {
-    void deps.agentMemoryService
-      .backfillEmbeddings(undefined, 1000)
-      .then((r) => {
-        if (r.embedded > 0 || r.failed > 0) {
-          console.log(`[memory] agent-memory embedding backfill — embedded=${r.embedded} failed=${r.failed}`);
-        }
-      })
-      .catch((e) => console.warn(`[memory] backfill failed: ${e instanceof Error ? e.message : String(e)}`));
-  }
+  //
+  // Semantic backfills are owned by SemanticIndexCoordinator. Running the raw
+  // service backfill here bypasses generation routing and fails for every new
+  // project whose Memory namespace has not been explicitly activated yet.
+  // Startup intentionally remains passive; durable mutation jobs and explicit
+  // reindex requests reconcile namespaces through the coordinator.
   if (memorySweeperEnabled()) {
     try {
-      startMemorySweeper({
+      const memorySweeper = startMemorySweeper({
         sessionStore: deps.sessionStore,
         db: deps.db,
         runEndMemory: deps.runEndMemory,
         agentMemoryService: deps.agentMemoryService,
       });
+      registerShutdownTask('memory-sweeper-stop', () => memorySweeper.stop());
     } catch (e) {
       console.warn(`[memory/sweeper] failed to start: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -554,12 +578,13 @@ export function createApp() {
   // the manual "run now" route works, but the periodic timer only arms when
   // MCP_MEMORY_CONSOLIDATE=1 (it archives rows, so it's explicit opt-in).
   try {
-    startMemoryConsolidator({
+    const memoryConsolidator = startMemoryConsolidator({
       db: deps.db,
       snapshotService: deps.snapshotService,
       embeddingService: deps.embeddingService,
       armed: memoryConsolidateEnabled(),
     });
+    registerShutdownTask('memory-consolidator-stop', () => memoryConsolidator.stop());
   } catch (e) {
     console.warn(`[memory/consolidator] failed to start: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -613,7 +638,8 @@ export function createApp() {
   // that have received zero `qa_test_results` for >10 min and mark them
   // `errored`. Closes the door on session-68-style ghost runs where the
   // streaming reporter was wired wrong but the agent moved on.
-  startQaWatchdog(deps.qaTestRunStore);
+  const stopQaWatchdog = startQaWatchdog(deps.qaTestRunStore);
+  registerShutdownTask('qa-watchdog-stop', stopQaWatchdog);
 
   // Documentação: any doc_sources row left in `fetching|indexing` after
   // a server restart is orphaned (the in-flight `IndexDocumentationUseCase`
@@ -790,6 +816,7 @@ export function createApp() {
   // /sprites menu entry is hidden.
   if (deps.config.features.spriteStudioEnabled) {
     mountSpriteStudioRoutes(app, deps);
+    registerShutdownTask('sprite-bus-sweep-stop', stopSpriteBusSweep);
   }
   // App Studio routes (Code Studio para leigos — scaffold SSE + sessões +
   // pipeline). O gate APP_STUDIO_ENABLED vive dentro do mount.
@@ -828,8 +855,8 @@ export function createApp() {
   // tool can reach it from any in-process CoderRunner via
   // `getGlobalDocsResearcher()`.
   //
-  // For worker-thread coders (MCP_CODER_WORKER=1), the singleton DOESN'T
-  // propagate across `worker_threads` module boundaries — so we ALSO
+  // Coder runs always live in worker threads, whose module singletons do not
+  // propagate across the boundary — so we ALSO
   // wire the same backends into `setCoderWorkerDocDeps`. The worker
   // boot installs RPC shims that route `rag_search_docs` /
   // `docs_deep_research` calls back to THESE singletons via the
@@ -842,28 +869,21 @@ export function createApp() {
   });
   setGlobalDocsResearcher(docsResearchBridge);
 
-  // Vision fallback — image→text describer. Resolves the `code-agent/vision`
-  // Pipelines role and runs a one-off chat so a model that can't see images
-  // (or the composer "Describe images" flag) still gets an agent-directed
-  // textual description. In-process coders read it via the global singleton;
-  // worker coders reach it back over the MessageBridge (`vision` doc-dep below).
+  // Vision fallback — image→text describer. Worker coders reach the canonical
+  // backend over the MessageBridge (`vision` doc-dep below).
   const visionDescriber = createVisionDescriber({ resolver: deps.pipelineProviderResolver });
   setGlobalVisionDescriber(visionDescriber);
 
-  // Sprite Studio host — the `sprite_*` agent tools reach it via the process
-  // singleton (in-process coders) or the `spriteStudioHost` MessageBridge shim
-  // (worker coders, wired into setCoderWorkerDocDeps below). Gated by the flag
-  // so a build without the feature never wires it.
+  // Sprite Studio host — worker coders reach it through the
+  // `spriteStudioHost` MessageBridge shim. Gated by the feature flag.
   const spriteStudioHost = deps.config.features.spriteStudioEnabled
     ? createSpriteStudioHostImpl(deps)
     : null;
   setGlobalSpriteStudioHost(spriteStudioHost);
 
-  // Mem C across workers: memoryRetriever + runEndMemory are the SAME
-  // canonical instances stream.ts passes on the in-process path — workers
-  // reach them via the memoryRetrieve/memoryExtract/memoryIsConfigured RPC
-  // handlers (sse/worker-memory-handlers.ts), so per-turn memory injection
-  // and run-end distillation work identically with MCP_CODER_WORKER=1.
+  // Mem C across workers: workers reach the canonical services through the
+  // memoryRetrieve/memoryExtract/memoryIsConfigured RPC handlers, preserving
+  // per-turn injection and run-end distillation without main-loop execution.
   setCoderWorkerDocDeps({
     docSearch: docSearchBackend,
     docsResearch: docsResearchBridge,
@@ -938,6 +958,15 @@ export function createApp() {
   // resolved lazily per tick (a pool that hasn't initialized yet just
   // contributes an empty list). `processMetricsProvider` is injected by
   // the Electron main process (app.getAppMetrics); null on web deploys.
+  // Open the append-only run journal before the first sampler/watchdog event.
+  // Synchronous JSONL appends survive Task Manager termination; a clean-close
+  // marker is only an extra lifecycle hint, never the durability boundary.
+  const configuredPerfLogDir = process.env.MCP_PERF_LOG_DIR?.trim();
+  const databasePerfLogDir = deps.config.dbPath.includes(':memory:')
+    ? undefined
+    : join(dirname(resolve(deps.config.dbPath)), 'diagnostics', 'performance');
+  startPersistentPerfDiagnostics({ rootDir: configuredPerfLogDir || databasePerfLogDir });
+
   startPerfSampler({
     // Closure over `deps`, NOT the field value: Electron assigns
     // `deps.processMetricsProvider` only AFTER createApp() returns, so
@@ -948,16 +977,18 @@ export function createApp() {
       try { return await getWorkerOrchestratorPool().memStats(); } catch { return []; }
     },
     coderMemStats: async () => {
-      if (!coderWorkerEnabled()) return [];
       try { return await getCoderWorkerPool().memStats(); } catch { return []; }
     },
     indexerMemStats: async () => indexer.client?.memStats() ?? null,
   });
 
+  registerShutdownTask('perf-sampler-stop', stopPerfSampler);
+
   // Main-loop freeze watchdog — feeds /api/admin/perf/freezes. Detects real
   // event-loop stalls (whole-app "trava todas as telas") and attributes them
   // to the in-flight IPC handler. Cheap interval; unref'd.
   startFreezeWatchdog();
+  registerShutdownTask('freeze-watchdog-stop', stopFreezeWatchdog);
 
   // Agent LSP nav (lsp_definition/references/hover beyond TS) — ONE router
   // instance feeds three consumers: in-process coder runs (global backend),
@@ -1014,9 +1045,7 @@ export function createApp() {
     bearerResolver: deps.mcpBearerResolver ?? null,
   });
   setCoderWorkerMcpPool(mcpPool);
-  // Also publish via the in-process singleton so stream.ts (the
-  // MCP_CODER_WORKER=off path) and `coder.stream.*` IPC handlers can
-  // hand the pool to runCoder() too.
+  // Also publish through the shared singleton for non-runner MCP consumers.
   setGlobalMcpExternalPool(mcpPool);
   void mcpPool
     .boot()
@@ -1026,7 +1055,7 @@ export function createApp() {
       );
     });
 
-  return { app, db: deps.db, chromeService, deps, mcpPool };
+  return { app, db: deps.db, chromeService, verdaccioService, deps, mcpPool };
 }
 
 export async function startServer(port: number, host: string) {
@@ -1053,16 +1082,13 @@ export async function startServer(port: number, host: string) {
   } catch (err) {
     console.warn(`[bundled-plugins] seed failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const { app, chromeService, deps } = createApp();
+  const { app, chromeService, verdaccioService, deps, mcpPool } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   const coder = describeCoderWorkerStatus();
   const fmtCompany = (s: { enabled: boolean; reason: string | null }): string =>
     s.enabled ? `ON (${s.reason ?? ''})` : `OFF — ${s.reason}`;
-  const fmtCoder = (s: { enabled: boolean; envFlag: boolean; reason: string | null }): string => {
-    if (s.enabled) return `ON (${s.reason ?? ''})`;
-    if (s.envFlag) return `OFF — ${s.reason}`;
-    return 'off';
-  };
+  const fmtCoder = (s: { enabled: boolean; reason: string | null }): string =>
+    s.enabled ? `ON (${s.reason ?? ''})` : `OFF — ${s.reason}`;
   console.log(`[workers] company orchestrator: ${fmtCompany(company)}`);
   console.log(`[workers] coder runs: ${fmtCoder(coder)}`);
   console.log(
@@ -1110,54 +1136,68 @@ export async function startServer(port: number, host: string) {
       `[chrome-service] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   });
+
+  standaloneShutdown = async (reason) => {
+    // Stop accepting new requests before draining workers. Upgraded/SSE
+    // connections are force-closed after their owning runtimes are disposed.
+    try { server.close(); } catch { /* already closed */ }
+    await shutdownAppRuntime({ deps, mcpPool, chromeService, verdaccioService, reason });
+    try { (server as unknown as import('node:http').Server).closeAllConnections?.(); } catch { /* old Node */ }
+  };
 }
 
 // ── Periodic heap monitor ──────────────────────────────
 // Helps diagnose memory leaks before they trigger an OOM crash.
 const HEAP_LOG_INTERVAL_MS = Number(process.env.HEAP_LOG_INTERVAL_MS ?? 60_000);
+let heapLogTimer: ReturnType<typeof setInterval> | null = null;
 if (HEAP_LOG_INTERVAL_MS > 0) {
-  setInterval(() => {
+  heapLogTimer = setInterval(() => {
     const mem = process.memoryUsage();
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
     console.error(
-      `[heap] rss=${(mem.rss / 1e6).toFixed(0)}MB heap=${(mem.heapUsed / 1e6).toFixed(0)}/${(mem.heapTotal / 1e6).toFixed(0)}MB external=${(mem.external / 1e6).toFixed(0)}MB`,
+      `[heap] rss=${(mem.rss / 1e6).toFixed(0)}MB ` +
+        `heap=${(mem.heapUsed / 1e6).toFixed(0)}/${(mem.heapTotal / 1e6).toFixed(0)}MB ` +
+        `limit=${(heapLimit / 1e6).toFixed(0)}MB external=${(mem.external / 1e6).toFixed(0)}MB`,
     );
-  }, HEAP_LOG_INTERVAL_MS).unref();
+  }, HEAP_LOG_INTERVAL_MS);
+  heapLogTimer.unref();
 }
 
 // Drain the dbWriter worker on graceful shutdown so the latest assistant
 // turn(s) land before the process exits. Without this, SIGINT/SIGTERM during
 // an active session can drop pending writes.
 let shuttingDown = false;
+let standaloneShutdown: ((reason: string) => Promise<void>) | null = null;
 const gracefulShutdown = (signal: NodeJS.Signals): void => {
-  if (shuttingDown) return;
+  if (shuttingDown) {
+    console.error(`[shutdown] received ${signal} again — forcing exit`);
+    process.exit(signal === 'SIGTERM' ? 0 : 130);
+    return;
+  }
   shuttingDown = true;
   void (async () => {
+    const forceExit = setTimeout(() => {
+      console.error('[shutdown] graceful shutdown timed out — forcing exit');
+      process.exit(signal === 'SIGTERM' ? 0 : 130);
+    }, 20_000);
+    forceExit.unref?.();
     try {
-      const { disposeWorkerOrchestratorPool } = await import('./sse/workerPoolSingleton.js');
-      const { disposeCoderWorkerPool } = await import('./sse/coderWorkerPoolSingleton.js');
-      const { runShutdownTasks } = await import('./server/shutdown-tasks.js');
-      const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
-      await Promise.allSettled([
-        closeDbWriter(),
-        closeIndexJobPool(),
-        disposeIndexerProcessResources(), // re-runs the two above (idempotent) + shared extractor
-        runShutdownTasks(),               // registered disposables (ONNX sessions, …)
-        disposeWorkerOrchestratorPool(),
-        disposeCoderWorkerPool(),
-      ]);
+      await standaloneShutdown?.(`signal:${signal}`);
     } catch (err) {
-      console.error('[shutdown] worker pool close failed:', err);
+      console.error('[shutdown] graceful shutdown failed:', err);
     } finally {
+      clearTimeout(forceExit);
       process.exit(signal === 'SIGTERM' ? 0 : 130);
     }
   })();
 };
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
 
 // Auto-start when executed directly
 const isDirectRun = process.argv[1]?.replace(/\\/g, '/').includes('api/server');
 if (isDirectRun) {
+  process.on('SIGINT', gracefulShutdown);
+  process.on('SIGTERM', gracefulShutdown);
+  process.on('exit', forceDisposeAppProcessResources);
   const cfg = loadConfig();
   startServer(cfg.dashboard.port, cfg.dashboard.host);
 }

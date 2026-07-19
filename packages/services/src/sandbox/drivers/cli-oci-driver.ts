@@ -36,6 +36,7 @@ import {
 import { spawn as spawnChild } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import type { IShellPort, ShellExecResult } from '@mcp/code-agent/ports/shell-port.js';
 import type {
   ISandboxDriver,
@@ -112,9 +113,13 @@ export class CliOciDriver implements ISandboxDriver {
         cwd: this.cwd,
         env: process.env,
         windowsHide: true,
+        detached: process.platform !== 'win32',
       });
+      const untrack = trackProcessTree(child.pid);
       const onAbort = () => {
-        child.kill('SIGKILL');
+        // Abort is latency-sensitive and already owns the ChildProcess handle.
+        // Full tree cleanup remains part of the owning runtime shutdown.
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
       };
       spec.signal?.addEventListener('abort', onAbort, { once: true });
       child.stdout?.setEncoding('utf8');
@@ -122,10 +127,12 @@ export class CliOciDriver implements ISandboxDriver {
       child.stdout?.on('data', (chunk: string) => spec.emit?.({ stream: 'stdout', chunk }));
       child.stderr?.on('data', (chunk: string) => spec.emit?.({ stream: 'stderr', chunk }));
       child.once('error', (err) => {
+        untrack();
         spec.signal?.removeEventListener('abort', onAbort);
         reject(err);
       });
       child.once('close', (code) => {
+        untrack();
         spec.signal?.removeEventListener('abort', onAbort);
         if (spec.signal?.aborted) {
           reject(new Error(`${this.binary} build aborted`));
@@ -647,16 +654,21 @@ export class CliOciDriver implements ISandboxDriver {
       const child = spawn(
         this.binary,
         [...this.globalArgs, 'cp', `${containerId}:${workdir}`, '-'],
-        { cwd: this.cwd },
+        { cwd: this.cwd, windowsHide: true, detached: process.platform !== 'win32' },
       );
+      const untrack = trackProcessTree(child.pid);
       const chunks: Buffer[] = [];
       let stderr = '';
       child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
       child.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString('utf-8');
       });
-      child.once('error', reject);
+      child.once('error', (error) => {
+        untrack();
+        reject(error);
+      });
       child.once('close', (code) => {
+        untrack();
         if (code !== 0) {
           reject(new Error(`${this.binary} cp export (stream) failed: ${stderr.trim()}`));
           return;

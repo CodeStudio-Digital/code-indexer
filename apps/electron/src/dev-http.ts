@@ -17,23 +17,38 @@ import type { Hono } from 'hono';
 
 /** The live listener handle, kept so quit can close the socket (it would
  *  otherwise leak a bound port until the process actually exits). */
-let handle: { close: (cb?: (err?: Error) => void) => void } | null = null;
+let handle: {
+  close: (cb?: (err?: Error) => void) => void;
+  closeAllConnections?: () => void;
+} | null = null;
 
 export async function startOptionalDevHttp(app: Hono): Promise<void> {
   if (process.env.MCP_DEV_HTTP !== '1') return;
+  if (handle) return;
   const port = Number(process.env.MCP_DEV_HTTP_PORT ?? process.env.MCP_INDEX_PORT ?? 7333);
   const { serve } = await import('@hono/node-server');
-  handle = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }) as typeof handle;
+  handle = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }) as unknown as NonNullable<typeof handle>;
   console.log(`[electron] MCP_DEV_HTTP enabled — Hono listening on http://127.0.0.1:${port}`);
 }
 
 /** Close the optional dev-http listener on quit. No-op when it was never started. */
-export function stopDevHttp(): void {
+export async function stopDevHttp(): Promise<void> {
   if (!handle) return;
-  try {
-    handle.close();
-  } catch {
-    /* already closing */
-  }
+  const current = handle;
   handle = null;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      try { current.closeAllConnections?.(); } catch { /* already closed */ }
+      finish();
+    }, 1_000);
+    timer.unref?.();
+    try { current.close(() => finish()); } catch { finish(); }
+  });
 }

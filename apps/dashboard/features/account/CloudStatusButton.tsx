@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cloud, ShieldCheck, CreditCard, MessageSquare, MonitorSmartphone, LogOut, Users, Loader2, type LucideIcon } from 'lucide-react';
+import { Cloud, ShieldCheck, CreditCard, GitFork, MessageSquare, MonitorSmartphone, LogOut, Users, Loader2, type LucideIcon } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -21,8 +21,9 @@ import { PlanMatrix } from './PlanMatrix.js';
 import { TeamsSection } from './TeamsSection.js';
 import { SessionsSection } from './SessionsSection.js';
 import { FeedbackForm } from './FeedbackForm.js';
+import { GitHubConnectionsSection } from './GitHubConnectionsSection.js';
 
-type DialogKind = '2fa' | 'subscription' | 'teams' | 'sessions' | 'feedback' | null;
+type DialogKind = '2fa' | 'subscription' | 'teams' | 'sessions' | 'github' | 'feedback' | null;
 
 const PROVIDERS: { id: OAuthProviderId; label: string }[] = [
   { id: 'google', label: 'Google' },
@@ -107,6 +108,7 @@ export function CloudStatusButton() {
               <MenuRow icon={CreditCard} label={t('menu.subscription')} onClick={() => openDialog('subscription')} />
               <MenuRow icon={Users} label={t('menu.teams')} onClick={() => openDialog('teams')} />
               <MenuRow icon={MonitorSmartphone} label={t('menu.sessions')} onClick={() => openDialog('sessions')} />
+              <MenuRow icon={GitFork} label={t('menu.github')} onClick={() => openDialog('github')} />
               <MenuRow icon={MessageSquare} label={t('menu.feedback')} onClick={() => openDialog('feedback')} />
               <div className="my-1 h-px bg-border" />
               <MenuRow icon={LogOut} label={t('action.signOut')} onClick={() => { setOpen(false); void auth.session.signOut(); }} />
@@ -155,6 +157,9 @@ export function CloudStatusButton() {
       </Modal>
       <Modal open={dialog === 'sessions'} onClose={closeDialog} title={t('sessions.title')}>
         <SessionsSection />
+      </Modal>
+      <Modal open={dialog === 'github'} onClose={closeDialog} title={t('github.title')} wide>
+        <GitHubConnectionsSection />
       </Modal>
       <Modal open={dialog === 'feedback'} onClose={closeDialog} title={t('feedback.title')}>
         <FeedbackForm />

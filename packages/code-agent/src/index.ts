@@ -156,6 +156,7 @@ import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { type TodoItem, buildTrackState } from '@mcp/code-agent/tools/task-list-shared.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
+import { browserTools, isResearchToolAllowed } from '@mcp/code-agent/tools/browser/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tools.js';
 import { buildConversationChapterTools } from '@mcp/code-agent/tools/conversation-chapters.js';
@@ -576,6 +577,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(previewTools);
+  registry.registerAll(browserTools);
   registry.registerAll(goalTools);
   // Session Drive — single-session working memory (read_plan / remember /
   // list_memory / recall_investigations). Only outside company context:
@@ -843,6 +845,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.allowedToolNames !== undefined) {
     const allowed = new Set(opts.allowedToolNames);
     registry.filterInPlace((tool) => allowed.has(tool.name));
+  }
+  if (effectiveAgentId === 'research') {
+    registry.filterInPlace(isResearchToolAllowed);
   }
 
   // Load disabled tools early so the subagent parentTools snapshot is already
@@ -1900,6 +1905,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     spriteStudio: spriteStudioWorkspace,
     isMaster: opts.companyContext?.isMaster === true,
     previewAvailable: opts.previewAvailable,
+    browserAvailable: opts.browserAvailable,
     agentId: effectiveAgentId,
     companyRole: opts.companyContext?.agentRole,
   })) {
@@ -1937,6 +1943,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // seed visibility, not authority: registry/disabled/policy boundaries
       // still apply and find_tools/expand_toolset can grow the surface.
       ...(opts.initialPinnedTools ?? []),
+      ...(effectiveAgentId === 'research' ? ['web_search', 'web_fetch'] : []),
       // P4 — native read_file is navigate-tier (mcp__read_file owns the
       // bootstrap read surface). Without the bridge there is NO read tool on
       // turn 1, so seed the disk fallback as a pin. Constant-per-session

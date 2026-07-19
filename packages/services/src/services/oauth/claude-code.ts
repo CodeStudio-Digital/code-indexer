@@ -86,6 +86,18 @@ const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const pending = new Map<string, PendingFlow>();
 const proxyAgents = new Map<string, HttpAgent | HttpsAgent>();
 
+export function disposeClaudeCodeOAuthResources(): void {
+  for (const flow of pending.values()) {
+    try { flow.server.closeAllConnections?.(); } catch { /* old Node */ }
+    try { flow.server.close(); } catch { /* already closed */ }
+  }
+  pending.clear();
+  for (const agent of proxyAgents.values()) {
+    try { agent.destroy(); } catch { /* already closed */ }
+  }
+  proxyAgents.clear();
+}
+
 type ClaudeCodeFetch = (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 let testFetch: ClaudeCodeFetch | null = null;
 

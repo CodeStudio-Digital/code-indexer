@@ -6,32 +6,31 @@
  * instead of re-running the append/push/spawn side effects, and that the
  * /continue live-run hardening never spins a second concurrent runner.
  *
- * The route is mounted against fake deps/runtime (no DB, no worker). `runCoder`
- * and the docs/preview side-effect modules are mocked so importing `stream.ts`
- * doesn't drag in the real agent runtime.
+ * The route is mounted against fake deps/runtime (no DB, no real worker). The
+ * mandatory worker pool is mocked at its route-facing RPC boundary.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 
-const { runCoderMock } = vi.hoisted(() => ({ runCoderMock: vi.fn() }));
-
-vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({ installDocsDeepResearch: () => false }));
-// listEnabledPluginRuntime opens a SQLite store (better-sqlite3) — stub it so
-// the fresh-run IIFE reaches runCoder in the test env. Everything else real.
-vi.mock('@mcp/plugin-host', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@mcp/plugin-host')>();
-  return { ...actual, listEnabledPluginRuntime: () => ({ toolPlugins: [], bundles: [] }) };
-});
-vi.mock('../../../../sse/closeCoderPreview.js', () => ({
-  closePreviewWindow: () => {},
-  closePreviewSession: () => {},
+const { poolMock, workerEntries } = vi.hoisted(() => ({
+  workerEntries: new Map<number, unknown>(),
+  poolMock: {
+    getBus: vi.fn(),
+    runFresh: vi.fn(),
+    isWaitingForInput: vi.fn(),
+    interruptWait: vi.fn(),
+    pushUserMessage: vi.fn(),
+  },
 }));
-vi.mock('../../../../sse/builder-checkpoint.js', () => ({ notifyBuilderRunEnded: () => {} }));
-vi.mock('@mcp/code-agent/index.js', () => ({ runCoder: runCoderMock }));
+
+vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
+  getCoderWorkerPool: () => poolMock,
+}));
+
 vi.mock('@mcp/app-studio/local-db.js', () => ({ findLocalD1File: () => null }));
 
 import { mountCoderStreamRoutes } from '../stream.js';
-import { createBus, markEnded, setBusRunner, type CoderRunBus } from '../../../../coder-bus.js';
+import { createBus, markEnded, type CoderRunBus } from '../../../../coder-bus.js';
 import { RecentMessageKeys } from '../../recent-message-keys.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -54,6 +53,8 @@ function makeRunner() {
     pushExtras,
   };
 }
+
+const runners = new Map<number, ReturnType<typeof makeRunner>>();
 
 function setup(
   recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys(),
@@ -115,11 +116,8 @@ function setup(
     buildToolSelectionFilter: () => undefined,
   } as unknown as ServerDeps;
 
-  const activeRuns = new Map<number, CoderRunBus>();
   const runtime = {
-    activeRuns,
-    BUS_LINGER_MS: 50,
-    wireRunnerToBus: () => {},
+    activeRuns: new Map<number, CoderRunBus>(),
     findPendingInteraction: () => null,
     findDanglingToolUse: () => null,
     coderPipelineRegistry: {},
@@ -136,27 +134,41 @@ function setup(
       body: JSON.stringify(body),
     });
 
-  return { app, deps, runtime, activeRuns, appendCalls, post };
+  return { app, deps, runtime, activeRuns: workerEntries as Map<number, CoderRunBus>, appendCalls, post };
 }
 
-/** Seed a live run whose runner is wired (resolves runnerReady). */
+/** Seed a live worker run and its mocked control surface. */
 function seedLiveRun(activeRuns: Map<number, CoderRunBus>, id: number) {
   const bus = createBus(new AbortController());
   const r = makeRunner();
-  setBusRunner(bus, r.runner as never);
   activeRuns.set(id, bus);
+  runners.set(id, r);
   return { bus, ...r };
 }
 
 beforeEach(() => {
-  runCoderMock.mockReset();
-  runCoderMock.mockImplementation(async () => ({
-    runner: { isWaitingForInput: () => false },
-    session: { id: 1 },
-    indexStatus: {},
-    done: Promise.resolve(),
-  }));
-  vi.stubEnv('MCP_CODER_WORKER', '');
+  vi.clearAllMocks();
+  workerEntries.clear();
+  runners.clear();
+  poolMock.getBus.mockImplementation((id: number) => workerEntries.get(id) ?? null);
+  poolMock.runFresh.mockImplementation(async (id: number) => {
+    const bus = createBus(new AbortController());
+    workerEntries.set(id, bus);
+    return bus;
+  });
+  poolMock.isWaitingForInput.mockImplementation(async (id: number) => runners.get(id)?.state.waiting ?? false);
+  poolMock.interruptWait.mockImplementation(async (id: number) => {
+    const runner = runners.get(id);
+    if (runner) runner.state.waiting = false;
+  });
+  poolMock.pushUserMessage.mockImplementation(async (
+    id: number,
+    content: string,
+    selectedSkillIds?: string[],
+    roundMessageId?: number,
+  ) => {
+    runners.get(id)?.runner.pushUserMessage(content, { selectedSkillIds, roundMessageId });
+  });
   vi.stubEnv('CODER_PREFLIGHT', '0');
 });
 
@@ -174,12 +186,12 @@ describe('POST /messages idempotency', () => {
 
     const pending = h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
     await vi.waitFor(() => expect(gate).toHaveBeenCalledTimes(1));
-    expect(runCoderMock).not.toHaveBeenCalled();
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
 
     release({ status: 'ready', phase: 'structural_ready' });
     const response = await pending;
     expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
   });
 
   it('starts the same session in degraded mode when the structural gate times out', async () => {
@@ -190,7 +202,7 @@ describe('POST /messages idempotency', () => {
 
     const response = await h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
     expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
   });
 
   it('a retry with the same client_msg_id does not re-append into a live run', async () => {
@@ -221,8 +233,8 @@ describe('POST /messages idempotency', () => {
 
     const r1 = await h.post('/api/coder/sessions/1/messages', { content: 'go', client_msg_id: 'K2' });
     expect(r1.status).toBe(200);
-    // runCoder fires in a detached async IIFE — wait for it to reach the call.
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    // The worker-pool start is asynchronous — wait for it to reach the call.
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
 
     const bus = h.activeRuns.get(1)!;
     markEnded(bus, 'done', {}); // run finished; bus lingers
@@ -234,7 +246,7 @@ describe('POST /messages idempotency', () => {
     );
     expect(r2.status).toBe(200);
     await new Promise((r) => setTimeout(r, 20)); // let any (unexpected) 2nd IIFE run
-    expect(runCoderMock).toHaveBeenCalledTimes(1); // still one run
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1); // still one run
   });
 
   it('answers with a synthetic done (no side effects) when the deduped bus is gone', async () => {
@@ -250,7 +262,7 @@ describe('POST /messages idempotency', () => {
     expect(text).toContain('event: done');
     expect(text).toContain('"duplicate":true');
     expect(h.appendCalls).toHaveLength(0);
-    expect(runCoderMock).not.toHaveBeenCalled();
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
   });
 
   it('a retry with a recorded key replays instead of raising the spurious 409 (and preserves 409 otherwise)', async () => {
@@ -291,8 +303,8 @@ describe('POST /messages idempotency', () => {
     });
 
     expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_orchestrator' });
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator' });
   });
 
   it('still honors explicit agent changes for normal non-specialist sessions', async () => {
@@ -305,8 +317,8 @@ describe('POST /messages idempotency', () => {
     });
 
     expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'explore' });
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'explore' });
   });
 
   it('resolves a custom agent into runtime prompt, skills, and tool allowlist', async () => {
@@ -332,14 +344,52 @@ describe('POST /messages idempotency', () => {
     });
 
     expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({
       agent: 'plan',
       agentSelectionId: selectionId,
       customAgentPrompt: custom.prompt,
       allowedToolNames: custom.toolNames,
       selectedSkillIds: ['security-review', 'repo-review'],
     });
+  });
+
+  it('forwards the model-facing request to the worker without reducing it', async () => {
+    const h = setup(new RecentMessageKeys(), { sessionAgent: 'build' });
+    const ideContext = {
+      activeFile: 'src/main.ts',
+      selections: [{ path: 'src/main.ts', startLine: 4, endLine: 9, text: 'const value = 1;' }],
+      openTabs: ['src/main.ts', 'src/app.ts'],
+    };
+
+    const res = await h.post('/api/coder/sessions/1/messages', {
+      content: 'implement the change',
+      max_turns: 17,
+      plan_mode: false,
+      agent: 'build',
+      profile: 'full',
+      worktree: { name: 'worker-isolation', branch: 'codex/worker-isolation' },
+      thinking: true,
+      describe_images: true,
+      selected_skill_ids: ['repo-review'],
+      ide_context: ideContext,
+      client_msg_id: 'K9',
+    });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh).toHaveBeenCalledWith(1, expect.objectContaining({
+      userMessage: 'implement the change',
+      maxTurns: 17,
+      planMode: false,
+      agent: 'build',
+      profile: 'full',
+      worktree: { name: 'worker-isolation', branch: 'codex/worker-isolation' },
+      thinking: true,
+      describeImages: true,
+      selectedSkillIds: ['repo-review'],
+      ideContext,
+    }));
   });
 });
 
@@ -350,7 +400,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
 
     const res = await h.post('/api/coder/sessions/1/continue', {});
     expect(res.status).toBe(200);
-    expect(runCoderMock).not.toHaveBeenCalled(); // tailed the live run, no 2nd runCoder
+    expect(poolMock.runFresh).not.toHaveBeenCalled(); // tailed the live run, no second worker run
 
     markEnded(live.bus, 'done', {});
   });
@@ -360,7 +410,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
 
     const r1 = await h.post('/api/coder/sessions/1/continue', { client_msg_id: 'C1' });
     expect(r1.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
 
     const bus = h.activeRuns.get(1)!;
     markEnded(bus, 'done', {});
@@ -372,7 +422,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
     );
     expect(r2.status).toBe(200);
     await new Promise((r) => setTimeout(r, 20));
-    expect(runCoderMock).toHaveBeenCalledTimes(1);
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a persisted app coordinator during continue', async () => {
@@ -384,7 +434,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
     });
 
     expect(res.status).toBe(200);
-    await vi.waitFor(() => expect(runCoderMock).toHaveBeenCalledTimes(1));
-    expect(runCoderMock.mock.calls[0][0]).toMatchObject({ agent: 'app_orchestrator', resume: true });
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator', resume: true });
   });
 });

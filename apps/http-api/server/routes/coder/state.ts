@@ -1,28 +1,19 @@
-import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { SessionStore } from '@mcp/code-agent/index.js';
 import type { CoderRunBus } from '../../../coder-bus.js';
-import { wireRunnerEventsToBus } from '../../../sse/runnerWiring.js';
-import {
-  coderWorkerEnabled,
-  getCoderWorkerPool,
-} from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { CoderPipelineRegistry } from './pipelines-state.js';
 import { RecentMessageKeys } from '../recent-message-keys.js';
 
 /**
- * Runtime state shared by every coder route file. Holds the in-flight
- * `activeRuns` map keyed by session id, along with helpers to wire a
- * `CoderRunner` to its replay bus and to walk the persisted message log
- * when the live runner is no longer in memory.
+ * Runtime state shared by every coder route file. Exposes the worker pool's
+ * in-flight buses through the `activeRuns` compatibility facade and walks the
+ * persisted message log when a worker runner is no longer alive.
  *
  * `coderPipelineRegistry` holds chat-pipeline executors that outlive a
  * single chat turn. See `pipelines-state.ts`.
  */
 export interface CoderRuntime {
   activeRuns: Map<number, CoderRunBus>;
-  /** How long to keep a bus around after `done`/`error` for late reattach. */
-  BUS_LINGER_MS: number;
-  wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus): void;
   findPendingInteraction(
     sessionId: number,
   ): {
@@ -46,47 +37,30 @@ export interface CoderRuntime {
 }
 
 export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
-  const localRuns = new Map<number, CoderRunBus>();
-  const BUS_LINGER_MS = 30_000;
   const coderPipelineRegistry = new CoderPipelineRegistry();
   const recentMessageKeys = new RecentMessageKeys();
 
-  // `activeRuns` is presented to consumers as a `Map<number, CoderRunBus>`
-  // — but its `.get()` / `.has()` fall through to the worker pool when
-  // `MCP_CODER_WORKER=1`. This keeps every existing route file
-  // (interaction.ts, snapshot.ts, ws upgrade, etc.) working unchanged
-  // while the coder path opt-in workers are live. Routes that NEED to
-  // route by bus (e.g. ws.ts mirror) still see a single CoderRunBus per
-  // session — the worker-mirrored one when the flag is on.
-  const activeRuns: Map<number, CoderRunBus> = new Proxy(localRuns, {
+  // Compatibility Map facade for route consumers. Its state is exclusively
+  // owned by CoderWorkerPool: production code cannot install a local runner or
+  // bus and therefore cannot reintroduce in-process execution accidentally.
+  const workerRuns = new Map<number, CoderRunBus>();
+  const activeRuns: Map<number, CoderRunBus> = new Proxy(workerRuns, {
     get(target, prop, receiver) {
       if (prop === 'get') {
-        return (id: number): CoderRunBus | undefined => {
-          const local = target.get(id);
-          if (local) return local;
-          if (coderWorkerEnabled()) {
-            const fromPool = getCoderWorkerPool().getBus(id);
-            if (fromPool) return fromPool;
-          }
-          return undefined;
-        };
+        return (id: number): CoderRunBus | undefined => getCoderWorkerPool().getBus(id) ?? undefined;
       }
       if (prop === 'has') {
-        return (id: number): boolean => {
-          if (target.has(id)) return true;
-          if (coderWorkerEnabled()) {
-            return getCoderWorkerPool().has(id);
-          }
-          return false;
+        return (id: number): boolean => getCoderWorkerPool().has(id);
+      }
+      if (prop === 'set') {
+        return (): never => {
+          throw new Error('CoderRuntime is worker-only; local active runs are not supported.');
         };
       }
-      // `delete` clears both — the pool's evict is async fire-and-forget.
       if (prop === 'delete') {
         return (id: number): boolean => {
-          const had = target.delete(id);
-          if (coderWorkerEnabled()) {
-            void getCoderWorkerPool().evict(id);
-          }
+          const had = getCoderWorkerPool().has(id);
+          void getCoderWorkerPool().evict(id);
           return had;
         };
       }
@@ -94,15 +68,6 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-
-  /**
-   * Wire a CoderRunner's events onto the bus. Delegates to the shared
-   * `wireRunnerEventsToBus` helper so the in-process path and the
-   * P17 worker (`coder-worker.ts`) emit identical event shapes.
-   */
-  function wireRunnerToBus(runner: CoderRunner, bus: CoderRunBus): void {
-    wireRunnerEventsToBus(runner, bus);
-  }
 
   /**
    * Walk the persisted history to detect a pending interactive tool call —
@@ -193,8 +158,6 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
 
   return {
     activeRuns,
-    BUS_LINGER_MS,
-    wireRunnerToBus,
     findPendingInteraction,
     findDanglingToolUse,
     coderPipelineRegistry,

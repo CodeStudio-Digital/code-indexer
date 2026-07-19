@@ -28,7 +28,21 @@
     "trialing": "Pro trial active"
   },
   "tierName": { "free": "Free", "pro": "Pro", "team": "Team", "enterprise": "Enterprise" },
-  "menu": { "twofa": "Configure 2FA", "subscription": "Manage subscription", "feedback": "Send feedback", "sessions": "Sessions", "teams": "Teams" },
+  "menu": { "twofa": "Configure 2FA", "subscription": "Manage subscription", "feedback": "Send feedback", "sessions": "Sessions", "teams": "Teams", "github": "GitHub connections" },
+  "github": {
+    "title": "GitHub",
+    "description": "Connect your account or organization to the optional MegaBrainStudio agent identity.",
+    "connect": "Connect GitHub",
+    "disconnect": "Unlink from MegaBrain",
+    "manage": "Manage repositories on GitHub",
+    "refresh": "Refresh",
+    "empty": "No account or organization connected.",
+    "unconfigured": "The backend has not received the GitHub App secrets yet.",
+    "allRepositories": "all repositories",
+    "selectedRepositories": "selected repositories",
+    "suspended": "suspended",
+    "nativePriority": "The Git login already configured in the project remains the default. MegaBrain identity is used only when you explicitly select it; there is no silent fallback."
+  },
   "teams": {
     "title": "Teams",
     "subtitle": "Create a team to share API workspaces and a knowledge base. Members inherit the team plan.",

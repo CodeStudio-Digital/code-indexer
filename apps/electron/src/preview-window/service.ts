@@ -570,9 +570,8 @@ export class PreviewWindowService implements IPreviewDevtools {
     });
     let pw: PreviewWindow | null = null;
     try {
-      pw = await PreviewWindow.create(win, url);
+      pw = await PreviewWindow.create(win, url, () => this.loadUrl(win, url, signal));
       this.byKey.set(key, pw);
-      await this.loadUrl(win, url, signal);
       pw.url = win.webContents.getURL();
       const viewport = applyViewport(pw, initial);
       return { windowId: pw.id, url: pw.url, viewport, reused, source };
@@ -754,18 +753,18 @@ export class PreviewWindowService implements IPreviewDevtools {
     }
   }
 
-  closeAll(): void {
+  async closeAll(): Promise<void> {
     for (const controller of this.inFlight.values()) controller.abort();
     this.inFlight.clear();
     for (const pw of this.byKey.values()) pw.close();
     this.byKey.clear();
     this.inspectListeners.clear();
-    // Stop every preview-owned dev server (app quit). Fire-and-forget.
-    if (this.runnerBridge) {
-      for (const taskId of this.ownedTaskByKey.values()) {
-        void this.runnerBridge.stop(taskId).catch(() => undefined);
-      }
-    }
+    // Stop every preview-owned dev server before the runner worker pool goes
+    // away. Awaiting this prevents a late stop request from racing app exit.
+    const ownedTasks = [...this.ownedTaskByKey.values()];
     this.ownedTaskByKey.clear();
+    if (this.runnerBridge) {
+      await Promise.allSettled(ownedTasks.map((taskId) => this.runnerBridge!.stop(taskId)));
+    }
   }
 }

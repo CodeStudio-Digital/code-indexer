@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  editorActionDeclSchema,
   parsePluginManifest,
   parseAppManifest,
   parseMarketplaceManifest,
@@ -40,6 +41,11 @@ describe('parsePluginManifest', () => {
 });
 
 describe('parseAppManifest', () => {
+  it('keeps the public editor action schema composable', () => {
+    expect(typeof editorActionDeclSchema.extend).toBe('function');
+    expect(editorActionDeclSchema.shape.gutter).toBeDefined();
+  });
+
   it('accepts a declarative tool output policy', () => {
     const app = parseAppManifest({
       tools: [
@@ -87,7 +93,19 @@ describe('parseAppManifest', () => {
       toolWindows: [{ id: 'tw', title: 'TW', side: 'left', entry: 'ui/index.html' }],
       commands: [{ id: 'c', label: 'C', runsTool: 'echo' }],
       themes: [{ id: 't', label: 'T', appearance: 'dark', tokens: {} }],
-      editorActions: [{ id: 'ea', label: 'EA', runsTool: 'echo', scope: 'project' }],
+      editorActions: [{
+        id: 'ea',
+        label: 'EA',
+        runsTool: 'echo',
+        toolArgs: { mode: 'fast' },
+        documentSelector: { filePatterns: ['Dockerfile*'], languageIds: ['dockerfile'] },
+        gutter: {
+          line: { text: 'FROM', match: 'word', trim: true, caseSensitive: false },
+          occurrence: 'first',
+          icon: 'build',
+        },
+        scope: 'editor',
+      }],
       statusBarItems: [{ id: 'sb', label: 'SB', alignment: 'right', runsTool: 'echo' }],
       runConfigurations: [{ id: 'run', title: 'Run', command: 'npm', args: ['test'] }],
       providerRuntime: {
@@ -106,8 +124,40 @@ describe('parseAppManifest', () => {
       ],
     });
     expect(app.toolWindows?.[0].side).toBe('left');
+    expect(app.editorActions?.[0].gutter?.icon).toBe('build');
+    expect(app.editorActions?.[0].toolArgs).toEqual({ mode: 'fast' });
     expect(app.modules?.[0].editorActions?.[0].id).toBe('mod-action');
     expect(app.providerRuntime?.kinds).toEqual(['acme']);
+  });
+
+  it('rejects an editor gutter without a document selector', () => {
+    expect(() => parseAppManifest({
+      editorActions: [{ id: 'ea', label: 'EA', runsTool: 'echo', gutter: {
+        line: { text: 'FROM', match: 'word' },
+      } }],
+    })).toThrow(/documentSelector/);
+  });
+
+  it('rejects an editor gutter without a tool', () => {
+    expect(() => parseAppManifest({
+      editorActions: [{ id: 'ea', label: 'EA', documentSelector: { filePatterns: ['Dockerfile'] }, gutter: {
+        line: { text: 'FROM', match: 'word' },
+      } }],
+    })).toThrow(/runsTool/);
+  });
+
+  it('rejects an unsafe editor gutter line matcher', () => {
+    expect(() => parseAppManifest({
+      editorActions: [{
+        id: 'ea',
+        label: 'EA',
+        runsTool: 'echo',
+        documentSelector: { filePatterns: ['Dockerfile'] },
+        gutter: {
+          line: { text: 'FROM', match: 'regex' },
+        },
+      }],
+    })).toThrow();
   });
 
   it('rejects an invalid tool-window side', () => {

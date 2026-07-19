@@ -169,6 +169,7 @@ export function attachRunGutter(
           glyphMarginHoverMessage: { value: cmd.reason ?? (cmd.snippet
             ? `Run \`${cmd.snippet.language}\` block`
             : cmd.manifestScript ? `Run \`${cmd.manifestScript}\`` : '`' + cmd.command + '`') },
+          glyphMargin: { position: monaco.editor.GlyphMarginLane.Center },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },
       })),
@@ -199,6 +200,8 @@ export function attachRunGutter(
   const mouse = editor.onMouseDown((e) => {
     if (!e.event.leftButton) return; // ignore right/middle click (don't launch + don't fight the context menu)
     if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+    if (e.target.detail.glyphMarginLane != null
+      && e.target.detail.glyphMarginLane !== monaco.editor.GlyphMarginLane.Center) return;
     const line = e.target.position?.lineNumber;
     if (line == null) return;
     const cmd = lineMap.get(line);

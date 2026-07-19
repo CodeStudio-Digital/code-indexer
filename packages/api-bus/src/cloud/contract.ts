@@ -130,6 +130,37 @@ export interface OrgMemberPublic {
   createdAtMs: number;
 }
 
+export interface GitHubAppInstallationPublic {
+  installationId: number;
+  githubAccountId: number;
+  githubAccountLogin: string;
+  githubAccountType: string;
+  repositorySelection: 'all' | 'selected';
+  permissions: Record<string, string>;
+  appSlug: string;
+  manageUrl: string | null;
+  suspendedAt: string | null;
+  linkedAt: string;
+  updatedAt: string;
+}
+
+export type GitHubRepositoryConnectionReason =
+  | 'not_configured'
+  | 'unsupported_host'
+  | 'not_connected'
+  | 'not_installed'
+  | 'suspended'
+  | 'authentication_failed';
+
+export interface GitHubRepositoryConnection {
+  available: boolean;
+  configured: boolean;
+  reason?: GitHubRepositoryConnectionReason;
+  host?: string;
+  installationId?: number;
+  installation?: GitHubAppInstallationPublic;
+}
+
 /** Per-operation input/output map. The op key is `"<namespace>.<method>"` and is
  *  resolved to an HTTP method+path by the main-process route map (never the
  *  renderer — so a compromised renderer can't aim the bearer at an arbitrary URL). */
@@ -197,6 +228,18 @@ export interface CloudContract {
   'orgs.vaultPull': { input: { orgId: string; kinds?: SyncKind[]; sinceVersion: number }; output: { documents: SyncPullItem[]; cursor: number } };
   'feedback.submit': { input: { kind: 'bug' | 'idea' | 'other'; message: string; appVersion?: string; os?: string }; output: { publicId: string } };
   'feedback.list': { input: void; output: { items: unknown[] } };
+  // Optional GitHub App identity. These operations are always explicit and do
+  // not replace or fall back from the project's native Git credentials.
+  'github.installations': { input: void; output: { configured: boolean; host: string; appSlug: string; installations: GitHubAppInstallationPublic[] } };
+  'github.connect': { input: void; output: { url: string } };
+  'github.repository': { input: { host: string; owner: string; repo: string }; output: GitHubRepositoryConnection };
+  'github.disconnect': { input: { installationId: number }; output: { disconnected: true } };
+  /** Opaque, repository-scoped, one-use capability; never a GitHub token. */
+  'github.createGrant': { input: { host: string; owner: string; repo: string; operation: 'push' | 'fetch' }; output: { grant: string; expiresAt: number } };
+  'github.createPullRequest': {
+    input: { host: string; owner: string; repo: string; head: string; base: string; title: string; body?: string; draft?: boolean };
+    output: { number: number; url: string; title: string; state: string; appSlug: string; installationId: number };
+  };
 }
 
 export type CloudOp = keyof CloudContract;

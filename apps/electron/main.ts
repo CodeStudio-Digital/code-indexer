@@ -44,9 +44,11 @@ import { installGlobalHardening, applyProductionHardening } from './src/security
 import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import { childRegistry } from './src/child-process-registry.js';
-import { killTree } from './src/tree-kill.js';
 import { sharedPtyManager } from '@mcp/api-handlers';
-import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
+import {
+  forceDisposeAppProcessResources,
+  shutdownAppRuntime,
+} from '@apps/http-api/server/runtime-shutdown.js';
 import type { Hono } from 'hono';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -77,19 +79,25 @@ process.on('unhandledRejection', (reason) => {
 // `process.exit` bypass `will-quit` entirely — without these, terminal
 // shells and their `npm run dev` grandchildren orphan. `killAllSync` is the
 // synchronous last resort (it's the only thing allowed on the 'exit' tick).
+let signalQuitStarted = false;
 const teardownOnSignal = (signal: NodeJS.Signals): void => {
-  console.error(`[electron-main] received ${signal} — killing tracked child processes`);
-  try {
+  if (signalQuitStarted) {
+    console.error(`[electron-main] received ${signal} again — forcing exit`);
     childRegistry.killAllSync();
-  } catch {
-    /* best-effort */
+    app.exit(signal === 'SIGINT' ? 130 : 0);
+    return;
   }
+  signalQuitStarted = true;
+  console.error(`[electron-main] received ${signal} — starting graceful shutdown`);
+  // The first signal follows will-quit so active worker turns and DB writes are
+  // flushed before process trees are reaped. A second signal is the hard stop.
   app.quit();
 };
 process.on('SIGINT', () => teardownOnSignal('SIGINT'));
 process.on('SIGTERM', () => teardownOnSignal('SIGTERM'));
 process.on('exit', () => {
   try {
+    forceDisposeAppProcessResources();
     childRegistry.killAllSync();
   } catch {
     /* best-effort */
@@ -104,7 +112,7 @@ const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
 const PRELOAD_PATH = path.join(__dirname, 'preload.cjs');
 
 /** Max time the graceful quit phase may take before we force-kill + exit. */
-const QUIT_GRACE_MS = 8000;
+const QUIT_GRACE_MS = 20_000;
 
 // ─── Renderer/main V8 heap ceiling ───────────────────────────────
 //
@@ -219,7 +227,7 @@ async function bootstrap() {
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.
-  const { app: honoApp, deps, mcpPool } = createApp();
+  const { app: honoApp, deps, mcpPool, chromeService, verdaccioService } = createApp();
   await startOptionalDevHttp(honoApp);
 
   // Perf monitor: hand the backend the Electron process tree
@@ -232,11 +240,13 @@ async function bootstrap() {
   // process directly and the user would see the window vanish without
   // it ever coming back (no supervisor in the Electron deployment).
   // `app.relaunch()` schedules a fresh launch with the same argv; the
-  // immediate `app.exit(0)` cleanly tears down the current instance.
+  // graceful `app.quit()` tears down the current instance before relaunch.
   const { setSettingsRestartHook } = await import('../http-api/admin/app-settings.routes.js');
   setSettingsRestartHook(() => {
     app.relaunch();
-    app.exit(0);
+    // quit() enters the same bounded graceful-shutdown path as a normal window
+    // close; exit() bypasses before-quit/will-quit and can orphan subprocesses.
+    app.quit();
   });
 
   updateSplashStatus('Carregando a interface…');
@@ -287,7 +297,6 @@ async function bootstrap() {
   mountPreviewCaptureIpc();
   // Cloud account/login transport (separate HTTPS surface to the deployed Worker).
   mountCloudIpc();
-  app.on('before-quit', () => previewService.closeAll());
   app.on('before-quit', () => stopOAuthLoopback());
 
   // The shared PTY manager backs the api `terminal` + `runner` namespaces —
@@ -298,11 +307,7 @@ async function bootstrap() {
   childRegistry.register({
     kind: 'pty',
     label: 'runner-ptys',
-    kill: () => {
-      const pids = sharedPtyManager.listPids();
-      sharedPtyManager.killAll();
-      for (const pid of pids) killTree(pid);
-    },
+    kill: () => sharedPtyManager.killAll(),
   });
 
   // Windows GUI quit emits NO SIGINT/SIGTERM, so the http-api signal handlers
@@ -322,20 +327,19 @@ async function bootstrap() {
     e.preventDefault();
 
     const graceful = (async (): Promise<void> => {
-      const { disposeCoderWorkerPool } = await import('../http-api/sse/coderWorkerPoolSingleton.js');
-      const { disposeWorkerOrchestratorPool } = await import('../http-api/sse/workerPoolSingleton.js');
-      // Worker pools FIRST so each worker's `stop` handler parks its pause /
-      // flushes its in-flight turn before the shared dbWriter is closed.
-      await Promise.allSettled([disposeCoderWorkerPool(), disposeWorkerOrchestratorPool()]);
-      const { runShutdownTasks } = await import('../http-api/server/shutdown-tasks.js');
-      const { disposeIndexerProcessResources } = await import('@mcp/indexer/bootstrap/dispose.js');
-      await Promise.allSettled([
-        runShutdownTasks(), // dbWriter close, LSP stopAll, ONNX dispose, DB client pools
-        disposeIndexerProcessResources(),
-        mcpPool.shutdown(), // external MCP stdio subprocesses (else orphaned — was never called)
-        getLocalProcessManager().killAll(), // company dev servers
-      ]);
-      stopDevHttp();
+      setGlobalPreviewDevtools(null);
+      await previewService.closeAll();
+      stopOAuthLoopback();
+      await stopDevHttp();
+      await shutdownAppRuntime({
+        deps,
+        mcpPool,
+        chromeService,
+        verdaccioService,
+        reason: 'electron-quit',
+      });
+      setElectronProfiler(null);
+      setMainSecretDecryptor(null);
     })();
 
     void (async () => {

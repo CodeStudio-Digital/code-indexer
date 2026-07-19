@@ -18,6 +18,7 @@ import {
   contributeRunConfiguration,
 } from '@mcp/plugin-sdk/define.js';
 import { allTools } from './all-tools.js';
+import { COMPOSE_EDITOR_PATTERNS, CONTAINERFILE_EDITOR_PATTERNS } from './lib.js';
 
 const containerProject = {
   whenFiles: [
@@ -35,17 +36,27 @@ const containerProject = {
   ],
 };
 
+const containerfileProject = {
+  whenFiles: ['Containerfile', 'Dockerfile'],
+};
+
 export default definePlugin({
   permissions: {
     fs: {
       // Read: container files + stack-detection markers (for podman_containerize).
       read: [
         'Dockerfile',
+        'Dockerfile.*',
         'Containerfile',
+        'Containerfile.*',
         'compose.yaml',
         'compose.yml',
+        'compose.*.yaml',
+        'compose.*.yml',
         'docker-compose.yml',
         'docker-compose.yaml',
+        'docker-compose.*.yml',
+        'docker-compose.*.yaml',
         'package.json',
         'requirements.txt',
         'pyproject.toml',
@@ -59,6 +70,47 @@ export default definePlugin({
     storage: true,
   },
   tools: allTools,
+  // Editor gutters live at plugin scope rather than inside the detected module:
+  // documentSelector is the authoritative file gate and also covers nested or
+  // dotted variants that the host's root-only activation matcher cannot express.
+  editorActions: [
+    contributeEditorAction({
+      id: 'podman-build-containerfile',
+      label: 'Podman: Build Image',
+      category: 'Podman',
+      runsTool: 'podman_project_run',
+      toolArgs: { buildOnly: true },
+      scope: 'editor',
+      documentSelector: {
+        filePatterns: CONTAINERFILE_EDITOR_PATTERNS,
+        languageIds: ['dockerfile'],
+      },
+      gutter: {
+        line: { text: 'FROM', match: 'word', trim: true, caseSensitive: false },
+        occurrence: 'first',
+        icon: 'build',
+        tooltip: 'Build this image with Podman',
+      },
+    }),
+    contributeEditorAction({
+      id: 'podman-compose-up',
+      label: 'Podman: Compose Up',
+      category: 'Podman',
+      runsTool: 'podman_compose',
+      toolArgs: { action: 'up', detach: true },
+      scope: 'editor',
+      documentSelector: {
+        filePatterns: COMPOSE_EDITOR_PATTERNS,
+        languageIds: ['yaml'],
+      },
+      gutter: {
+        line: { text: 'services:', match: 'word', trim: true, caseSensitive: true },
+        occurrence: 'first',
+        icon: 'run',
+        tooltip: 'Start this Compose stack with Podman',
+      },
+    }),
+  ],
   modules: [
     contributeProjectModule({
       id: 'containerized-project',
@@ -88,6 +140,7 @@ export default definePlugin({
           category: 'Podman',
           runsTool: 'podman_project_run',
           scope: 'project',
+          activation: containerfileProject,
         }),
       ],
       statusBarItems: [
@@ -104,7 +157,7 @@ export default definePlugin({
       runConfigurations: [
         contributeRunConfiguration({
           id: 'podman-build-run',
-          title: 'Podman Build and Run',
+          title: 'Podman Build Image',
           kind: 'podman',
           command: 'podman',
           args: ['build', '-t', 'project:dev', '.'],

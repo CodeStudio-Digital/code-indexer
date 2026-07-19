@@ -75,4 +75,58 @@ describe('AppStudioStore v6', () => {
     expect(h.store.listWorkItemRuns(app.id, { workItemId: 'reserve' })[0]).toMatchObject({ attempt: 1, status: 'completed' });
     expect(JSON.parse(h.store.getWorkItem(app.id, 'reserve')!.evidence_json)).toHaveLength(1);
   });
+
+  it('releases verification for reviewed work without releasing other dependents', () => {
+    const app = h.store.createSession({ project_id: h.projectId, name: 'Hotel', app_slug: 'hotel' });
+    const plan = emptyAppPlan('pt-BR');
+    const revision = h.store.savePlanRevision({
+      app_session_id: app.id,
+      plan,
+      fitness: {
+        v: 1,
+        status: 'ready',
+        plan_fingerprint: 'plan:test',
+        checked_at: '2026-07-19T00:00:00.000Z',
+        checks: [],
+        counts: { passed: 0, warnings: 0, errors: 0 },
+      },
+    });
+    h.store.upsertWorkItems([
+      {
+        app_session_id: app.id,
+        id: 'foundation:implement',
+        plan_revision_id: revision.id,
+        title: 'Construir fundação',
+        kind: 'implement',
+        owner_role: 'fullstack',
+        status: 'review',
+      },
+      {
+        app_session_id: app.id,
+        id: 'foundation:verify',
+        plan_revision_id: revision.id,
+        title: 'Revisar fundação',
+        kind: 'verify',
+        owner_role: 'qa',
+        status: 'backlog',
+        depends_on_json: JSON.stringify(['foundation:implement']),
+      },
+      {
+        app_session_id: app.id,
+        id: 'catalog:implement',
+        plan_revision_id: revision.id,
+        title: 'Construir catálogo',
+        kind: 'implement',
+        owner_role: 'fullstack',
+        status: 'backlog',
+        depends_on_json: JSON.stringify(['foundation:implement']),
+      },
+    ]);
+    h.store.approvePlanRevision(app.id, revision.id);
+
+    h.store.refreshReadyWorkItems(app.id);
+
+    expect(h.store.getWorkItem(app.id, 'foundation:verify')).toMatchObject({ status: 'ready' });
+    expect(h.store.getWorkItem(app.id, 'catalog:implement')).toMatchObject({ status: 'backlog' });
+  });
 });

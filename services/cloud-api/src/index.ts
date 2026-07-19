@@ -21,6 +21,7 @@ import { teamsRouter } from './routes/teams.js';
 import { feedbackRouter } from './routes/feedback.js';
 import { accountRouter } from './routes/account.js';
 import { adminRouter } from './routes/admin.js';
+import { githubAppRouter } from './routes/github-app.js';
 import { securityHeaders, docsSecurityHeaders, corsAllowlist } from './middleware/security.js';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -67,6 +68,7 @@ app.use('/v1/feedback/*', bodyLimit({ maxSize: 6 * 1024 * 1024, onError: tooLarg
 app.use('/v1/account', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/account/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
 app.use('/v1/admin/*', bodyLimit({ maxSize: 32 * 1024, onError: tooLarge }));
+app.use('/v1/github/*', bodyLimit({ maxSize: 96 * 1024, onError: tooLarge }));
 
 app.get('/v1/health', (c) =>
   c.json({
@@ -94,6 +96,7 @@ app.route('/v1/orgs', teamsRouter());
 app.route('/v1/feedback', feedbackRouter());
 app.route('/v1/account', accountRouter());
 app.route('/v1/admin', adminRouter());
+app.route('/v1/github', githubAppRouter());
 
 // JSON-only API: never render HTML, even for 404s.
 app.notFound((c) => c.json({ code: 'not_found', message: 'Not found' }, 404));

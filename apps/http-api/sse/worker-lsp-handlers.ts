@@ -26,7 +26,7 @@ interface LspRequestPayload {
 
 let box: { handlers: LspApi; db: CodeIndexDB } | null = null;
 
-export function setWorkerLspDeps(deps: { handlers: LspApi; db: CodeIndexDB }): void {
+export function setWorkerLspDeps(deps: { handlers: LspApi; db: CodeIndexDB } | null): void {
   box = deps;
 }
 

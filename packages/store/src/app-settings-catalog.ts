@@ -36,6 +36,7 @@ import { MEMORY_SETTINGS } from './app-settings/memory.js';
 import { DEBUG_SETTINGS } from './app-settings/debug.js';
 import { INDEXING_SETTINGS } from './app-settings/indexing.js';
 import { SANDBOX_SETTINGS } from './app-settings/sandbox.js';
+import { GIT_IDENTITY_SETTINGS } from './app-settings/git-identity.js';
 
 export const APP_SETTINGS: readonly SettingDef[] = [
   ...LLM_SETTINGS,
@@ -47,6 +48,7 @@ export const APP_SETTINGS: readonly SettingDef[] = [
   ...AGENT_OUTPUT_SETTINGS,
   ...AGENT_SPAWN_SETTINGS,
   ...AGENT_TASK_SETTINGS,
+  ...GIT_IDENTITY_SETTINGS,
   ...COMPANY_SETTINGS,
   ...COMPANY_SUPERVISOR_SETTINGS,
   ...NOTIFICATION_SETTINGS,

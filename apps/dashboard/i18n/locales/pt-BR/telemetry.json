@@ -153,6 +153,7 @@
   "quality.infrastructure.empty": "Nenhuma falha de binding, timeout ou parser.",
   "quality.delivery.title": "Qualidade da entrega por tarefa",
   "quality.delivery.empty": "Nenhuma rodada concluída avaliada ainda.",
+  "quality.delivery.round": "rodada",
   "quality.runtime.title": "Incidentes objetivos de runtime",
   "quality.runtime.empty": "Nenhum guard objetivo acionado.",
   "quality.legacy.title": "Histórico legado",

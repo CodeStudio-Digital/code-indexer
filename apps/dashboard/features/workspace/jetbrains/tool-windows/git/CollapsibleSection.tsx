@@ -13,6 +13,10 @@ interface CollapsibleSectionHeaderProps {
   title: string;
   open: boolean;
   onToggle: () => void;
+  /** Additional visual treatment for a specific section family. */
+  className?: string;
+  /** Optional semantic color for the section label. */
+  titleClassName?: string;
   /** Optional control placed between the disclosure arrow and the title. */
   headerControl?: ReactNode;
   /** Right-aligned controls (e.g. bulk actions). */
@@ -29,6 +33,8 @@ export function CollapsibleSectionHeader({
   title,
   open,
   onToggle,
+  className,
+  titleClassName,
   headerControl,
   actions,
   sticky = true,
@@ -37,6 +43,7 @@ export function CollapsibleSectionHeader({
     <div className={cn(
       'z-[1] flex items-center gap-1 px-2.5 py-1 bg-card/80 backdrop-blur supports-[backdrop-filter]:bg-card/60 border-b',
       sticky && 'sticky top-0',
+      className,
     )}>
       <button
         type="button"
@@ -52,9 +59,12 @@ export function CollapsibleSectionHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
+        className={cn(
+          'min-w-0 truncate text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground',
+          titleClassName,
+        )}
       >
-        <span className="font-semibold">{title}</span>
+        <span className="block truncate font-semibold">{title}</span>
       </button>
       {actions && <div className="ml-auto">{actions}</div>}
     </div>
@@ -65,6 +75,8 @@ export function CollapsibleSection({
   title,
   open,
   onToggle,
+  className,
+  titleClassName,
   headerControl,
   actions,
   sticky,
@@ -76,6 +88,8 @@ export function CollapsibleSection({
         title={title}
         open={open}
         onToggle={onToggle}
+        className={className}
+        titleClassName={titleClassName}
         headerControl={headerControl}
         actions={actions}
         sticky={sticky}

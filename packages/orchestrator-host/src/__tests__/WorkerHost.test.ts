@@ -57,6 +57,13 @@ describe('WorkerHost ↔ real worker_threads', () => {
     expect(ticks).toEqual([{ tick: 1 }]);
   });
 
+  it('forwards per-isolate resource limits to the worker', async () => {
+    const host = makeHost({ resourceLimits: { maxOldGenerationSizeMb: 64 } });
+    await host.start();
+    const stats = await host.requireBridge().request<{ heapLimitMB: number }>('heapLimit', {});
+    expect(stats.heapLimitMB).toBeLessThan(256);
+  });
+
   it('surfaces handler errors as rejected promises', async () => {
     const host = makeHost();
     await host.start();

@@ -294,7 +294,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       if (!task) throw new ApiError('not_found', 404, 'task not found');
       task.status = 'stopped';
       try {
-        manager.get(task.terminalId).pty.kill();
+        manager.kill(task.terminalId);
       } catch {
         /* PTY may have already exited — status still reflects intent */
       }
@@ -308,7 +308,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       // we don't orphan the process.
       if (task.status === 'running') {
         try {
-          manager.get(task.terminalId).pty.kill();
+          manager.kill(task.terminalId);
         } catch {
           /* already gone */
         }
@@ -321,7 +321,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       const task = tasks.get(taskId);
       if (!task) throw new ApiError('not_found', 404, 'task not found');
       try {
-        manager.get(task.terminalId).pty.kill();
+        manager.kill(task.terminalId);
       } catch {
         /* already gone */
       }

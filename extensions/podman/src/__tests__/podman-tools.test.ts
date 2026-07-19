@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginToolContext } from '@mcp/plugin-sdk';
 import { allTools } from '../all-tools.js';
+import plugin from '../plugin.js';
 
 interface ExecCall {
   cmd: string;
@@ -102,6 +103,104 @@ describe('podman plugin tools', () => {
     expect(runCall).toContain('-v');
     expect(runCall).toContain('D:/projects/7:/app');
     expect(runCall).toContain('5173:5173');
+  });
+
+  it('builds only the Dockerfile selected by an editor gutter', async () => {
+    const { ctx, calls } = makeCtx(() => ({ code: 0, stdout: 'built' }));
+    const r = await tool('podman_project_run').handler({
+      buildOnly: true,
+      _editor: {
+        path: 'containers/Dockerfile.dev',
+        languageId: 'dockerfile',
+        lineNumber: 1,
+        column: 1,
+        lineText: 'FROM node:20',
+      },
+    }, ctx);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'build', '-t', 'podman-demo:dev', '-f', 'containers/Dockerfile.dev', '.',
+    ]);
+    expect(r.content).toContain('Built podman-demo:dev');
+  });
+
+  it.each([
+    '/tmp/Dockerfile',
+    'C:\\outside\\Dockerfile',
+    'C:relative-drive\\Dockerfile',
+    '../Dockerfile',
+    'containers/../Dockerfile',
+  ])('rejects an unsafe editor Containerfile path: %s', async (path) => {
+    const { ctx, calls } = makeCtx(() => ({ code: 0, stdout: 'should not run' }));
+    const r = await tool('podman_project_run').handler({
+      buildOnly: true,
+      _editor: { path, languageId: 'dockerfile', lineNumber: 1, column: 1, lineText: 'FROM scratch' },
+    }, ctx);
+    expect(r.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('uses the active compose file supplied by an editor gutter', async () => {
+    const { ctx, calls } = makeCtx(() => ({ code: 0, stdout: 'started' }));
+    await tool('podman_compose').handler({
+      action: 'up',
+      detach: true,
+      _editor: {
+        path: 'infra/docker-compose.prod.override.yml',
+        languageId: 'yaml',
+        lineNumber: 1,
+        column: 1,
+        lineText: 'services:',
+      },
+    }, ctx);
+    expect(calls[0].args).toEqual([
+      'compose', '-f', 'infra/docker-compose.prod.override.yml', 'up', '-d',
+    ]);
+  });
+
+  it('normalizes and validates an explicit Compose variant path', async () => {
+    const { ctx, calls } = makeCtx(() => ({ code: 0, stdout: 'started' }));
+    const r = await tool('podman_compose').handler({
+      action: 'up',
+      detach: true,
+      file: 'infra\\compose.prod.override.yaml',
+    }, ctx);
+    expect(r.isError).toBeFalsy();
+    expect(calls[0].args).toEqual([
+      'compose', '-f', 'infra/compose.prod.override.yaml', 'up', '-d',
+    ]);
+  });
+
+  it.each([
+    '/tmp/compose.yml',
+    'C:\\outside\\compose.yml',
+    'C:relative-drive\\compose.yml',
+    '../compose.yml',
+    'infra/../compose.yml',
+    'infra/not-compose.yml',
+  ])('rejects an unsafe or unrelated explicit Compose path: %s', async (file) => {
+    const { ctx, calls } = makeCtx(() => ({ code: 0, stdout: 'should not run' }));
+    const r = await tool('podman_compose').handler({ action: 'up', detach: true, file }, ctx);
+    expect(r.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('declares safe Dockerfile and Compose editor gutters', () => {
+    const actions = plugin.editorActions;
+    expect(actions.find((item) => item.id === 'podman-build-containerfile')).toMatchObject({
+      toolArgs: { buildOnly: true },
+      gutter: { occurrence: 'first', icon: 'build' },
+    });
+    expect(actions.find((item) => item.id === 'podman-compose-up')).toMatchObject({
+      toolArgs: { action: 'up', detach: true },
+      gutter: { occurrence: 'first', icon: 'run' },
+    });
+    expect(actions.every((item) => item.activation === undefined)).toBe(true);
+    const moduleActionIds = plugin.modules[0].editorActions?.map((item) => item.id) ?? [];
+    expect(moduleActionIds).not.toEqual(expect.arrayContaining([
+      'podman-build-containerfile',
+      'podman-compose-up',
+    ]));
   });
 
   it('podman_containerize writes a non-root Containerfile + .dockerignore for a node project', async () => {

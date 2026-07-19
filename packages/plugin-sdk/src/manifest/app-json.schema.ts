@@ -79,6 +79,37 @@ export const themeDeclSchema = z.object({
 
 const contributionScopeSchema = z.enum(['application', 'editor', 'project', 'module']);
 
+export const editorGutterLineMatcherSchema = z
+  .object({
+    text: z.string().min(1).max(256),
+    match: z.enum(['equals', 'startsWith', 'contains', 'word']),
+    trim: z.boolean().optional(),
+    caseSensitive: z.boolean().optional(),
+  })
+  .strict();
+
+export const editorDocumentSelectorSchema = z
+  .object({
+    filePatterns: z.array(z.string().min(1).max(256)).min(1).max(32).optional(),
+    languageIds: z.array(z.string().min(1).max(64)).min(1).max(16).optional(),
+  })
+  .strict()
+  .refine(
+    (selector) => Boolean(selector.filePatterns?.length || selector.languageIds?.length),
+    {
+      message: 'documentSelector requires filePatterns or languageIds',
+    },
+  );
+
+export const editorGutterDeclSchema = z
+  .object({
+    line: editorGutterLineMatcherSchema,
+    occurrence: z.enum(['first', 'all']).optional(),
+    icon: z.enum(['run', 'build', 'inspect']).optional(),
+    tooltip: z.string().min(1).max(256).optional(),
+  })
+  .strict();
+
 export const editorActionDeclSchema = z.object({
   id: contribId,
   label: z.string().min(1),
@@ -86,9 +117,29 @@ export const editorActionDeclSchema = z.object({
   icon: z.string().optional(),
   shortcut: z.string().optional(),
   runsTool: z.string().min(1).optional(),
+  toolArgs: z.record(z.unknown()).optional(),
+  documentSelector: editorDocumentSelectorSchema.optional(),
+  gutter: editorGutterDeclSchema.optional(),
   scope: contributionScopeSchema.extract(['editor', 'project', 'module']).optional(),
   activation: activationRuleSchema.optional(),
 });
+
+// Keep the exported action schema as a ZodObject for SDK consumers that extend
+// or merge contribution shapes. Cross-field invariants belong to the complete
+// manifest parsing lane and are applied at every action nesting point below.
+const manifestEditorActionDeclSchema = editorActionDeclSchema
+  .superRefine((action, ctx) => {
+    if (action.gutter && !action.runsTool) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runsTool'], message: 'gutter requires runsTool' });
+    }
+    if (action.gutter && !action.documentSelector) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['documentSelector'],
+        message: 'gutter requires documentSelector',
+      });
+    }
+  });
 
 export const statusBarItemDeclSchema = z.object({
   id: contribId,
@@ -124,7 +175,7 @@ export const projectModuleDeclSchema = z.object({
   activation: activationRuleSchema,
   tools: z.array(z.string().min(1)).optional(),
   toolWindows: z.array(toolWindowDeclSchema).optional(),
-  editorActions: z.array(editorActionDeclSchema).optional(),
+  editorActions: z.array(manifestEditorActionDeclSchema).optional(),
   statusBarItems: z.array(statusBarItemDeclSchema).optional(),
   runConfigurations: z.array(runConfigurationDeclSchema).optional(),
 });
@@ -169,7 +220,7 @@ function buildAppManifestSchema(providers: z.ZodTypeAny) {
     toolWindows: z.array(toolWindowDeclSchema).optional(),
     commands: z.array(commandDeclSchema).optional(),
     themes: z.array(themeDeclSchema).optional(),
-    editorActions: z.array(editorActionDeclSchema).optional(),
+    editorActions: z.array(manifestEditorActionDeclSchema).optional(),
     statusBarItems: z.array(statusBarItemDeclSchema).optional(),
     runConfigurations: z.array(runConfigurationDeclSchema).optional(),
     modules: z.array(projectModuleDeclSchema).optional(),

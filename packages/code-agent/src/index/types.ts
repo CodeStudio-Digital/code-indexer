@@ -288,6 +288,8 @@ export interface RunCoderOptions {
    * Set by the caller (http-api) from the main-process service presence.
    */
   previewAvailable?: boolean;
+  /** Whether the isolated public-web research backend is configured for this run. */
+  browserAvailable?: boolean;
   /**
    * Standalone sandbox binding (decoupled Builder sessions). When present,
    * the runner pins `cwd` to the container workdir and swaps in the

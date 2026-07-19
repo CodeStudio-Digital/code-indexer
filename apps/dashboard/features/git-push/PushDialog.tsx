@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { FileCode2, GitCommit as GitCommitIcon, Loader2, Tag, Upload } from 'lucide-react';
+import { Bot, FileCode2, GitCommit as GitCommitIcon, Loader2, Tag, Upload, UserRound } from 'lucide-react';
 import type {
   GitCommitDetail,
   GitDiffResult,
+  GitIdentityMode,
+  GitHubRepositoryConnection,
+  GitPullRequestResult,
   GitPushActionRequired,
   GitPushPreview,
   GitRunResult,
 } from '@mcp/api-bus';
 import { apiCall } from '../../lib/api-client.js';
+import { cloudCall } from '../../lib/cloud/cloud-client.js';
 import { Button } from '../../components/ui/button.js';
 import {
   Dialog,
@@ -24,7 +28,6 @@ import { cn } from '../../lib/utils.js';
 import { workspaceApi } from '../builder/preview/api.js';
 import {
   closePushDialog,
-  usePushDialogStore,
   type PushDialogRequest,
 } from './push-dialog-store.js';
 import { CommitFileDiff } from './CommitFileDiff.js';
@@ -77,6 +80,8 @@ async function executePush(
   request: PushDialogRequest,
   preview: GitPushPreview,
   pushTags: boolean,
+  identityMode: GitIdentityMode,
+  managedGrant?: string,
 ): Promise<PushExecutionResult> {
   if (request.kind === 'workspace') {
     const result = await workspaceApi.gitPush(request.sessionId, request.projectId, {
@@ -99,6 +104,8 @@ async function executePush(
     setUpstream: preview.setUpstream,
     force: request.force,
     pushTags,
+    identityMode,
+    managedGrant,
   });
   if (!result.ok) {
     throw pushError(
@@ -112,12 +119,7 @@ async function executePush(
   };
 }
 
-export function PushDialogHost() {
-  const request = usePushDialogStore((state) => state.request);
-  return request ? <PushDialogBody key={request.id} request={request} /> : null;
-}
-
-function PushDialogBody({ request }: { request: PushDialogRequest }) {
+export function PushDialog({ request }: { request: PushDialogRequest }) {
   const { t, i18n } = useTranslation('workspace');
   const [preview, setPreview] = useState<GitPushPreview | null>(null);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
@@ -126,6 +128,10 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
   const [patch, setPatch] = useState<string | null>(null);
   const [patchTruncated, setPatchTruncated] = useState(false);
   const [pushTags, setPushTags] = useState(false);
+  const [identityMode, setIdentityMode] = useState<GitIdentityMode>('project');
+  const [createPullRequest, setCreatePullRequest] = useState(false);
+  const [managedConnection, setManagedConnection] = useState<GitHubRepositoryConnection | null>(null);
+  const [managedChecking, setManagedChecking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [patchLoading, setPatchLoading] = useState(false);
@@ -139,6 +145,8 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     void loadPreview(request).then((result) => {
       if (!active) return;
       setPreview(result);
+      setIdentityMode(request.kind === 'project' ? result.identity?.defaultMode ?? 'project' : 'project');
+      setCreatePullRequest(false);
       setSelectedSha(result.commits[0]?.sha ?? null);
       setError(null);
     }).catch((cause) => {
@@ -148,6 +156,42 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     });
     return () => { active = false; };
   }, [request]);
+
+  const managedTarget = useMemo(() => {
+    const identity = preview?.identity?.managed;
+    const parts = identity?.repository?.split('/') ?? [];
+    if (!identity?.host || parts.length !== 2 || !parts[0] || !parts[1]) return null;
+    return { host: identity.host, owner: parts[0], repo: parts[1] };
+  }, [preview]);
+
+  const refreshManagedConnection = useCallback(async () => {
+    if (!managedTarget || request.kind !== 'project') {
+      setManagedConnection(null);
+      return;
+    }
+    setManagedChecking(true);
+    try {
+      const connection = await cloudCall('github.repository', managedTarget);
+      setManagedConnection(connection);
+      if (!connection.available) {
+        setIdentityMode('project');
+        setCreatePullRequest(false);
+      }
+    } catch {
+      setManagedConnection({ available: false, configured: true, reason: 'not_connected' });
+      setIdentityMode('project');
+      setCreatePullRequest(false);
+    } finally {
+      setManagedChecking(false);
+    }
+  }, [managedTarget, request.kind]);
+
+  useEffect(() => {
+    void refreshManagedConnection();
+    const onFocus = () => void refreshManagedConnection();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshManagedConnection]);
 
   useEffect(() => {
     setDetail(null);
@@ -175,6 +219,14 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     overscan: 8,
   });
   const pushable = !!preview && (preview.commitCount > 0 || (pushTags && preview.tagCount > 0));
+  const managedIdentity = preview?.identity?.managed
+    ? {
+        ...preview.identity.managed,
+        available: managedConnection?.available ?? false,
+        configured: managedConnection?.configured ?? preview.identity.managed.configured,
+        reason: managedConnection?.reason ?? (managedConnection ? undefined : preview.identity.managed.reason),
+      }
+    : null;
   const confirmLabel = pushTags
     ? preview?.commitCount
       ? t('git.pushReview.confirmWithTags', { count: preview.commitCount })
@@ -206,9 +258,42 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     setPushing(true);
     setError(null);
     try {
-      const result = await executePush(request, preview, pushTags);
+      let managedGrant: string | undefined;
+      if (identityMode === 'managed') {
+        if (!managedTarget || !managedConnection?.available) throw new Error(t('git.pushReview.managedUnavailable.not_connected'));
+        managedGrant = (await cloudCall('github.createGrant', { ...managedTarget, operation: 'push' })).grant;
+      }
+      const result = await executePush(request, preview, pushTags, identityMode, managedGrant);
+      let pullRequest: GitPullRequestResult | null = null;
+      if (
+        createPullRequest &&
+        request.kind === 'project' &&
+        identityMode === 'managed' &&
+        preview.defaultBranch
+      ) {
+        try {
+          if (!managedTarget) throw new Error(t('git.pushReview.managedUnavailable.invalid_remote'));
+          pullRequest = await cloudCall('github.createPullRequest', {
+            ...managedTarget,
+            head: preview.branch,
+            base: preview.defaultBranch,
+            title: preview.commits[0]?.subject || preview.branch,
+            body: 'Created by MegaBrainStudio.',
+            draft: true,
+          });
+        } catch (cause) {
+          toast.error(t('git.pushReview.pushSucceededPrFailed'), {
+            description: cause instanceof Error ? cause.message : String(cause),
+          });
+          closePushDialog(request.id);
+          try { await request.onPushed?.(); } catch { /* push succeeded; refresh is best-effort */ }
+          return;
+        }
+      }
       toast.success(t('git.pushReview.success'), {
-        description: result.updatedBeforePush
+        description: pullRequest
+          ? t('git.pushReview.pullRequestCreated', { number: pullRequest.number, url: pullRequest.url })
+          : result.updatedBeforePush
           ? t('git.pushReview.successAfterUpdate')
           : result.message || t('git.pushReview.successDescription'),
       });
@@ -233,6 +318,16 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
     }
   };
 
+  const connectManagedIdentity = async () => {
+    setError(null);
+    try {
+      const { url } = await cloudCall('github.connect', undefined);
+      (globalThis as { electronAPI?: { openExternal?: (value: string) => void } }).electronAPI?.openExternal?.(url);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !pushing) closePushDialog(request.id); }}>
       <DialogContent className="flex h-[min(82vh,720px)] w-[min(96vw,1040px)] max-w-none flex-col gap-0 overflow-hidden p-0">
@@ -248,6 +343,59 @@ function PushDialogBody({ request }: { request: PushDialogRequest }) {
               <span className="text-muted-foreground">→</span>
               <span className="truncate text-primary">{preview.remote}/{preview.targetBranch}</span>
               {preview.setUpstream && <span className="ml-auto shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] text-primary">{t('git.pushReview.setUpstream')}</span>}
+            </div>
+          )}
+          {request.kind === 'project' && preview?.identity && managedIdentity && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[10.5px]">
+              <span className="mr-1 text-muted-foreground">{t('git.pushReview.identity')}</span>
+              <button
+                type="button"
+                disabled={pushing}
+                onClick={() => { setIdentityMode('project'); setCreatePullRequest(false); }}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 transition-colors',
+                  identityMode === 'project' ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-muted/50',
+                )}
+              >
+                <UserRound className="h-3.5 w-3.5" />
+                {t('git.pushReview.projectIdentity')}
+              </button>
+              <button
+                type="button"
+                disabled={pushing || managedChecking || !managedIdentity.available}
+                title={!managedIdentity.available ? t(`git.pushReview.managedUnavailable.${managedIdentity.reason || 'not_configured'}`) : undefined}
+                onClick={() => setIdentityMode('managed')}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-45',
+                  identityMode === 'managed' ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-muted/50',
+                )}
+              >
+                <Bot className="h-3.5 w-3.5" />
+                {managedChecking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {managedIdentity.label}
+              </button>
+              {!managedIdentity.available && ['not_connected', 'not_installed'].includes(managedIdentity.reason || '') ? (
+                <button type="button" className="text-primary hover:underline" onClick={() => void connectManagedIdentity()}>
+                  {t('git.pushReview.connectManaged')}
+                </button>
+              ) : null}
+              <span className="text-muted-foreground">
+                {identityMode === 'managed'
+                  ? t('git.pushReview.managedIdentityHint')
+                  : t('git.pushReview.projectIdentityHint')}
+              </span>
+              {identityMode === 'managed' && preview.defaultBranch && preview.defaultBranch !== preview.branch && (
+                <label className="ml-auto flex items-center gap-2 text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={createPullRequest}
+                    disabled={pushing}
+                    onChange={(event) => setCreatePullRequest(event.target.checked)}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  {t('git.pushReview.createDraftPr', { base: preview.defaultBranch })}
+                </label>
+              )}
             </div>
           )}
         </DialogHeader>

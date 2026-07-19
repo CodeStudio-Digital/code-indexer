@@ -20,65 +20,97 @@ export interface OrphanSemanticItem {
 
 export function listProjectsHygiene(db: DB): ProjectHygieneRow[] {
   return db.prepare(`
+    WITH semantic_project_items AS MATERIALIZED (
+      SELECT
+        i.*,
+        p.id AS project_id
+      FROM semantic_items i
+      JOIN projects p ON p.id = CAST(CASE
+        WHEN i.namespace LIKE 'code:p%'
+          THEN substr(i.namespace, length('code:p') + 1)
+        WHEN i.namespace LIKE 'snapshot:p%'
+          THEN substr(i.namespace, length('snapshot:p') + 1)
+        WHEN i.namespace LIKE 'memory:project:p%'
+          THEN substr(i.namespace, length('memory:project:p') + 1)
+      END AS INTEGER)
+      WHERE (
+        i.namespace GLOB 'code:p[0-9]*'
+        OR i.namespace GLOB 'snapshot:p[0-9]*'
+        OR i.namespace GLOB 'memory:project:p[0-9]*'
+      )
+        AND i.namespace IN (
+          'code:p' || p.id,
+          'snapshot:p' || p.id,
+          'memory:project:p' || p.id
+        )
+    ),
+    semantic_counts AS (
+      SELECT
+        i.project_id,
+        COUNT(*) AS vector_count,
+        SUM(CASE WHEN
+          i.generation_id = COALESCE(ng.building_generation_id, ng.active_generation_id)
+          AND (
+            (i.item_key LIKE 'file:%' AND NOT EXISTS (
+              SELECT 1 FROM files f
+              WHERE f.project_id = i.project_id
+                AND f.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+            )) OR
+            ((i.item_key LIKE 'symbol:%' OR i.item_key LIKE 'symbol_body:%' OR i.item_key LIKE 'symbol_group:%')
+              AND NOT EXISTS (
+                SELECT 1 FROM symbols s
+                WHERE s.project_id = i.project_id
+                  AND s.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+              )) OR
+            (i.item_key LIKE 'snapshot:%' AND NOT EXISTS (
+              SELECT 1 FROM snapshots sn
+              WHERE sn.project_id = i.project_id AND sn.archived_at IS NULL
+                AND sn.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+            )) OR
+            (i.item_key LIKE 'agent_memory:%' AND NOT EXISTS (
+              SELECT 1 FROM agent_memory m
+              WHERE m.project_id = i.project_id AND m.archived_at IS NULL
+                AND m.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+            )) OR
+            (i.item_key LIKE 'investigation:%' AND NOT EXISTS (
+              SELECT 1 FROM coder_investigations ci
+              WHERE ci.project_id = i.project_id
+                AND ci.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
+            ))
+          )
+        THEN 1 ELSE 0 END) AS orphan_semantic_items
+      FROM semantic_project_items i
+      LEFT JOIN semantic_namespace_generations ng ON ng.namespace = i.namespace
+      GROUP BY i.project_id
+    ),
+    file_counts AS (
+      SELECT
+        project_id,
+        COUNT(*) AS file_count,
+        SUM(CASE WHEN language <> LOWER(language) THEN 1 ELSE 0 END) AS mixed_case_languages
+      FROM files
+      GROUP BY project_id
+    ),
+    stale_run_counts AS (
+      SELECT project_id, COUNT(*) AS stale_runs
+      FROM runs
+      WHERE status = 'running'
+        AND started_at < datetime('now', '-2 hours')
+      GROUP BY project_id
+    )
     SELECT
       p.id,
       p.name,
       p.root_path,
-      (SELECT COUNT(*) FROM files f WHERE f.project_id = p.id) AS file_count,
-      (SELECT COUNT(*) FROM semantic_items i
-        WHERE i.namespace IN (
-          'code:p' || p.id,
-          'snapshot:p' || p.id,
-          'memory:project:p' || p.id
-        )
-      ) AS vector_count,
-      (SELECT COUNT(*) FROM semantic_items i
-        WHERE i.namespace IN (
-          'code:p' || p.id,
-          'snapshot:p' || p.id,
-          'memory:project:p' || p.id
-        ) AND i.generation_id = (
-          SELECT COALESCE(ng.building_generation_id, ng.active_generation_id)
-          FROM semantic_namespace_generations ng
-          WHERE ng.namespace = i.namespace
-        ) AND (
-          (i.item_key LIKE 'file:%' AND NOT EXISTS (
-            SELECT 1 FROM files f
-            WHERE f.project_id = p.id
-              AND f.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
-          )) OR
-          ((i.item_key LIKE 'symbol:%' OR i.item_key LIKE 'symbol_body:%' OR i.item_key LIKE 'symbol_group:%')
-            AND NOT EXISTS (
-              SELECT 1 FROM symbols s
-              WHERE s.project_id = p.id
-                AND s.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
-            )) OR
-          (i.item_key LIKE 'snapshot:%' AND NOT EXISTS (
-            SELECT 1 FROM snapshots sn
-            WHERE sn.project_id = p.id AND sn.archived_at IS NULL
-              AND sn.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
-          )) OR
-          (i.item_key LIKE 'agent_memory:%' AND NOT EXISTS (
-            SELECT 1 FROM agent_memory m
-            WHERE m.project_id = p.id AND m.archived_at IS NULL
-              AND m.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
-          )) OR
-          (i.item_key LIKE 'investigation:%' AND NOT EXISTS (
-            SELECT 1 FROM coder_investigations ci
-            WHERE ci.project_id = p.id
-              AND ci.id = CAST(substr(i.item_key, instr(i.item_key, ':') + 1) AS INTEGER)
-          ))
-        )
-      ) AS orphan_semantic_items,
-      (SELECT COUNT(*) FROM runs r
-        WHERE r.project_id = p.id
-          AND r.status = 'running'
-          AND r.started_at < datetime('now', '-2 hours')
-      ) AS stale_runs,
-      (SELECT COUNT(*) FROM files f
-        WHERE f.project_id = p.id AND f.language <> LOWER(f.language)
-      ) AS mixed_case_languages
+      COALESCE(f.file_count, 0) AS file_count,
+      COALESCE(s.vector_count, 0) AS vector_count,
+      COALESCE(s.orphan_semantic_items, 0) AS orphan_semantic_items,
+      COALESCE(r.stale_runs, 0) AS stale_runs,
+      COALESCE(f.mixed_case_languages, 0) AS mixed_case_languages
     FROM projects p
+    LEFT JOIN file_counts f ON f.project_id = p.id
+    LEFT JOIN semantic_counts s ON s.project_id = p.id
+    LEFT JOIN stale_run_counts r ON r.project_id = p.id
     ORDER BY p.name
   `).all() as ProjectHygieneRow[];
 }

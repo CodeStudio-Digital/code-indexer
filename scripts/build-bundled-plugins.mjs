@@ -47,7 +47,13 @@ mkdirSync(stageRoot, { recursive: true });
 for (const ns of providers) {
   const srcDir = join(extDir, ns);
   // Build → emits dist/plugin.js + .app.json from the declarative spec.
-  run('npx', ['tsx', 'packages/plugin-sdk/src/cli/index.ts', 'build', `extensions/${ns}`]);
+  run('npx', [
+    'tsx',
+    'packages/plugin-sdk/src/cli/index.ts',
+    'build',
+    `extensions/${ns}`,
+    '--trust-providers',
+  ]);
 
   const appJson = join(srcDir, '.app.json');
   if (!existsSync(appJson)) {

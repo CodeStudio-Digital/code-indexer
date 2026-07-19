@@ -4,13 +4,13 @@
  * spawn-free here so it unit-tests directly: load built plugin bundles via
  * dynamic import, index their tools, dispatch by name.
  */
-import { pathToFileURL } from 'node:url';
 import type {
   PluginModule,
   ContributedTool,
   PluginToolContext,
   PluginToolResult,
 } from '@mcp/plugin-sdk';
+import { importPluginBundle } from '../import-plugin-bundle.js';
 
 export type PluginToolMap = Map<string, ContributedTool>;
 
@@ -31,7 +31,7 @@ export async function loadPluginTools(bundles: PluginBundleRef[]): Promise<Plugi
   for (const b of bundles) {
     let mod: { default?: PluginModule };
     try {
-      mod = (await import(pathToFileURL(b.file).href)) as { default?: PluginModule };
+      mod = await importPluginBundle<{ default?: PluginModule }>(b.file);
     } catch (e) {
       console.warn(
         `[plugin-runtime] failed to load ${b.namespace} (${b.file}): ${

@@ -30,15 +30,14 @@ function devtoolsLocked(): boolean {
 // hatch to watch the DevTools console for violations, then tighten):
 //   - 'wasm-unsafe-eval'      tree-sitter + onnxruntime wasm
 //   - 'unsafe-inline' styles  React inline styles + Tailwind/shadcn layer
-//   - fonts.googleapis/gstatic the <link> in index.html
 //   - blob: workers/img       Monaco editor web workers, generated images
 //   - localhost/127.0.0.1      the builder's local dev-server previews (iframe + HMR ws)
 //   - mcp://app                in-process backend (also bypassCSP; listed for clarity)
 const CSP = [
   "default-src 'self' mcp://app",
   "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
   "img-src 'self' data: blob: mcp://app",
   "connect-src 'self' mcp://app http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
   "worker-src 'self' blob:",

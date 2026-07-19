@@ -1,6 +1,6 @@
 {
   "name": "podman",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Manage Podman from your project — detect, run, pause, build images, volumes, networks and pods",
   "author": { "name": "mcp" },
   "apps": ".app.json",

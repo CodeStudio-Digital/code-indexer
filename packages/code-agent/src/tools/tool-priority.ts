@@ -18,6 +18,7 @@
 import {
   API_TOOLS,
   APP_STUDIO_TOOLS,
+  BROWSER_TOOLS,
   CORE_TIER_NAMES,
   DB_TOOLS,
   DESIGN_SYSTEM_CONSUMER_TOOLS,
@@ -92,6 +93,7 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
 export const ROLE_CAPABILITY_FLOOR: ReadonlySet<string> = new Set([
   ...API_TOOLS,
   ...APP_STUDIO_TOOLS,
+  ...BROWSER_TOOLS,
   ...DB_TOOLS,
   ...DESIGN_SYSTEM_CONSUMER_TOOLS,
   ...DESIGN_SYSTEM_STUDIO_TOOLS,
@@ -189,6 +191,7 @@ function survivalGroup(tier: ToolTier, hot: boolean): number {
     case 'company':
       return 4;
     case 'api':
+    case 'browser':
     case 'diagram':
     case 'db':
     case 'qa':

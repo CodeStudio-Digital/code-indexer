@@ -73,4 +73,20 @@ export const ROUTE_MAP: Record<CloudOp, CloudRoute> = {
   'orgs.audit': { method: 'GET', path: (i) => `/v1/orgs/${encodeURIComponent(String(i.orgId))}/audit`, auth: 'required', session: null },
   'feedback.submit': { method: 'POST', path: p('/v1/feedback'), auth: 'optional', session: null },
   'feedback.list': { method: 'GET', path: p('/v1/feedback'), auth: 'required', session: null },
+  'github.installations': { method: 'GET', path: p('/v1/github/installations'), auth: 'required', session: null },
+  'github.connect': { method: 'POST', path: p('/v1/github/connect'), auth: 'required', session: null },
+  'github.repository': {
+    method: 'GET',
+    path: (i) => `/v1/github/repository?host=${encodeURIComponent(String(i.host))}&owner=${encodeURIComponent(String(i.owner))}&repo=${encodeURIComponent(String(i.repo))}`,
+    auth: 'required',
+    session: null,
+  },
+  'github.disconnect': {
+    method: 'DELETE',
+    path: (i) => `/v1/github/installations/${encodeURIComponent(String(i.installationId))}`,
+    auth: 'required',
+    session: null,
+  },
+  'github.createGrant': { method: 'POST', path: p('/v1/github/grants'), auth: 'required', session: null },
+  'github.createPullRequest': { method: 'POST', path: p('/v1/github/pull-requests'), auth: 'required', session: null },
 };

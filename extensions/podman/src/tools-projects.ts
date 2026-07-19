@@ -7,7 +7,16 @@
 import { contributeTool } from '@mcp/plugin-sdk/define.js';
 import type { PluginToolContext } from '@mcp/plugin-sdk/define.js';
 import { buildArgs, runArgs } from '@mcp/podman-core';
-import { podman, ok, fail, details, optString, optBool } from './lib.js';
+import {
+  podman,
+  ok,
+  fail,
+  details,
+  containerfilePath,
+  editorContext,
+  optString,
+  optBool,
+} from './lib.js';
 
 const CONTAINERFILES = ['Containerfile', 'Dockerfile'];
 const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
@@ -112,17 +121,27 @@ export const projectTools = [
         hostPort: { type: 'number', description: 'host port to publish onto the exposed port' },
         mount: { type: 'boolean', description: 'bind-mount the project at /app (default true)' },
         noCache: { type: 'boolean' },
+        buildOnly: { type: 'boolean', description: 'build the image without starting a container' },
       },
     },
     handler: async (a, ctx: PluginToolContext) => {
       const d = await detect(ctx);
-      if (!d.containerfile) return fail('no Dockerfile/Containerfile in this project — nothing to build');
+      const editor = editorContext(a);
+      const selectedContainerfile = editor ? containerfilePath(editor.path) : null;
+      if (editor && !selectedContainerfile) {
+        return fail('active editor path must be a project-relative Dockerfile/Containerfile');
+      }
+      const containerfile = selectedContainerfile ?? d.containerfile;
+      if (!containerfile) return fail('no Dockerfile/Containerfile in this project — nothing to build');
       const tag = optString(a, 'tag') ?? `podman-${slug(ctx.projectName)}:dev`;
       const built = await podman(
         ctx,
-        buildArgs({ tag, file: d.containerfile, context: '.', noCache: optBool(a, 'noCache') }),
+        buildArgs({ tag, file: containerfile, context: '.', noCache: optBool(a, 'noCache') }),
       );
       if (built.code !== 0) return fail(built.stdout.trim() || `build failed (exit ${built.code})`);
+      if (optBool(a, 'buildOnly')) {
+        return details(`Built ${tag} from ${containerfile}.`, { tag, containerfile });
+      }
 
       const containerPort = d.exposedPorts[0];
       const hostPort = Number(a.hostPort) || containerPort;

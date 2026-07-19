@@ -44,3 +44,11 @@ function ensureHost(): PluginWorkerHost {
 
 export const invokePluginTool: PluginToolInvokeFn = (namespace, tool, args, ctx) =>
   ensureHost().invokeTool(namespace, tool, args, ctx);
+
+/** Dispose the UI-owned plugin worker, if it was ever created. */
+export async function disposePluginToolHost(): Promise<void> {
+  const current = host;
+  host = null;
+  loadedKey = '';
+  if (current) await current.dispose();
+}

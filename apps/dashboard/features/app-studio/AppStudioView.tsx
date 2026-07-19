@@ -12,6 +12,8 @@ import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStud
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
 import { AppStudioSurfaceFind } from './AppStudioSurfaceFind.js';
 import { AppStudioRightPanel, AppStudioRightRail, type AppStudioSidePanel } from './AppStudioRightRail.js';
+import { AppStudioAgentsDropdown } from './AppStudioAgentsDropdown.js';
+import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 
 const TAB_KEY = 'mcp.app-studio.tab.v6';
 const SINGLE_SESSION_KEY = 'mcp.app-studio.single-session.v1';
@@ -45,6 +47,8 @@ export function AppStudioView({
 }) {
   const { t } = useTranslation('appStudio');
   const { detail, error, refresh } = useAppStudioSession(sessionId);
+  const companySessionId = detail?.session.company_session_id ?? null;
+  const companyStream = useCompanyStream(companySessionId, undefined, { kind: 'app_studio', appSessionId: sessionId });
   const [tab, setTabState] = useState<AppStudioTab>(initialTab);
   const [sidePanel, setSidePanel] = useState<AppStudioSidePanel | null>(() => !window.matchMedia('(max-width: 767px)').matches || !!initialIdeaPrompt?.trim() ? 'chat' : null);
   const [singleSessionId, setSingleSessionIdState] = useState<number | null>(() => readSingleSession(sessionId));
@@ -69,6 +73,7 @@ export function AppStudioView({
     return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => { if (!compact) sidePanel ? panelRef.current?.expand() : panelRef.current?.collapse(); }, [sidePanel, compact]);
+  useEffect(() => { if (companySessionId != null) void companyStream.reattach(); }, [companySessionId, companyStream.reattach]);
 
   const runControl = async (next: 'pause' | 'resume' | 'cancel') => {
     if (next === 'cancel' && !(await confirm({ title: t('v6.cancelTitle'), description: t('v6.cancelBody'), confirmLabel: t('v6.cancelBuild'), tone: 'destructive' }))) return;
@@ -80,7 +85,7 @@ export function AppStudioView({
   if (!detail?.project) return <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('create.creating')}</div>;
 
   const masterSessionId = detail.master_session_id ?? initialMasterSessionId ?? null;
-  const right = sidePanel ? <AppStudioRightPanel active={sidePanel} appSessionId={sessionId} companySessionId={detail.session.company_session_id} projectId={detail.project.id} projectName={detail.project.name} masterSessionId={masterSessionId} initialPrompt={initialIdeaPrompt} singleSessionId={singleSessionId} onSingleSessionChange={setSingleSessionId} onCollapse={() => setSidePanel(null)} /> : null;
+  const right = sidePanel ? <AppStudioRightPanel active={sidePanel} appSessionId={sessionId} companySessionId={detail.session.company_session_id} projectId={detail.project.id} projectName={detail.project.name} masterSessionId={masterSessionId} initialPrompt={initialIdeaPrompt} detail={detail} singleSessionId={singleSessionId} onSingleSessionChange={setSingleSessionId} companyStream={companyStream} onChanged={() => void refresh()} onCollapse={() => setSidePanel(null)} /> : null;
   const stageLabel = t(STAGE_KEYS[detail.stage]);
 
   return (
@@ -90,6 +95,7 @@ export function AppStudioView({
         <span className="h-4 w-px bg-[var(--workbench-border)]" />
         <div className="min-w-0 flex-1"><span className="truncate text-xs font-semibold">{detail.session.name}</span><span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">{stageLabel}</span></div>
         {error && <span className="truncate text-xs text-red-600">{error}</span>}
+        <AppStudioAgentsDropdown stream={companyStream} masterSessionId={masterSessionId} />
         <Button variant="ghost" size="icon" className="h-7 w-7" disabled={action != null} onClick={() => void runControl('pause')} title={t('v6.pause')}><Pause className="h-3.5 w-3.5" /></Button>
         <Button variant="ghost" size="icon" className="h-7 w-7" disabled={action != null} onClick={() => void runControl('resume')} title={t('v6.resume')}><Play className="h-3.5 w-3.5" /></Button>
         <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" disabled={action != null} onClick={() => void runControl('cancel')} title={t('v6.cancelBuild')}><Square className="h-3.5 w-3.5" /></Button>

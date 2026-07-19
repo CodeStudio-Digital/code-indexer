@@ -45,6 +45,16 @@ function sharedSftpManager(): SftpManager {
   return _sftp;
 }
 
+/** Drain every SSH-owned socket/channel/listener without creating lazy state. */
+export function disposeSharedSshResources(): void {
+  _sftp?.closeAll();
+  _tunnels?.stopAll();
+  _manager?.disconnectAll();
+  _sftp = null;
+  _tunnels = null;
+  _manager = null;
+}
+
 export function createSshHandlers(_deps: HandlerDeps): SshApi {
   const manager = sharedSshManager();
 

@@ -10,12 +10,9 @@
  *   - loop was BUSY (active ≈ stall) → a genuine main-thread block (a sync
  *     handler or a GC pause). Attributed to the in-flight handler whose
  *     lifetime ≈ the stall, else `event-loop`.
- *   - loop was IDLE (active ≪ stall) → NOT a main-code block: the loop was
- *     parked in an `await`, or the OS descheduled the thread under CPU
- *     contention (e.g. workers indexing). Recorded as `source:'starved'` with
- *     NO handler blamed — this is what stops a handler that merely AWAITS
- *     (`/api/admin/perf/current` awaiting worker RPCs) from being falsely
- *     pinned for a concurrent stall.
+ *   - libuv was mostly IDLE (active ≪ stall) → no synchronous Node handler can
+ *     be attributed. In Electron this can still be native Chromium/Electron
+ *     work on the browser thread, OS descheduling/contention, or suspend.
  * The perf panel's OWN routes (`/api/admin/perf/*`) are excluded from
  * attribution so the observer never appears as the culprit.
  *
@@ -24,16 +21,28 @@
  * reset via the perf route.
  */
 import { performance } from 'node:perf_hooks';
+import { currentPersistentPerfRun, recordPersistentFreeze } from './persistent-diagnostics.js';
+import {
+  enterOffloopHandler,
+  exitOffloopHandler,
+  heartbeatOffloopWatchdog,
+  startOffloopWatchdog,
+  stopOffloopWatchdog,
+} from './offloop-watchdog.js';
 
-interface FreezeEvent {
+export interface FreezeEvent {
   at: number;
-  source: 'handler' | 'event-loop' | 'renderer' | 'starved';
+  source: 'handler' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
   /** IPC channel (handler) or script URL (renderer); absent for GC/starved. */
   channel?: string;
   durationMs: number;
   detail?: string;
-  /** Consecutive 'starved' ticks collapsed into this row (≥1). */
+  /** Retained for wire compatibility with older grouped rows. New rows are raw. */
   count?: number;
+  wallLateMs?: number;
+  windowMs?: number;
+  activeMs?: number;
+  busyFraction?: number;
 }
 
 /** NaN-safe numeric env: an operator-set garbage value falls back instead of
@@ -60,18 +69,24 @@ const events: FreezeEvent[] = [];
 
 function recordFreeze(e: Omit<FreezeEvent, 'at'> & { at?: number }): void {
   const at = e.at ?? Date.now();
-  const last = events[events.length - 1];
-  // A CPU-contention burst emits many consecutive 'starved' ticks; collapse
-  // them into one growing row so they never evict the high-value handler/
-  // event-loop/renderer blocks from the bounded ring.
-  if (e.source === 'starved' && last && last.source === 'starved') {
-    last.at = at;
-    last.durationMs = Math.max(last.durationMs, Math.round(e.durationMs));
-    last.count = (last.count ?? 1) + 1;
-    return;
-  }
-  events.push({ at, source: e.source, channel: e.channel, durationMs: Math.round(e.durationMs), detail: e.detail, count: 1 });
+  const event: FreezeEvent = {
+    at,
+    source: e.source,
+    channel: e.channel,
+    durationMs: Math.round(e.durationMs),
+    detail: e.detail,
+    count: 1,
+    wallLateMs: e.wallLateMs,
+    windowMs: e.windowMs,
+    activeMs: e.activeMs,
+    busyFraction: e.busyFraction,
+  };
+  // Preserve every detection. The old implementation merged any later
+  // `starved` row even when healthy ticks occurred between them, making ×N
+  // look like one continuous freeze and discarding its real timestamps.
+  events.push(event);
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
+  recordPersistentFreeze(event);
 }
 
 /** Most recent first. */
@@ -95,12 +110,15 @@ const inFlight = new Map<number, InFlightEntry>();
 
 export function enterInFlight(channel: string): number {
   const id = nextId++;
-  inFlight.set(id, { channel, at: Date.now() });
+  const at = Date.now();
+  inFlight.set(id, { channel, at });
+  enterOffloopHandler(id, channel, at);
   return id;
 }
 
 export function exitInFlight(id: number): void {
   inFlight.delete(id);
+  exitOffloopHandler(id);
 }
 
 /** The most-recently-entered still-active handler (insertion-ordered Map). */
@@ -165,7 +183,9 @@ export function attributeStall(
 
 function detailFor(source: StallAttribution['source']): string | undefined {
   if (source === 'event-loop') return 'GC / sync non-IPC turn (main loop was busy)';
-  if (source === 'starved') return 'main loop idle during stall — CPU contention / await / OS deschedule, not a main-thread block';
+  if (source === 'starved') {
+    return 'Node/libuv tick delayed while mostly idle — native Electron/Chromium work, OS contention/deschedule, or suspend; no JS handler attributed';
+  }
   return undefined;
 }
 
@@ -179,10 +199,13 @@ let eluPrev: ReturnType<typeof performance.eventLoopUtilization> | undefined;
 /** Start the main-loop stall watchdog. Idempotent. */
 export function startFreezeWatchdog(): void {
   if (timer) return;
+  const persistedRun = currentPersistentPerfRun();
+  if (persistedRun) startOffloopWatchdog(persistedRun.path);
   expectedWall = Date.now() + WATCHDOG_INTERVAL_MS;
   lastMono = performance.now();
   eluPrev = typeof performance.eventLoopUtilization === 'function' ? performance.eventLoopUtilization() : undefined;
   timer = setInterval(() => {
+    heartbeatOffloopWatchdog();
     const now = Date.now();
     const mono = performance.now();
     const wallLate = now - expectedWall;
@@ -203,9 +226,30 @@ export function startFreezeWatchdog(): void {
     // Wall jumped far beyond the monotonic elapsed → NTP step / wake-from-sleep.
     if (wallLate - monoLate > 5_000) return;
     const { source, channel } = attributeStall(monoLate, activeMs, windowMs, now, currentInFlight(), lastExit);
-    recordFreeze({ at: now, source, channel, durationMs: Math.round(monoLate), detail: detailFor(source) });
+    recordFreeze({
+      at: now,
+      source,
+      channel,
+      durationMs: Math.round(monoLate),
+      detail: detailFor(source),
+      wallLateMs: Math.round(wallLate),
+      windowMs: Math.round(windowMs),
+      activeMs: Math.round(activeMs * 10) / 10,
+      busyFraction: Math.round((activeMs / Math.max(1, windowMs)) * 1000) / 1000,
+    });
   }, WATCHDOG_INTERVAL_MS);
   timer.unref?.();
+}
+
+export function stopFreezeWatchdog(): Promise<void> {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    expectedWall = 0;
+    lastMono = 0;
+    eluPrev = undefined;
+  }
+  return stopOffloopWatchdog();
 }
 
 export function freezeThresholdMs(): number {

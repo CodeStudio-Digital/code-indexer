@@ -62,9 +62,9 @@ export default defineConfig({
   server: {
     host: true,
     port: dashboardPort,
-    // Fall through to the next free port instead of hard-failing if the
-    // chosen port is taken (e.g. a second dashboard on the same machine).
-    strictPort: false,
+    // Electron loads this exact port. Moving to the next free port would leave
+    // the launcher waiting on 7317 while Vite serves a different endpoint.
+    strictPort: true,
     proxy: {
       // CodeStudio Cloud Worker (auth/billing/sharing/feedback) — dev bridge only.
       '/v1': {

@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildSync } from 'esbuild';
 import { brandDevBinary } from './brand-dev-binary.js';
+import { waitForDevServer } from './src/wait-for-dev-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,18 +64,32 @@ buildSync({
 //    We spawn it directly so stdout/stderr stream through the parent.
 const electronBin: string = nodeRequire('electron');
 
+const dashboardUrl =
+  process.env.MCP_ELECTRON_DEV_URL ??
+  `http://localhost:${process.env.MCP_DASHBOARD_PORT ?? 7317}`;
+const configuredWaitMs = Number(process.env.MCP_ELECTRON_DEV_WAIT_MS ?? 120_000);
+const dashboardWaitMs = Number.isFinite(configuredWaitMs) && configuredWaitMs >= 0
+  ? configuredWaitMs
+  : 120_000;
+
 // 3) On Windows, stamp the prebuilt electron.exe so Task Manager shows
 //    "CodeStudio" instead of "Electron" (idempotent + fail-open). Must run
 //    before the spawn below, otherwise the launched process locks the binary.
 await brandDevBinary(electronBin);
 
+// Vite and this launcher are sibling processes under `concurrently`; being
+// spawned first does not mean the renderer socket is accepting connections.
+// Wait for the exact URL Electron will load so a slow cold start cannot abort
+// the entire main-process bootstrap with ERR_CONNECTION_REFUSED.
+console.log(`[electron] waiting for dashboard at ${dashboardUrl}`);
+await waitForDevServer(dashboardUrl, { timeoutMs: dashboardWaitMs });
+console.log(`[electron] dashboard ready at ${dashboardUrl}`);
+
 const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   stdio: 'inherit',
   env: {
     ...process.env,
-    MCP_ELECTRON_DEV_URL:
-      process.env.MCP_ELECTRON_DEV_URL ??
-      `http://localhost:${process.env.MCP_DASHBOARD_PORT ?? 7317}`,
+    MCP_ELECTRON_DEV_URL: dashboardUrl,
     // IPC-first: Hono HTTP listener stays OFF unless the operator
     // explicitly opts in (MCP_DEV_HTTP=1) to debug with curl. The
     // dashboard talks to the backend via window.electronAPI.api.* —

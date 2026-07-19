@@ -128,6 +128,7 @@ const WRITE_VERBS = new Set<string>([
   'projectGit.mergeContinue',
   'projectGit.mergeAbort',
   'projectGit.push',
+  'projectGit.createPullRequest',
   'projectGit.fetch',
   'projectGit.pull',
   'projectGit.updateBranch',

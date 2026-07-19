@@ -114,6 +114,14 @@ interface PendingFlow {
 const pending = new Map<string, PendingFlow>();
 const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 
+export function disposeOpenAiOAuthResources(): void {
+  for (const flow of pending.values()) {
+    try { flow.server.closeAllConnections?.(); } catch { /* old Node */ }
+    try { flow.server.close(); } catch { /* already closed */ }
+  }
+  pending.clear();
+}
+
 function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

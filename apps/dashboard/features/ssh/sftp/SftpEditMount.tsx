@@ -22,6 +22,9 @@ import { toast } from '../../../components/ui/prompt-dialog.js';
 import { registerSftpEdit } from '../../workspace/editor/sftp-edit-session.js';
 import { sftpWriteFile } from '../api.js';
 import { useSharedMonacoTheme } from '../../../lib/monaco-theme.js';
+import { setupMonaco } from '../../../lib/monaco-setup.js';
+
+setupMonaco();
 
 const baseName = (p: string): string => p.split('/').pop() || p;
 

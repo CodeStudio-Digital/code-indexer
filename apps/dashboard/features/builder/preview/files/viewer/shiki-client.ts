@@ -1,4 +1,4 @@
-import { createHighlighter, type HighlighterGeneric, type BundledLanguage, type BundledTheme } from 'shiki';
+import type { HighlighterGeneric, BundledLanguage, BundledTheme } from 'shiki';
 
 /**
  * Lazy singleton Shiki highlighter. We keep one instance per page and
@@ -14,10 +14,10 @@ const loadedLangs = new Set<string>();
 
 export async function getHighlighter() {
   if (!promise) {
-    promise = createHighlighter({
+    promise = import('shiki').then(({ createHighlighter }) => createHighlighter({
       themes: [...THEMES],
       langs: [],
-    });
+    }));
   }
   return promise;
 }

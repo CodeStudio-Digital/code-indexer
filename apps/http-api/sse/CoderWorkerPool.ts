@@ -17,13 +17,11 @@
  *   - `sendUserMessage(id, content)` — pushes a follow-up message to
  *     the worker's runner. Handles the is-waiting / interject
  *     decision tree on the worker side via a single RPC.
- *   - `isWaitingForInput(id)` — proxy read of the runner's waiting
- *     flag, used by the legacy decision tree on main.
+ *   - `isWaitingForInput(id)` — proxy read of the worker runner's waiting flag.
  *   - `interruptWait(id)`, `abort(id)` — runner control proxies.
  *
- * The pool reuses the same `OrchestratorRegistry`-style fallback
- * pattern: routes call `runtime.activeRuns.get(id)`, the pool injects
- * itself transparently when the env flag `MCP_CODER_WORKER=1` is on.
+ * The pool is the only owner of coder runners. Routes may use the compatibility
+ * `runtime.activeRuns` facade, but that facade delegates exclusively here.
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
 import {
@@ -37,6 +35,7 @@ import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import { getGlobalResearchBrowser, type ResearchBrowserInvoke } from '@mcp/code-agent/tools/browser/index.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
 import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
@@ -88,6 +87,8 @@ export interface CoderWorkerPoolOpts {
   workerFile: string;
   /** Extra execArgv (reserved). */
   workerExecArgv?: string[];
+  /** Old-generation heap ceiling for each coder isolate. Default 2048 MB. */
+  workerMaxOldGenerationSizeMb?: number;
   /** Dev-mode TS entry the bootstrap dynamic-imports. */
   workerDevTsEntry?: string;
   /** SQLite path passed to each worker. */
@@ -171,6 +172,8 @@ export interface RunFreshOpts {
   describeImages?: boolean;
   /** Auto-activate the `preview` DevTools tier (builder/dev-server sessions). */
   previewAvailable?: boolean;
+  /** Auto-activate the isolated public-web tier for the research preset. */
+  browserAvailable?: boolean;
   /** Skill IDs the user pre-selected in the sidebar; forwarded to runCoder. */
   selectedSkillIds?: string[];
   /**
@@ -473,6 +476,13 @@ export class CoderWorkerPool {
     await entry.host.requireBridge().request('setToolPermissionMode', { mode });
   }
 
+  /** Replace the provider of a live worker-side runner after persistence updates. */
+  async swapProvider(sessionId: number, provider: string, model: string): Promise<void> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return;
+    await entry.host.requireBridge().request('swapProvider', { provider, model });
+  }
+
   async abort(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
@@ -548,6 +558,9 @@ export class CoderWorkerPool {
         tsEntry: this.opts.workerDevTsEntry,
       },
       execArgv: this.opts.workerExecArgv,
+      resourceLimits: {
+        maxOldGenerationSizeMb: this.opts.workerMaxOldGenerationSizeMb ?? 2_048,
+      },
       maxRestarts: 3,
       defaultRequestTimeoutMs: 120_000,
       onCrash: (err) => {
@@ -613,7 +626,8 @@ export class CoderWorkerPool {
     const bootMs = Date.now() - startedAt;
     this.log(
       'info',
-      `[coder-pool] worker spawned session=${sessionId} (boot=${bootMs}ms)`,
+      `[coder-pool] worker spawned session=${sessionId} ` +
+        `(boot=${bootMs}ms, old-space=${this.opts.workerMaxOldGenerationSizeMb ?? 2_048}MB)`,
     );
 
     // Mirror the worker's bus to a main-side bus so existing
@@ -709,6 +723,17 @@ export class CoderWorkerPool {
       const svc = getGlobalPreviewDevtools();
       const requestId = (payload as { requestId?: unknown })?.requestId;
       if (svc?.cancel && typeof requestId === 'string') await svc.cancel(requestId);
+      return { ok: true };
+    });
+    const offResearchBrowser = bridge.handle('researchBrowser', async (payload) => {
+      const browser = getGlobalResearchBrowser();
+      if (!browser) throw new Error('Research browser backend is unavailable.');
+      return browser.invoke(payload as ResearchBrowserInvoke);
+    });
+    const offResearchBrowserCancel = bridge.handle('researchBrowserCancel', async (payload) => {
+      const browser = getGlobalResearchBrowser();
+      const requestId = (payload as { requestId?: unknown })?.requestId;
+      if (browser?.cancel && typeof requestId === 'string') await browser.cancel(requestId);
       return { ok: true };
     });
     // Vision fallback — routes image→text describe to the main-process vision
@@ -856,6 +881,8 @@ export class CoderWorkerPool {
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
         try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
+        try { offResearchBrowser(); } catch { /* best-effort */ }
+        try { offResearchBrowserCancel(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offSpriteHost(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }

@@ -10,7 +10,7 @@ import { adaptChannelToIPty } from '../ssh-pty-adapter.js';
 import { generateSshKey } from '../ssh-keys.js';
 import { TunnelManager } from '../ssh-tunnels.js';
 import { SftpManager } from '../ssh-sftp.js';
-import type { SshConnectionManager } from '../ssh-connection-manager.js';
+import { SshConnectionManager } from '../ssh-connection-manager.js';
 
 describe('KnownHostsStore (TOFU)', () => {
   let dir: string;
@@ -169,6 +169,51 @@ describe('SftpManager editor save', () => {
     expect(uploaded).toEqual(Buffer.from(content, 'utf8'));
 
     service.close(spec.hostId);
+    expect(client.listenerCount('close')).toBe(0);
+    expect(manager.release).toHaveBeenCalledTimes(1);
+    service.close(spec.hostId);
+    expect(manager.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SSH lifecycle cleanup', () => {
+  it('disconnectAll closes every pooled client and clears the pool', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-ssh-lifecycle-'));
+    try {
+      const manager = new SshConnectionManager(new KnownHostsStore(join(dir, 'known_hosts.json')));
+      const first = Object.assign(new EventEmitter(), { end: vi.fn() });
+      const second = Object.assign(new EventEmitter(), { end: vi.fn() });
+      const pool = (manager as unknown as { conns: Map<string, unknown> }).conns;
+      pool.set('a', { client: first, refCount: 1, sig: 'a' });
+      pool.set('b', { client: second, refCount: 2, sig: 'b' });
+
+      manager.disconnectAll();
+
+      expect(first.end).toHaveBeenCalledOnce();
+      expect(second.end).toHaveBeenCalledOnce();
+      expect(pool.size).toBe(0);
+      manager.disconnectAll();
+      expect(first.end).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stopAll drains tunnel handles and releases their SSH references once', () => {
+    const manager = { release: vi.fn() } as unknown as SshConnectionManager;
+    const tunnels = new TunnelManager(manager);
+    const stopA = vi.fn();
+    const stopB = vi.fn();
+    const active = (tunnels as unknown as { tunnels: Map<string, unknown> }).tunnels;
+    active.set('a', { hostId: 'h1', meta: { id: 'a' }, stop: stopA });
+    active.set('b', { hostId: 'h2', meta: { id: 'b' }, stop: stopB });
+
+    tunnels.stopAll();
+
+    expect(stopA).toHaveBeenCalledOnce();
+    expect(stopB).toHaveBeenCalledOnce();
+    expect(manager.release).toHaveBeenCalledTimes(2);
+    expect(active.size).toBe(0);
   });
 });
 

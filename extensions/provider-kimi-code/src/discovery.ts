@@ -6,6 +6,7 @@ import type {
 import { KIMI_CODE_BASE_URL } from './auth.js';
 
 export const KIMI_CODE_SEED_MODELS: ProviderDiscoveredModel[] = [
+  seedK3(),
   seed('kimi-k2.6', 'Kimi K2.6', 'Kimi Code default model for coding/v1 with thinking, image input, and video input.'),
   seed('kimi-k2.5', 'Kimi K2.5', 'Kimi Code K2.5 model with thinking, image input, and video input.'),
   seed('kimi-k2-thinking', 'Kimi K2 Thinking', 'Kimi Code thinking model. always_thinking.'),
@@ -43,13 +44,14 @@ export function kimiCodeSeedUpsertModels(): ProviderDiscoveredModel[] {
   return KIMI_CODE_SEED_MODELS.map((model) => ({ ...model }));
 }
 
-function mapKimiCodeModel(model: KimiCodeModelInfo): ProviderDiscoveredModel {
+export function mapKimiCodeModel(model: KimiCodeModelInfo): ProviderDiscoveredModel {
   const id = model.id;
   const hasK2Defaults = /^kimi-k2/i.test(id);
+  const hasK3Defaults = /^k3$/i.test(id);
   const alwaysThinking = /thinking/i.test(id);
-  const canReason = Boolean(model.supports_reasoning) || hasK2Defaults || alwaysThinking;
-  const supportsImage = Boolean(model.supports_image_in) || hasK2Defaults;
-  const supportsVideo = Boolean(model.supports_video_in) || hasK2Defaults;
+  const canReason = Boolean(model.supports_reasoning) || hasK2Defaults || hasK3Defaults || alwaysThinking;
+  const supportsImage = Boolean(model.supports_image_in) || hasK2Defaults || hasK3Defaults;
+  const supportsVideo = Boolean(model.supports_video_in) || hasK2Defaults || hasK3Defaults;
   const modalities = ['text'];
   if (supportsImage) modalities.push('image');
   if (supportsVideo) modalities.push('video');
@@ -64,15 +66,36 @@ function mapKimiCodeModel(model: KimiCodeModelInfo): ProviderDiscoveredModel {
       supportsVideo ? 'video input' : null,
       alwaysThinking ? 'always_thinking' : null,
     ].filter(Boolean).join('; '),
-    context_window: model.context_length ?? (hasK2Defaults ? 262_144 : null),
-    default_max_tokens: hasK2Defaults ? 32_000 : null,
+    context_window: model.context_length ?? (hasK3Defaults ? 1_048_576 : hasK2Defaults ? 262_144 : null),
+    default_max_tokens: hasK2Defaults || hasK3Defaults ? 32_000 : null,
     can_reason: canReason,
     supports_attachments: supportsImage || supportsVideo,
-    default_reasoning_level: canReason ? 'high' : null,
-    supported_reasoning_levels: canReason ? ['low', 'medium', 'high'] : null,
+    default_reasoning_level: hasK3Defaults ? 'max' : canReason ? 'high' : null,
+    supported_reasoning_levels: hasK3Defaults
+      ? ['low', 'high', 'max']
+      : canReason ? ['low', 'medium', 'high'] : null,
     visibility: 'list',
     supported_in_api: true,
     input_modalities: modalities,
+    source: 'live',
+  };
+}
+
+function seedK3(): ProviderDiscoveredModel {
+  return {
+    model_id: 'k3',
+    name: 'Kimi K3',
+    display_name: 'Kimi K3',
+    description: 'Kimi flagship coding model with low, high, and max reasoning effort.',
+    context_window: 1_048_576,
+    default_max_tokens: 32_000,
+    can_reason: true,
+    supports_attachments: true,
+    supported_reasoning_levels: ['low', 'high', 'max'],
+    default_reasoning_level: 'max',
+    input_modalities: ['text', 'image', 'video'],
+    visibility: 'list',
+    supported_in_api: true,
     source: 'live',
   };
 }

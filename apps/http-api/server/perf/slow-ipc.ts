@@ -14,10 +14,12 @@
  * metrics) measures the full round-trip, so `renderer − backend ≈ IPC
  * overhead`.
  *
- * All in-memory, reset via POST /api/admin/perf/slow-ipc/reset.
+ * The live aggregate is resettable in memory; each qualifying call is also
+ * appended to the persistent perf journal for post-crash reconstruction.
  */
 
 import { enterInFlight, exitInFlight, noteExit } from './freeze-log.js';
+import { recordPersistentSlowCall } from './persistent-diagnostics.js';
 
 export interface SlowCallRow {
   channel: string;
@@ -58,10 +60,11 @@ export function recordSlowCall(channel: string, ms: number): void {
     table.set(channel, row);
   }
   const rounded = Math.round(ms);
+  const at = Date.now();
   row.count++;
   row.totalMs += rounded;
   row.maxMs = Math.max(row.maxMs, rounded);
-  row.lastAt = Date.now();
+  row.lastAt = at;
   // Bounded ring: append until full, then overwrite oldest.
   if (row.samples.length < SAMPLE_CAP) {
     row.samples.push(rounded);
@@ -69,6 +72,7 @@ export function recordSlowCall(channel: string, ms: number): void {
     row.samples[row.head] = rounded;
     row.head = (row.head + 1) % SAMPLE_CAP;
   }
+  recordPersistentSlowCall(channel, rounded, at);
 }
 
 /** Nearest-rank percentile over an ascending-sorted array. */

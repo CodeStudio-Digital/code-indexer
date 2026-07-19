@@ -118,9 +118,12 @@ import { buildWorkerMemoryShims } from './memory-shims.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
+import { resolveDocSearchTimeoutMs } from './doc-search-timeout.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { installWorkerQualityWiring } from './quality-wiring.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
+import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
+import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
 
 interface CompanyWorkerData {
   companySessionId: number;
@@ -154,7 +157,7 @@ hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
 // Quality classifiers — worker_threads don't share module state, so the
 // quality globals installed in server.ts (main thread) are NULL here. The
 // main Company CoderRunner instances fire completed-round assessment from INSIDE
-// this worker when MCP_CODER_WORKER=1, so without this re-install Telemetry
+// this worker, so without this re-install Telemetry
 // → Quality stays empty for company/subordinate runs. See quality-wiring.ts
 // for the gaps vs main.
 const qualityController = installWorkerQualityWiring(
@@ -200,7 +203,7 @@ const docSearchShim: DocSearchBackend = {
     bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
       'docSearch',
       input,
-      { timeoutMs: 60_000 },
+      { timeoutMs: resolveDocSearchTimeoutMs() },
     ),
   // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
   readChunk: async (input) =>
@@ -671,6 +674,8 @@ bridge.handle('supervisor.rpc', (payload) => {
 });
 
 bridge.handle('stop', async () => {
+  try { disposeExecCommandSessions('company-worker-stop'); } catch { /* best-effort */ }
+  try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // Tear down the orchestrator. `abortAll` aborts any live runners
   // and marks the bus ended. The bus.end mirror above will fire.
   try {

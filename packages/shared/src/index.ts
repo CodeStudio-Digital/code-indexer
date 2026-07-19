@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './editor-settings.js';
 export * from './version.js';
+export * from './research-browser.js';
 export * from './utils/config.js';
 export * from './utils/data-paths.js';
 export * from './utils/token-budget.js';
@@ -12,6 +13,7 @@ export * from './utils/native-fetch.js';
 export * from './attachments/policy.js';
 export * from './editor/completion-prefilter.js';
 export * from './git/push-with-auto-update.js';
+export * from './git/managed-git.js';
 export * from './sse/SSEFramer.js';
 export * from './sse/BackoffStrategy.js';
 export * from './sse/ReconnectingSSEClient.js';

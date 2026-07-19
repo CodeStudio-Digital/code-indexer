@@ -32,6 +32,27 @@ function mapApiError(c: Context, err: unknown) {
   throw err;
 }
 
+type SemanticJob = ReturnType<ServerDeps['semanticStore']['listJobs']>[number];
+
+function currentProjectReindexJob(
+  projectId: number,
+  jobs: SemanticJob[],
+  generationIds: Set<number>,
+): SemanticJob | null {
+  const openStatuses = new Set(['pending', 'running', 'paused']);
+  const markerNamespace = `semantic:reindex:code:p${projectId}`;
+  const belongsToCurrentGeneration = (job: SemanticJob) =>
+    job.namespace === codeNamespace(projectId)
+    && (job.kind === 'backfill' || job.kind === 'build')
+    && (job.generation_id === null ? generationIds.size === 0 : generationIds.has(job.generation_id));
+  return jobs.find((job) =>
+    job.namespace === markerNamespace && openStatuses.has(job.status))
+    ?? jobs.find((job) => belongsToCurrentGeneration(job) && openStatuses.has(job.status))
+    ?? jobs.find((job) => job.namespace === markerNamespace)
+    ?? jobs.find(belongsToCurrentGeneration)
+    ?? null;
+}
+
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   const h = createProjectsHandlers(deps);
 
@@ -131,6 +152,54 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       if (err instanceof ApiError && err.status === 404) return notFound(c);
       return mapApiError(c, err);
     }
+  });
+
+  /** Admin summary in one transport call. The previous UI issued one IPC per
+   * project; each request repeated namespace SQL and synchronous file stats,
+   * creating a long main-loop queue on larger workspaces. */
+  app.get('/api/projects/semantic/status', async (c) => {
+    const projects = await h.list(undefined, createContext());
+    const profiles = deps.semanticStore.listProfiles();
+    const allJobs = deps.semanticStore.listJobs();
+    const namespacesByProject = projects.map((project) => [
+      codeNamespace(project.id),
+      snapshotNamespace(project.id),
+      projectMemoryNamespace(project.id),
+      ...deps.docStore.listCollectionsForProject(project.id)
+        .map((collection) => docNamespace(collection.id)),
+    ]);
+    const allNamespaceStatuses = deps.localVectorRouter.getNamespaceStatuses(
+      namespacesByProject.flat(),
+    );
+    let statusCursor = 0;
+    const results = projects.map((project, index) => {
+      const nextStatusCursor = statusCursor + namespacesByProject[index].length;
+      const namespaces = allNamespaceStatuses.slice(statusCursor, nextStatusCursor);
+      statusCursor = nextStatusCursor;
+      const relevantNamespaces = new Set([
+        ...namespacesByProject[index],
+        `semantic:reindex:code:p${project.id}`,
+      ]);
+      const jobs = allJobs
+        .filter((job) => relevantNamespaces.has(job.namespace))
+        .sort((left, right) => right.id - left.id);
+      const codeStatus = namespaces.find((row) => row.namespace === codeNamespace(project.id));
+      const generationIds = new Set([
+        codeStatus?.active?.generationId,
+        codeStatus?.building?.generationId,
+      ].filter((value): value is number => typeof value === 'number'));
+      return {
+        project,
+        status: {
+          project_id: project.id,
+          profiles,
+          namespaces,
+          reindex_job: currentProjectReindexJob(project.id, jobs, generationIds),
+        },
+        error: null,
+      };
+    });
+    return c.json({ results });
   });
 
   app.post('/api/projects/:id/activation', async (c) => {
@@ -252,22 +321,11 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       generation.id === codeStatus?.active?.generationId) ?? null;
     const buildingGeneration = generations.find((generation) =>
       generation.id === codeStatus?.building?.generationId) ?? null;
-    const openStatuses = new Set(['pending', 'running', 'paused']);
-    const markerNamespace = `semantic:reindex:code:p${id}`;
-    const codeJobBelongsToCurrentGeneration = (job: (typeof jobs)[number]) =>
-      job.namespace === codeNamespace(id)
-      && (job.kind === 'backfill' || job.kind === 'build')
-      && (job.generation_id === null ? generationIds.size === 0 : generationIds.has(job.generation_id));
     // Older/global builds did not create a project control marker. Expose the
     // underlying code backfill in that case so the same project surface can
     // resume it instead of pretending there is no recoverable job. Jobs from
     // retired generations must never shadow a healthy active generation.
-    const reindexJob = jobs.find((job) =>
-      job.namespace === markerNamespace && openStatuses.has(job.status))
-      ?? jobs.find((job) => codeJobBelongsToCurrentGeneration(job) && openStatuses.has(job.status))
-      ?? jobs.find((job) => job.namespace === markerNamespace)
-      ?? jobs.find(codeJobBelongsToCurrentGeneration)
-      ?? null;
+    const reindexJob = currentProjectReindexJob(id, jobs, generationIds);
     return c.json({
       project_id: id,
       profiles: deps.semanticStore.listProfiles(),

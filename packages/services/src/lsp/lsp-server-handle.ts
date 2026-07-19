@@ -6,6 +6,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { setPriority } from 'node:os';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { LspRpcClient } from './lsp-client.js';
 import { LspRequestScheduler, type LspRequestPriority, type LspRequestSchedulerStats } from './lsp-request-scheduler.js';
 import {
@@ -91,8 +92,10 @@ export class LspServerHandle {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      detached: process.platform !== 'win32',
       shell: false, // absolute command path — never .cmd shims here
     });
+    const untrackProcess = trackProcessTree(this.child.pid);
     if (spec.priority !== undefined && this.child.pid !== undefined) {
       try {
         setPriority(this.child.pid, spec.priority);
@@ -110,12 +113,14 @@ export class LspServerHandle {
       this.stderrTail = (this.stderrTail + chunk.toString('utf-8')).slice(-STDERR_RING);
     });
     this.child.on('exit', (code) => {
+      untrackProcess();
       const wasStopped = this.state === 'stopped';
       this.state = wasStopped ? 'stopped' : 'crashed';
       this.rpc.dispose(`lsp server exited (code ${code})`);
       if (!wasStopped) hooks.onExit(code);
     });
     this.child.on('error', (err) => {
+      untrackProcess();
       hooks.log(`spawn error: ${err.message}`);
       this.state = 'crashed';
       this.rpc.dispose(`lsp server spawn error: ${err.message}`);
@@ -502,6 +507,8 @@ export class LspServerHandle {
       this.child.once('exit', () => { clearTimeout(t); resolve(true); });
     });
     if (!exited) {
+      // LSP stop/restart runs during ordinary editor activity. Do not invoke a
+      // system-wide Windows tree enumeration on this hot path.
       try { this.child.kill('SIGKILL'); } catch { /* already gone */ }
     }
     this.rpc.dispose('lsp server stopped');

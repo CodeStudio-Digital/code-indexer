@@ -123,8 +123,12 @@ export function setCompanyWorkerDocDeps(
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
     projectMemory?: CoderWorkerDocDeps['projectMemory'];
     investigationSemantic?: CoderWorkerDocDeps['investigationSemantic'];
-  },
+  } | null,
 ): void {
+  if (!deps) {
+    for (const key of Object.keys(docDeps) as Array<keyof CoderWorkerDocDeps>) delete docDeps[key];
+    return;
+  }
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;

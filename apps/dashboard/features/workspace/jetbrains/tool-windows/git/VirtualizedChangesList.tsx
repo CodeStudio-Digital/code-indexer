@@ -47,6 +47,32 @@ type ChangeListRow =
 
 const GROUP_ORDER: readonly SelectableChangeGroup[] = ['staged', 'unstaged', 'untracked'];
 
+const GROUP_VISUALS: Record<SelectableChangeGroup, {
+  header: string;
+  title: string;
+  dot: string;
+  row: string;
+}> = {
+  staged: {
+    header: 'border-l-2 border-l-emerald-500/80 bg-emerald-500/[0.09] dark:bg-emerald-500/[0.07]',
+    title: 'text-emerald-700 dark:text-emerald-300',
+    dot: 'bg-emerald-500',
+    row: 'border-l-2 border-l-emerald-500/25',
+  },
+  unstaged: {
+    header: 'border-l-2 border-l-amber-500/80 bg-amber-500/[0.09] dark:bg-amber-500/[0.07]',
+    title: 'text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500',
+    row: 'border-l-2 border-l-amber-500/25',
+  },
+  untracked: {
+    header: 'border-l-2 border-l-sky-500/80 bg-sky-500/[0.09] dark:bg-sky-500/[0.07]',
+    title: 'text-sky-700 dark:text-sky-300',
+    dot: 'bg-sky-500',
+    row: 'border-l-2 border-l-sky-500/25',
+  },
+};
+
 function rowKey(row: ChangeListRow): string {
   if (row.kind === 'empty') return 'empty';
   if (row.kind === 'warning') return row.key;
@@ -108,7 +134,13 @@ export function VirtualizedChangesList({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) => rows[index]?.kind === 'empty' ? 88 : rows[index]?.kind === 'warning' ? 38 : 28,
+    estimateSize: (index) => rows[index]?.kind === 'empty'
+      ? 88
+      : rows[index]?.kind === 'warning'
+        ? 38
+        : rows[index]?.kind === 'section'
+          ? 32
+          : 28,
     getItemKey: (index) => rowKey(rows[index]!),
     overscan: 12,
   });
@@ -130,6 +162,7 @@ export function VirtualizedChangesList({
   const renderSection = (group: SelectableChangeGroup) => {
     const state = selectionStates[group];
     const paths = selectedPaths[group];
+    const visual = GROUP_VISUALS[group];
     const title = group === 'staged'
       ? t('git.staged', { count: groups.staged.length })
       : group === 'unstaged'
@@ -141,7 +174,7 @@ export function VirtualizedChangesList({
         ? t(state === 'all' ? 'git.deselectAllChanges' : 'git.selectAllChanges')
         : t(state === 'all' ? 'git.deselectAllUntracked' : 'git.selectAllUntracked');
 
-    const actions = group === 'staged' ? (
+    const bulkActions = group === 'staged' ? (
       <HeaderActionButton
         icon={Minus}
         title={t('git.unstageSelected', { count: paths.length })}
@@ -188,14 +221,23 @@ export function VirtualizedChangesList({
         open={openSections[group]}
         onToggle={() => toggleSection(group)}
         sticky={false}
+        className={cn('min-h-8 border-y shadow-sm', visual.header)}
+        titleClassName={visual.title}
         headerControl={(
-          <SelectionCheckbox
-            state={state}
-            label={selectionLabel}
-            onToggle={() => toggleGroup(group)}
-          />
+          <span className={cn('mx-0.5 h-1.5 w-1.5 shrink-0 rounded-full', visual.dot)} aria-hidden="true" />
         )}
-        actions={actions}
+        actions={(
+          <div className="flex items-center gap-1">
+            <div className="mr-0.5 flex h-5 items-center border-r border-border/70 pr-1.5">
+              <SelectionCheckbox
+                state={state}
+                label={selectionLabel}
+                onToggle={() => toggleGroup(group)}
+              />
+            </div>
+            {bulkActions}
+          </div>
+        )}
       />
     );
   };
@@ -217,6 +259,7 @@ export function VirtualizedChangesList({
     );
     return (
       <FileRow
+        group={group}
         file={file}
         onClick={group === 'untracked' ? undefined : () => void showDiff(file)}
         selection={{
@@ -230,51 +273,61 @@ export function VirtualizedChangesList({
   };
 
   return (
-    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-      <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
-        {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index]!;
-          return (
-            <div
-              key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              className="will-change-transform"
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                transform: `translateY(${item.start}px)`,
-              }}
-            >
-              {row.kind === 'empty' && (
-                <div className="grid place-items-center gap-2 px-6 py-10 text-center text-muted-foreground">
-                  <Check className="h-5 w-5 opacity-50" />
-                  <p className="text-[11.5px]">{t('git.cleanTree')}</p>
-                </div>
-              )}
-              {row.kind === 'section' && renderSection(row.group)}
-              {row.kind === 'file' && renderFile(row.group, row.file)}
-              {row.kind === 'warning' && (
-                <div className="mx-2 my-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
-                  {row.message}
-                </div>
-              )}
-            </div>
-          );
-        })}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-1.5 border-b bg-muted/25 px-2.5 py-1 text-[9.5px] text-muted-foreground">
+        <span className="grid h-3.5 w-3.5 shrink-0 place-items-center rounded-[3px] border border-primary/60 bg-primary/10 text-primary" aria-hidden="true">
+          <Check className="h-2.5 w-2.5" />
+        </span>
+        <span className="truncate" title={t('git.selectionHint')}>{t('git.selectionHint')}</span>
+      </div>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const row = rows[item.index]!;
+            return (
+              <div
+                key={item.key}
+                data-index={item.index}
+                ref={virtualizer.measureElement}
+                className="will-change-transform"
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${item.start}px)`,
+                }}
+              >
+                {row.kind === 'empty' && (
+                  <div className="grid place-items-center gap-2 px-6 py-10 text-center text-muted-foreground">
+                    <Check className="h-5 w-5 opacity-50" />
+                    <p className="text-[11.5px]">{t('git.cleanTree')}</p>
+                  </div>
+                )}
+                {row.kind === 'section' && renderSection(row.group)}
+                {row.kind === 'file' && renderFile(row.group, row.file)}
+                {row.kind === 'warning' && (
+                  <div className="mx-2 my-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
+                    {row.message}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
 function FileRow({
+  group,
   file,
   actions,
   onClick,
   selection,
 }: {
+  group: SelectableChangeGroup;
   file: GitStatusFile;
   actions: ReactNode;
   onClick?: () => void;
@@ -287,7 +340,8 @@ function FileRow({
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       className={cn(
-        'group flex items-center gap-2 border-b px-2.5 py-1 text-[11.5px] transition-colors hover:bg-muted/40',
+        'group flex items-center gap-2 border-b bg-background/70 py-1 pl-5 pr-2.5 text-[11.5px] transition-colors hover:bg-muted/40',
+        GROUP_VISUALS[group].row,
         onClick && 'cursor-pointer',
       )}
       onClick={onClick}

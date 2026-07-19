@@ -27,7 +27,12 @@ export type {
 export {
   SandboxManager,
   getSandboxManager,
+  tryGetSandboxManager,
   setSandboxManagerForTests,
+  setCompanySandboxStore,
+  setCompanySandboxServicesStore,
+  setCompanySessionEnvStore,
+  setQaPreviewConfig,
   cleanupSessionPersistence,
 } from './sandbox-manager.js';
 export type { SandboxManagerOptions, ProvisionRequest } from './sandbox-manager.js';

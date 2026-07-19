@@ -17,6 +17,7 @@ describe('semantic hygiene', () => {
     dirs.push(dir);
     const db = new CodeIndexDB(join(dir, 'index.db'));
     const project = db.createProject('p', dir);
+    const emptyProject = db.createProject('empty', join(dir, 'empty'));
     const semantic = new SemanticStore(db.raw());
     try {
       const generation = semantic.createGeneration({
@@ -51,6 +52,13 @@ describe('semantic hygiene', () => {
         vector_count: 1,
         orphan_semantic_items: 1,
       });
+      expect(db.getProjectsHygiene().find((candidate) => candidate.id === emptyProject.id))
+        .toMatchObject({
+          vector_count: 0,
+          orphan_semantic_items: 0,
+          stale_runs: 0,
+          mixed_case_languages: 0,
+        });
       expect(db.getOrphanSemanticItems(project.id)).toEqual([
         expect.objectContaining({
           namespace: `code:p${project.id}`,

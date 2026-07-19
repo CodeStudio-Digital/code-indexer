@@ -12,6 +12,9 @@ import type {
   commandDeclSchema,
   themeDeclSchema,
   editorActionDeclSchema,
+  editorDocumentSelectorSchema,
+  editorGutterDeclSchema,
+  editorGutterLineMatcherSchema,
   statusBarItemDeclSchema,
   runConfigurationDeclSchema,
   projectModuleDeclSchema,
@@ -32,6 +35,9 @@ export type ToolWindowDecl = z.infer<typeof toolWindowDeclSchema>;
 export type CommandDecl = z.infer<typeof commandDeclSchema>;
 export type ThemeDecl = z.infer<typeof themeDeclSchema>;
 export type EditorActionDecl = z.infer<typeof editorActionDeclSchema>;
+export type EditorDocumentSelectorDecl = z.infer<typeof editorDocumentSelectorSchema>;
+export type EditorGutterDecl = z.infer<typeof editorGutterDeclSchema>;
+export type EditorGutterLineMatcherDecl = z.infer<typeof editorGutterLineMatcherSchema>;
 export type StatusBarItemDecl = z.infer<typeof statusBarItemDeclSchema>;
 export type RunConfigurationDecl = z.infer<typeof runConfigurationDeclSchema>;
 export type ProjectModuleDecl = z.infer<typeof projectModuleDeclSchema>;

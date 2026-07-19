@@ -329,7 +329,15 @@ export class SandboxManager {
 let singleton: SandboxManager | null = null;
 
 export function getSandboxManager(): SandboxManager {
-  if (!singleton) singleton = new SandboxManager();
+  // The application entrypoints own SIGINT/SIGTERM and call destroyAll as one
+  // phase of their coordinated shutdown. Installing another process.exit()
+  // handler here races worker/database flushes and can cut them off early.
+  if (!singleton) singleton = new SandboxManager({ skipShutdownHandlers: true });
+  return singleton;
+}
+
+/** Read the singleton during shutdown without creating timers/handlers late. */
+export function tryGetSandboxManager(): SandboxManager | null {
   return singleton;
 }
 

@@ -112,6 +112,7 @@ export async function startOAuthLoopback(honoApp?: Hono): Promise<LoopbackResult
 export function stopOAuthLoopback(): void {
   clearAutoStop();
   authCapture = null;
+  currentHonoApp = null;
   if (!server) return;
   server.close();
   server = null;

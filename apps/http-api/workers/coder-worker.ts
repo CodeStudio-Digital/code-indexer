@@ -65,6 +65,12 @@ import {
   type PreviewInvoke,
 } from '../../../packages/code-agent/src/tools/preview/index.js';
 import {
+  researchBrowserRpcTimeoutMs,
+  setGlobalResearchBrowser,
+  type IResearchBrowser,
+  type ResearchBrowserInvoke,
+} from '../../../packages/code-agent/src/tools/browser/index.js';
+import {
   setGlobalVisionDescriber,
   type IVisionDescriber,
   type VisionDescribeRequest,
@@ -115,6 +121,7 @@ import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
+import { resolveDocSearchTimeoutMs } from './doc-search-timeout.js';
 import { PluginWorkerHost } from '../sse/PluginWorkerHost.js';
 import { buildPluginTools, type EnabledPlugin } from '../../../packages/plugin-host/src/plugin-tool-bridge.js';
 import { buildHostInvoke, type HostInvoke } from '../../../packages/plugin-host/src/host-invoke.js';
@@ -123,6 +130,8 @@ import type { PluginPermissions } from '../../../packages/plugin-sdk/src/contrib
 import { InstalledPluginStore } from '../../../packages/store/src/installed-plugin-store.js';
 import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-store.js';
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
+import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
+import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
 import { installWorkerQualityWiring } from './quality-wiring.js';
 
 interface CoderWorkerData {
@@ -204,7 +213,7 @@ hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
 // Quality classifiers — worker_threads don't share module state, so the
 // quality globals installed in server.ts (main thread) are NULL here. The
 // CoderRunner that fires the completed-round assessment runs INSIDE this worker
-// when MCP_CODER_WORKER=1, so without this re-install the Telemetry →
+// in this worker, so without this re-install the Telemetry →
 // Quality dashboard stays empty. See quality-wiring.ts for the gaps vs main.
 const qualityController = installWorkerQualityWiring(
   dbConn.handle,
@@ -242,10 +251,9 @@ const docSearchShim: DocSearchBackend = {
     bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
       'docSearch',
       input,
-      // 60s covers a worst-case rewrite+rerank round-trip on a slow
-      // provider; the in-process path has no timeout at all but workers
-      // need a ceiling to surface stuck-RPC bugs instead of hanging.
-      { timeoutMs: 60_000 },
+      // Embedding + reranking can legitimately outlive the former fixed 60s
+      // ceiling on a slow provider. Keep a configurable finite RPC guard.
+      { timeoutMs: resolveDocSearchTimeoutMs() },
     ),
   // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
   readChunk: async (input) =>
@@ -325,6 +333,16 @@ const previewShim: IPreviewDevtools = {
 };
 setGlobalPreviewDevtools(previewShim);
 
+const researchBrowserShim: IResearchBrowser = {
+  invoke: (request: ResearchBrowserInvoke) => (
+    bridge.request('researchBrowser', request, { timeoutMs: researchBrowserRpcTimeoutMs(request) })
+  ),
+  cancel: (requestId: string) => {
+    void bridge.request('researchBrowserCancel', { requestId }, { timeoutMs: 2_000 }).catch(() => undefined);
+  },
+};
+setGlobalResearchBrowser(researchBrowserShim);
+
 // ─── Vision describer shim: route image→text describe to the main process ──
 // The real describer (resolves the code-agent/vision Pipelines role + runs a
 // one-off chat) lives in the main process. The vision-fallback transform calls
@@ -363,7 +381,7 @@ setGlobalSpriteStudioHost(spriteHostShim);
 // The canonical MemoryRetriever + RunEndMemory (embeddings, hybrid dedup,
 // distiller binding) live once in server/deps.ts. The in-process chat path
 // passes them into runCoder directly (routes/coder/stream.ts); this worker
-// forwards the same calls over the bridge so MCP_CODER_WORKER=1 keeps
+// forwards the same calls over the bridge so worker isolation keeps
 // per-turn memory injection and run-end distillation instead of silently
 // dropping them. Degrades to no-op when main has no memory deps wired.
 const memoryShims = buildWorkerMemoryShims(bridge);
@@ -744,6 +762,7 @@ interface RunFreshPayload {
   modelSupportsVision?: boolean;
   describeImages?: boolean;
   previewAvailable?: boolean;
+  browserAvailable?: boolean;
   selectedSkillIds?: string[];
   /** Structured IDE context (active file / selections / open tabs) for this send. */
   ideContext?: import('@mcp/code-agent/core/ide-context.js').IdeContext;
@@ -807,6 +826,7 @@ bridge.handle('runFresh', async (payload) => {
       modelSupportsVision: opts.modelSupportsVision,
       describeImages: opts.describeImages,
       previewAvailable: opts.previewAvailable,
+      browserAvailable: opts.browserAvailable,
       selectedSkillIds: opts.selectedSkillIds,
       ideContext: opts.ideContext,
       preflight: opts.preflight,
@@ -953,6 +973,16 @@ bridge.handle('setToolPermissionMode', (payload) => {
   return { ok: true };
 });
 
+bridge.handle('swapProvider', async (payload) => {
+  recordRpc('swapProvider');
+  const { provider, model } = payload as { provider: string; model: string };
+  const runner = activeRun?.runner;
+  if (!runner) return { ok: false, reason: 'no_runner' };
+  const { createChatProviderAsync } = await import('@mcp/services/providers/factory.js');
+  runner.swapProvider(await createChatProviderAsync(provider, model));
+  return { ok: true };
+});
+
 bridge.handle('abort', () => {
   recordRpc('abort');
   try {
@@ -972,6 +1002,8 @@ bridge.handle('abort', () => {
 
 bridge.handle('stop', async () => {
   recordRpc('stop');
+  try { disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
+  try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // `stop` is the EVICT/shutdown path (WorkerHost.evict → dispose). It must
   // NOT abort an interactive pause: `runner.abort()` resolves waitForUserInput
   // with {aborted:true}, the tool returns "aborted by user", and the eventual

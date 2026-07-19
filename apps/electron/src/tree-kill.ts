@@ -11,34 +11,12 @@
  *     spawned `detached` (its own group leader); fall back to the single
  *     pid otherwise. SIGKILL — this is the last-resort force path.
  *
- * Best-effort and synchronous-capable (usable from a `process.on('exit')`
- * handler, where no async work can run). Never throws.
+ * Best-effort and asynchronous on Windows so a suspended helper cannot block
+ * Electron's main event loop. The exit-only synchronous batch lives in the
+ * shared helper and is used by ChildProcessRegistry.killAllSync().
  */
 
-import { spawnSync } from 'node:child_process';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 
-export function killTree(pid: number | undefined | null): void {
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return;
-  try {
-    if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      return;
-    }
-    // POSIX: try the process group first (negative pid). Throws ESRCH if the
-    // child wasn't a group leader — fall back to the single process.
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        /* already gone */
-      }
-    }
-  } catch {
-    /* taskkill missing / pid already reaped — best-effort */
-  }
-}
+/** @deprecated Prefer the shared helper directly outside Electron. */
+export const killTree = killProcessTree;

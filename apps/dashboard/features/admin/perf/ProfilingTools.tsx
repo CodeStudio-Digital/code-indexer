@@ -9,8 +9,9 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
-import { ensureRendererVitals, stopRendererVitals, getLongTasks, clearLongTasks } from './renderer-vitals.js';
+import { getLongTasks, clearLongTasks } from './renderer-vitals.js';
 import { RouteStartupPanel } from './RouteStartupPanel.js';
+import { PersistentDiagnosticsPanel } from './PersistentDiagnosticsPanel.js';
 
 interface SlowCallRow {
   channel: string;
@@ -25,7 +26,7 @@ interface SlowCallRow {
 
 interface FreezeRow {
   at: number;
-  source: 'handler' | 'event-loop' | 'renderer' | 'starved';
+  source: 'handler' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
   durationMs: number;
   culprit: string;
 }
@@ -60,7 +61,7 @@ export function ProfilingTools() {
       const r = await fetch(`${apiBaseUrl()}/api/admin/perf/freezes`);
       if (r.ok) {
         const body = (await r.json()) as {
-          events: Array<{ source: 'handler' | 'event-loop' | 'starved'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
+          events: Array<{ source: 'handler' | 'event-loop' | 'starved' | 'offloop'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
         };
         mainRows = body.events.map((e) => ({
           at: e.at,
@@ -80,7 +81,6 @@ export function ProfilingTools() {
   };
 
   useEffect(() => {
-    ensureRendererVitals();
     void loadSlowCalls();
     void loadFreezes();
     const timer = setInterval(() => {
@@ -90,7 +90,6 @@ export function ProfilingTools() {
     }, 10_000);
     return () => {
       clearInterval(timer);
-      stopRendererVitals();
     };
   }, []);
 
@@ -200,6 +199,8 @@ export function ProfilingTools() {
         </div>
       )}
       {error && <div className="text-xs text-destructive">{error}</div>}
+
+      <PersistentDiagnosticsPanel />
 
       <RouteStartupPanel />
 

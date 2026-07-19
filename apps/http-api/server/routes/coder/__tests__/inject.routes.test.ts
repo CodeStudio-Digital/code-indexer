@@ -1,36 +1,45 @@
 /**
- * Unit test for POST /api/coder/sessions/:id/inject (legacy in-process path).
+ * Unit test for POST /api/coder/sessions/:id/inject (mandatory worker path).
  *
  * Mounts the coder interaction routes with STUB sessionStore + runtime (no DB,
- * no worker) so it's ABI-free. `coderWorkerEnabled()` is false without
- * MCP_CODER_WORKER=1, so the route takes the legacy branch and pokes the stub
- * runner directly. Validates the three outcomes the dashboard queue depends on:
+ * no real worker) so it's ABI-free. The worker pool RPC surface is mocked.
+ * Validates the three outcomes the dashboard queue depends on:
  * injected (live run), noActiveRun (no run → client falls back to /messages),
  * and the empty-content 400.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+
+const { poolMock } = vi.hoisted(() => ({
+  poolMock: {
+    getBus: vi.fn(),
+    isWaitingForInput: vi.fn(),
+    interruptWait: vi.fn(),
+    pushUserMessage: vi.fn(),
+  },
+}));
+
+vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
+  getCoderWorkerPool: () => poolMock,
+}));
+
 import { mountCoderInteractionRoutes } from '../interaction.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
-function liveBus(runner: unknown) {
+function liveBus() {
   // Shape `emitWorkerLog`/`publish` touch (nextSeq/buffer/subscribers) plus the
-  // fields /inject reads (ended/runner).
-  return { ended: false, nextSeq: 0, buffer: [] as unknown[], subscribers: new Set(), eventSinks: [] as unknown[], runner };
+  // fields /inject and worker logging read.
+  return { ended: false, nextSeq: 0, buffer: [] as unknown[], subscribers: new Set(), eventSinks: [] as unknown[] };
 }
 
 function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
   const appendCalls: Array<{ id: number; msg: unknown }> = [];
-  const pushCalls: Array<{ content: string; extras: unknown }> = [];
-  let interruptCalls = 0;
-  const runner = {
-    isWaitingForInput: () => !!opts.waiting,
-    interruptWait: () => { interruptCalls++; return true; },
-    pushUserMessage: (content: string, extras: unknown) => { pushCalls.push({ content, extras }); },
-  };
-  const activeRuns = new Map<number, unknown>();
-  if (opts.live !== false) activeRuns.set(1, liveBus(runner));
+  const bus = opts.live === false ? null : liveBus();
+  poolMock.getBus.mockImplementation((id: number) => id === 1 ? bus : null);
+  poolMock.isWaitingForInput.mockResolvedValue(!!opts.waiting);
+  poolMock.interruptWait.mockResolvedValue(undefined);
+  poolMock.pushUserMessage.mockResolvedValue(undefined);
 
   const deps = {
     sessionStore: {
@@ -41,7 +50,7 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
     },
   } as unknown as ServerDeps;
   const runtime = {
-    activeRuns,
+    activeRuns: new Map(),
     findPendingInteraction: () => null,
     findDanglingToolUse: () => null,
   } as unknown as CoderRuntime;
@@ -56,8 +65,10 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
       body: JSON.stringify(body),
     });
 
-  return { inject, appendCalls, pushCalls, get interruptCalls() { return interruptCalls; } };
+  return { inject, appendCalls };
 }
+
+beforeEach(() => vi.clearAllMocks());
 
 describe('coder POST /sessions/:id/inject', () => {
   it('enqueues into a live run and returns injected', async () => {
@@ -66,10 +77,7 @@ describe('coder POST /sessions/:id/inject', () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ injected: true });
     expect(h.appendCalls).toHaveLength(1);
-    expect(h.pushCalls).toEqual([{
-      content: 'follow-up',
-      extras: { selectedSkillIds: ['s1'], roundMessageId: 42 },
-    }]);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(1, 'follow-up', ['s1'], 42);
   });
 
   it('returns noActiveRun when there is no live run', async () => {
@@ -78,28 +86,28 @@ describe('coder POST /sessions/:id/inject', () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ noActiveRun: true });
     expect(h.appendCalls).toHaveLength(0);
-    expect(h.pushCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
   });
 
   it('400s on empty content', async () => {
     const h = setup({ live: true });
     const r = await h.inject(1, { content: '   ' });
     expect(r.status).toBe(400);
-    expect(h.pushCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
   });
 
   it('returns waiting when blocked and interject is not set', async () => {
     const h = setup({ live: true, waiting: true });
     const r = await h.inject(1, { content: 'hi' });
     expect(await r.json()).toEqual({ waiting: true });
-    expect(h.pushCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
   });
 
   it('interrupts the wait and injects when interject is set', async () => {
     const h = setup({ live: true, waiting: true });
     const r = await h.inject(1, { content: 'hi', interject: true });
     expect(await r.json()).toEqual({ injected: true });
-    expect(h.interruptCalls).toBe(1);
-    expect(h.pushCalls).toHaveLength(1);
+    expect(poolMock.interruptWait).toHaveBeenCalledWith(1);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
   });
 });

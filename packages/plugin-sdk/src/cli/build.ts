@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parsePluginManifest } from '../manifest/schema.js';
+import { parseAppManifest, parsePluginManifest } from '../manifest/schema.js';
 import { buildPluginUi } from './build-ui.js';
 import type { PluginModule } from '../contributions/types.js';
 
@@ -15,11 +15,23 @@ export interface BuildResult {
   uiFiles: string[];
 }
 
+export interface BuildPluginOptions {
+  /**
+   * Allow host-only provider capabilities when building plugins shipped as
+   * first-party bundled extensions. Third-party builds remain strict by
+   * default; callers must opt into this lane explicitly.
+   */
+  trustProviders?: boolean;
+}
+
 /**
  * Bundle `src/plugin.ts` → `dist/plugin.js` (single ESM file) and extract the
  * declarative `.app.json` by importing the built module (dropping handlers).
  */
-export async function buildPlugin(dir: string): Promise<BuildResult> {
+export async function buildPlugin(
+  dir: string,
+  options: BuildPluginOptions = {},
+): Promise<BuildResult> {
   const root = resolve(dir);
   parsePluginManifest(JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8')));
 
@@ -54,7 +66,7 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
   // importing the ESM output.
   await writeFile(
     join(root, 'dist', 'package.json'),
-    `${JSON.stringify({ type: 'module', mcpPluginRuntimeFormat: 4 }, null, 2)}\n`,
+    `${JSON.stringify({ type: 'module', mcpPluginRuntimeFormat: 5 }, null, 2)}\n`,
   );
 
   const mod = (await import(`${pathToFileURL(bundle).href}?t=${Date.now()}`)) as {
@@ -102,8 +114,11 @@ export async function buildPlugin(dir: string): Promise<BuildResult> {
     // above as providerRuntime when the bundle exports adapter(s).
     ...(pm.providers && pm.providers.length ? { providers: pm.providers } : {}),
   };
+  const validatedApp = parseAppManifest(app, {
+    trustProviders: options.trustProviders === true,
+  });
   const appJson = join(root, '.app.json');
-  await writeFile(appJson, `${JSON.stringify(app, null, 2)}\n`);
+  await writeFile(appJson, `${JSON.stringify(validatedApp, null, 2)}\n`);
   const ui = await buildPluginUi(root);
   return { bundle, appJson, tools: pm.tools.length, uiFiles: ui.written };
 }

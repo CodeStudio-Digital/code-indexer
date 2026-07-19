@@ -38,7 +38,7 @@ function fallbackDecrypt(blob: string): string {
 }
 
 /** Inject the real (safeStorage-backed) decryptor. Call once from Electron boot. */
-export function setMainSecretDecryptor(fn: SecretDecryptor): void {
+export function setMainSecretDecryptor(fn: SecretDecryptor | null): void {
   mainDecryptor = fn;
 }
 

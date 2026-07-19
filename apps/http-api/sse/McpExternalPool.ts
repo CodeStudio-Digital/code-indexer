@@ -77,10 +77,8 @@ export interface McpExternalSnapshot {
 const HEALTH_CHECK_INTERVAL_MS = 60_000;
 
 /**
- * The pool itself implements `IMcpServerManager` so the in-process
- * stream path (`apps/http-api/server/routes/coder/stream.ts`, used
- * when `MCP_CODER_WORKER` is OFF) can hand the pool straight to
- * `runCoder()`. The interface methods all delegate to the underlying
+ * The pool itself implements `IMcpServerManager` for non-worker consumers.
+ * The interface methods all delegate to the underlying
  * `McpServerManager`, so the pool is essentially a long-lived wrapper.
  *
  * Worker-thread callers (where worker_threads can't share heap) talk
@@ -94,6 +92,7 @@ export class McpExternalPool implements IMcpServerManager {
   private snapshot: McpExternalSnapshot | null = null;
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private booted = false;
+  private shuttingDown = false;
 
   constructor(opts: {
     dbPath: string;
@@ -110,10 +109,12 @@ export class McpExternalPool implements IMcpServerManager {
    * path can re-trigger boot without restarting the process.
    */
   async boot(): Promise<void> {
+    if (this.shuttingDown) return;
     if (this.booted) return this.refresh();
     const store = new McpServerStore(this.dbPath);
     try {
       const enabled = store.listServers({ enabled: true });
+      if (this.shuttingDown) return;
       if (enabled.length === 0) {
         this.snapshot = this.emptySnapshot();
         this.booted = true;
@@ -126,6 +127,10 @@ export class McpExternalPool implements IMcpServerManager {
           .join(', ')}`,
       );
       await this.manager.connectAll(enabled);
+      if (this.shuttingDown) {
+        await this.manager.closeAll();
+        return;
+      }
       this.snapshot = await this.buildSnapshot(enabled);
       this.booted = true;
       this.scheduleHealthCheck();
@@ -145,6 +150,7 @@ export class McpExternalPool implements IMcpServerManager {
    * servers) can come later if boot becomes a bottleneck.
    */
   async refresh(): Promise<void> {
+    if (this.shuttingDown) return;
     await this.manager.closeAll();
     this.booted = false;
     await this.boot();
@@ -198,9 +204,8 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   // ── IMcpServerManager surface ─────────────────────────────────────
-  // These let the in-process stream.ts hand the pool straight to
-  // runCoder() so MCP_CODER_WORKER=0 reuses the same warm transports
-  // worker-mode does. Workers continue to go through the RPC proxy.
+  // Non-worker consumers reuse the same warm transports. Coder workers
+  // continue to go through the RPC proxy.
 
   /**
    * No-op in pool mode — boot() already connected everything during
@@ -275,6 +280,7 @@ export class McpExternalPool implements IMcpServerManager {
    * process shutdown. Idempotent.
    */
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer);
       this.healthCheckTimer = null;
@@ -361,6 +367,7 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   private scheduleHealthCheck(): void {
+    if (this.shuttingDown) return;
     if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
     this.healthCheckTimer = setInterval(() => {
       // Fire-and-forget; we don't await so a long listTools doesn't
@@ -380,7 +387,7 @@ export class McpExternalPool implements IMcpServerManager {
    * rebuild the snapshot.
    */
   private async refreshSnapshotFromHealthCheck(): Promise<void> {
-    if (!this.booted) return;
+    if (!this.booted || this.shuttingDown) return;
     const store = new McpServerStore(this.dbPath);
     try {
       const enabled = store.listServers({ enabled: true });

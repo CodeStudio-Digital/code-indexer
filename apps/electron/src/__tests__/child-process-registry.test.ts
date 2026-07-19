@@ -1,9 +1,21 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+
+const { killTreeMock, killProcessTreesSyncMock } = vi.hoisted(() => ({
+  killTreeMock: vi.fn(() => Promise.resolve()),
+  killProcessTreesSyncMock: vi.fn(),
+}));
+
+vi.mock('../tree-kill.js', () => ({ killTree: killTreeMock }));
+vi.mock('@mcp/shared/utils/process-tree.js', () => ({
+  killProcessTreesSync: killProcessTreesSyncMock,
+}));
+
 import { childRegistry } from '../child-process-registry.js';
 
 // Entries carry no `pid`, so the registry's force tree-kill (taskkill /
 // process.kill) is a no-op — these tests exercise the bookkeeping + ordering
 // only, never a real OS signal.
+beforeEach(() => vi.clearAllMocks());
 afterEach(() => childRegistry.killAllSync());
 
 describe('ChildProcessRegistry', () => {
@@ -24,6 +36,14 @@ describe('ChildProcessRegistry', () => {
     expect(childRegistry.list()).toHaveLength(0);
   });
 
+  it('killAll awaits the asynchronous tree-kill queue', async () => {
+    childRegistry.register({ pid: 51_001, kind: 'process', label: 'tree', kill: () => undefined });
+
+    await childRegistry.killAll({ graceMs: 50 });
+
+    expect(killTreeMock).toHaveBeenCalledWith(51_001);
+  });
+
   it('killAll is bounded by graceMs and tolerates a throwing/hanging kill', async () => {
     let cleanRan = false;
     childRegistry.register({ kind: 'pty', label: 'throws', kill: () => { throw new Error('boom'); } });
@@ -36,9 +56,10 @@ describe('ChildProcessRegistry', () => {
 
   it('killAllSync fires kill(force=true) and clears synchronously', () => {
     let forced: boolean | null = null;
-    childRegistry.register({ kind: 'pty', label: 's', kill: (f) => { forced = f; } });
+    childRegistry.register({ pid: 51_002, kind: 'pty', label: 's', kill: (f) => { forced = f; } });
     childRegistry.killAllSync();
     expect(forced).toBe(true);
+    expect(killProcessTreesSyncMock).toHaveBeenCalledWith([51_002]);
     expect(childRegistry.list()).toHaveLength(0);
   });
 });

@@ -213,7 +213,7 @@ export function QualityPanel() {
             {assessments.length === 0 ? <div className="text-xs italic text-muted-foreground">{t('telemetry:quality.delivery.empty')}</div> : assessments.map(([id, rows]) => (
               <div key={id} className="rounded border p-2 text-xs">
                 <div className="mb-1 flex gap-2 text-muted-foreground">
-                  <span>{rows[0]?.created_at}</span><span>round {rows[0]?.round_message_id ?? '—'}</span><span className="ml-auto font-mono">{id.slice(0, 8)}</span>
+                  <span>{rows[0]?.created_at}</span><span>{t('telemetry:quality.delivery.round')} {rows[0]?.round_message_id ?? '—'}</span><span className="ml-auto font-mono">{id.slice(0, 8)}</span>
                 </div>
                 {rows.map((row) => (
                   <div key={row.id} className="flex items-center gap-2 py-0.5">

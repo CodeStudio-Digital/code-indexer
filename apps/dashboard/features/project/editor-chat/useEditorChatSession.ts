@@ -60,7 +60,7 @@ interface EditorChatSessionOptions {
   initialReasoningEffort?: string | null;
 }
 
-const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'app_db', 'api', 'diagram', 'builder']);
+const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'research', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'app_db', 'api', 'diagram', 'builder']);
 
 function isValidAgentId(agent: unknown): agent is AgentId {
   return typeof agent === 'string'

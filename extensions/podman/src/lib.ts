@@ -7,7 +7,32 @@
  * Note: the plugin exec surface returns only `{ stdout, code }` (no stderr),
  * so failures surface as a non-zero exit with whatever the CLI put on stdout.
  */
-import type { PluginToolContext, PluginToolResult } from '@mcp/plugin-sdk/define.js';
+import type {
+  PluginEditorInvocationContext,
+  PluginToolContext,
+  PluginToolResult,
+} from '@mcp/plugin-sdk/define.js';
+
+export const CONTAINERFILE_EDITOR_PATTERNS = [
+  'Dockerfile',
+  'Dockerfile.*',
+  'Containerfile',
+  'Containerfile.*',
+];
+
+export const COMPOSE_EDITOR_PATTERNS = [
+  'compose.yaml',
+  'compose.yml',
+  'compose.*.yaml',
+  'compose.*.yml',
+  'docker-compose.yml',
+  'docker-compose.yaml',
+  'docker-compose.*.yml',
+  'docker-compose.*.yaml',
+];
+
+const CONTAINERFILE_BASENAME = /^(?:dockerfile|containerfile)(?:\.[^.]+)*$/i;
+const COMPOSE_BASENAME = /^(?:docker-)?compose(?:\.[^.]+)*\.ya?ml$/i;
 
 /** Run `podman <args>` in the project dir. Throws only if exec isn't granted. */
 export async function podman(
@@ -86,6 +111,52 @@ export function optBool(args: Record<string, unknown>, key: string): boolean {
   if (typeof raw === 'boolean') return raw;
   if (typeof raw === 'string') return raw === 'true' || raw === '1' || raw === 'yes';
   return false;
+}
+
+/** Editor metadata injected by an IDE editorAction gutter invocation. */
+export function editorContext(args: Record<string, unknown>): PluginEditorInvocationContext | null {
+  const raw = args._editor;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.path !== 'string' || typeof value.lineNumber !== 'number') return null;
+  return {
+    path: value.path,
+    languageId: typeof value.languageId === 'string' ? value.languageId : 'plaintext',
+    lineNumber: value.lineNumber,
+    column: typeof value.column === 'number' ? value.column : 1,
+    lineText: typeof value.lineText === 'string' ? value.lineText : '',
+  };
+}
+
+/** Normalize a project-relative path without allowing host-path escapes. */
+export function projectRelativePath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw || /[\u0000-\u001f\u007f]/.test(raw)) return null;
+  const normalized = raw.replace(/\\/g, '/');
+  // Reject POSIX/UNC/root-relative paths and Windows drive absolute/relative paths.
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) return null;
+  const segments = normalized.split('/');
+  if (segments.includes('..')) return null;
+  const clean = segments.filter((segment) => segment && segment !== '.');
+  return clean.length ? clean.join('/') : null;
+}
+
+function artifactPath(value: unknown, basename: RegExp): string | null {
+  const path = projectRelativePath(value);
+  if (!path) return null;
+  const name = path.split('/').pop() ?? '';
+  return basename.test(name) ? path : null;
+}
+
+/** A safe relative Dockerfile/Containerfile path, including dotted variants. */
+export function containerfilePath(value: unknown): string | null {
+  return artifactPath(value, CONTAINERFILE_BASENAME);
+}
+
+/** A safe relative Compose path, including multiple dotted qualifiers. */
+export function composeFilePath(value: unknown): string | null {
+  return artifactPath(value, COMPOSE_BASENAME);
 }
 
 /**

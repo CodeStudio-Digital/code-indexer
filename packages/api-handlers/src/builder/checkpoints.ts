@@ -7,6 +7,7 @@
  * ApiErrors so the routes map them to clean HTTP responses.
  */
 import { execFile } from 'node:child_process';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { ApiError } from '@mcp/api-bus';
 import {
   createBuilderCheckpoint,
@@ -21,13 +22,21 @@ const DIFF_MAX_CHARS = 800_000;
 
 function git(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'git',
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-      (err, stdout, stderr) =>
-        resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }),
+      {
+        cwd,
+        timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+      (err, stdout, stderr) => {
+        untrack();
+        resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+      },
     );
+    const untrack = trackProcessTree(child.pid);
   });
 }
 

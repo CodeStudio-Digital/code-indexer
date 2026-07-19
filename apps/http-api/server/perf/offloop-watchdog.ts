@@ -1,0 +1,194 @@
+/**
+ * Worker-thread watchdog for hangs that never return to the main event loop.
+ *
+ * The regular freeze watchdog is intentionally richer, but its timer cannot
+ * fire while the Electron/main Node loop is blocked. This tiny worker receives
+ * heartbeats plus handler lifecycle metadata and writes only when heartbeats
+ * stop. It never receives request payloads or secrets.
+ */
+import { Worker } from 'node:worker_threads';
+import { join } from 'node:path';
+
+const WORKER_SOURCE = String.raw`
+const { parentPort, workerData } = require('node:worker_threads');
+const { closeSync, fdatasyncSync, openSync, writeSync } = require('node:fs');
+const { performance } = require('node:perf_hooks');
+
+const handlers = new Map();
+let lastHeartbeat = performance.now();
+let lastReport = 0;
+let closed = false;
+let fd = null;
+
+try {
+  fd = openSync(workerData.outputPath, 'a', 0o600);
+} catch (error) {
+  parentPort.postMessage({ type: 'error', message: error && error.message ? error.message : String(error) });
+}
+
+function append(record) {
+  if (fd == null) return;
+  try {
+    const buffer = Buffer.from(JSON.stringify(record) + '\n', 'utf8');
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = writeSync(fd, buffer, offset, buffer.length - offset, null);
+      if (written <= 0) throw new Error('off-loop watchdog write made no progress');
+      offset += written;
+    }
+    // This runs outside the measured loop. Make the rare hang record durable
+    // immediately so a Task Manager kill right afterward still leaves it.
+    fdatasyncSync(fd);
+  } catch (error) {
+    parentPort.postMessage({ type: 'error', message: error && error.message ? error.message : String(error) });
+  }
+}
+
+function recentHandlers() {
+  return Array.from(handlers.values()).slice(-5).reverse();
+}
+
+const timer = setInterval(() => {
+  const nowMono = performance.now();
+  const lateMs = nowMono - lastHeartbeat;
+  if (lateMs < workerData.thresholdMs) {
+    lastReport = 0;
+    return;
+  }
+  if (lastReport && nowMono - lastReport < workerData.repeatMs) return;
+  lastReport = nowMono;
+  const suspects = recentHandlers();
+  const suspect = suspects[0];
+  const at = Date.now();
+  append({
+    type: 'freeze',
+    at,
+    event: {
+      at,
+      source: 'offloop',
+      channel: suspect && suspect.channel,
+      durationMs: Math.round(lateMs),
+      wallLateMs: Math.round(lateMs),
+      windowMs: Math.round(lateMs),
+      detail: suspect
+        ? 'Worker watchdog: main heartbeat stopped; latest in-flight handler persisted before the block'
+        : 'Worker watchdog: main heartbeat stopped; no in-flight HTTP/IPC handler was known',
+      suspects,
+      detectedBy: 'worker-thread',
+    },
+  });
+}, workerData.pollMs);
+
+parentPort.on('message', (message) => {
+  if (!message || closed) return;
+  if (message.type === 'heartbeat') {
+    lastHeartbeat = performance.now();
+    return;
+  }
+  if (message.type === 'enter') {
+    handlers.set(message.id, { channel: message.channel, startedAt: message.at });
+    return;
+  }
+  if (message.type === 'exit') {
+    handlers.delete(message.id);
+    return;
+  }
+  if (message.type === 'stop') {
+    closed = true;
+    clearInterval(timer);
+    if (fd != null) {
+      try { fdatasyncSync(fd); } catch {}
+      try { closeSync(fd); } catch {}
+      fd = null;
+    }
+    parentPort.postMessage({ type: 'stopped' });
+    parentPort.close();
+  }
+});
+`;
+
+export interface OffloopWatchdogOptions {
+  thresholdMs?: number;
+  pollMs?: number;
+  repeatMs?: number;
+}
+
+let watchdog: Worker | null = null;
+let warned = false;
+
+function warnOnce(message: string): void {
+  if (warned) return;
+  warned = true;
+  console.warn(`[offloop-watchdog] ${message}`);
+}
+
+export function startOffloopWatchdog(runDir: string, options: OffloopWatchdogOptions = {}): void {
+  if (watchdog) return;
+  warned = false;
+  const worker = new Worker(WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      outputPath: join(runDir, 'offloop-watchdog.jsonl'),
+      // The in-loop watchdog covers ordinary 200–1000ms stalls with richer
+      // ELU attribution. This worker is the catastrophic-hang backstop.
+      thresholdMs: Math.max(100, options.thresholdMs ?? 1_500),
+      pollMs: Math.max(25, options.pollMs ?? 100),
+      repeatMs: Math.max(250, options.repeatMs ?? 5_000),
+    },
+  });
+  watchdog = worker;
+  worker.on('message', (message: unknown) => {
+    if (message && typeof message === 'object' && (message as { type?: unknown }).type === 'error') {
+      warnOnce(String((message as { message?: unknown }).message ?? 'worker write failed'));
+    }
+  });
+  worker.on('error', (error) => warnOnce(error.message));
+  worker.on('exit', (code) => {
+    if (watchdog === worker) watchdog = null;
+    if (code !== 0) warnOnce(`worker exited with code ${code}`);
+  });
+  worker.unref();
+  heartbeatOffloopWatchdog();
+}
+
+function post(message: object): void {
+  try { watchdog?.postMessage(message); } catch (error) {
+    warnOnce(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export function heartbeatOffloopWatchdog(): void {
+  post({ type: 'heartbeat' });
+}
+
+export function enterOffloopHandler(id: number, channel: string, at: number): void {
+  post({ type: 'enter', id, channel, at });
+}
+
+export function exitOffloopHandler(id: number): void {
+  post({ type: 'exit', id });
+}
+
+export function stopOffloopWatchdog(): Promise<void> {
+  const worker = watchdog;
+  watchdog = null;
+  if (!worker) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      void worker.terminate().finally(finish);
+    }, 1_000);
+    timeout.unref?.();
+    worker.once('message', (message: unknown) => {
+      if (message && typeof message === 'object' && (message as { type?: unknown }).type === 'stopped') finish();
+    });
+    worker.once('exit', finish);
+    try { worker.postMessage({ type: 'stop' }); } catch { finish(); }
+  });
+}

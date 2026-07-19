@@ -9,12 +9,14 @@
  *   - per-worker-thread heap via the pools' `memStats()` RPC (best-effort)
  *   - the MemoryLedger subsystem snapshot
  *
- * History is an in-memory ring buffer (240 samples ≈ 60 min) — diagnostics
- * don't need to survive a restart, so no SQLite and no migration.
+ * The hot history remains an in-memory ring (240 samples ≈ 60 min), while each
+ * completed sample is also appended to the crash-resilient JSONL journal so a
+ * forced app close does not erase the evidence.
  */
 import v8 from 'node:v8';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { getMemoryLedger, type LedgerEntry } from './memory-ledger.js';
+import { recordPersistentPerfSample } from './persistent-diagnostics.js';
 import type { WorkerMemStats } from '../../workers/perf-stats.js';
 
 /** Subset of Electron's ProcessMetric we consume (KB working set!). */
@@ -40,6 +42,7 @@ export interface PerfSample {
     rssMB: number;
     heapUsedMB: number;
     heapTotalMB: number;
+    heapLimitMB: number;
     externalMB: number;
     arrayBuffersMB: number;
     /** rss − heapTotal: native allocations (ONNX weights, SQLite, buffers). */
@@ -161,6 +164,7 @@ export class PerfSampler {
         rssMB: mb(mem.rss),
         heapUsedMB: mb(mem.heapUsed),
         heapTotalMB: mb(mem.heapTotal),
+        heapLimitMB: mb(heap.heap_size_limit),
         externalMB: mb(mem.external),
         arrayBuffersMB: mb(mem.arrayBuffers),
         nativeMB: Math.max(0, mb(mem.rss - heap.total_heap_size)),
@@ -184,6 +188,7 @@ export class PerfSampler {
       loopP99Ms: sample.main.loopP99Ms,
     });
     if (this.history.length > RING_SIZE) this.history.splice(0, this.history.length - RING_SIZE);
+    recordPersistentPerfSample(sample);
     return sample;
   }
 }
@@ -200,4 +205,9 @@ export function startPerfSampler(sources: PerfSamplerSources): PerfSampler {
 
 export function getPerfSampler(): PerfSampler | null {
   return singleton;
+}
+
+export function stopPerfSampler(): void {
+  singleton?.stop();
+  singleton = null;
 }

@@ -16,6 +16,7 @@ const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1';
 
 // = KIMI_CODE_SEED_MODELS.map((m) => m.model_id)
 const KIMI_CODE_SEED_MODEL_IDS = [
+  'k3',
   'kimi-k2.6',
   'kimi-k2.5',
   'kimi-k2-thinking',
@@ -33,6 +34,7 @@ export const kimiCodeSpec: ProviderSpec = {
   defaultModel: 'kimi-k2.6',
   defaultModels: KIMI_CODE_SEED_MODEL_IDS,
   pricing: {
+    'k3': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2.6': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2.5': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2-thinking': { inputPer1M: 0.0, outputPer1M: 0.0 },

@@ -1,4 +1,3 @@
-import { pathToFileURL } from 'node:url';
 import type {
   ChatProvider,
   ChatRequest,
@@ -10,6 +9,7 @@ import type {
   ProviderSpec,
   ResolvedCreds,
 } from '@mcp/provider-sdk';
+import { importPluginBundle } from './import-plugin-bundle.js';
 
 export interface ProviderAdapterRuntimeRef {
   namespace: string;
@@ -51,7 +51,7 @@ async function importAdapters(ref: ProviderAdapterRuntimeRef): Promise<ProviderR
   const cacheKey = `${ref.namespace}:${ref.file}`;
   const cached = adapterCache.get(cacheKey);
   if (cached) return cached;
-  const promise = import(pathToFileURL(ref.file).href).then((mod: ProviderAdapterModule) => {
+  const promise = importPluginBundle<ProviderAdapterModule>(ref.file).then((mod) => {
     const adapters = [
       ...(mod.providerAdapter ? [mod.providerAdapter] : []),
       ...(Array.isArray(mod.providerAdapters) ? mod.providerAdapters : []),
@@ -80,6 +80,7 @@ class PluginChatProvider implements ChatProvider {
     private readonly creds: ResolvedCreds,
     model: string,
     private readonly opts?: CreateCoderOpts,
+    private readonly hostDefinition?: ProviderDefinition,
   ) {
     this.name = kind;
     this.model = model;
@@ -91,13 +92,15 @@ class PluginChatProvider implements ChatProvider {
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
     const adapter = await loadAdapter(this.ref, this.kind);
-    if (!adapter.createCoder) throw new Error(`Provider '${this.kind}' does not support the coder`);
-    const client = await adapter.createCoder({
-      kind: this.kind,
-      creds: this.creds,
-      model: this.model,
-      opts: this.opts,
-    });
+    const client = adapter.createCoder
+      ? await adapter.createCoder({
+          kind: this.kind,
+          creds: this.creds,
+          model: this.model,
+          opts: this.opts,
+        })
+      : this.hostDefinition?.createCoder?.(this.creds, this.model, this.opts);
+    if (!client) throw new Error(`Provider '${this.kind}' does not support the coder`);
     client.setModel(this.model);
     yield* client.chat(req);
   }
@@ -135,6 +138,7 @@ function buildAuthHandlers(ref: ProviderAdapterRuntimeRef, kind: string): Provid
 export function buildProviderPluginDefinition(
   spec: ProviderSpec,
   ref: ProviderAdapterRuntimeRef,
+  hostDefinition: ProviderDefinition,
 ): ProviderDefinition {
   const defaultModel = spec.defaultModel ?? spec.defaultModels[0] ?? '';
   return {
@@ -161,8 +165,8 @@ export function buildProviderPluginDefinition(
     },
     async fetchModels(creds) {
       const adapter = await loadAdapter(ref, spec.kind);
-      if (!adapter.fetchModels) return spec.defaultModels;
-      return adapter.fetchModels({ kind: spec.kind, creds, model: defaultModel });
+      if (adapter.fetchModels) return adapter.fetchModels({ kind: spec.kind, creds, model: defaultModel });
+      return hostDefinition.fetchModels?.(creds) ?? spec.defaultModels;
     },
     async discoverModels(ctx) {
       const adapter = await loadAdapter(ref, spec.kind);
@@ -174,9 +178,10 @@ export function buildProviderPluginDefinition(
     async testConnection({ config, creds }) {
       const adapter = await loadAdapter(ref, spec.kind);
       if (adapter.testConnection) await adapter.testConnection({ config, creds });
+      else await hostDefinition.testConnection?.({ config, creds });
     },
     createCoder(creds, model, opts) {
-      return new PluginChatProvider(ref, spec.kind, creds, model ?? defaultModel, opts);
+      return new PluginChatProvider(ref, spec.kind, creds, model ?? defaultModel, opts, hostDefinition);
     },
   };
 }

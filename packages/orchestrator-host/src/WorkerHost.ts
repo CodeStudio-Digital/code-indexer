@@ -15,7 +15,7 @@
  * top maps `sessionId → WorkerHost` with TTL eviction.
  */
 import { Worker } from 'node:worker_threads';
-import type { Worker as WorkerType } from 'node:worker_threads';
+import type { Worker as WorkerType, WorkerOptions } from 'node:worker_threads';
 import { MessageBridge, type MessageBridgeOpts } from './MessageBridge.js';
 
 export interface WorkerHostOpts<TWorkerData = unknown> {
@@ -29,6 +29,8 @@ export interface WorkerHostOpts<TWorkerData = unknown> {
    * source running under the dev loader.
    */
   execArgv?: string[];
+  /** Per-isolate V8 limits forwarded to `new Worker(..., { resourceLimits })`. */
+  resourceLimits?: WorkerOptions['resourceLimits'];
   /** Optional name used in logs / restart messages. */
   name?: string;
   /** Max restart attempts before marking `crashed`. Default 3. */
@@ -144,6 +146,7 @@ export class WorkerHost<TWorkerData = unknown> {
     const worker = new Worker(this.opts.workerFile, {
       workerData: this.opts.workerData,
       execArgv: this.opts.execArgv,
+      resourceLimits: this.opts.resourceLimits,
     });
     this.worker = worker;
     this.bridge = new MessageBridge({

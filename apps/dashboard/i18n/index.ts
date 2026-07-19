@@ -1,96 +1,82 @@
-import i18n from 'i18next';
+import i18n, { type BackendModule, type ReadCallback, type Resource } from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
-import commonPtBR from './locales/pt-BR/common.json';
-import adminPtBR from './locales/pt-BR/admin.json';
-import projectsPtBR from './locales/pt-BR/projects.json';
-import chatPtBR from './locales/pt-BR/chat.json';
-import agentsPtBR from './locales/pt-BR/agents.json';
-import searchPtBR from './locales/pt-BR/search.json';
-import telemetryPtBR from './locales/pt-BR/telemetry.json';
-import docsPtBR from './locales/pt-BR/docs.json';
-import designSystemsPtBR from './locales/pt-BR/designSystems.json';
-import workspacePtBR from './locales/pt-BR/workspace.json';
-import pluginsPtBR from './locales/pt-BR/plugins.json';
-import settingsPtBR from './locales/pt-BR/settings.json';
-import cloudPtBR from './locales/pt-BR/cloud.json';
-import apiClientPtBR from './locales/pt-BR/apiClient.json';
-import sshPtBR from './locales/pt-BR/ssh.json';
-import dbClientPtBR from './locales/pt-BR/dbClient.json';
-import spriteStudioPtBR from './locales/pt-BR/spriteStudio.json';
-import appStudioPtBR from './locales/pt-BR/appStudio.json';
-import pinsPtBR from './locales/pt-BR/pins.json';
+type LocaleResource = Resource[string][string];
 
-import commonEn from './locales/en/common.json';
-import adminEn from './locales/en/admin.json';
-import projectsEn from './locales/en/projects.json';
-import chatEn from './locales/en/chat.json';
-import agentsEn from './locales/en/agents.json';
-import searchEn from './locales/en/search.json';
-import telemetryEn from './locales/en/telemetry.json';
-import docsEn from './locales/en/docs.json';
-import designSystemsEn from './locales/en/designSystems.json';
-import workspaceEn from './locales/en/workspace.json';
-import pluginsEn from './locales/en/plugins.json';
-import settingsEn from './locales/en/settings.json';
-import cloudEn from './locales/en/cloud.json';
-import apiClientEn from './locales/en/apiClient.json';
-import sshEn from './locales/en/ssh.json';
-import dbClientEn from './locales/en/dbClient.json';
-import spriteStudioEn from './locales/en/spriteStudio.json';
-import appStudioEn from './locales/en/appStudio.json';
-import pinsEn from './locales/en/pins.json';
+// Vite turns every loader into its own async chunk. The previous eager JSON
+// imports put every namespace in both languages on the startup path (~800 KB
+// decoded), even when the user only opened the project list.
+const localeLoaders = import.meta.glob('./locales/*/*.json', {
+  import: 'default',
+}) as Record<string, () => Promise<LocaleResource>>;
+
+function localeFolder(language: string): 'pt-BR' | 'en' {
+  return language.toLowerCase().startsWith('pt') ? 'pt-BR' : 'en';
+}
+
+const lazyLocaleBackend: BackendModule = {
+  type: 'backend',
+  init() {},
+  read(language: string, namespace: string, callback: ReadCallback) {
+    const folder = localeFolder(language);
+    const load = localeLoaders[`./locales/${folder}/${namespace}.json`];
+    if (!load) {
+      callback(new Error(`Unknown locale namespace: ${folder}/${namespace}`), null);
+      return;
+    }
+    void load().then(
+      (resource) => callback(null, resource),
+      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), null),
+    );
+  },
+};
+
+// These namespaces are consumed before or during the first project-list paint.
+// Product-area catalogs (Admin, Agents, Docs, editors, etc.) are requested by
+// react-i18next only when their lazy route mounts.
+const BOOTSTRAP_NAMESPACES = ['common', 'cloud', 'pins', 'workspace', 'projects'] as const;
+
+function detectInitialLanguage(): 'pt-BR' | 'en' {
+  try {
+    const stored = window.localStorage.getItem('i18n-lang');
+    if (stored) return localeFolder(stored);
+  } catch {
+    // Storage can be unavailable in hardened webviews; navigator is enough.
+  }
+  return localeFolder(typeof navigator === 'undefined' ? 'pt-BR' : navigator.language);
+}
+
+async function loadBootstrapResources(language: 'pt-BR' | 'en') {
+  // Load the active locale and the Portuguese fallback explicitly. i18next's
+  // backend remains responsible for every later route/namespace and for the
+  // English catalogs when the language switcher is used.
+  const folders = language === 'pt-BR' ? ['pt-BR'] as const : ['en', 'pt-BR'] as const;
+  const resources: Resource = {};
+  await Promise.all(folders.flatMap((folder) => BOOTSTRAP_NAMESPACES.map(async (namespace) => {
+    const load = localeLoaders[`./locales/${folder}/${namespace}.json`];
+    if (!load) throw new Error(`Unknown locale namespace: ${folder}/${namespace}`);
+    resources[folder] ??= {};
+    resources[folder]![namespace] = await load();
+  })));
+  return resources;
+}
 
 i18n
   .use(LanguageDetector)
-  .use(initReactI18next)
-  .init({
-    resources: {
-      'pt-BR': {
-        common: commonPtBR,
-        admin: adminPtBR,
-        projects: projectsPtBR,
-        chat: chatPtBR,
-        agents: agentsPtBR,
-        search: searchPtBR,
-        telemetry: telemetryPtBR,
-        docs: docsPtBR,
-        designSystems: designSystemsPtBR,
-        workspace: workspacePtBR,
-        plugins: pluginsPtBR,
-        settings: settingsPtBR,
-        cloud: cloudPtBR,
-        apiClient: apiClientPtBR,
-        ssh: sshPtBR,
-        dbClient: dbClientPtBR,
-        spriteStudio: spriteStudioPtBR,
-        appStudio: appStudioPtBR,
-        pins: pinsPtBR,
-      },
-      en: {
-        common: commonEn,
-        admin: adminEn,
-        projects: projectsEn,
-        chat: chatEn,
-        agents: agentsEn,
-        search: searchEn,
-        telemetry: telemetryEn,
-        docs: docsEn,
-        designSystems: designSystemsEn,
-        workspace: workspaceEn,
-        plugins: pluginsEn,
-        settings: settingsEn,
-        cloud: cloudEn,
-        apiClient: apiClientEn,
-        ssh: sshEn,
-        dbClient: dbClientEn,
-        spriteStudio: spriteStudioEn,
-        appStudio: appStudioEn,
-        pins: pinsEn,
-      },
-    },
+  .use(lazyLocaleBackend)
+  .use(initReactI18next);
+
+export const i18nReady = (async () => {
+  const lng = detectInitialLanguage();
+  const resources = await loadBootstrapResources(lng);
+  await i18n.init({
+    lng,
+    resources,
     fallbackLng: 'pt-BR',
+    supportedLngs: ['pt-BR', 'en'],
+    partialBundledLanguages: true,
+    ns: [...BOOTSTRAP_NAMESPACES],
     defaultNS: 'common',
     interpolation: {
       escapeValue: false,
@@ -101,5 +87,6 @@ i18n
       lookupLocalStorage: 'i18n-lang',
     },
   });
+})();
 
 export default i18n;

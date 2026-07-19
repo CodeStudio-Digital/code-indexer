@@ -14,9 +14,9 @@
  * HTML. Add more here as language features expand.
  *
  * `setupMonaco()` is idempotent — the first call wires everything; the
- * rest are no-ops. Call it before mounting the first Monaco editor.
- * Inside @monaco-editor/react that's any `<Editor />` instance, so we
- * call it from MonacoMount's module scope.
+ * rest are no-ops. Call it from each lazy editor implementation before
+ * mounting its first `<Editor />`. Keeping this module out of main.tsx means
+ * routes that never open an editor do not download Monaco or its workers.
  */
 
 import * as monaco from 'monaco-editor';

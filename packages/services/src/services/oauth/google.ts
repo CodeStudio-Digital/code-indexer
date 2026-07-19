@@ -101,6 +101,14 @@ interface PendingFlow {
 const pending = new Map<string, PendingFlow>();
 const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 
+export function disposeGoogleOAuthResources(): void {
+  for (const flow of pending.values()) {
+    try { flow.server.closeAllConnections?.(); } catch { /* old Node */ }
+    try { flow.server.close(); } catch { /* already closed */ }
+  }
+  pending.clear();
+}
+
 function cleanupExpired(): void {
   const now = Date.now();
   for (const [state, flow] of pending) {

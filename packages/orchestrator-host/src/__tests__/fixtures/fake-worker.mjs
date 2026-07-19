@@ -14,6 +14,7 @@
  *     event stream in both directions)
  */
 import { parentPort } from 'node:worker_threads';
+import v8 from 'node:v8';
 
 if (!parentPort) {
   throw new Error('fake-worker.mjs: not running inside a worker_thread');
@@ -43,6 +44,9 @@ parentPort.on('message', async (msg) => {
 
 async function dispatch(type, payload) {
   if (type === 'ping') return { pong: payload?.value };
+  if (type === 'heapLimit') {
+    return { heapLimitMB: Math.round(v8.getHeapStatistics().heap_size_limit / 1024 / 1024) };
+  }
   if (type === 'throw') throw new Error(payload?.message ?? 'fake-worker boom');
   if (type === 'slow') {
     await new Promise((r) => setTimeout(r, payload?.ms ?? 50));

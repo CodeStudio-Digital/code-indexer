@@ -278,7 +278,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     (
       answer: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+      extras?: { agent?: AgentPreset },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/answer`,
@@ -293,7 +293,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     (
       verdict: { approved: boolean; aborted?: boolean; feedback?: string },
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+      extras?: { agent?: AgentPreset },
     ) => {
       // Stay-in-Build: on APPROVAL the plan→build transition already happened
       // server-side (agent persisted to `build`), so the resume must NOT forward
@@ -318,7 +318,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     (
       answers: DecisionAnswers,
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+      extras?: { agent?: AgentPreset },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/decide`,
@@ -338,7 +338,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
         execution_mode?: StreamTaskExecutionMode;
       },
       onMessageComplete?: () => void,
-      extras?: { agent?: 'explore' | 'plan' | 'build' | 'admin' },
+      extras?: { agent?: AgentPreset },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/tasks-response`,

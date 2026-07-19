@@ -6,7 +6,7 @@
  * the client disconnects. An idle sweep drops buses with no subscribers and no
  * recent activity so long-running servers don't leak.
  */
-import { createBus, publish, type CoderRunBus } from '../../../coder-bus.js';
+import { createBus, markEnded, publish, type CoderRunBus } from '../../../coder-bus.js';
 import type { SpriteJobEvent } from '@mcp/sprite-studio/jobs/events.js';
 
 const IDLE_MS = 10 * 60 * 1000; // 10 min with no subscribers/activity → evict
@@ -54,4 +54,19 @@ export function startSpriteBusSweep(): void {
   if (sweepTimer) return;
   sweepTimer = setInterval(() => sweepIdleSpriteBuses(), IDLE_MS);
   sweepTimer.unref?.();
+}
+
+/** Stop the process-wide sweep and release all SSE bus state on app shutdown. */
+export function stopSpriteBusSweep(): void {
+  if (sweepTimer) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
+  }
+  for (const entry of buses.values()) {
+    entry.bus.ctrl.abort('app-shutdown');
+    if (!entry.bus.ended) markEnded(entry.bus, 'error', { error: 'app_shutdown' });
+    entry.bus.subscribers.clear();
+    entry.bus.buffer.length = 0;
+  }
+  buses.clear();
 }

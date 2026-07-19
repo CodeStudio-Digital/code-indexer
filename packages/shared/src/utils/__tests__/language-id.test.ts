@@ -17,6 +17,11 @@ describe('languageIdForPath build and launcher files', () => {
     ['Directory.Build.props', 'xml'],
     ['Directory.Build.targets', 'xml'],
     ['packages/example.nuspec', 'xml'],
+    ['Dockerfile', 'dockerfile'],
+    ['docker/Dockerfile.dev', 'dockerfile'],
+    ['Containerfile', 'dockerfile'],
+    ['containers/Containerfile.release', 'dockerfile'],
+    ['legacy/app.containerfile', 'dockerfile'],
   ])('maps %s to %s', (path, expected) => {
     expect(languageIdForPath(path)).toBe(expected);
   });

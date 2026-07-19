@@ -40,7 +40,14 @@ describe('definePlugin', () => {
           title: 'Node Project',
           activation: { whenFiles: ['package.json'] },
           editorActions: [
-            contributeEditorAction({ id: 'echo-editor', label: 'Echo', runsTool: 'echo' }),
+            contributeEditorAction({
+              id: 'echo-editor',
+              label: 'Echo',
+              runsTool: 'echo',
+              toolArgs: { source: 'gutter' },
+              documentSelector: { filePatterns: ['Dockerfile'] },
+              gutter: { line: { text: 'FROM', match: 'word' }, occurrence: 'first' },
+            }),
           ],
           statusBarItems: [
             contributeStatusBarItem({ id: 'echo-status', label: 'Echo', runsTool: 'echo' }),
@@ -63,5 +70,7 @@ describe('definePlugin', () => {
     expect(mod.commands[0].id).toBe('c');
     expect(mod.modules[0].id).toBe('node-project');
     expect(mod.modules[0].editorActions?.[0].runsTool).toBe('echo');
+    expect(mod.modules[0].editorActions?.[0].gutter?.line.text).toBe('FROM');
+    expect(mod.modules[0].editorActions?.[0].toolArgs).toEqual({ source: 'gutter' });
   });
 });

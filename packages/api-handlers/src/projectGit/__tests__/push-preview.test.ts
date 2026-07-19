@@ -1,9 +1,10 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createProjectGitHandlers } from '../index.js';
+import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 
 const dirs: string[] = [];
 
@@ -51,9 +52,10 @@ function advanceRemote(remote: string, file: string, contents: string): string {
   return git(other, 'rev-parse', 'HEAD');
 }
 
-function handlers(root: string) {
+function handlers(root: string, managedGit?: ManagedGitClient) {
   return createProjectGitHandlers({
     db: { getProject: (id: number) => id === 1 ? { id, name: 'Push repo', root_path: root } : null },
+    managedGit,
   } as never);
 }
 
@@ -165,5 +167,118 @@ describe('reviewed project push', () => {
     const diff = await api.commitFileDiff({ projectId: 1, sha, path: 'large.txt' }, {} as never);
     expect(diff.truncated).toBe(true);
     expect(diff.patch.length).toBe(500_000);
+  });
+
+  it('uses the managed broker only after explicit selection and never rewrites the project remote', async () => {
+    const { root } = setup();
+    const githubRemote = 'git@github.com:CodeStudio-Digital/code-indexer.git';
+    git(root, 'remote', 'set-url', '--push', 'origin', githubRemote);
+    const calls: string[][] = [];
+    const managedGit: ManagedGitClient = {
+      defaultIdentityMode: 'project',
+      describe: async () => ({
+        available: true,
+        configured: true,
+        label: 'MegaBrainStudio',
+        host: 'github.com',
+        repository: 'CodeStudio-Digital/code-indexer',
+      }),
+      runGit: async ({ args }) => {
+        calls.push(args);
+        return { ok: true, code: 0, stdout: '', stderr: '' };
+      },
+      createPullRequest: async () => ({
+        number: 12,
+        url: 'https://github.com/CodeStudio-Digital/code-indexer/pull/12',
+        title: 'outgoing change',
+        state: 'open',
+        appSlug: 'megabrainstudio',
+        installationId: 147330858,
+      }),
+    };
+    const api = handlers(root, managedGit);
+    const preview = await api.pushPreview({ projectId: 1 }, {} as never);
+
+    expect(preview.identity).toMatchObject({
+      defaultMode: 'project',
+      managed: { available: true, repository: 'CodeStudio-Digital/code-indexer' },
+    });
+    const pushed = await api.push({
+      projectId: 1,
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+      identityMode: 'managed',
+    }, {} as never);
+
+    expect(pushed.ok).toBe(true);
+    expect(calls).toEqual([expect.arrayContaining(['push', 'origin', 'main'])]);
+    expect(git(root, 'remote', 'get-url', '--push', 'origin')).toBe(githubRemote);
+  });
+
+  it('creates a pull request through the managed identity port', async () => {
+    const { root } = setup();
+    const githubRemote = 'https://github.com/CodeStudio-Digital/code-indexer.git';
+    git(root, 'remote', 'set-url', '--push', 'origin', githubRemote);
+    const createPullRequest = vi.fn(async () => ({
+      number: 18,
+      url: 'https://github.com/CodeStudio-Digital/code-indexer/pull/18',
+      title: 'outgoing change',
+      state: 'open',
+      appSlug: 'megabrainstudio',
+      installationId: 147330858,
+    }));
+    const managedGit = {
+      defaultIdentityMode: 'project' as const,
+      describe: async () => ({ available: true, configured: true, label: 'MegaBrainStudio', host: 'github.com', repository: 'CodeStudio-Digital/code-indexer' }),
+      runGit: async () => ({ ok: true, code: 0, stdout: '', stderr: '' }),
+      createPullRequest,
+    } satisfies ManagedGitClient;
+    const api = handlers(root, managedGit);
+
+    const result = await api.createPullRequest({
+      projectId: 1,
+      remote: 'origin',
+      head: 'main',
+      base: 'develop',
+      title: 'outgoing change',
+      draft: true,
+      identityMode: 'managed',
+    }, {} as never);
+
+    expect(result.number).toBe(18);
+    expect(createPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+      remoteUrl: githubRemote,
+      head: 'main',
+      base: 'develop',
+      draft: true,
+    }));
+  });
+
+  it('refuses managed push for Git LFS without falling back to project credentials', async () => {
+    const { root } = setup();
+    git(root, 'remote', 'set-url', '--push', 'origin', 'https://github.com/CodeStudio-Digital/code-indexer.git');
+    writeFileSync(join(root, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+    git(root, 'add', '.gitattributes');
+    git(root, 'commit', '-m', 'configure lfs');
+    const runGit = vi.fn(async () => ({ ok: true, code: 0, stdout: '', stderr: '' }));
+    const api = handlers(root, {
+      defaultIdentityMode: 'project',
+      describe: async () => ({ available: true, configured: true, label: 'MegaBrainStudio', host: 'github.com', repository: 'CodeStudio-Digital/code-indexer' }),
+      runGit,
+      createPullRequest: async () => ({ number: 1, url: '', title: '', state: 'open', appSlug: 'megabrainstudio', installationId: 147330858 }),
+    });
+    const preview = await api.pushPreview({ projectId: 1 }, {} as never);
+
+    await expect(api.push({
+      projectId: 1,
+      remote: preview.remote,
+      branch: preview.branch,
+      targetBranch: preview.targetBranch,
+      expectedHead: preview.headSha,
+      identityMode: 'managed',
+    }, {} as never)).rejects.toMatchObject({ code: 'managed_identity_lfs_unsupported', status: 409 });
+    expect(runGit).not.toHaveBeenCalled();
   });
 });

@@ -15,14 +15,22 @@
  * Mounted by server.ts next to `mountWorkersDiagnosticRoute`.
  */
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { getPerfSampler } from '../../perf/perf-sampler.js';
 import { resetSlowCalls, slowCallsSnapshot } from '../../perf/slow-ipc.js';
 import { breakdownEnabled, breakdownSnapshot, resetBreakdown } from '../../perf/breakdown.js';
 import { freezeSnapshot, resetFreezes, freezeThresholdMs } from '../../perf/freeze-log.js';
 import { getElectronProfiler } from '../../perf/electron-profiler.js';
 import { captureCpuProfile, writeHeapSnapshotToTmp } from '../../perf/cpu-profile.js';
+import {
+  currentPersistentPerfRun,
+  listPersistentPerfRuns,
+  readPersistentPerfRun,
+  recordPersistentRendererFreezes,
+  type PersistedRendererFreeze,
+} from '../../perf/persistent-diagnostics.js';
 import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
-import { coderWorkerEnabled, getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 
 /** Resolve the profile target: main isolate or one worker's isolate. */
 async function captureCpuProfileFor(target: string, durationMs: number): Promise<object | null> {
@@ -31,9 +39,34 @@ async function captureCpuProfileFor(target: string, durationMs: number): Promise
   const sessionId = Number(idRaw);
   if (!Number.isFinite(sessionId)) throw new Error(`invalid target "${target}"`);
   if (kind === 'company') return getWorkerOrchestratorPool().cpuProfile(sessionId, durationMs);
-  if (kind === 'coder' && coderWorkerEnabled()) return getCoderWorkerPool().cpuProfile(sessionId, durationMs);
+  if (kind === 'coder') return getCoderWorkerPool().cpuProfile(sessionId, durationMs);
   throw new Error(`unknown target "${target}" (use main | company:<id> | coder:<id>)`);
 }
+
+function cleanRendererFreeze(value: unknown): PersistedRendererFreeze | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.id !== 'string' || row.id.length < 1 || row.id.length > 240) return null;
+  if (typeof row.at !== 'number' || !Number.isFinite(row.at) || row.at <= 0) return null;
+  if (typeof row.durationMs !== 'number' || !Number.isFinite(row.durationMs) || row.durationMs < 0 || row.durationMs > 600_000) return null;
+  if (row.kind !== 'loaf' && row.kind !== 'longtask') return null;
+  const name = typeof row.name === 'string' ? row.name.slice(0, 2_000) : '';
+  if (!name) return null;
+  const script = typeof row.script === 'string' ? row.script.slice(0, 4_000) : undefined;
+  return {
+    id: row.id,
+    at: Math.round(row.at),
+    durationMs: Math.round(row.durationMs),
+    name,
+    script,
+    kind: row.kind,
+  };
+}
+
+const rendererFreezeBodyLimit = bodyLimit({
+  maxSize: 512 * 1024,
+  onError: (c) => c.json({ error: 'renderer freeze batch too large' }, 413),
+});
 
 export function mountPerfRoutes(app: Hono): void {
   app.get('/api/admin/perf/current', async (c) => {
@@ -53,6 +86,35 @@ export function mountPerfRoutes(app: Hono): void {
     const sampler = getPerfSampler();
     if (!sampler) return c.json({ error: 'perf sampler not started' }, 503);
     return c.json({ points: sampler.getHistory() });
+  });
+
+  // Crash-resilient per-run journal. The current run and the latest seven
+  // runs are retained beside the configured app database.
+  app.get('/api/admin/perf/runs', (c) =>
+    c.json({ currentRunId: currentPersistentPerfRun()?.id ?? null, runs: listPersistentPerfRuns() }));
+
+  app.get('/api/admin/perf/runs/:runId', async (c) => {
+    const detail = await readPersistentPerfRun(c.req.param('runId'));
+    return detail ? c.json(detail) : c.json({ error: 'performance run not found' }, 404);
+  });
+
+  // Renderer LoAFs are first staged in localStorage. If the app is force-killed
+  // before this request succeeds, the next renderer launch retries them; the
+  // journal resolves their original run from the event timestamp.
+  app.post('/api/admin/perf/renderer-freezes', rendererFreezeBodyLimit, async (c) => {
+    const body: { events?: unknown[]; runId?: unknown } = await c.req
+      .json<{ events?: unknown[]; runId?: unknown }>()
+      .catch(() => ({}));
+    const rows = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
+    const requestedRunId = typeof body.runId === 'string' ? body.runId : undefined;
+    const cleaned: PersistedRendererFreeze[] = [];
+    for (const raw of rows) {
+      const row = cleanRendererFreeze(raw);
+      if (!row) continue;
+      cleaned.push(row);
+    }
+    const persisted = recordPersistentRendererFreezes(cleaned, requestedRunId);
+    return c.json({ ok: true, accepted: persisted, persisted, currentRunId: currentPersistentPerfRun()?.id ?? null });
   });
 
   // ─── Profiling tools (Fase 2) ────────────────────────────────────

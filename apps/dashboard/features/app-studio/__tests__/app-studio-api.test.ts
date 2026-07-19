@@ -62,6 +62,20 @@ describe('App Studio v6 API client', () => {
     }));
   });
 
+  it('posts the explicit manual dispatch action used by the orchestration board', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(runAppAction(2, 'dispatch_ready_work')).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith('/api/app-studio/apps/2/actions', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ action: 'dispatch_ready_work' }),
+    }));
+  });
+
   it('renders structured API failures instead of undefined fields', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       error: { message: 'The current plan is blocked.' },

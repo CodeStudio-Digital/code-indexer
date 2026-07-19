@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ChevronRight,
@@ -23,11 +23,15 @@ import { Input } from '../../components/ui/input.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
-import ProjectCreateDialog from './ProjectCreateDialog.js';
-import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
-import { NewProjectWizard } from './new-project/index.js';
+import type { Project as SettingsProject } from '@mcp/shared/types.js';
 import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
 import { ProjectRow } from './list/ProjectRow.js';
+
+const ProjectCreateDialog = lazy(() => import('./ProjectCreateDialog.js'));
+const ProjectSettingsModal = lazy(() =>
+  import('./settings/ProjectSettingsModal.js').then((module) => ({ default: module.ProjectSettingsModal })),
+);
+const NewProjectWizard = lazy(() => import('./new-project/NewProjectWizard.js'));
 
 /** Persisted in localStorage so the user's layout choice survives reloads. */
 type LayoutMode = 'cards' | 'compact';
@@ -182,23 +186,29 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
           </CardContent>
         </Card>
         {creating && (
-          <ProjectCreateDialog
-            open={creating}
-            onOpenChange={setCreating}
-            onCreated={(p) => {
-              refetch();
-              onSelectProject(p.id, p.name);
-            }}
-          />
+          <Suspense fallback={null}>
+            <ProjectCreateDialog
+              open={creating}
+              onOpenChange={setCreating}
+              onCreated={(p) => {
+                refetch();
+                onSelectProject(p.id, p.name);
+              }}
+            />
+          </Suspense>
         )}
-        <NewProjectWizard
-          open={scaffolding}
-          onOpenChange={setScaffolding}
-          onCreated={(p) => {
-            refetch();
-            onSelectProject(p.id, p.name);
-          }}
-        />
+        {scaffolding && (
+          <Suspense fallback={null}>
+            <NewProjectWizard
+              open={scaffolding}
+              onOpenChange={setScaffolding}
+              onCreated={(p) => {
+                refetch();
+                onSelectProject(p.id, p.name);
+              }}
+            />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -345,34 +355,42 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
       )}
 
       {editing && (
-        <ProjectSettingsModal
-          project={editing as unknown as Parameters<typeof ProjectSettingsModal>[0]['project']}
-          open={!!editing}
-          onOpenChange={(open) => { if (!open) setEditing(null); }}
-          initialSection="general"
-          onSaved={refetch}
-          onDeleted={refetch}
-          existingGroups={existingGroups}
-        />
+        <Suspense fallback={null}>
+          <ProjectSettingsModal
+            project={editing as unknown as SettingsProject}
+            open={!!editing}
+            onOpenChange={(open) => { if (!open) setEditing(null); }}
+            initialSection="general"
+            onSaved={refetch}
+            onDeleted={refetch}
+            existingGroups={existingGroups}
+          />
+        </Suspense>
       )}
       {creating && (
-        <ProjectCreateDialog
-          open={creating}
-          onOpenChange={setCreating}
-          onCreated={(p) => {
-            refetch();
-            onSelectProject(p.id, p.name);
-          }}
-        />
+        <Suspense fallback={null}>
+          <ProjectCreateDialog
+            open={creating}
+            onOpenChange={setCreating}
+            onCreated={(p) => {
+              refetch();
+              onSelectProject(p.id, p.name);
+            }}
+          />
+        </Suspense>
       )}
-      <NewProjectWizard
-        open={scaffolding}
-        onOpenChange={setScaffolding}
-        onCreated={(p) => {
-          refetch();
-          onSelectProject(p.id, p.name);
-        }}
-      />
+      {scaffolding && (
+        <Suspense fallback={null}>
+          <NewProjectWizard
+            open={scaffolding}
+            onOpenChange={setScaffolding}
+            onCreated={(p) => {
+              refetch();
+              onSelectProject(p.id, p.name);
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

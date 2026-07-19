@@ -355,11 +355,15 @@ export class AppStudioStore {
     if (!approved) return this.listWorkItems(sessionId);
     const items = this.listWorkItems(sessionId);
     const done = new Set(items.filter((item) => item.status === 'done').map((item) => item.id));
+    const review = new Set(items.filter((item) => item.status === 'review').map((item) => item.id));
     const tx = this.db.transaction(() => {
       for (const item of items) {
         if (item.plan_revision_id !== approved.id || item.status !== 'backlog') continue;
         const deps = JSON.parse(item.depends_on_json) as string[];
-        if (deps.every((id) => done.has(id))) {
+        const dependenciesReady = item.kind === 'verify'
+          ? deps.every((id) => done.has(id) || review.has(id))
+          : deps.every((id) => done.has(id));
+        if (dependenciesReady) {
           this.db.prepare("UPDATE app_studio_work_items SET status = 'ready', updated_at = datetime('now') WHERE app_session_id = ? AND id = ?").run(sessionId, item.id);
         }
       }

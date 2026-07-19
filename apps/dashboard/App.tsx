@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
   createBrowserRouter,
   Navigate,
@@ -15,33 +15,89 @@ import {
   ConfirmDialogHost,
   ToastHost,
 } from './components/ui/prompt-dialog.js';
-import Admin from './features/admin/index.js';
-import { ProjectList, ProjectView } from './features/project/index.js';
-import { AgentsTab } from './features/agents/AgentsTab.js';
-import { DesignSystemsTab } from './features/design-systems/DesignSystemsTab.js';
-import { AppStudioHome, AppStudioView } from './features/app-studio/index.js';
-import { TelemetryDashboard } from './features/telemetry/TelemetryDashboard.js';
-import { DocsPage } from './features/docs/DocsPage.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
-import { OnboardingWizard, isOnboarded, resetOnboarding } from './features/onboarding/OnboardingWizard.js';
+import { isOnboarded, resetOnboarding } from './features/onboarding/storage.js';
 import { AccountGate } from './features/account/AccountGate.js';
 import { useAccountGate } from './features/account/useAccountGate.js';
-import { PreflightWizard, isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/index.js';
+import { isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/storage.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
-import { PopoutRoot } from './features/popout/PopoutRoot.js';
 import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
-import { GlobalSessionWorkbench } from './features/chat/global/GlobalSessionWorkbench.js';
-import { PushDialogHost } from './features/git-push/PushDialog.js';
+import { PushDialogHost } from './features/git-push/PushDialogHost.js';
+
+// Every top-level surface is its own async boundary. Previously App.tsx
+// statically imported the entire dashboard, so opening the project list also
+// downloaded and parsed Monaco, Shiki, the agent workbench, Admin, Docs, and
+// App Studio. Keep the shell eager and pay for each product area only when its
+// route is actually visited.
+const Admin = lazy(() => import('./features/admin/Admin.js'));
+const ProjectList = lazy(() =>
+  import('./features/project/ProjectList.js').then((module) => ({ default: module.default })),
+);
+const ProjectView = lazy(() =>
+  import('./features/project/ProjectView.js').then((module) => ({ default: module.ProjectView })),
+);
+const AgentsTab = lazy(() =>
+  import('./features/agents/AgentsTab.js').then((module) => ({ default: module.AgentsTab })),
+);
+const DesignSystemsTab = lazy(() =>
+  import('./features/design-systems/DesignSystemsTab.js').then((module) => ({ default: module.DesignSystemsTab })),
+);
+const AppStudioHome = lazy(() =>
+  import('./features/app-studio/AppStudioHome.js').then((module) => ({ default: module.AppStudioHome })),
+);
+const AppStudioView = lazy(() =>
+  import('./features/app-studio/AppStudioView.js').then((module) => ({ default: module.AppStudioView })),
+);
+const TelemetryDashboard = lazy(() =>
+  import('./features/telemetry/TelemetryDashboard.js').then((module) => ({ default: module.TelemetryDashboard })),
+);
+const DocsPage = lazy(() =>
+  import('./features/docs/DocsPage.js').then((module) => ({ default: module.DocsPage })),
+);
+const PopoutRoot = lazy(() =>
+  import('./features/popout/PopoutRoot.js').then((module) => ({ default: module.PopoutRoot })),
+);
+const GlobalSessionWorkbench = lazy(() =>
+  import('./features/chat/global/GlobalSessionWorkbench.js').then((module) => ({ default: module.GlobalSessionWorkbench })),
+);
+const OnboardingWizard = lazy(() =>
+  import('./features/onboarding/OnboardingWizard.js').then((module) => ({ default: module.OnboardingWizard })),
+);
+const PreflightWizard = lazy(() =>
+  import('./features/preflight/PreflightWizard.js').then((module) => ({ default: module.PreflightWizard })),
+);
 
 // Sprite Studio is a heavy standalone surface (virtualized library now,
 // canvas engine later) — lazy so it never weighs on the other routes.
 const SpriteStudioView = lazy(() =>
   import('./features/sprite-studio/SpriteStudioView.js').then((m) => ({ default: m.SpriteStudioView })),
 );
+
+function RouteBoundary({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={(
+        <div className="grid h-full min-h-24 place-items-center" aria-busy="true">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        </div>
+      )}
+    >
+      {children}
+    </Suspense>
+  );
+}
+
+function WizardFallback() {
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-background/95" aria-busy="true">
+      <span className="h-6 w-6 animate-spin rounded-full border-2 border-muted border-t-primary" />
+    </div>
+  );
+}
 
 // ─── Route components ────────────────────────────────────────
 
@@ -148,9 +204,15 @@ function AppRoot() {
           <GlobalNotificationListener />
           <AppShell />
           {showPreflight ? (
-            <PreflightWizard onDone={() => setShowPreflight(false)} />
+            <Suspense fallback={<WizardFallback />}>
+              <PreflightWizard onDone={() => setShowPreflight(false)} />
+            </Suspense>
           ) : (
-            showOnboarding && <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+            showOnboarding && (
+              <Suspense fallback={<WizardFallback />}>
+                <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+              </Suspense>
+            )
           )}
         </>
       ) : null}
@@ -252,11 +314,7 @@ function DesignSystemsRoute() {
 function SpritesRoute() {
   const features = useFeatures();
   if (!features.spriteStudioEnabled) return <Navigate to="/" replace />;
-  return (
-    <Suspense fallback={null}>
-      <SpriteStudioView />
-    </Suspense>
-  );
+  return <SpriteStudioView />;
 }
 
 function AppsRoute() {
@@ -304,7 +362,7 @@ function AppStudioSessionRoute() {
 const router = createBrowserRouter([
   // Rota top-level SEM AppShell: o popout é chrome-less (PopoutRoot traz a
   // própria caption). Por isso é irmã de `/`, não filha do AppRoot.
-  { path: '/popout/:kind', element: <PopoutRoot /> },
+  { path: '/popout/:kind', element: <RouteBoundary><PopoutRoot /></RouteBoundary> },
   {
     path: '/',
     // AppRoot wraps AppShell + the onboarding wizard overlay so the
@@ -313,20 +371,20 @@ const router = createBrowserRouter([
     // mount exactly where they did before.
     element: <AppRoot />,
     children: [
-      { index: true, element: <HomeRoute /> },
-      { path: 'projects/:id', element: <ProjectViewRoute /> },
+      { index: true, element: <RouteBoundary><HomeRoute /></RouteBoundary> },
+      { path: 'projects/:id', element: <RouteBoundary><ProjectViewRoute /></RouteBoundary> },
       { path: 'projects/:id/analytics', element: <AnalyticsRedirect /> },
-      { path: 'agents', element: <AgentsTab /> },
-      { path: 'global', element: <GlobalSessionRoute /> },
+      { path: 'agents', element: <RouteBoundary><AgentsTab /></RouteBoundary> },
+      { path: 'global', element: <RouteBoundary><GlobalSessionRoute /></RouteBoundary> },
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
-      { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <AgentsTab /> },
-      { path: 'admin', element: <Admin /> },
-      { path: 'design-systems', element: <DesignSystemsRoute /> },
-      { path: 'apps', element: <AppsRoute /> },
-      { path: 'apps/:sessionId', element: <AppStudioSessionRoute /> },
-      { path: 'sprites', element: <SpritesRoute /> },
-      { path: 'telemetry', element: <TelemetryDashboard /> },
-      { path: 'docs', element: <DocsPage /> },
+      { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <RouteBoundary><AgentsTab /></RouteBoundary> },
+      { path: 'admin', element: <RouteBoundary><Admin /></RouteBoundary> },
+      { path: 'design-systems', element: <RouteBoundary><DesignSystemsRoute /></RouteBoundary> },
+      { path: 'apps', element: <RouteBoundary><AppsRoute /></RouteBoundary> },
+      { path: 'apps/:sessionId', element: <RouteBoundary><AppStudioSessionRoute /></RouteBoundary> },
+      { path: 'sprites', element: <RouteBoundary><SpritesRoute /></RouteBoundary> },
+      { path: 'telemetry', element: <RouteBoundary><TelemetryDashboard /></RouteBoundary> },
+      { path: 'docs', element: <RouteBoundary><DocsPage /></RouteBoundary> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

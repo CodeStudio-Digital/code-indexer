@@ -28,6 +28,7 @@ import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 
 export type AgentId =
   | 'explore'
+  | 'research'
   | 'plan'
   | 'build'
   | 'admin'
@@ -119,6 +120,16 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     specMode: true,
     maxTurns: 120,
     defaultTemperature: 0.3,
+  },
+  research: {
+    id: 'research',
+    label: 'Research',
+    description:
+      'Read-only source research with indexed docs, web search/fetch, and an isolated anonymous browser for JavaScript-driven public pages.',
+    profile: 'bootstrap',
+    planMode: false,
+    maxTurns: 50,
+    defaultTemperature: 0.2,
   },
   app_orchestrator: {
     id: 'app_orchestrator',

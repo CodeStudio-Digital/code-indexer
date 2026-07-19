@@ -33,6 +33,7 @@ import { resolve as resolvePath, isAbsolute } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
+import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ interface NodePtyModule {
 }
 
 interface NodePtyProcess {
+  pid: number;
   onData(cb: (data: string) => void): void;
   onExit(cb: (e: { exitCode: number; signal?: number }) => void): void;
   write(data: string): void;
@@ -385,9 +387,12 @@ async function spawnSession(opts: {
       cwd: opts.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // detached:false (default) — kill propagates to children on dispose.
+      detached: !isWindows,
+      windowsHide: true,
     });
   }
+
+  const untrackProcess = trackProcessTree(proc.pid);
 
   const rec: SessionRecord = {
     id,
@@ -406,11 +411,15 @@ async function spawnSession(opts: {
     lastTouchMs: nowMs(),
     exitedPromise,
     markExited: (code) => {
+      untrackProcess();
       rec.status = 'exited';
       rec.exitCode = code;
       resolveExit();
     },
     dispose: (_reason) => {
+      untrackProcess();
+      // Idle reap and explicit session disposal are normal background paths.
+      // The shutdown-only disposer below retains process-tree termination.
       try {
         if (opts.mode === 'pty') {
           (proc as NodePtyProcess).kill();
@@ -782,6 +791,15 @@ export const writeStdin: CoderTool = {
   },
 };
 
+/** Kill every persistent exec/write_stdin process tree in this JS realm. */
+export function disposeExecCommandSessions(reason = 'shutdown'): void {
+  for (const rec of [...sessions.values()]) {
+    killProcessTree(rec.proc.pid, 'SIGKILL');
+    rec.dispose(reason);
+  }
+  sessions.clear();
+}
+
 // ─── Test hooks ────────────────────────────────────────────────────
 // Exported only so unit tests can poke the registry. Not part of the
 // stable surface; do not import from runner code.
@@ -790,8 +808,7 @@ export const __testing = {
   sessions,
   reapIdleSessions,
   disposeAll(): void {
-    for (const rec of sessions.values()) rec.dispose('test-reset');
-    sessions.clear();
+    disposeExecCommandSessions('test-reset');
   },
 };
 

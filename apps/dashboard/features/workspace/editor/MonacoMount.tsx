@@ -47,6 +47,7 @@ import { useEnsureFileContent } from './useEnsureFileContent.js';
 import { useConflictMarkers } from './useConflictMarkers.js';
 import { useChangeMarkers } from './useChangeMarkers.js';
 import { useRunGutter } from './run/useRunGutter.js';
+import { usePluginEditorGutter } from './usePluginEditorGutter.js';
 import { useSymbolNavigationGutter } from './useSymbolNavigationGutter.js';
 import { registerRunActions } from './run/run-actions.js';
 import { applyMonacoKeymap, watchKeymapPreset } from './monaco-keymap.js';
@@ -54,6 +55,9 @@ import { useEffectiveEditorSettings } from '../../../state/editor-settings.js';
 import { attachDiagnosticNavigation } from './diagnostic-navigation.js';
 import { activateSharedMonacoTheme } from '../../../lib/monaco-theme.js';
 import { registerSemanticSearchAction } from './semantic-search-action.js';
+import { setupMonaco } from '../../../lib/monaco-setup.js';
+
+setupMonaco();
 
 function detectDarkMode(): boolean {
   if (typeof document === 'undefined') return true;
@@ -159,6 +163,8 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // IntelliJ-style ▶ run gutter for scripts, project manifests, and source
   // entry points (gated inside the hook to the relevant files).
   useRunGutter(file, editorInstance, monacoInstance);
+  // Declarative, project-scoped gutters contributed by installed plugins.
+  usePluginEditorGutter(file, editorInstance, monacoInstance);
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
       editorRef.current = editor;

@@ -102,7 +102,7 @@ export function AppSettingsPanel() {
         </div>
       </div>
 
-      <div className="sticky bottom-0 -mx-3 px-3 py-3 bg-background/95 backdrop-blur border-t flex items-center gap-2">
+      <div className="sticky bottom-0 z-10 -mx-3 -mb-3 px-3 py-3 bg-background/95 backdrop-blur border-t flex items-center gap-2">
         <div className="text-xs text-muted-foreground flex-1">
           {dirtyCount > 0 ? (
             <span className="inline-flex items-center">

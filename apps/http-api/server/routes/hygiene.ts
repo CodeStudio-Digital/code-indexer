@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { stat } from 'node:fs/promises';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
 
@@ -27,31 +28,24 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
       tiersByProject.set(r.project_id, bucket);
     }
 
-    // Cheap stat() check — flagging projects whose root_path no longer
-    // exists on disk lets the user purge them in bulk. We swallow ENOENT
-    // and treat any other error as "unknown" rather than guessing.
-    const fs = await import('node:fs');
-    const enriched = projects.map((p) => {
-      let missingOnDisk = false;
-      try {
-        const stat = fs.statSync(p.root_path);
-        missingOnDisk = !stat.isDirectory();
-      } catch {
-        missingOnDisk = true;
-      }
-      return {
-        ...p,
-        missing_on_disk: missingOnDisk,
-        tiers: tiersByProject.get(p.id) ?? {},
-      };
-    });
-
-    let vectorStoreAvailable = false;
-    try {
-      vectorStoreAvailable = await vectorStore.isAvailable();
-    } catch {
-      vectorStoreAvailable = false;
-    }
+    // Filesystem probes can stall on offline/network roots. Keep them off the
+    // Electron main loop and overlap them with the vector-worker health check.
+    const [enriched, vectorStoreAvailable] = await Promise.all([
+      Promise.all(projects.map(async (p) => {
+        let missingOnDisk = false;
+        try {
+          missingOnDisk = !(await stat(p.root_path)).isDirectory();
+        } catch {
+          missingOnDisk = true;
+        }
+        return {
+          ...p,
+          missing_on_disk: missingOnDisk,
+          tiers: tiersByProject.get(p.id) ?? {},
+        };
+      })),
+      vectorStore.isAvailable().catch(() => false),
+    ]);
 
     return c.json({
       projects: enriched,

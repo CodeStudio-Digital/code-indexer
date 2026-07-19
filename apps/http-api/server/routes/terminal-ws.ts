@@ -38,6 +38,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Hono } from 'hono';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { getCompanyOrchestrator } from '../../sse/companyOrchestrator.js';
 
 // ─── ws + node-pty surface (typed locally — no @types installed) ──
@@ -330,6 +331,13 @@ interface TerminalCtx {
   rows: number;
 }
 
+/** Active legacy WebSocket PTYs, drained by the process shutdown coordinator. */
+const activeTerminalCleanups = new Set<() => void>();
+
+export function closeTerminalWebSocketProcesses(): void {
+  for (const cleanup of [...activeTerminalCleanups]) cleanup();
+}
+
 function parseUpgradeRequest(req: IncomingMessage): TerminalCtx | null {
   if (req.method !== 'GET') return null;
   const url = req.url ?? '';
@@ -424,11 +432,18 @@ function handleConnection(
     }
   });
 
+  let cleaned = false;
   const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    activeTerminalCleanups.delete(cleanup);
     onData.dispose();
     onExit.dispose();
+    killProcessTree(proc.pid);
     try { proc.kill(); } catch { /* may already be dead */ }
+    try { ws.close(1001, 'server shutting down'); } catch { /* already closed */ }
   };
+  activeTerminalCleanups.add(cleanup);
   ws.on('close', cleanup);
   ws.on('error', cleanup);
 }

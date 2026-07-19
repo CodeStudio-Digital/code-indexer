@@ -82,7 +82,7 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
     },
 
     async kill({ terminalId, signal }) {
-      manager.get(terminalId).pty.kill(signal);
+      manager.kill(terminalId, signal);
     },
 
     async diagnose({ target }) {

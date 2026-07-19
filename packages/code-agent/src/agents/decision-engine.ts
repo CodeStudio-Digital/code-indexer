@@ -136,7 +136,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     },
   },
   external_docs: {
-    agent: 'explore',
+    agent: 'research',
     phase: 'exploration',
     risk: 'read',
     cost: 'low',

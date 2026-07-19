@@ -34,6 +34,22 @@ export interface ContribEditorAction {
   icon?: string;
   shortcut?: string;
   runsTool?: string;
+  toolArgs?: Record<string, unknown>;
+  documentSelector?: {
+    filePatterns?: string[];
+    languageIds?: string[];
+  };
+  gutter?: {
+    line: {
+      text: string;
+      match: 'equals' | 'startsWith' | 'contains' | 'word';
+      trim?: boolean;
+      caseSensitive?: boolean;
+    };
+    occurrence?: 'first' | 'all';
+    icon?: 'run' | 'build' | 'inspect';
+    tooltip?: string;
+  };
   scope?: 'editor' | 'project' | 'module';
 }
 

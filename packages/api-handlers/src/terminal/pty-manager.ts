@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { delimiter } from 'node:path';
 import { ApiError, type TerminalOutputChunk } from '@mcp/api-bus';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { OutputCoalescer, trimReplayBuffer } from './output-coalescer.js';
 import { shValue } from './shell-quote.js';
 
@@ -83,6 +84,8 @@ export interface PtyEntry {
   exitChunk?: TerminalOutputChunk;
   /** One-shot exit callbacks (runner status tracking) — no buffer replay. */
   exitHooks: Set<(code: number | null) => void>;
+  /** Releases native/EventEmitter subscriptions and retained buffers. */
+  dispose?: () => void;
 }
 
 export class PtyManager {
@@ -204,9 +207,11 @@ export class PtyManager {
       entry.bufferBytes = trimReplayBuffer(entry.buffer, entry.bufferBytes);
       for (const l of entry.listeners) l(chunk);
     });
-    child.onData((data) => coalescer.push(data));
+    const dataSub = child.onData((data) => coalescer.push(data));
 
-    child.onExit((e) => {
+    let reapTimer: ReturnType<typeof setTimeout> | null = null;
+    let exitSub: { dispose(): void } = { dispose: () => undefined };
+    exitSub = child.onExit((e) => {
       // Drain any buffered output BEFORE the exit chunk so ordering holds.
       coalescer.flush();
       const chunk: TerminalOutputChunk = {
@@ -220,10 +225,29 @@ export class PtyManager {
       entry.listeners.clear();
       for (const h of entry.exitHooks) h(e.exitCode ?? null);
       entry.exitHooks.clear();
+      dataSub.dispose();
+      exitSub.dispose();
       // Keep the entry around briefly so a late consumer still sees
       // the exit code; reap on the next spawn cycle.
-      setTimeout(() => this.entries.delete(id), 30_000).unref?.();
+      reapTimer = setTimeout(() => {
+        this.entries.delete(id);
+        entry.buffer.length = 0;
+        entry.exitChunk = undefined;
+      }, 30_000);
+      reapTimer.unref?.();
     });
+    entry.dispose = () => {
+      dataSub.dispose();
+      exitSub.dispose();
+      if (reapTimer) clearTimeout(reapTimer);
+      reapTimer = null;
+      coalescer.flush();
+      entry.listeners.clear();
+      entry.exitHooks.clear();
+      entry.buffer.length = 0;
+      entry.bufferBytes = 0;
+      entry.exitChunk = undefined;
+    };
 
     return { id, entry };
   }
@@ -286,6 +310,20 @@ export class PtyManager {
     };
   }
 
+  /** Kill a terminal and every process it launched. */
+  kill(id: string, signal?: string): void {
+    const entry = this.get(id);
+    const pid = entry.pty.pid;
+    // Tree-first is intentional: once the shell exits, Windows can no longer
+    // discover descendants by walking the vanished parent pid.
+    killProcessTree(pid, signal === 'SIGTERM' ? 'SIGTERM' : 'SIGKILL');
+    try {
+      entry.pty.kill(signal);
+    } catch {
+      /* already exited */
+    }
+  }
+
   /**
    * OS pids of every live PTY — read BEFORE `killAll()` so the caller can
    * process-tree-kill (taskkill /T) any grandchildren the PTY launched
@@ -303,16 +341,18 @@ export class PtyManager {
 
   /**
    * Kill every live PTY (app shutdown). Best-effort — signals each child and
-   * clears the registry so a second call is a no-op. Grandchildren are reaped
-   * by the caller via tree-kill of `listPids()`.
+   * clears the registry so a second call is a no-op. Process trees are killed
+   * here so every host (Electron and standalone HTTP) gets identical cleanup.
    */
   killAll(): void {
     for (const entry of this.entries.values()) {
+      killProcessTree(entry.pty.pid);
       try {
         entry.pty.kill();
       } catch {
         /* already exited */
       }
+      entry.dispose?.();
     }
     this.entries.clear();
   }

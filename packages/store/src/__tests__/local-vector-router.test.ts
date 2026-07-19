@@ -116,6 +116,36 @@ describe('LocalVectorRouter', () => {
     }
   });
 
+  it('reads namespace state once for a batched diagnostics snapshot', () => {
+    const root = freshDir();
+    const state = {
+      namespace: 'code:p9', purpose: 'code' as const,
+      active_generation_id: 2, building_generation_id: null,
+      expected_items: 2, indexed_items: 2, failed_items: 0, delta_items: 0,
+      last_error: null, updated_at: '2026-01-01 00:00:00',
+    };
+    const listNamespaceGenerations = vi.fn(() => [state]);
+    const router = new LocalVectorRouter({
+      resolveProject: (id) => ({ id, rootPath: root }),
+      semanticStore: { listNamespaceGenerations },
+    });
+
+    const statuses = router.getNamespaceStatuses([
+      'code:p9',
+      'snapshot:p9',
+      'memory:project:p9',
+    ]);
+
+    expect(statuses.map((status) => status.namespace)).toEqual([
+      'code:p9',
+      'snapshot:p9',
+      'memory:project:p9',
+    ]);
+    expect(statuses[0].active?.tableName).toBe('code_g_2');
+    expect(new Set(statuses.map((status) => status.size_bytes)).size).toBe(1);
+    expect(listNamespaceGenerations).toHaveBeenCalledTimes(1);
+  });
+
   it('routes project memory and global docs/memory scopes to separate DBs', () => {
     const root = freshDir();
     const dataDir = freshDir();

@@ -105,6 +105,16 @@ export class SshConnectionManager {
     managed.client.end();
   }
 
+  /** Force-close every pooled connection (application shutdown). */
+  disconnectAll(): void {
+    const live = [...this.conns.values()];
+    this.conns.clear();
+    this.pendingChallenges.clear();
+    for (const managed of live) {
+      try { managed.client.end(); } catch { /* already closed */ }
+    }
+  }
+
   /**
    * Persist a host key as trusted (TOFU) after the user accepts it — but ONLY if
    * this exact fingerprint was actually presented by `host:port` during a recent
@@ -121,6 +131,10 @@ export class SshConnectionManager {
   }
 
   private recordChallenge(host: string, port: number, fingerprint: string): void {
+    const now = Date.now();
+    for (const [key, challenge] of this.pendingChallenges) {
+      if (challenge.expiresAt < now) this.pendingChallenges.delete(key);
+    }
     this.pendingChallenges.set(`${host}:${port}`, { fingerprint, expiresAt: Date.now() + CHALLENGE_TTL_MS });
   }
 
@@ -134,19 +148,43 @@ export class SshConnectionManager {
     }
     // ProxyJump semantics: connect to j1, forward through it to j2, … to jn,
     // then forward from jn to the final target and dial it over that stream.
-    const lastJump = await this.connectChain(spec.jump);
-    const sock = await forwardOut(lastJump, spec.host, spec.port ?? DEFAULT_PORT);
-    return this.dial({ ...spec, jump: undefined }, sock);
+    const jumps = await this.connectChain(spec.jump);
+    try {
+      const sock = await forwardOut(jumps.at(-1)!, spec.host, spec.port ?? DEFAULT_PORT);
+      const target = await this.dial({ ...spec, jump: undefined }, sock);
+      // The target is transported through every jump client. Closing it must
+      // release the upstream chain too; otherwise each reconnect leaks sockets
+      // and keepalive timers for all prior hops.
+      target.once('close', () => {
+        for (const jump of jumps.reverse()) {
+          try { jump.end(); } catch { /* already closed */ }
+        }
+      });
+      return target;
+    } catch (error) {
+      for (const jump of jumps.reverse()) {
+        try { jump.end(); } catch { /* already closed */ }
+      }
+      throw error;
+    }
   }
 
   /** Connect sequentially through the jump chain (nearest-first), returning the LAST hop's Client. */
-  private async connectChain(jumps: SshConnectSpec[]): Promise<Client> {
-    let client = await this.dial({ ...jumps[0], jump: undefined });
-    for (let i = 1; i < jumps.length; i += 1) {
-      const sock = await forwardOut(client, jumps[i].host, jumps[i].port ?? DEFAULT_PORT);
-      client = await this.dial({ ...jumps[i], jump: undefined }, sock);
+  private async connectChain(jumps: SshConnectSpec[]): Promise<Client[]> {
+    const connected: Client[] = [];
+    try {
+      connected.push(await this.dial({ ...jumps[0], jump: undefined }));
+      for (let i = 1; i < jumps.length; i += 1) {
+        const sock = await forwardOut(connected.at(-1)!, jumps[i].host, jumps[i].port ?? DEFAULT_PORT);
+        connected.push(await this.dial({ ...jumps[i], jump: undefined }, sock));
+      }
+      return connected;
+    } catch (error) {
+      for (const client of connected.reverse()) {
+        try { client.end(); } catch { /* already closed */ }
+      }
+      throw error;
     }
-    return client;
   }
 
   private dial(spec: SshConnectSpec, sock?: Duplex): Promise<Client> {

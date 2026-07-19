@@ -104,6 +104,16 @@ function refreshThresholdMs(extra: Record<string, unknown> | undefined): number 
 
 export const KIMI_CODE_SEED_MODELS = [
   {
+    model_id: 'k3',
+    name: 'Kimi K3',
+    display_name: 'Kimi K3',
+    context_window: 1_048_576,
+    default_max_tokens: 32_000,
+    can_reason: true,
+    supports_attachments: true,
+    description: 'Kimi flagship coding model with low, high, and max reasoning effort.',
+  },
+  {
     model_id: 'kimi-k2.6',
     name: 'Kimi K2.6',
     display_name: 'Kimi K2.6',
@@ -553,6 +563,10 @@ function isKimiK2(id: string): boolean {
   return /^kimi-k2/i.test(id);
 }
 
+function isKimiK3(id: string): boolean {
+  return /^k3$/i.test(id);
+}
+
 function isAlwaysThinking(id: string): boolean {
   return /thinking/i.test(id);
 }
@@ -561,9 +575,10 @@ export function mapKimiCodeModels(models: KimiCodeModelInfo[]): UpsertModelInput
   return models.map((model) => {
     const id = model.id;
     const hasK2Defaults = isKimiK2(id);
-    const canReason = Boolean(model.supports_reasoning) || hasK2Defaults || isAlwaysThinking(id);
-    const supportsImage = Boolean(model.supports_image_in) || hasK2Defaults;
-    const supportsVideo = Boolean(model.supports_video_in) || hasK2Defaults;
+    const hasK3Defaults = isKimiK3(id);
+    const canReason = Boolean(model.supports_reasoning) || hasK2Defaults || hasK3Defaults || isAlwaysThinking(id);
+    const supportsImage = Boolean(model.supports_image_in) || hasK2Defaults || hasK3Defaults;
+    const supportsVideo = Boolean(model.supports_video_in) || hasK2Defaults || hasK3Defaults;
     const modalities = ['text'];
     if (supportsImage) modalities.push('image');
     if (supportsVideo) modalities.push('video');
@@ -579,12 +594,14 @@ export function mapKimiCodeModels(models: KimiCodeModelInfo[]): UpsertModelInput
       name: model.display_name ?? id,
       display_name: model.display_name ?? id,
       description: descriptionParts.join('; '),
-      context_window: model.context_length ?? getRegistryContextWindow(id),
-      default_max_tokens: hasK2Defaults ? 32_000 : null,
+      context_window: model.context_length ?? (hasK3Defaults ? 1_048_576 : getRegistryContextWindow(id)),
+      default_max_tokens: hasK2Defaults || hasK3Defaults ? 32_000 : null,
       can_reason: canReason,
       supports_attachments: supportsImage || supportsVideo,
-      default_reasoning_level: canReason ? 'high' : null,
-      supported_reasoning_levels: canReason ? ['low', 'medium', 'high'] : null,
+      default_reasoning_level: hasK3Defaults ? 'max' : canReason ? 'high' : null,
+      supported_reasoning_levels: hasK3Defaults
+        ? ['low', 'high', 'max']
+        : canReason ? ['low', 'medium', 'high'] : null,
       visibility: 'list',
       supported_in_api: true,
       input_modalities: modalities,
@@ -596,8 +613,12 @@ export function mapKimiCodeModels(models: KimiCodeModelInfo[]): UpsertModelInput
 export function kimiCodeSeedUpsertModels(): UpsertModelInput[] {
   return KIMI_CODE_SEED_MODELS.map((model) => ({
     ...model,
-    supported_reasoning_levels: model.can_reason ? ['low', 'medium', 'high'] : null,
-    default_reasoning_level: model.can_reason ? 'high' : null,
+    supported_reasoning_levels: isKimiK3(model.model_id)
+      ? ['low', 'high', 'max']
+      : model.can_reason ? ['low', 'medium', 'high'] : null,
+    default_reasoning_level: isKimiK3(model.model_id)
+      ? 'max'
+      : model.can_reason ? 'high' : null,
     input_modalities: model.supports_attachments ? ['text', 'image', 'video'] : ['text'],
     visibility: 'list',
     supported_in_api: true,

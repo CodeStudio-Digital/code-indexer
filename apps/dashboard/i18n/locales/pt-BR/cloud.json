@@ -28,7 +28,21 @@
     "trialing": "Trial Pro ativo"
   },
   "tierName": { "free": "Free", "pro": "Pro", "team": "Team", "enterprise": "Enterprise" },
-  "menu": { "twofa": "Configurar 2FA", "subscription": "Gerenciar assinatura", "feedback": "Enviar feedback", "sessions": "Sessões", "teams": "Times" },
+  "menu": { "twofa": "Configurar 2FA", "subscription": "Gerenciar assinatura", "feedback": "Enviar feedback", "sessions": "Sessões", "teams": "Times", "github": "Conexões do GitHub" },
+  "github": {
+    "title": "GitHub",
+    "description": "Conecte sua conta ou organização à identidade opcional do agente MegaBrainStudio.",
+    "connect": "Conectar GitHub",
+    "disconnect": "Desvincular do MegaBrain",
+    "manage": "Gerenciar repositórios no GitHub",
+    "refresh": "Atualizar",
+    "empty": "Nenhuma conta ou organização conectada.",
+    "unconfigured": "O backend ainda não recebeu os segredos da GitHub App.",
+    "allRepositories": "todos os repositórios",
+    "selectedRepositories": "repositórios selecionados",
+    "suspended": "suspensa",
+    "nativePriority": "O login Git já configurado no projeto continua sendo o padrão. A identidade MegaBrain só é usada quando você a seleciona explicitamente; não há fallback silencioso."
+  },
   "teams": {
     "title": "Times",
     "subtitle": "Crie um time para compartilhar workspaces de API e uma base de conhecimento. Membros herdam o plano do time.",

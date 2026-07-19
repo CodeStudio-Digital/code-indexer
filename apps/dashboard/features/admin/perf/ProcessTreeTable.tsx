@@ -15,7 +15,7 @@ function WorkerRow({ label, stats }: { label: string; stats: WorkerMemStats | nu
       <td className="px-2">{'worker_thread'}</td>
       <td className="px-2 text-right">—</td>
       <td className="px-2 text-right">
-        {stats ? `${stats.heapUsedMB} / ${stats.heapTotalMB} MB` : t('perf.workers.noData')}
+        {stats ? `${stats.heapUsedMB} / ${stats.heapLimitMB} MB` : t('perf.workers.noData')}
       </td>
       <td className="px-2 text-right">{stats ? `${stats.loopP99Ms} ms` : '—'}</td>
     </tr>
@@ -48,7 +48,7 @@ export function ProcessTreeTable({ sample }: { sample: PerfSample }) {
             <td className="px-2 text-right">
               {`${main.rssMB} MB`}
               <span className="text-muted-foreground font-normal">
-                {` (${t('perf.main.heapShort')} ${main.heapUsedMB} · ${t('perf.main.nativeShort')} ${main.nativeMB})`}
+                {` (${t('perf.main.heapShort')} ${main.heapUsedMB}/${main.heapLimitMB} · ${t('perf.main.nativeShort')} ${main.nativeMB})`}
               </span>
             </td>
             <td className="px-2 text-right">{`p99 ${main.loopP99Ms} ms`}</td>

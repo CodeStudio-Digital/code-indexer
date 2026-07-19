@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   cleanupUnusedSemanticVectors,
+  fetchProjectSemanticStatuses,
   fetchSemanticGenerations,
   probeSemanticTarget,
   reindexProjectSemanticCode,
@@ -11,6 +12,23 @@ import {
 
 describe('semantic admin API', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('loads every project semantic status in one transport call', async () => {
+    const results = [{
+      project: { id: 7, name: 'demo' },
+      status: { project_id: 7, profiles: [], namespaces: [] },
+      error: null,
+    }];
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ results }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchProjectSemanticStatuses()).resolves.toEqual(results);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/semantic/status');
+  });
 
   it('requests only the selected project namespace', async () => {
     const fetchMock = vi.fn(async () => new Response(

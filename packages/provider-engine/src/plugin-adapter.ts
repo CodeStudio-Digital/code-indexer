@@ -8,7 +8,6 @@ import type {
   ResolvedCreds,
 } from '@mcp/provider-sdk';
 import { defineProviderAdapter } from '@mcp/provider-sdk';
-import type { ProviderDefinition } from '@mcp/provider-sdk';
 
 export interface ProviderAdapterFromSpecOptions {
   authHandlers?: ProviderAuthHandlers;
@@ -36,11 +35,6 @@ export function defineProviderAdapterFromSpec(
   spec: ProviderSpec,
   opts: ProviderAdapterFromSpecOptions = {},
 ): ProviderRuntimeAdapter {
-  let defPromise: Promise<ProviderDefinition> | null = null;
-  const definition = async (): Promise<ProviderDefinition> => {
-    defPromise ??= import('./build-definition.js').then((m) => m.buildProviderDefinition(spec));
-    return defPromise;
-  };
   return defineProviderAdapter({
     sdkVersion: 2,
     kind: spec.kind,
@@ -48,20 +42,6 @@ export function defineProviderAdapterFromSpec(
     resolveCredentials:
       opts.resolveCredentials ??
       (spec.credKind === 'api-key' ? resolveApiKeyCredentials(spec) : undefined),
-    async fetchModels({ creds }) {
-      const def = await definition();
-      if (!def.fetchModels) return spec.defaultModels;
-      return def.fetchModels(creds);
-    },
     discoverModels: opts.discoverModels,
-    async testConnection({ config, creds }) {
-      const def = await definition();
-      if (def.testConnection) await def.testConnection({ config, creds });
-    },
-    async createCoder({ creds, model, opts: coderOpts }) {
-      const def = await definition();
-      if (!def.createCoder) throw new Error(`Provider '${spec.kind}' does not support the coder`);
-      return def.createCoder(creds, model, coderOpts);
-    },
   });
 }

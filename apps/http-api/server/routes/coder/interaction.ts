@@ -12,10 +12,7 @@ import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseIdParam, notFound } from '../_helpers.js';
-import {
-  coderWorkerEnabled,
-  getCoderWorkerPool,
-} from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 
@@ -64,48 +61,31 @@ export function mountCoderInteractionRoutes(
   runtime: CoderRuntime,
 ): void {
   const { sessionStore } = deps;
-  const { activeRuns, findPendingInteraction, findDanglingToolUse } = runtime;
+  const { findPendingInteraction, findDanglingToolUse } = runtime;
+  const workerPool = getCoderWorkerPool();
 
   /**
    * Emit a route-level `worker_log` event so the dashboard's
    * WorkerLogPanel shows endpoint hits alongside runner events. Picks
-   * the bus from the worker pool first (worker mode) or `activeRuns`
-   * (legacy). When neither has a live run, the log is silently dropped
-   * — no client is subscribed to receive it.
+   * the bus from the mandatory worker pool. When no run is live, the log is
+   * silently dropped because no client is subscribed to receive it.
    */
   const logRouteHit = (sessionId: number, endpoint: string, preview: unknown): void => {
-    const bus = coderWorkerEnabled()
-      ? getCoderWorkerPool().getBus(sessionId)
-      : activeRuns.get(sessionId);
+    const bus = workerPool.getBus(sessionId);
     emitWorkerLog(bus, 'info', 'route', `POST ${endpoint}`, preview);
   };
 
   app.post('/api/coder/sessions/:id/abort', async (c) => {
     const id = parseIdParam(c);
-    // P17 — abort the worker's runner first if it's the active path.
-    // The proxy bus on main has no `.runner`, so the legacy branch
-    // below would no-op silently.
-    if (coderWorkerEnabled()) {
-      try {
-        await getCoderWorkerPool().abort(id);
-        return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker abort failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    const bus = activeRuns.get(id);
-    if (!bus) return c.json({ error: 'no active run' }, 404);
-    // In-process (non-worker) abort: kill background subagent jobs too — they
-    // are detached from the run signal, so runner.abort() alone leaves them.
     try {
-      const { getSubagentJobManager } = await import('@mcp/code-agent/tools/subagent-jobs.js');
-      getSubagentJobManager().abortSession(id, 'user abort');
-    } catch { /* best-effort */ }
-    bus.ctrl.abort();
-    bus.runner?.abort();
-    return c.json({ ok: true });
+      await workerPool.abort(id);
+      return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker abort failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return c.json({ error: 'worker abort failed' }, 503);
+    }
   });
 
   /**
@@ -140,32 +120,15 @@ export function mountCoderInteractionRoutes(
       ...(skillIds ? { selectedSkillIds: skillIds } : {}),
     };
 
-    // Worker mode: the runner lives in a worker_thread — poke it via pool RPCs
-    // (the main-side mirrored bus has no `.runner`).
-    if (coderWorkerEnabled()) {
-      const pool = getCoderWorkerPool();
-      const bus = pool.getBus(id);
-      if (!bus || bus.ended) return c.json({ noActiveRun: true });
-      const waiting = await pool.isWaitingForInput(id).catch(() => false);
-      if (waiting) {
-        if (!interject) return c.json({ waiting: true });
-        await pool.interruptWait(id).catch(() => undefined);
-      }
-      const roundMessageId = sessionStore.appendMessage(id, userMsg);
-      await pool.pushUserMessage(id, content, skillIds, roundMessageId);
-      return c.json({ injected: true });
-    }
-
-    // Legacy in-process runner.
-    const entry = activeRuns.get(id);
-    if (!entry || entry.ended || !entry.runner) return c.json({ noActiveRun: true });
-    const runner = entry.runner;
-    if (runner.isWaitingForInput()) {
+    const bus = workerPool.getBus(id);
+    if (!bus || bus.ended) return c.json({ noActiveRun: true });
+    const waiting = await workerPool.isWaitingForInput(id).catch(() => false);
+    if (waiting) {
       if (!interject) return c.json({ waiting: true });
-      runner.interruptWait();
+      await workerPool.interruptWait(id).catch(() => undefined);
     }
     const roundMessageId = sessionStore.appendMessage(id, userMsg);
-    runner.pushUserMessage(content, { selectedSkillIds: skillIds, roundMessageId });
+    await workerPool.pushUserMessage(id, content, skillIds, roundMessageId);
     return c.json({ injected: true });
   });
 
@@ -174,36 +137,13 @@ export function mountCoderInteractionRoutes(
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
     logRouteHit(id, '/answer', { answer_preview: answer.slice(0, 80) });
-    // Apêndice 4 Fase 2 — track whether we attempted the worker path.
-    // If yes and we still fall through, the response must signal
-    // `resumed_via_worker:true` so the dashboard POSTs `/messages`
-    // (spinning a new worker run) instead of `/continue` (which would
-    // start a conflicting in-process runner).
-    const inWorkerMode = coderWorkerEnabled();
-    // P17 — worker mode: the runner lives in a worker_thread, so we
-    // can't read `entry.runner` directly. Push the answer via the
-    // pool's `provideUserInput` RPC; the worker resolves the pending
-    // `waitForUserInput()` and the runner proceeds normally.
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(
-          id,
-          JSON.stringify({ answer }),
-        );
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        // Fall through to the resume path so the user's answer still
-        // lands in the DB and the next /messages can replay it.
-      }
-    }
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(JSON.stringify({ answer }));
-      if (ok) return c.json({ ok });
-      // Runner exists but isn't waiting — fall through to resume path.
+    try {
+      const ok = await workerPool.provideUserInput(id, JSON.stringify({ answer }));
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const pending = findPendingInteraction(id);
     if (!pending || pending.name !== 'ask_user') {
@@ -218,11 +158,7 @@ export function mountCoderInteractionRoutes(
       }],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 
   /**
@@ -238,21 +174,13 @@ export function mountCoderInteractionRoutes(
     const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
     logRouteHit(id, '/decide', { questions: Object.keys(answers).length });
     const payload = JSON.stringify({ answers });
-    const inWorkerMode = coderWorkerEnabled();
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(id, payload);
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput(decide) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(payload);
-      if (ok) return c.json({ ok });
+    try {
+      const ok = await workerPool.provideUserInput(id, payload);
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput(decide) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const pending = findPendingInteraction(id);
     if (!pending || pending.name !== 'decision_gate') {
@@ -276,11 +204,7 @@ export function mountCoderInteractionRoutes(
       }],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 
   /**
@@ -309,21 +233,13 @@ export function mountCoderInteractionRoutes(
       alwaysAllow: !!body.always_allow,
     });
     const askId = approvalAskId(toolUseId);
-    const inWorkerMode = coderWorkerEnabled();
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(id, payload, askId);
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput(tool-approval) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(payload, askId);
-      if (ok) return c.json({ ok });
+    try {
+      const ok = await workerPool.provideUserInput(id, payload, askId);
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput(tool-approval) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const dangling = findDanglingToolUse(id, toolUseId);
     if (!dangling) return c.json({ error: 'no pending tool approval' }, 404);
@@ -339,11 +255,7 @@ export function mountCoderInteractionRoutes(
       }],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 
   app.post('/api/coder/sessions/:id/plan-response', async (c) => {
@@ -354,23 +266,13 @@ export function mountCoderInteractionRoutes(
     const approved = !aborted && !!body.approved;
     logRouteHit(id, '/plan-response', { approved, aborted, has_feedback: !!body.feedback });
     const envelope = JSON.stringify({ approved, feedback: body.feedback, aborted });
-    const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
-    // P17 — worker mode: forward the verdict via the pool RPC so the
-    // worker-side runner unblocks. See `/answer` for the rationale.
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(id, envelope);
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(envelope);
-      if (ok) return c.json({ ok });
+    try {
+      const ok = await workerPool.provideUserInput(id, envelope);
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
     const pending = findPendingInteraction(id);
     if (!pending || pending.name !== 'submit_plan') {
@@ -423,11 +325,7 @@ export function mountCoderInteractionRoutes(
         }
       }
     }
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 
   /**
@@ -476,9 +374,7 @@ export function mountCoderInteractionRoutes(
       task_count: body.tasks?.length ?? 0,
       execution_mode: body.execution_mode ?? null,
     });
-    const inWorkerMode = coderWorkerEnabled(); // Apêndice 4 Fase 2.
-
-    // P17 — worker mode: forward the verdict via the pool RPC. The
+    // Forward the verdict via worker RPC. The
     // worker's `submit_tasks` is blocked in `waitForUserInput()`; this
     // pushes the JSON it expects and unblocks the tool with the right
     // approve/reject branch. Without this path, the rest of the
@@ -486,28 +382,9 @@ export function mountCoderInteractionRoutes(
     // the worker stays blocked, leaving session state inconsistent
     // (UI shows "rejected" even when user clicked approve, because
     // `resolveTasks(approved:false)` runs on the worker side too).
-    if (inWorkerMode) {
-      try {
-        const ok = await getCoderWorkerPool().provideUserInput(
-          id,
-          JSON.stringify({
-            approved,
-            feedback: body.feedback,
-            tasks: body.tasks,
-            execution_mode: body.execution_mode,
-          }),
-        );
-        if (ok) return c.json({ ok: true });
-      } catch (err) {
-        console.warn(
-          `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    const entry = activeRuns.get(id);
-    if (entry?.runner) {
-      const ok = entry.runner.provideUserInput(
+    try {
+      const ok = await workerPool.provideUserInput(
+        id,
         JSON.stringify({
           approved,
           feedback: body.feedback,
@@ -515,7 +392,11 @@ export function mountCoderInteractionRoutes(
           execution_mode: body.execution_mode,
         }),
       );
-      if (ok) return c.json({ ok });
+      if (ok) return c.json({ ok: true });
+    } catch (err) {
+      console.warn(
+        `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // Resume path — runner is gone. Find the pending submit_tasks / task_list
@@ -546,11 +427,7 @@ export function mountCoderInteractionRoutes(
       ],
     };
     sessionStore.appendMessage(id, toolMsg);
-    return c.json(
-      inWorkerMode
-        ? { ok: true, resumed_via_worker: true }
-        : { ok: true, resumed: true },
-    );
+    return c.json({ ok: true, resumed_via_worker: true });
   });
 
   // Set/clear fallback provider+model for a session
@@ -580,8 +457,7 @@ export function mountCoderInteractionRoutes(
     if (!session) return notFound(c);
     const newProvider = await createChatProviderAsync(body.provider, body.model);
     sessionStore.updateSessionProvider(id, body.provider, newProvider.model);
-    const entry = activeRuns.get(id);
-    entry?.runner?.swapProvider(newProvider);
+    await workerPool.swapProvider(id, body.provider, newProvider.model);
     return c.json({ ok: true, provider: body.provider, model: newProvider.model });
   });
 }

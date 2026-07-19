@@ -96,7 +96,7 @@ contributions snapshot lives in `installed_plugins`).
 | `contributeCommand` | Command Palette (`Ctrl+Shift+P`) | — |
 | `contributeTheme` | "Apply theme: X" in the palette | Overrides shadcn CSS vars; toggles `.dark`. |
 | `contributeProjectModule` | Project/module facet | Declares IntelliJ-style project modules activated by files/deps, with nested actions/status/run configs. |
-| `contributeEditorAction` | Editor/Search Everywhere command | Can call a contributed tool through `runsTool`; active only when its activation rule matches. |
+| `contributeEditorAction` | Editor/Search Everywhere command + optional gutter glyph | Can call a contributed tool through `runsTool`, pass static `toolArgs`, and target documents declaratively; active only when its activation rule matches. |
 | `contributeStatusBarItem` | IDE status bar | Lightweight project/module indicator; optional click-through to `runsTool`. |
 | `contributeRunConfiguration` | Project run config | Declarative command/args/kind metadata for project and module runners. |
 | `contributeProvider` | LLM provider metadata | Declares the provider shape for Admin/seed/pricing. Bundled first-party providers can also export `providerAdapter` for V2 owned runtime. |
@@ -139,6 +139,36 @@ export default definePlugin({
   ],
 });
 ```
+
+Editor actions can also render a host-owned glyph in Monaco without giving plugin code access to the
+editor process. `activation` selects the project/module on the host; `documentSelector` selects the
+open document in the renderer. When both file and language selectors are present, both must match.
+The line matcher is a small literal DSL (`equals`, `startsWith`, `contains`, `word`) rather than a
+plugin-provided regular expression.
+
+```ts
+contributeEditorAction({
+  id: 'podman-build-containerfile',
+  label: 'Podman: Build Image',
+  runsTool: 'podman_project_run',
+  toolArgs: { buildOnly: true },
+  scope: 'editor',
+  documentSelector: {
+    filePatterns: ['Dockerfile', 'Dockerfile.*', 'Containerfile', 'Containerfile.*'],
+    languageIds: ['dockerfile'],
+  },
+  gutter: {
+    line: { text: 'FROM', match: 'word', trim: true, caseSensitive: false },
+    occurrence: 'first',
+    icon: 'build',
+    tooltip: 'Build this image with Podman',
+  },
+});
+```
+
+On a gutter click the IDE invokes `runsTool` with `toolArgs` plus a reserved `_editor` object:
+`{ path, languageId, lineNumber, column, lineText }`. The buffer is never sent. The worker still runs
+through the normal plugin capability boundary and receives project identity through `ctx`.
 
 ### Provider plugins
 

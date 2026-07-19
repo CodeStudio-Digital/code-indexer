@@ -24,10 +24,7 @@ import {
   detachProjectFromGlobalSession,
   GlobalWorkspaceError,
 } from './global-workspace.js';
-import {
-  coderWorkerEnabled,
-  getCoderWorkerPool,
-} from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import {
   listCustomAgents,
   resolveAgentSelection,
@@ -283,29 +280,21 @@ interface CreateSessionBody {
 export function mountCoderSessionsRoutes(
   app: Hono,
   deps: ServerDeps,
-  runtime: CoderRuntime,
+  _runtime: CoderRuntime,
 ): void {
   const { sessionStore, providerStore } = deps;
-  const { activeRuns } = runtime;
+  const workerPool = getCoderWorkerPool();
 
   const validateAgentSelection = (value: unknown): value is AgentSelectionId =>
     resolveAgentSelection(providerStore, value) !== null;
 
-  // Abort a session's LIVE run (worker pool or legacy bus) — best-effort. Used
+  // Abort a session's live worker run — best-effort. Used
   // before tearing down a global session's virtual workspace so the runner +
   // indexer stop touching the junction dir + synthetic project we're about to
   // remove (otherwise the cwd vanishes mid-turn and a re-index races deleteProject).
   const abortActiveRun = async (id: number): Promise<void> => {
     try {
-      if (coderWorkerEnabled()) {
-        await getCoderWorkerPool().abort(id);
-        return;
-      }
-      const bus = activeRuns.get(id);
-      if (bus) {
-        bus.ctrl.abort();
-        bus.runner?.abort();
-      }
+      await workerPool.abort(id);
     } catch {
       /* best-effort — teardown still proceeds */
     }
@@ -318,9 +307,7 @@ export function mountCoderSessionsRoutes(
   // on the next run anyway).
   const isRunActive = (id: number): boolean => {
     try {
-      if (coderWorkerEnabled()) return getCoderWorkerPool().isRunning(id);
-      const bus = activeRuns.get(id);
-      return !!bus && !bus.ended;
+      return workerPool.isRunning(id);
     } catch {
       return false;
     }
@@ -825,7 +812,7 @@ export function mountCoderSessionsRoutes(
 
   /**
    * Per-session tool permission mode (PermissionGate). Persists the column
-   * AND pushes the change into the live runner (worker RPC or in-process),
+   * AND pushes the change into the live worker runner,
    * so a mid-run switch applies to the next gated tool call. `null` clears
    * back to the default ('auto').
    */
@@ -838,15 +825,9 @@ export function mountCoderSessionsRoutes(
     }
     sessionStore.setSessionToolPermissionMode(id, mode);
     const effective = mode ?? 'auto';
-    if (coderWorkerEnabled()) {
-      try {
-        await getCoderWorkerPool().setToolPermissionMode(id, effective);
-      } catch { /* no live worker — column alone covers the next run */ }
-    } else {
-      try {
-        runtime.activeRuns.get(id)?.runner?.setToolPermissionMode(effective);
-      } catch { /* best-effort live push */ }
-    }
+    try {
+      await workerPool.setToolPermissionMode(id, effective);
+    } catch { /* no live worker — column alone covers the next run */ }
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
@@ -1217,7 +1198,7 @@ export function mountCoderSessionsRoutes(
    */
   app.get('/api/coder/sessions/:id/status', (c) => {
     const id = parseIdParam(c);
-    const bus = activeRuns.get(id);
+    const bus = workerPool.getBus(id);
     return c.json({
       active: !!bus && !bus.ended,
       last_seq: bus ? bus.nextSeq - 1 : -1,

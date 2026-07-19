@@ -17,7 +17,7 @@ export function register(program: Command): void {
     .option('--plan', 'Plan mode: agent must submit a plan and get user approval before mutating tools')
     .option(
       '--agent <id>',
-      'Agent preset: explore (read-only) | plan (read + plan mode) | build (read+edit) | admin (everything). Default: auto by first message',
+      'Agent preset: explore (repo read-only) | research (web research) | plan (read + plan mode) | build (read+edit) | admin (everything). Default: auto by first message',
     )
     .option(
       '--profile <id>',

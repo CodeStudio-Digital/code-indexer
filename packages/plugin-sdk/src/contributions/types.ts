@@ -124,6 +124,45 @@ export interface ContributedTheme {
 
 export type PluginContributionScope = 'application' | 'editor' | 'project' | 'module';
 
+/**
+ * Safe, declarative line matcher used by editor gutter contributions. The
+ * renderer deliberately evaluates this small DSL instead of executing plugin
+ * code (or arbitrary regular expressions) in the Monaco process.
+ */
+export interface EditorGutterLineMatcher {
+  text: string;
+  match: 'equals' | 'startsWith' | 'contains' | 'word';
+  /** Trim leading/trailing whitespace before matching. */
+  trim?: boolean;
+  /** Defaults to true. */
+  caseSensitive?: boolean;
+}
+
+export interface EditorDocumentSelector {
+  /** Basename/path globs, e.g. `Dockerfile`, `compose*.yaml`, `infra/**`. */
+  filePatterns?: string[];
+  /** Monaco language ids, e.g. `dockerfile` or `yaml`. */
+  languageIds?: string[];
+}
+
+export interface EditorGutterContribution {
+  line: EditorGutterLineMatcher;
+  /** Paint only the first matching line or every matching line (default). */
+  occurrence?: 'first' | 'all';
+  /** Host-controlled glyph; plugins cannot inject CSS into the editor. */
+  icon?: 'run' | 'build' | 'inspect';
+  tooltip?: string;
+}
+
+/** Context injected by the IDE under the reserved `_editor` tool argument. */
+export interface PluginEditorInvocationContext {
+  path: string;
+  languageId: string;
+  lineNumber: number;
+  column: number;
+  lineText: string;
+}
+
 export interface ContributedEditorAction {
   id: string;
   label: string;
@@ -135,6 +174,12 @@ export interface ContributedEditorAction {
    * runtime, so actions stay declarative.
    */
   runsTool?: string;
+  /** Static arguments merged into the tool call for palette and gutter runs. */
+  toolArgs?: Record<string, unknown>;
+  /** Restrict the action to matching files/languages in the active editor. */
+  documentSelector?: EditorDocumentSelector;
+  /** Optional IntelliJ-style clickable glyph rendered beside matching lines. */
+  gutter?: EditorGutterContribution;
   scope?: Extract<PluginContributionScope, 'editor' | 'project' | 'module'>;
   activation?: ActivationRule;
 }

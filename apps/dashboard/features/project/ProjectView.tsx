@@ -65,6 +65,13 @@ import { registerProjectCommands } from './project-commands.js';
 import { registerEditorCommands } from '../workspace/editor/editor-commands.js';
 import { registerCommands } from '../../keymap/commands.js';
 import { apiCall } from '../../lib/api-client.js';
+import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
+import {
+  matchesEditorDocument,
+  pluginEditorContextFromEditor,
+} from '../workspace/editor/plugin-editor-gutter.js';
+import { runPluginEditorAction } from '../workspace/editor/plugin-editor-action-runner.js';
+import { getActiveEditor } from '../workspace/editor/editor-models.js';
 import { startRecentFilesTracking } from '../../state/recent-files.js';
 import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
@@ -429,28 +436,29 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   }, [projectId]);
 
   useEffect(() => {
-    if (!contribEditorActions.length) return undefined;
+    const activeLanguageId = activeFilePath ? languageIdForPath(activeFilePath) : undefined;
+    const activeActions = contribEditorActions.filter((action) => (
+      !action.documentSelector
+      || (activeFilePath != null && matchesEditorDocument(action, activeFilePath, activeLanguageId))
+    ));
+    if (!activeActions.length) return undefined;
     return registerCommands(
-      contribEditorActions.map((action) => ({
+      activeActions.map((action) => ({
         id: `plugin.${action.pluginNs}.${action.id}`,
         title: action.label,
         titlePt: action.label,
         category: action.category ?? `Plugin: ${action.pluginNs}`,
-        target: 'project' as const,
+        target: action.scope === 'editor' ? 'editor' as const : 'project' as const,
         defaultKeys: action.shortcut ? { intellij: [action.shortcut], vscode: [action.shortcut] } : undefined,
         allowInInputs: true,
-        run: async () => {
-          if (!action.runsTool) return;
-          await apiCall('plugins.invokeTool', {
-            namespace: action.pluginNs,
-            tool: action.runsTool,
-            args: {},
-            projectId,
-          });
-        },
+        run: () => runPluginEditorAction(
+          action,
+          projectId,
+          pluginEditorContextFromEditor(getActiveEditor(), projectId, activeFilePath ?? undefined, activeLanguageId),
+        ),
       })),
     );
-  }, [contribEditorActions, projectId]);
+  }, [activeFilePath, contribEditorActions, projectId]);
   return (
     // `h-full` (not `flex-1`) because the parent <main> in AppShell is
     // a plain block element — `flex-1` would no-op and the bottom of

@@ -25,6 +25,8 @@ import {
   reqString,
   optString,
   optBool,
+  composeFilePath,
+  editorContext,
   toList,
   toRecord,
 } from './lib.js';
@@ -105,7 +107,15 @@ export const podTools = [
       const action = reqString(a, 'action') as 'up' | 'down' | 'ps';
       if (!['up', 'down', 'ps'].includes(action)) return fail('action must be up, down or ps');
       const detach = a.detach === undefined ? true : optBool(a, 'detach');
-      const r = await podman(ctx, composeArgs(action, { file: optString(a, 'file'), detach }));
+      const requestedFile = optString(a, 'file');
+      const editor = editorContext(a);
+      const file = requestedFile
+        ? composeFilePath(requestedFile)
+        : editor ? composeFilePath(editor.path) : undefined;
+      if ((requestedFile || editor) && !file) {
+        return fail('compose file must be a project-relative compose*.yml/yaml file');
+      }
+      const r = await podman(ctx, composeArgs(action, { file, detach }));
       if (r.code !== 0) return fail(r.stdout.trim() || `podman compose ${action} failed (exit ${r.code})`);
       return ok(r.stdout.trim() || `compose ${action} done.`);
     },

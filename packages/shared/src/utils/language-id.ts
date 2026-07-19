@@ -11,7 +11,8 @@ export function languageIdForPath(path: string): string {
   const base = path.toLowerCase().split(/[\\/]/).pop() ?? '';
   // Extensionless launchers and convention-based build files need an explicit
   // mapping: Monaco cannot infer a language from their contents or shebang.
-  if (base === 'dockerfile' || base.startsWith('dockerfile.')) return 'dockerfile';
+  if (base === 'dockerfile' || base.startsWith('dockerfile.')
+    || base === 'containerfile' || base.startsWith('containerfile.')) return 'dockerfile';
   if (base === 'gradlew' || base === 'mvnw' || base === 'configure'
     || base === '.bashrc' || base === '.bash_profile' || base === '.profile'
     || base === '.zshrc' || base === '.zprofile') return 'shell';
@@ -53,7 +54,7 @@ export function languageIdForPath(path: string): string {
     case 'sh': case 'bash': case 'zsh': case 'fish': return 'shell';
     case 'bat': case 'cmd': return 'bat';
     case 'ps1': return 'powershell';
-    case 'dockerfile': return 'dockerfile';
+    case 'dockerfile': case 'containerfile': return 'dockerfile';
     default: return 'plaintext';
   }
 }

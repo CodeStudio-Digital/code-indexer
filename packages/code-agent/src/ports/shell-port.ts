@@ -36,6 +36,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { delimiter } from 'node:path';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 /**
  * Per-project runtime PATH/env to inject into agent-spawned processes — the
@@ -366,9 +367,12 @@ export class LocalShellAdapter implements IShellPort {
       cwd,
       shell: isWin ? true : '/bin/bash',
       env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv),
+      detached: !isWin,
+      windowsHide: true,
     });
+    const untrack = trackProcessTree(child.pid);
     writeStdin(child, options.stdin);
-    return this.collectStreaming(child, options);
+    return this.collectStreaming(child, options, untrack);
   }
 
   spawn(
@@ -380,14 +384,18 @@ export class LocalShellAdapter implements IShellPort {
     const child = spawn(program, args, {
       cwd,
       env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv),
+      detached: process.platform !== 'win32',
+      windowsHide: true,
     });
+    const untrack = trackProcessTree(child.pid);
     writeStdin(child, options.stdin);
-    return this.collectStreaming(child, options);
+    return this.collectStreaming(child, options, untrack);
   }
 
   private collectStreaming(
     child: ReturnType<typeof spawn>,
     options: ShellExecOptions,
+    untrack: () => void,
   ): Promise<ShellExecResult> {
     const { timeoutMs, signal } = options;
     const maxBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
@@ -401,12 +409,15 @@ export class LocalShellAdapter implements IShellPort {
       const timer = setTimeout(() => {
         timedOut = true;
         killed = true;
-        child.kill('SIGKILL');
+        // Timeout/abort is a hot background path. Kill through the existing
+        // handle; the process-wide tracker performs the expensive tree sweep
+        // only when the owning worker/application shuts down.
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
       }, timeoutMs);
 
       const onAbort = () => {
         killed = true;
-        child.kill('SIGKILL');
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
       };
       signal?.addEventListener('abort', onAbort);
 
@@ -417,6 +428,7 @@ export class LocalShellAdapter implements IShellPort {
         stderr.append(chunk);
       });
       child.on('close', (code) => {
+        untrack();
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         const stdoutResult = stdout.finishDetailed();

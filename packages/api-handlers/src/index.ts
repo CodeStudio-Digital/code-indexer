@@ -60,11 +60,12 @@ export {
 } from './projects/link-design-system.js';
 export { createFilesHandlers } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
-export { createSshHandlers, sharedSshManager } from './ssh/index.js';
+export { createSshHandlers, sharedSshManager, disposeSharedSshResources } from './ssh/index.js';
 export { createDbClientHandlers } from './db-client/index.js';
 export { createRunnerHandlers } from './runner/index.js';
 export { sharedPtyManager } from './terminal/pty-manager.js';
 export { createRuntimeHandlers } from './runtime/index.js';
+export { disposeShellStreamProcesses } from './runtime/installers/shell-stream.js';
 export { createCoderHandlers } from './coder/index.js';
 export { createLspHandlers } from './lsp/index.js';
 // Boot-time wiring: ensureLspManager wires the onDocEvent listener + the
@@ -99,6 +100,7 @@ export { createEditorHandlers } from './editor/index.js';
 export { createSnapshotsHandlers } from './snapshots/index.js';
 export { createSearchHandlers } from './search/index.js';
 export { createProjectGitHandlers } from './projectGit/index.js';
+export { disposeProjectGitProcesses } from './projectGit/index.js';
 export { PROJECT_GIT_RPC_METHODS, type ProjectGitRpcMethod } from './projectGit/guard.js';
 export { createPluginsHandlers } from './plugins/index.js';
 export { createSystemHandlers } from './system/index.js';

@@ -23,11 +23,26 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       completed_at: null,
     },
   ] as const;
+  const namespaceStatus = (namespace: string) => ({
+    namespace,
+    purpose: namespace.startsWith('code:') ? 'code' : 'memory',
+    dbPath: 'D:/demo/.mcp-indexer/vectors.db',
+    size_bytes: 123,
+    active: namespace === 'code:p7' ? { generationId: 8 } : null,
+    building: null,
+    expected_items: 100,
+    indexed_items: 25,
+    failed_items: 0,
+    delta_items: 0,
+    last_error: null,
+    updated_at: '2026-07-15 00:00:01',
+  });
   const deps = {
     db: {
       getProject: (id: number) => id === 7
         ? { id, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 }
         : null,
+      listProjects: () => [{ id: 7, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 }],
       listFiles: () => [{ id: 1 }],
     },
     config: { concurrency: 1, ignorePatterns: [], maxFileSize: 256 },
@@ -69,23 +84,11 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       })),
     },
     localVectorRouter: {
-      getNamespaceStatus: vi.fn((namespace: string) => ({
-        namespace,
-        purpose: namespace.startsWith('code:') ? 'code' : 'memory',
-        dbPath: 'D:/demo/.mcp-indexer/vectors.db',
-        size_bytes: 123,
-        active: namespace === 'code:p7' ? { generationId: 8 } : null,
-        building: null,
-        expected_items: 100,
-        indexed_items: 25,
-        failed_items: 0,
-        delta_items: 0,
-        last_error: null,
-        updated_at: '2026-07-15 00:00:01',
-      })),
+      getNamespaceStatus: vi.fn(namespaceStatus),
+      getNamespaceStatuses: vi.fn((namespaces: string[]) => namespaces.map(namespaceStatus)),
     },
     semanticProfileRuntime: {
-      rerankerDiagnostics: () => ({ model: 'Xenova/bge-reranker-base', dtype: 'q8' }),
+      rerankerDiagnostics: vi.fn(() => ({ model: 'Xenova/bge-reranker-base', dtype: 'q8' })),
     },
     semanticCoordinator: {
       enqueueCodeProjectReindex: vi.fn(() => ({ id: 99, status: 'pending' })),
@@ -112,6 +115,26 @@ function appWith(deps: ServerDeps): Hono {
 }
 
 describe('project indexing routes', () => {
+  it('reports every project summary with one batched namespace snapshot', async () => {
+    const deps = makeDeps();
+    const response = await appWith(deps).request('/api/projects/semantic/status');
+    const body = await response.json() as { results: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]).toMatchObject({
+      project: { id: 7, name: 'demo' },
+      status: {
+        project_id: 7,
+        reindex_job: { id: 41, status: 'running' },
+      },
+      error: null,
+    });
+    expect(deps.localVectorRouter.getNamespaceStatuses).toHaveBeenCalledTimes(1);
+    expect(deps.semanticStore.listJobs).toHaveBeenCalledTimes(1);
+    expect(deps.semanticProfileRuntime.rerankerDiagnostics).not.toHaveBeenCalled();
+  });
+
   it('reports configured, pinned and physical semantic state separately', async () => {
     const response = await appWith(makeDeps()).request('/api/projects/7/semantic/status');
     const body = await response.json() as Record<string, unknown>;

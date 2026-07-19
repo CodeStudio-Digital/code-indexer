@@ -78,6 +78,12 @@ describe('decide', () => {
     expect(d.riskBudget).toBe('write');
   });
 
+  it('routes external documentation research to the read-only research agent', () => {
+    const d = decide('read the docs for the vitest library');
+    expect(d.recommendedAgent).toBe('research');
+    expect(d.riskBudget).toBe('read');
+  });
+
   it('routes a planning ask to plan mode (read ceiling pre-approval)', () => {
     const d = decide('plan the migration strategy');
     expect(d.recommendedAgent).toBe('plan');

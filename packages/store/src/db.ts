@@ -146,7 +146,11 @@ export class CodeIndexDB {
   getSchemaVersion(): number { return getSchemaVersion(this.db); }
   /** better-sqlite3 handle for stores that need direct prepared-statement access. */
   raw(): DB { return this.db; }
+  private closed = false;
+
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     if (this.walCheckpointTimer) {
       clearInterval(this.walCheckpointTimer);
       this.walCheckpointTimer = null;

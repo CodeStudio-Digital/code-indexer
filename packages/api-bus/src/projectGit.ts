@@ -117,6 +117,33 @@ export interface GitPushPreview {
   tags: GitPushTag[];
   tagCount: number;
   tagsTruncated: boolean;
+  /** Default branch inferred locally for optional PR creation after push. */
+  defaultBranch?: string | null;
+  /** Explicit identities available for this remote. Project credentials stay untouched. */
+  identity?: {
+    defaultMode: GitIdentityMode;
+    managed: GitManagedIdentityStatus;
+  };
+}
+
+export type GitIdentityMode = 'project' | 'managed';
+
+export interface GitManagedIdentityStatus {
+  available: boolean;
+  configured: boolean;
+  label: string;
+  host: string | null;
+  repository: string | null;
+  reason?: 'not_configured' | 'unsupported_host' | 'invalid_remote' | 'private_key_unavailable' | 'not_installed' | 'not_connected' | 'suspended' | 'authentication_failed';
+}
+
+export interface GitPullRequestResult {
+  number: number;
+  url: string;
+  title: string;
+  state: string;
+  appSlug: string;
+  installationId: number;
 }
 
 export interface GitBranch {
@@ -666,9 +693,26 @@ export interface ProjectGitApi {
       force?: boolean;
       setUpstream?: boolean;
       pushTags?: boolean;
+      identityMode?: GitIdentityMode;
+      /** One-use cloud broker capability. Never a GitHub credential. */
+      managedGrant?: string;
     },
     ctx: ApiContext,
   ): Promise<GitRunResult>;
+
+  /** Create a GitHub pull request as the explicitly-selected managed identity. */
+  createPullRequest(
+    input: GitScope & {
+      remote?: string;
+      head: string;
+      base: string;
+      title: string;
+      body?: string;
+      draft?: boolean;
+      identityMode: 'managed';
+    },
+    ctx: ApiContext,
+  ): Promise<GitPullRequestResult>;
 
   /** Fetch refs from a remote. `prune: true` removes stale tracking refs. */
   fetch(

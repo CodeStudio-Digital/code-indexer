@@ -84,6 +84,9 @@ export function getMemoryConsolidator(): MemoryConsolidatorHandle | null {
 }
 
 export function startMemoryConsolidator(args: StartMemoryConsolidatorArgs): MemoryConsolidatorHandle {
+  // createApp() may be rebuilt in-process by tests/dev harnesses. Never leave
+  // the previous timer and its full dependency graph retained.
+  activeHandle?.stop();
   const intervalMs = args.intervalMs ?? DEFAULT_INTERVAL_MS;
   const idleMs = args.idleMs ?? DEFAULT_IDLE_MS;
   const maxProjects = args.maxProjects ?? DEFAULT_MAX_PROJECTS;

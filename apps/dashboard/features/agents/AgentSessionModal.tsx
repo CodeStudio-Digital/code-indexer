@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, ChevronRight, Crown, X } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -40,9 +40,54 @@ interface AgentSessionModalProps {
   onClose: () => void;
 }
 
+const LIVE_REFRESH_INTERVAL_MS = 2_000;
+
+/**
+ * Agent-run state and coder-session state do not use exactly the same status
+ * vocabulary. Once the full session payload arrives it is authoritative; the
+ * caller status is only the bootstrap value while that first request is in
+ * flight. Waiting states are still live runs and should keep the transcript
+ * fresh until the coder session reports a terminal/idle state.
+ */
+export function shouldPollAgentSession(
+  callerStatus: string,
+  sessionStatus?: string | null,
+): boolean {
+  const status = (sessionStatus ?? callerStatus).trim().toLowerCase();
+  return status === 'active'
+    || status === 'running'
+    || status === 'starting'
+    || status === 'pending'
+    || status === 'queued'
+    || status === 'resuming'
+    || status.startsWith('waiting_');
+}
+
 export function AgentSessionModal({ coderSessionId, role, status, onClose }: AgentSessionModalProps) {
   const { t } = useTranslation('agents');
-  const { data: sessionData } = useApi<SessionData>(`/coder/sessions/${coderSessionId}?full=1`);
+  const {
+    data: fetchedSessionData,
+    loading,
+    refetch,
+  } = useApi<SessionData>(`/coder/sessions/${coderSessionId}?full=1`);
+  // useApi intentionally preserves the previous value while a URL changes.
+  // Never render (or derive polling state from) a prior modal session during
+  // that small transition window.
+  const sessionData = fetchedSessionData?.session.id === coderSessionId
+    ? fetchedSessionData
+    : null;
+  const effectiveStatus = sessionData?.session.status ?? status;
+  const isLive = shouldPollAgentSession(status, sessionData?.session.status);
+
+  useEffect(() => {
+    // Recursive one-shot scheduling, gated by `loading`, means a slow request
+    // must finish before the next two-second window starts. useApi cancels the
+    // pending state update on unmount/session changes, while this cleanup stops
+    // the next request from being initiated after the modal closes.
+    if (!isLive || loading) return;
+    const timer = window.setTimeout(refetch, LIVE_REFRESH_INTERVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [coderSessionId, isLive, loading, refetch]);
 
   // Meta rows (`is_meta=1`) are runtime-injected nudges from the
   // orchestrator (stop-guard reminders, subordinate-completion pings,
@@ -69,7 +114,16 @@ export function AgentSessionModal({ coderSessionId, role, status, onClose }: Age
               {sessionData.session.provider}/{sessionData.session.model}
             </span>
           )}
-          <Badge variant="outline" className="text-[10px] capitalize">{status}</Badge>
+          <Badge variant="outline" className="text-[10px] capitalize">{effectiveStatus}</Badge>
+          {isLive && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] text-emerald-400"
+              title={loading ? t('common.loading') : t('company.live')}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full bg-emerald-400 ${loading ? 'animate-pulse' : ''}`} />
+              {loading ? t('common.loading') : t('company.live')}
+            </span>
+          )}
           {sessionData && (
             <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
               {formatTokens(sessionData.session.total_input_tokens)} in / {formatTokens(sessionData.session.total_output_tokens)} out

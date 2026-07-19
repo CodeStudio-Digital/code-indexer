@@ -84,8 +84,38 @@ export interface AppWorkItemView {
   evidence: Array<Record<string, unknown>>;
   file_scope: string[];
   blocked_reason: string | null;
+  /** Runtime attempt data is enriched by newer servers; older servers omit it. */
+  active_attempt?: AppWorkAttemptView | null;
+  latest_attempt?: AppWorkAttemptView | null;
+  attempts?: AppWorkAttemptView[];
   created_at: string;
   updated_at: string;
+}
+
+export interface AppWorkAttemptView {
+  id: number;
+  work_item_id?: string;
+  attempt: number;
+  role: string;
+  company_agent_run_id: number | null;
+  coder_session_id: number | null;
+  status: 'claimed' | 'running' | 'waiting' | 'paused' | 'completed' | 'blocked' | 'error' | 'aborted' | 'interrupted' | 'cancelled';
+  status_message: string | null;
+  created_at?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at: string;
+}
+
+export interface AppRecentEventView {
+  id: number;
+  /** `kind` is canonical; `event_type` keeps the client compatible with early previews. */
+  kind?: string;
+  event_type?: string;
+  entity_type?: string;
+  entity_id?: string;
+  payload?: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface AppDecisionView {
@@ -119,6 +149,7 @@ export interface AppStudioSessionDetail {
   plan_history: Array<Pick<AppPlanRevisionView, 'id' | 'revision_number' | 'status' | 'created_by' | 'created_at' | 'approved_at'>>;
   work_items: AppWorkItemView[];
   decisions: AppDecisionView[];
+  recent_events?: AppRecentEventView[];
   deployment: AppDeploymentView | null;
   evidence_current: boolean;
   team: AppTeamSessionView | null;
@@ -176,7 +207,9 @@ export async function deleteAppStudioSession(id: number): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/apps/${id}`, { method: 'DELETE' }));
 }
 
-export function runAppAction(id: number, action: 'approve_plan_and_build' | 'run_checks' | 'pause' | 'resume' | 'cancel'): Promise<AppStudioSessionDetail | { ok: true }> {
+export type AppStudioAction = 'approve_plan_and_build' | 'dispatch_ready_work' | 'run_checks' | 'pause' | 'resume' | 'cancel';
+
+export function runAppAction(id: number, action: AppStudioAction): Promise<AppStudioSessionDetail | { ok: true }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/actions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
   }));

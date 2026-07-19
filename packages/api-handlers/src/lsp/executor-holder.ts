@@ -12,7 +12,7 @@ import type { LspBackendExecutor } from './executor-types.js';
 
 let executor: LspBackendExecutor | null = null;
 
-export function setLspExecutor(e: LspBackendExecutor): void {
+export function setLspExecutor(e: LspBackendExecutor | null): void {
   executor = e;
 }
 

@@ -58,6 +58,7 @@ export type CoreTier =
   | 'admin'
   | 'master'
   | 'preview'
+  | 'browser'
   | 'api'
   | 'diagram'
   | 'db'
@@ -77,6 +78,7 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'admin',
   'master',
   'preview',
+  'browser',
   'api',
   'diagram',
   'db',
@@ -162,6 +164,18 @@ export const DIAGRAM_TOOLS: ReadonlySet<string> = new Set<string>([
   'diagram_read',
   'diagram_list',
   'diagram_export',
+]);
+
+/** Public-web automation available only to the dedicated research runtime. */
+export const BROWSER_TOOLS: ReadonlySet<string> = new Set<string>([
+  'browser_open',
+  'browser_snapshot',
+  'browser_extract',
+  'browser_click',
+  'browser_fill',
+  'browser_press',
+  'browser_screenshot',
+  'browser_close',
 ]);
 
 /**
@@ -529,6 +543,7 @@ export function getToolTier(
   if (ADMIN_TOOLS.has(name)) return 'admin';
   if (MASTER_TOOLS.has(name)) return 'master';
   if (PREVIEW_TOOLS.has(name)) return 'preview';
+  if (BROWSER_TOOLS.has(name)) return 'browser';
   if (API_TOOLS.has(name)) return 'api';
   if (DIAGRAM_TOOLS.has(name)) return 'diagram';
   if (DB_TOOLS.has(name)) return 'db';
@@ -559,6 +574,7 @@ export function allTieredToolNames(): Set<string> {
     ...ADMIN_TOOLS,
     ...MASTER_TOOLS,
     ...PREVIEW_TOOLS,
+    ...BROWSER_TOOLS,
     ...API_TOOLS,
     ...DIAGRAM_TOOLS,
     ...DB_TOOLS,
@@ -595,6 +611,7 @@ export interface ContextualToolTierContext {
   spriteStudio?: boolean;
   isMaster?: boolean;
   previewAvailable?: boolean;
+  browserAvailable?: boolean;
   agentId?: string | null;
   companyRole?: string | null;
 }
@@ -626,6 +643,7 @@ export function contextualTiersForRuntime(
   ) {
     tiers.add('preview');
   }
+  if (context.browserAvailable && context.agentId === 'research') tiers.add('browser');
   if (context.agentId === 'api') tiers.add('api');
   if (context.agentId === 'diagram') tiers.add('diagram');
   if (context.agentId === 'app_db' || role === 'database') tiers.add('db');
@@ -764,6 +782,14 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   manage_path: 'Create directories, move/rename paths, or safely delete',
   web_fetch: 'Fetch a URL and extract content',
   web_search: 'Search the web for information',
+  browser_open: 'Open a public page in the isolated research browser',
+  browser_snapshot: 'Read visible web-page elements and refs',
+  browser_extract: 'Extract rendered text from a dynamic page',
+  browser_click: 'Navigate through an anonymous public page',
+  browser_fill: 'Fill a public search or filter field',
+  browser_press: 'Press a key in the research browser',
+  browser_screenshot: 'Capture the current research page',
+  browser_close: 'Close and clear the research browser context',
   run_command: 'Run a shell command (sandboxed to project)',
   // Persistent exec_command session registry. Navigate tier (with
   // exec_command / write_stdin); pairs with write_stdin's rich error to let
@@ -971,6 +997,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('admin', ADMIN_TOOLS);
   push('master', MASTER_TOOLS);
   push('preview', PREVIEW_TOOLS);
+  push('browser', BROWSER_TOOLS);
   push('api', API_TOOLS);
   push('diagram', DIAGRAM_TOOLS);
   push('db', DB_TOOLS);
@@ -991,6 +1018,7 @@ export const TIER_COUNTS = {
   admin: ADMIN_TOOLS.size,
   master: MASTER_TOOLS.size,
   preview: PREVIEW_TOOLS.size,
+  browser: BROWSER_TOOLS.size,
   api: API_TOOLS.size,
   diagram: DIAGRAM_TOOLS.size,
   db: DB_TOOLS.size,

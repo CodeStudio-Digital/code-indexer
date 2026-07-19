@@ -278,39 +278,10 @@ export async function fetchSemanticGenerations(): Promise<{
   };
 }
 
-export async function fetchProjectSemanticStatuses(
-  concurrency = 4,
-): Promise<ProjectSemanticStatusResult[]> {
-  const projectsResponse = await expectOk(await fetch('/api/projects'));
-  const projects = (await projectsResponse.json()) as SemanticProjectView[];
-  const results: ProjectSemanticStatusResult[] = new Array(projects.length);
-  let cursor = 0;
-  const worker = async (): Promise<void> => {
-    while (cursor < projects.length) {
-      const index = cursor++;
-      const project = projects[index];
-      try {
-        const response = await expectOk(
-          await fetch(`/api/projects/${encodeURIComponent(project.id)}/semantic/status`),
-        );
-        results[index] = {
-          project,
-          status: (await response.json()) as ProjectSemanticStatusView,
-          error: null,
-        };
-      } catch (error) {
-        results[index] = {
-          project,
-          status: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(1, concurrency), projects.length) }, worker),
-  );
-  return results;
+export async function fetchProjectSemanticStatuses(): Promise<ProjectSemanticStatusResult[]> {
+  const response = await expectOk(await fetch('/api/projects/semantic/status'));
+  const body = (await response.json()) as { results?: ProjectSemanticStatusResult[] };
+  return body.results ?? [];
 }
 
 export async function reindexSemanticProfile(purpose: SemanticProfilePurpose): Promise<void> {

@@ -12,6 +12,7 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import {
   createBuilderCheckpoint,
   setBuilderCheckpointScreenshot,
@@ -23,12 +24,21 @@ const GIT_TIMEOUT_MS = 15_000;
 
 function git(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'git',
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout) => resolve({ ok: !err, stdout: String(stdout ?? '') }),
+      {
+        cwd,
+        timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+      (err, stdout) => {
+        untrack();
+        resolve({ ok: !err, stdout: String(stdout ?? '') });
+      },
     );
+    const untrack = trackProcessTree(child.pid);
   });
 }
 

@@ -418,10 +418,11 @@ this runtime and must never be mirrored or created.
 ## CORE RULES
 
 1. Read \`app_get_workflow\` before deciding what can run.
-2. Delegate only approved, dependency-ready cards through \`app_dispatch_ready_work\`.
-3. Never call \`execute_tasks\`, free-spawn a specialist, or replace a missing/disabled role with yourself.
-4. A specialist is not finished until \`app_record_work_evidence\` has durable proof and the workflow advances it.
-5. Reuse the persistent inbox, board and specialist sessions for continuity; keep implementation out of the Master.
+2. Maintain approved, dependency-safe cards; the App scheduler is the sole automatic dispatcher.
+3. Use \`app_dispatch_ready_work\` only for explicit operator recovery/manual dispatch, never as the routine post-approval loop or in competition with the scheduler.
+4. Never call \`execute_tasks\`, free-spawn a specialist, or replace a missing/disabled role with yourself.
+5. A specialist is not finished until \`app_record_work_evidence\` has durable proof and the workflow advances it.
+6. Reuse the persistent inbox, board and specialist sessions for continuity; keep implementation out of the Master.
 ${operationalRulesBlock}
 ## APP PROJECT
 

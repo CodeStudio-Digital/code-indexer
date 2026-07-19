@@ -5,6 +5,7 @@ import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
 import { parseAppPlan, type AppFitnessReport, type AppPlanV1 } from '@mcp/app-studio/plan/types.js';
 import type { AppStudioWorkItem, UpsertAppStudioWorkItemInput } from '@mcp/store/app-studio-store.js';
 import { getAppTeamSession } from '@mcp/api-handlers/app-studio/app-team-session.js';
+import { dispatchReadyAppWork } from '@mcp/company/tools/app-studio/company-dispatch.js';
 import { getOrSpawnCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { abortCompanyRuntime } from '../company/runtime-lifecycle.js';
 import { stopCompanySessionRuntime } from '../company/session-delete.js';
@@ -46,7 +47,27 @@ function deriveStage(args: {
   return 'building';
 }
 
-function appState(deps: ServerDeps, id: number) {
+function recentEventViews(deps: ServerDeps, id: number, limit = 50) {
+  const recent: ReturnType<ServerDeps['appStudioStore']['listEvents']> = [];
+  let cursor = 0;
+  for (;;) {
+    const batch = deps.appStudioStore.listEvents(id, cursor);
+    if (batch.length === 0) break;
+    recent.push(...batch);
+    if (recent.length > limit) recent.splice(0, recent.length - limit);
+    const nextCursor = batch[batch.length - 1]!.id;
+    if (nextCursor <= cursor || batch.length < 250) break;
+    cursor = nextCursor;
+  }
+  return recent.map((event) => ({
+    id: event.id,
+    event_type: event.kind,
+    payload: json<unknown>(event.payload_json, {}),
+    created_at: event.created_at,
+  }));
+}
+
+function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?: boolean } = {}) {
   const session = deps.appStudioStore.getSession(id);
   if (!session) return null;
   const project = deps.db.getProject(session.project_id);
@@ -101,6 +122,7 @@ function appState(deps: ServerDeps, id: number) {
     evidence_current: evidenceCurrent,
     team,
     master_session_id: team?.master_session_id ?? null,
+    ...(options.includeRecentEvents ? { recent_events: recentEventViews(deps, id) } : {}),
   };
 }
 
@@ -152,7 +174,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
   }));
 
   app.get('/api/app-studio/apps/:id', (c) => {
-    const state = appState(deps, parseIdParam(c));
+    const state = appState(deps, parseIdParam(c), { includeRecentEvents: true });
     return state ? c.json(state) : notFound(c, 'App not found');
   });
 
@@ -212,16 +234,32 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       if (fitness.status !== 'ready') return c.json({ error: 'The plan is not ready.', fitness }, 409);
       try {
         const approved = deps.appStudioStore.approvePlanRevision(id, revision.id);
-        deps.appStudioStore.upsertWorkItems(workFromPlan(id, approved.id, plan));
-        deps.appStudioStore.refreshReadyWorkItems(id);
-        if (session.company_session_id) {
-          void getOrSpawnCompanyOrchestrator(session.company_session_id)
-            .then(({ orchestrator }) => orchestrator.sendMessageToMaster(
-              '[App Studio] O plano foi aprovado. Revise os cards da revisão atual e despache somente o trabalho pronto.',
-            ))
-            .catch(() => undefined);
+        const currentRevisionWork = deps.appStudioStore.listWorkItems(id)
+          .filter((item) => item.plan_revision_id === approved.id);
+        if (currentRevisionWork.length === 0) {
+          deps.appStudioStore.upsertWorkItems(workFromPlan(id, approved.id, plan));
         }
-        return c.json(appState(deps, id));
+        deps.appStudioStore.refreshReadyWorkItems(id);
+        return c.json(appState(deps, id, { includeRecentEvents: true }));
+      } catch (error) {
+        return c.json({ error: (error as Error).message }, 409);
+      }
+    }
+    if (body.action === 'dispatch_ready_work') {
+      if (!session.company_session_id) return c.json({ error: 'The App team is unavailable.' }, 409);
+      try {
+        const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
+        const dispatchResults = await dispatchReadyAppWork({
+          store: deps.appStudioStore,
+          session,
+          host: orchestrator,
+          source: 'manual',
+          maxItems: 2,
+        });
+        return c.json({
+          ...appState(deps, id, { includeRecentEvents: true }),
+          dispatch_results: dispatchResults,
+        });
       } catch (error) {
         return c.json({ error: (error as Error).message }, 409);
       }

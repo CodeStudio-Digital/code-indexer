@@ -13,7 +13,14 @@ describe('collectContributions', () => {
           ],
           commands: [{ id: 'c', label: 'C' }],
           toolWindows: [{ id: 'w', title: 'W', icon: 'cloud', side: 'right', entry: 'ui/p.html' }],
-          editorActions: [{ id: 'ea', label: 'EA', runsTool: 'echo' }],
+          editorActions: [{
+            id: 'ea',
+            label: 'EA',
+            runsTool: 'echo',
+            toolArgs: { mode: 'fast' },
+            documentSelector: { filePatterns: ['Dockerfile'] },
+            gutter: { line: { text: 'FROM', match: 'word' }, icon: 'build' },
+          }],
           statusBarItems: [{ id: 'sb', label: 'SB', alignment: 'right' }],
           runConfigurations: [{ id: 'run', title: 'Run', command: 'npm' }],
           modules: [
@@ -40,6 +47,12 @@ describe('collectContributions', () => {
     // Declared icon names ride along (rails map them via pluginWindowIcon).
     expect(result.toolWindows[0].icon).toBe('cloud');
     expect(result.editorActions.map((a) => a.id)).toEqual(['ea', 'module-ea']);
+    expect(result.editorActions[0]).toMatchObject({
+      pluginNs: 'a',
+      toolArgs: { mode: 'fast' },
+      documentSelector: { filePatterns: ['Dockerfile'] },
+      gutter: { icon: 'build' },
+    });
     expect(result.statusBarItems[0].id).toBe('sb');
     expect(result.runConfigurations[0].id).toBe('run');
     expect(result.modules[0].id).toBe('node-project');

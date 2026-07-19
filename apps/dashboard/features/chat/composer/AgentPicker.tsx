@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Compass, ClipboardList, Database, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
+import { Bot, Compass, ClipboardList, Database, Globe2, Hammer, ShieldAlert, Sparkles, ScrollText, Webhook, Workflow } from 'lucide-react';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 import type { AgentPreset, BuiltInAgentPreset } from '@mcp/api-bus';
 
@@ -31,6 +31,7 @@ type AgentId = AgentPreset;
 
 const AGENT_LABEL: Record<BuiltInAgentPreset, string> = {
   explore: 'Explore',
+  research: 'Research',
   plan: 'Plan',
   build: 'Code',
   admin: 'Ops',
@@ -44,6 +45,7 @@ const AGENT_LABEL: Record<BuiltInAgentPreset, string> = {
 
 const AGENT_PROMISE: Record<BuiltInAgentPreset, string> = {
   explore: 'Answers, not edits',
+  research: 'Researches current sources and cites them',
   plan: 'Proposes a plan, waits for OK',
   build: 'Edits, verifies, reports',
   admin: 'Commits, snapshots, ops - asks first',
@@ -57,6 +59,7 @@ const AGENT_PROMISE: Record<BuiltInAgentPreset, string> = {
 
 const ICONS: Record<BuiltInAgentPreset, React.ComponentType<{ className?: string }>> = {
   explore: Compass,
+  research: Globe2,
   plan: ClipboardList,
   build: Hammer,
   admin: ShieldAlert,
@@ -72,6 +75,7 @@ const ICONS: Record<BuiltInAgentPreset, React.ComponentType<{ className?: string
 // composer at a glance signals which mode is active.
 const MODE_TINT: Record<BuiltInAgentPreset, string> = {
   explore: 'text-sky-500',
+  research: 'text-blue-500',
   plan: 'text-violet-500',
   build: 'text-emerald-500',
   admin: 'text-rose-500',
@@ -167,6 +171,7 @@ export function AgentPicker({ value, onChange, autoSuggestFor }: AgentPickerProp
       agents ??
       ([
         { id: 'explore', label: AGENT_LABEL.explore, description: t('agentPicker.bootstrap'), profile: 'bootstrap', planMode: false },
+        { id: 'research', label: AGENT_LABEL.research, description: agentPromise('research'), profile: 'bootstrap', planMode: false },
         { id: 'plan', label: AGENT_LABEL.plan, description: t('agentPicker.navigate'), profile: 'navigate', planMode: true },
         { id: 'build', label: AGENT_LABEL.build, description: t('agentPicker.navigateFull'), profile: 'navigate', planMode: false },
         { id: 'admin', label: AGENT_LABEL.admin, description: t('agentPicker.full'), profile: 'full', planMode: false },

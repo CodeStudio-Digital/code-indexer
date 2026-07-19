@@ -26,6 +26,11 @@ export default {
   toolWindows: [],
   commands: [{ id: 'c', label: 'C' }],
   themes: [],
+  editorActions: [{
+    id: 'build', label: 'Build', runsTool: 'echo', toolArgs: { mode: 'fast' },
+    documentSelector: { filePatterns: ['Dockerfile'] },
+    gutter: { line: { text: 'FROM', match: 'word' }, occurrence: 'first', icon: 'build' },
+  }],
 };
 `;
 
@@ -52,7 +57,7 @@ describe('buildPlugin', () => {
     expect(r.tools).toBe(1);
     expect(JSON.parse(readFileSync(join(dir, 'dist', 'package.json'), 'utf8'))).toEqual({
       type: 'module',
-      mcpPluginRuntimeFormat: 4,
+      mcpPluginRuntimeFormat: 5,
     });
 
     const app = JSON.parse(readFileSync(r.appJson, 'utf8'));
@@ -61,6 +66,56 @@ describe('buildPlugin', () => {
     expect(app.tools[0].mutates).toBe(false);
     expect(app.tools[0].handler).toBeUndefined();
     expect(app.commands[0].id).toBe('c');
+    expect(app.editorActions[0].toolArgs).toEqual({ mode: 'fast' });
+    expect(app.editorActions[0].gutter.icon).toBe('build');
+  });
+
+  it.each([
+    {
+      missing: 'runsTool',
+      action: `{
+        id: 'build', label: 'Build',
+        documentSelector: { filePatterns: ['Dockerfile'] },
+        gutter: { line: { text: 'FROM', match: 'word' } },
+      }`,
+    },
+    {
+      missing: 'documentSelector',
+      action: `{
+        id: 'build', label: 'Build', runsTool: 'echo',
+        gutter: { line: { text: 'FROM', match: 'word' } },
+      }`,
+    },
+  ])('rejects a generated editor gutter without $missing', async ({ missing, action }) => {
+    writeFileSync(
+      join(dir, 'src', 'plugin.ts'),
+      `export default { tools: [], toolWindows: [], commands: [], themes: [], editorActions: [${action}] };\n`,
+    );
+
+    await expect(buildPlugin(dir)).rejects.toThrow(new RegExp(missing));
+    expect(existsSync(join(dir, '.app.json'))).toBe(false);
+  });
+
+  it('keeps provider capabilities strict unless the first-party lane is explicit', async () => {
+    writeFileSync(
+      join(dir, 'src', 'plugin.ts'),
+      `export default {
+        tools: [], toolWindows: [], commands: [], themes: [], editorActions: [],
+        providers: [{
+          kind: 'bedrock', displayName: 'AWS Bedrock', credKind: 'aws',
+          envVars: [], defaultModels: [], pricing: {}, wire: 'bedrock',
+          discovery: { from: 'sdk:bedrock' },
+          test: { from: 'unsupported', message: 'not implemented' },
+        }],
+      };\n`,
+    );
+
+    await expect(buildPlugin(dir)).rejects.toThrow();
+    expect(existsSync(join(dir, '.app.json'))).toBe(false);
+
+    const result = await buildPlugin(dir, { trustProviders: true });
+    const app = JSON.parse(readFileSync(result.appJson, 'utf8'));
+    expect(app.providers[0].discovery).toEqual({ from: 'sdk:bedrock' });
   });
 
   it('supports deferred CommonJS builtin requires from a clean ESM process', async () => {

@@ -13,6 +13,7 @@ import {
   filterByTiers,
   getAllKnownToolsMeta,
   BOOTSTRAP_TOOLS,
+  contextualTiersForRuntime,
 } from '@mcp/code-agent/tools/tiers.js';
 import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
@@ -82,5 +83,13 @@ describe('tier contract — always-on state tools are explicitly tiered', () => 
       expect(BOOTSTRAP_TOOLS.has(name)).toBe(false);
       expect(getToolTier(name)).toBe('navigate');
     }
+  });
+});
+
+describe('research browser tier isolation', () => {
+  it('activates only for the research agent when the host is available', () => {
+    expect(contextualTiersForRuntime({ browserAvailable: true, agentId: 'research' }).has('browser')).toBe(true);
+    expect(contextualTiersForRuntime({ browserAvailable: false, agentId: 'research' }).has('browser')).toBe(false);
+    expect(contextualTiersForRuntime({ browserAvailable: true, agentId: 'build' }).has('browser')).toBe(false);
   });
 });

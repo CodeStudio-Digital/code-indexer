@@ -8,7 +8,7 @@
  * font (text-xs / 11-12px), icons + labels. Replaces the old left
  * sidebar to free vertical space for content.
  */
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -45,7 +45,6 @@ import { LanguageSwitcher } from './components/LanguageSwitcher.js';
 import { RunningTasksDropdown } from './components/RunningTasksDropdown.js';
 import { AppMenu } from './components/AppMenu.js';
 import { WindowControls } from './components/WindowControls.js';
-import { CommandPalette } from './components/CommandPalette.js';
 import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 import { buildCommandActions } from './components/command-actions.js';
 import { PinnedTabsBar } from './components/pinned-tabs/PinnedTabsBar.js';
@@ -61,6 +60,10 @@ import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 import { ProjectBranchControl, ProjectRunControl } from './features/project/ProjectIdeToolbar.js';
+
+const CommandPalette = lazy(() =>
+  import('./components/CommandPalette.js').then((module) => ({ default: module.CommandPalette })),
+);
 
 interface NavItem {
   id: ActiveView['page'] | string;
@@ -402,7 +405,11 @@ export function AppShell() {
           <WindowControls />
         </div>
       </header>
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={commandActions} />
+      {paletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette open onOpenChange={setPaletteOpen} actions={commandActions} />
+        </Suspense>
+      )}
       {/* Global pinned tabs — persists across the whole app; hidden when empty. */}
       <PinnedTabsBar />
       {/* Container padding by route. Pages that own their full-bleed

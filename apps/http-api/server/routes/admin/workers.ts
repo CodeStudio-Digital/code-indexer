@@ -2,10 +2,8 @@
  * Diagnostic endpoint for the worker pools.
  *
  * `GET /api/admin/workers` returns a snapshot of every spawned
- * worker_thread alongside its lifecycle state. The company orchestrator
- * is workers-only (no env gate); the coder pool stays env-gated via
- * `MCP_CODER_WORKER=1`. Use this endpoint to confirm both are taking
- * effect — without grep'ing logs.
+ * worker_thread alongside its lifecycle state. Company and coder runs are
+ * both workers-only; failure to resolve either worker is a boot error.
  *
  * Response shape:
  * ```json
@@ -39,7 +37,6 @@ import {
   getWorkerOrchestratorPool,
 } from '../../../sse/workerPoolSingleton.js';
 import {
-  coderWorkerEnabled,
   describeCoderWorkerStatus,
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
@@ -60,10 +57,9 @@ interface WorkersResponse {
     workerFile: string | null;
     workers: WorkerRow[];
   };
-  // Coder runner pool: still env-gated via MCP_CODER_WORKER.
+  // Coder runner pool: workers-only, same fail-closed posture as Company.
   coder: {
     enabled: boolean;
-    envFlag: boolean;
     reason: string | null;
     workerFile: string | null;
     workers: WorkerRow[];
@@ -81,11 +77,9 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
     try {
       company.push(...getWorkerOrchestratorPool().snapshot());
     } catch { /* pool not initialized yet */ }
-    if (coderWorkerEnabled()) {
-      try {
-        coder.push(...getCoderWorkerPool().snapshot());
-      } catch { /* pool not initialized yet */ }
-    }
+    try {
+      coder.push(...getCoderWorkerPool().snapshot());
+    } catch { /* pool not initialized yet */ }
 
     const mem = process.memoryUsage();
     const companyStatus = describeWorkerOrchestratorStatus();
@@ -99,7 +93,6 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
       },
       coder: {
         enabled: coderStatus.enabled,
-        envFlag: coderStatus.envFlag,
         reason: coderStatus.reason,
         workerFile: coderStatus.resolved?.file ?? null,
         workers: coder,

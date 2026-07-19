@@ -153,6 +153,7 @@
   "quality.infrastructure.empty": "No binding, timeout, or parser failures.",
   "quality.delivery.title": "Delivery quality by task",
   "quality.delivery.empty": "No completed round has been assessed yet.",
+  "quality.delivery.round": "round",
   "quality.runtime.title": "Objective runtime incidents",
   "quality.runtime.empty": "No objective guard was triggered.",
   "quality.legacy.title": "Legacy history",

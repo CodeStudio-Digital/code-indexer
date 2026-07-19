@@ -58,6 +58,7 @@ import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
+import { browserTools } from '@mcp/code-agent/tools/browser/index.js';
 import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
@@ -87,7 +88,7 @@ const STATIC_TOOLS: NamedTool[] = [
   ...tasksTools, ...interactionTools, ...toolOutputTools, ...diagnosticsTools, ...lspTools,
   ...execCommandTools, ...webTools, ...httpTools, ...globTools, ...ragSearchDocsTools,
   ...ragReadDocTools,
-  ...todoTools, ...viewImageTools, ...previewTools, ...goalTools, ...listAgentsTools,
+  ...todoTools, ...viewImageTools, ...previewTools, ...browserTools, ...goalTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools,
   ...apiClientTools, ...dbTools,

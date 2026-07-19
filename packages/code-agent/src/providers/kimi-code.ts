@@ -69,6 +69,13 @@ export class KimiCodeChatProvider implements ChatProvider {
       params.thinking = thinking;
     }
 
+    // K3 exposes discrete reasoning intensity through the OpenAI-compatible
+    // `reasoning_effort` string. Omitting it keeps Kimi's server-side `max`
+    // default; older Kimi models only understand the boolean `thinking` shape.
+    if (isKimiK3Model(this.model) && req.reasoningEffort) {
+      params.reasoning_effort = req.reasoningEffort;
+    }
+
     if (kimiDebugEnabled()) {
       logKimiRequest({
         model: this.model,
@@ -228,6 +235,10 @@ function resolveKimiMaxTokens(): number {
 
 function isAlwaysThinkingModel(model: string): boolean {
   return /thinking/i.test(model);
+}
+
+function isKimiK3Model(model: string): boolean {
+  return /^k3$/i.test(model);
 }
 
 function resolveEffectiveThinking(

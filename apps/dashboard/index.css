@@ -76,10 +76,10 @@
   --workbench-active: #e7e5ff;
   --workbench-focus: #6366f1;
   --workbench-gap: 6px;
-  /* Premium IDE typography — Inter variable + JetBrains Mono via the
-     Google Fonts link in index.html. System fallbacks cover offline. */
-  --font-sans: "Inter", "InterVariable", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+  /* Variable fonts are bundled locally so the desktop shell and first paint do
+     not depend on an external, render-blocking stylesheet. */
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
   /* IDE density (Feature 4) — defaults = "comfortable" (um passo acima do
      legado 13/22). Overridden por html[data-density] via state/ui-density.ts. */
   --ide-ui-font: 13px;
@@ -428,6 +428,14 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .mcp-run-glyph-disabled { cursor: not-allowed; }
 .mcp-run-glyph-disabled::before { color: var(--muted-foreground); opacity: 0.45; }
 .mcp-run-glyph-disabled:hover::before { color: var(--muted-foreground); opacity: 0.45; }
+
+/* Host-owned glyphs for declarative plugin editor actions (left gutter lane). */
+.mcp-plugin-gutter { cursor: pointer; text-align: center; }
+.mcp-plugin-gutter::before { color: var(--success); font-size: 11px; opacity: 0.9; }
+.mcp-plugin-gutter:hover::before { color: var(--foreground); opacity: 1; }
+.mcp-plugin-gutter-run::before { content: '\25B6'; }
+.mcp-plugin-gutter-build::before { content: '\2692'; font-size: 12px; }
+.mcp-plugin-gutter-inspect::before { content: '\25C9'; }
 
 /* Symbol navigation: right glyph lane stays independent from run/conflict markers. */
 .mcp-symbol-implementation-glyph,

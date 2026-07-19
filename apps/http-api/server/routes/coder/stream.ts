@@ -1,7 +1,5 @@
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { runCoder } from '@mcp/code-agent/index.js';
-import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
@@ -11,22 +9,14 @@ import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import {
-  createBus,
-  publish,
-  markEnded,
-  setBusRunner,
   emitWorkerLog,
+  type CoderRunBus,
 } from '../../../coder-bus.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
-import { closePreviewWindow, closePreviewSession } from '../../../sse/closeCoderPreview.js';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
-import { notifyBuilderRunEnded } from '../../../sse/builder-checkpoint.js';
-import {
-  coderWorkerEnabled,
-  getCoderWorkerPool,
-} from '../../../sse/coderWorkerPoolSingleton.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
 import { withSessionLock } from './sessionLock.js';
@@ -41,14 +31,8 @@ import {
   cleanSessionTitleSeed,
   isAutomaticSessionTitle,
 } from '@mcp/services/services/task-preflight/index.js';
-import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
-import { getGlobalMcpExternalPool } from '../../../sse/McpExternalPool.js';
-import { listEnabledPluginRuntime, buildPluginTools } from '@mcp/plugin-host';
-import { PluginWorkerHost } from '../../../sse/PluginWorkerHost.js';
-import { getPluginHostInvoke } from '../../../sse/pluginHostInvoke.js';
 import {
   getRuntimeEventLog,
-  installRuntimeEventLog,
   runtimeEventsToJsonl,
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
@@ -124,13 +108,6 @@ interface SendMessageBody {
   client_msg_id?: string;
 }
 
-/**
- * Window during which we'll wait for `bus.runner` to become available when
- * a second POST /messages arrives during a fresh run's setup phase. Five
- * seconds is comfortably more than `runCoder` ever takes locally; if it
- * exceeds this we'd rather fail fast than block the request handler.
- */
-const RUNNER_READY_TIMEOUT_MS = 5_000;
 const DEFAULT_INDEX_GATE_TIMEOUT_MS = 180_000;
 
 function structuralIndexGateTimeoutMs(): number {
@@ -141,12 +118,6 @@ function structuralIndexGateTimeoutMs(): number {
     10,
   );
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INDEX_GATE_TIMEOUT_MS;
-}
-
-function projectRootForSession(deps: ServerDeps, sessionId: number): string | null {
-  const session = deps.sessionStore.getSession(sessionId);
-  if (session?.project_id == null) return null;
-  return deps.db.getProject(session.project_id)?.root_path ?? null;
 }
 
 interface ContinueBody {
@@ -174,10 +145,11 @@ export function mountCoderStreamRoutes(
   runtime: CoderRuntime,
 ): void {
   const { sessionStore, providerStore } = deps;
-  const { activeRuns, BUS_LINGER_MS, wireRunnerToBus, recentMessageKeys } = runtime;
-  const semanticBusLeases = new WeakMap<ReturnType<typeof createBus>, () => void>();
+  const { activeRuns, recentMessageKeys } = runtime;
+  const workerPool = getCoderWorkerPool();
+  const semanticBusLeases = new WeakMap<CoderRunBus, () => void>();
 
-  function keepSemanticProjectAlive(sessionId: number, bus: ReturnType<typeof createBus>): void {
+  function keepSemanticProjectAlive(sessionId: number, bus: CoderRunBus): void {
     if (bus.ended || semanticBusLeases.has(bus)) return;
     const projectId = sessionStore.getSession(sessionId)?.project_id;
     if (projectId == null) return;
@@ -263,6 +235,15 @@ export function mountCoderStreamRoutes(
     return session.project_id != null && getGlobalPreviewDevtools() ? true : undefined;
   }
 
+  function resolveBrowserAvailable(): boolean | undefined {
+    try {
+      const config = deps.chromeServiceStore.getConfig();
+      return config.enabled && config.status === 'running' ? true : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   function applyGeneratedSessionTitle(id: number, title: string | undefined): boolean {
     if (!title) return false;
     const current = sessionStore.getSession(id);
@@ -321,9 +302,7 @@ export function mountCoderStreamRoutes(
       // runCoder's own hasHistory check) AND no live bus (attach path).
       if (session.compaction_summary) return undefined;
       if (sessionStore.getMessageCount(id) > 0) return undefined;
-      const liveBus = coderWorkerEnabled()
-        ? getCoderWorkerPool().getBus(id)
-        : activeRuns.get(id);
+      const liveBus = workerPool.getBus(id);
       if (liveBus && !liveBus.ended) return undefined;
 
       const workspaceProjects = session.is_global
@@ -546,9 +525,7 @@ export function mountCoderStreamRoutes(
     // emitWorkerLog no-ops in that case, but if a worker is still alive
     // (attach branch) the dashboard sees the incoming POST live.
     {
-      const existing = coderWorkerEnabled()
-        ? getCoderWorkerPool().getBus(id)
-        : activeRuns.get(id);
+      const existing = workerPool.getBus(id);
       emitWorkerLog(existing, 'info', 'route', 'POST /messages', {
         content_preview: body.content?.slice(0, 80) ?? '',
         resume: !!body.resume,
@@ -578,8 +555,8 @@ export function mountCoderStreamRoutes(
     // capability. Embedded
     // figures are pulled out as image blocks only when the model has vision (or
     // the user forced the vision-fallback), so a blind model doesn't pay surprise
-    // describe-image cost. Mutating `body` here covers both the worker and legacy
-    // fresh paths; attachments are first-message-only, so this runs at most once.
+    // describe-image cost. Mutating `body` here prepares the worker request;
+    // attachments are first-message-only, so this runs at most once.
     if (body.attachments && body.attachments.length > 0) {
       const extractImages =
         resolveModelSupportsVision(id) === true || body.describe_images === true;
@@ -648,99 +625,23 @@ export function mountCoderStreamRoutes(
     }
 
     // Serialize the "do we have an active run?" decision per session so two
-    // concurrent POSTs cannot both observe `activeRuns.get(id) === undefined`
-    // and each spin up a fresh `runCoder`. Inside the lock we either:
+    // concurrent POSTs cannot both create a worker run. Inside the lock we either:
     //   (a) attach to the live run by enqueueing the message + tailing the
     //       existing bus, or
-    //   (b) create a brand new bus + runCoder and tail that.
+    //   (b) ask the mandatory worker pool to start a run and tail its bus.
     // The lock is released as soon as the synchronous setup completes — the
     // SSE stream itself is not held under the lock.
     const decide = async (): Promise<
-      | { kind: 'attach'; bus: ReturnType<typeof createBus>; tailFrom: number }
-      | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
+      | { kind: 'attach'; bus: CoderRunBus; tailFrom: number }
+      | { kind: 'fresh'; bus: CoderRunBus }
       | { kind: 'reject'; status: 409; body: { error: string; code: string } }
     > => {
-      // P17 — worker-backed coder path. Same decision tree, but the
-      // runner lives in a dedicated worker_thread. Synchronous runner
-      // pokes (`isWaitingForInput`, `pushUserMessage`, `interruptWait`)
-      // become RPC round-trips via `CoderWorkerPool`. We short-circuit
-      // BEFORE the legacy decision tree so the rest of this function
-      // stays untouched when the flag is off.
-      if (coderWorkerEnabled()) {
-        const pool = getCoderWorkerPool();
-        const existingBus = pool.getBus(id);
-        if (existingBus && !existingBus.ended) {
-          if (body.attachments && body.attachments.length > 0) {
-            return {
-              kind: 'reject',
-              status: 409,
-              body: {
-                error: 'attachments are only supported on the first message of a session — drop them or wait for the current run to finish',
-                code: 'ATTACHMENTS_MIDRUN_UNSUPPORTED',
-              },
-            };
-          }
-          const waiting = await pool.isWaitingForInput(id).catch(() => false);
-          if (waiting) {
-            if (!body.interject) {
-              return {
-                kind: 'reject',
-                status: 409,
-                body: {
-                  error: 'runner is waiting for an interactive answer — use /answer or /plan-response, or pass {"interject": true} to override',
-                  code: 'INTERACTION_PENDING',
-                },
-              };
-            }
-            await pool.interruptWait(id).catch(() => undefined);
-          }
-          const userMsg: AgentMessage = {
-            role: 'user',
-            content: [{ type: 'text', text: body.content }],
-            ...(selectedSkillIds ? { selectedSkillIds } : {}),
-          };
-          const roundMessageId = sessionStore.appendMessage(id, userMsg);
-          await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
-          return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
-        }
-        // Fresh run via the worker — `runFresh` spawns the worker (if
-        // needed), kicks off `runCoder()` inside it, and returns the
-        // main-side mirrored bus the route can pump to SSE.
-        const freshBus = await pool.runFresh(id, {
-          userMessage: body.content,
-          attachments: body.attachments,
-          maxTurns: body.max_turns,
-          planMode: body.plan_mode,
-          agent: runAgent,
-          agentSelectionId,
-          customAgentPrompt: customAgent?.prompt,
-          allowedToolNames: customAgent?.toolNames ?? undefined,
-          profile: body.profile,
-          worktree: body.worktree,
-          thinking,
-          modelSupportsVision: resolveModelSupportsVision(id),
-          describeImages: body.describe_images,
-          previewAvailable: resolvePreviewAvailable(id),
-          selectedSkillIds,
-          ideContext: body.ide_context,
-          preflight,
-          ...deps.buildAgentDecisionRuntimeOptions(),
-          // Apêndice 4 Fase 2 — when the dashboard is resuming via the
-          // worker-fallback path, the synthetic tool_result is already
-          // in history. runCoder({resume:true}) picks up from there
-          // without pushing a new user turn.
-          resume: body.resume,
-        });
-        return { kind: 'fresh', bus: freshBus };
-      }
-
-      const existing = activeRuns.get(id);
-      if (existing && !existing.ended) {
-        // Attachments are intentionally not supported on enqueue-and-attach:
-        // the runner's pendingUserMessages buffer is text-only and the live
-        // turn already committed to whatever attachments were sent at start.
-        // Reject explicitly so the caller knows to either start a new session
-        // or wait for the current run to finish.
+      // Coder sessions are workers-only. Synchronous runner pokes
+      // (`isWaitingForInput`, `pushUserMessage`, `interruptWait`) are RPCs;
+      // no request is allowed to fall back onto the Electron/backend loop.
+      const pool = workerPool;
+      const existingBus = pool.getBus(id);
+      if (existingBus && !existingBus.ended) {
         if (body.attachments && body.attachments.length > 0) {
           return {
             kind: 'reject',
@@ -751,27 +652,8 @@ export function mountCoderStreamRoutes(
             },
           };
         }
-
-        let runner;
-        try {
-          runner = await Promise.race([
-            existing.runnerReady,
-            new Promise<never>((_, rej) =>
-              setTimeout(() => rej(new Error('runner not ready')), RUNNER_READY_TIMEOUT_MS),
-            ),
-          ]);
-        } catch {
-          // The first run failed before wiring its runner, or setup is
-          // taking abnormally long. Fall through to creating a fresh run —
-          // the failed bus will linger-evict on its own timer.
-          return { kind: 'fresh', bus: startFreshRun() };
-        }
-
-        // Live run waiting on an interactive tool? `interject:true` means
-        // "abandon the wait and process my message instead" (mirrors how
-        // company subordinates wake the master from `wait_for_subordinates`).
-        // Without `interject` we steer callers to the canonical /answer route.
-        if (runner.isWaitingForInput()) {
+        const waiting = await pool.isWaitingForInput(id).catch(() => false);
+        if (waiting) {
           if (!body.interject) {
             return {
               kind: 'reject',
@@ -782,47 +664,50 @@ export function mountCoderStreamRoutes(
               },
             };
           }
-          runner.interruptWait();
+          await pool.interruptWait(id).catch(() => undefined);
         }
-
-        // Persist the user message BEFORE pushing it onto the runner's
-        // pendingUserMessages buffer. If the runner crashes/aborts before
-        // flushing, the message is still in the DB so a future resume can
-        // pick it up. The runner only consumes its in-memory history during
-        // a run, so there is no DB-to-runner race here.
         const userMsg: AgentMessage = {
           role: 'user',
           content: [{ type: 'text', text: body.content }],
           ...(selectedSkillIds ? { selectedSkillIds } : {}),
         };
         const roundMessageId = sessionStore.appendMessage(id, userMsg);
-        runner.pushUserMessage(body.content, { selectedSkillIds, roundMessageId });
-
-        // Tail mode: subscribe to events from now on, no replay. The runner
-        // will emit a fresh `turn_start` (and downstream tool calls) when
-        // it picks up the enqueued message at the next turn boundary.
-        return { kind: 'attach', bus: existing, tailFrom: existing.nextSeq - 1 };
+        await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
+        return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
       }
-
-      // No live run, or the previous bus is in its 30s linger window with
-      // `ended === true`. Either way, create a new run.
-      return { kind: 'fresh', bus: startFreshRun() };
-
-      // Synchronous setup of a fresh run + register in activeRuns. The
-      // actual `runCoder()` call is fired into the background below so the
-      // lock returns quickly.
-      function startFreshRun() {
-        const ctrl = new AbortController();
-        const newBus = createBus(ctrl);
-        installRuntimeEventLog(newBus, 'coder', id);
-        activeRuns.set(id, newBus);
-        return newBus;
-      }
+      // `runFresh` spawns the worker if needed and returns the main-side
+      // mirrored bus. All model-facing options are forwarded unchanged.
+      const freshBus = await pool.runFresh(id, {
+        userMessage: body.content,
+        attachments: body.attachments,
+        maxTurns: body.max_turns,
+        planMode: body.plan_mode,
+        agent: runAgent,
+        agentSelectionId,
+        customAgentPrompt: customAgent?.prompt,
+        allowedToolNames: customAgent?.toolNames ?? undefined,
+        profile: body.profile,
+        worktree: body.worktree,
+        thinking,
+        modelSupportsVision: resolveModelSupportsVision(id),
+        describeImages: body.describe_images,
+        previewAvailable: resolvePreviewAvailable(id),
+        browserAvailable: resolveBrowserAvailable(),
+        selectedSkillIds,
+        ideContext: body.ide_context,
+        preflight,
+        ...deps.buildAgentDecisionRuntimeOptions(),
+        // When the dashboard resumes, the synthetic tool_result is already
+        // in history. runCoder({resume:true}) picks up from there
+        // without pushing a new user turn.
+        resume: body.resume,
+      });
+      return { kind: 'fresh', bus: freshBus };
     };
 
     const decision = await withSessionLock(id, async (): Promise<
       | Awaited<ReturnType<typeof decide>>
-      | { kind: 'replay'; bus: ReturnType<typeof createBus>; since: number }
+      | { kind: 'replay'; bus: CoderRunBus; since: number }
       | { kind: 'gone' }
     > => {
       // Idempotency: a `ReconnectingSSEClient` retry re-POSTs this body. If the
@@ -839,7 +724,7 @@ export function mountCoderStreamRoutes(
             client_msg_id: dedupeKey,
             bus_gone: !hit.bus,
           });
-          return hit.bus && (hit.bus.ended || hit.bus === activeRuns.get(id))
+          return hit.bus && (hit.bus.ended || hit.bus === workerPool.getBus(id))
             ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
             : { kind: 'gone' };
         }
@@ -877,111 +762,9 @@ export function mountCoderStreamRoutes(
 
     keepSemanticProjectAlive(id, decision.bus);
 
-    // Fresh run. When the worker flag is on, `pool.runFresh()` already
-    // kicked off `runCoder()` inside the worker — the route just
-    // pumps the mirrored bus to SSE and returns.
-    if (coderWorkerEnabled()) {
-      return pumpBusToSSE(c, decision.bus);
-    }
-    // Legacy in-process fresh run: fire runCoder fire-and-forget. The
-    // HTTP response only subscribes to the bus — if the client
-    // disconnects, the run keeps producing events into the buffer
-    // until it finishes.
-    const bus = decision.bus;
-    void (async () => {
-      let pluginHost: PluginWorkerHost | null = null;
-      try {
-        const { toolPlugins, bundles } = listEnabledPluginRuntime({
-          projectRoot: projectRootForSession(deps, id),
-        });
-        let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
-        if (toolPlugins.length > 0) {
-          const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
-          pluginHost = host;
-          pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
-            host.invokeTool(ns, name, args, ctx),
-          );
-        }
-        const handle = await runCoder({
-          session: { id },
-          resolveRuntimeEnv: resolveAgentRuntimeEnv,
-          userMessage: body.content,
-          attachments: body.attachments,
-          maxTurns: body.max_turns,
-          planMode: body.plan_mode,
-          agent: runAgent,
-          agentSelectionId,
-          customAgentPrompt: customAgent?.prompt,
-          allowedToolNames: customAgent?.toolNames ?? undefined,
-          profile: body.profile,
-          worktree: body.worktree,
-          thinking,
-          modelSupportsVision: resolveModelSupportsVision(id),
-          describeImages: body.describe_images,
-          previewAvailable: resolvePreviewAvailable(id),
-          selectedSkillIds,
-          ideContext: body.ide_context,
-          preflight,
-          pluginTools,
-          signal: bus.ctrl.signal,
-          mcpBearerResolver: deps.mcpBearerResolver,
-          // Mem C — proactive project-memory injection (in-process path).
-          memoryRetriever: deps.memoryRetriever,
-          // Smart recall query for meta/continuation messages (in-process path).
-          memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
-          // Mem C write-back — distill durable memory at run-end (in-process path).
-          runEndMemory: deps.runEndMemory,
-          // Direct agent ports — save_note scope 'project' + recall_memory.
-          projectMemory: deps.projectMemory,
-          // Reuse the long-lived McpExternalPool from server boot so we
-          // don't reconnect every external MCP server per chat turn.
-          // The pool implements IMcpServerManager directly; runCoder
-          // detects the injection and skips the legacy
-          // `new McpServerManager()` path.
-          externalMcpManager: getGlobalMcpExternalPool() ?? undefined,
-          onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
-          // Wire optional runtime decision/tool-selection hooks. Every helper is
-          // default-off, so env flags disabled preserve the old runner options.
-          toolSelectionFilter: deps.buildToolSelectionFilter(),
-          ...deps.buildAgentDecisionRuntimeOptions(),
-          // Inject docs_deep_research — the DocsAgent escalation tool.
-          // The bridge singleton is installed in server.ts at boot; the
-          // helper returns false when unset (e.g. headless tests) so the
-          // runner just doesn't see the tool — no errors.
-          onRunnerReady: (runner) => {
-            installDocsDeepResearch(runner);
-          },
-        });
-        setBusRunner(bus, handle.runner);
-        publish(bus, 'session', handle.session);
-        publish(bus, 'index_status', handle.indexStatus);
-        wireRunnerToBus(handle.runner, bus);
-        await handle.done;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        publish(bus, 'error', { message });
-        markEnded(bus, 'error', { message });
-      } finally {
-        void pluginHost?.dispose();
-        // Turn ended → free the agent's preview WINDOW now (keep any
-        // preview-owned dev server up for the next turn). In-process mirror
-        // of the worker pool's bus.end → closeWindow.
-        closePreviewWindow(id);
-        // Builder checkpoint (in-process mirror of the pool's bus.end hook).
-        notifyBuilderRunEnded(id);
-        // Linger in the map so a late reattach (tab closed near done) still
-        // sees the full buffer. After BUS_LINGER_MS the entry is evicted —
-        // at which point we also stop any preview-owned dev server.
-        setTimeout(() => {
-          if (activeRuns.get(id) === bus) {
-            activeRuns.delete(id);
-            closePreviewSession(id);
-          }
-        }, BUS_LINGER_MS);
-      }
-    })();
-
-    return pumpBusToSSE(c, bus);
+    // `runFresh()` already started `runCoder()` inside the worker. The route
+    // only mirrors its bus to SSE; there is deliberately no in-process path.
+    return pumpBusToSSE(c, decision.bus);
   });
 
   /**
@@ -1019,17 +802,17 @@ export function mountCoderStreamRoutes(
     // up runCoder for the same session. We hold it only across the
     // synchronous setup; the SSE pump runs outside the lock.
     const decision = await withSessionLock(id, async (): Promise<
-      | { kind: 'replay'; bus: ReturnType<typeof createBus>; since: number }
+      | { kind: 'replay'; bus: CoderRunBus; since: number }
       | { kind: 'gone' }
-      | { kind: 'attach'; bus: ReturnType<typeof createBus>; tailFrom: number }
-      | { kind: 'fresh'; bus: ReturnType<typeof createBus> }
+      | { kind: 'attach'; bus: CoderRunBus; tailFrom: number }
+      | { kind: 'fresh'; bus: CoderRunBus }
     > => {
       // Idempotency: a retry re-POSTs this body. Replay the original bus
       // instead of spinning a second runCoder (see /messages + recent-message-keys.ts).
       if (dedupeKey) {
         const hit = recentMessageKeys.lookup(id, dedupeKey);
         if (hit) {
-          return hit.bus && (hit.bus.ended || hit.bus === activeRuns.get(id))
+          return hit.bus && (hit.bus.ended || hit.bus === workerPool.getBus(id))
             ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
             : { kind: 'gone' };
         }
@@ -1039,15 +822,27 @@ export function mountCoderStreamRoutes(
       // start a second concurrent runCoder over the same session DB — tail
       // the live bus instead. Previously this path unconditionally created a
       // fresh bus and overwrote activeRuns, orphaning the running runner.
-      const live = activeRuns.get(id);
+      const live = workerPool.getBus(id);
       if (live && !live.ended) {
         if (dedupeKey) recentMessageKeys.record(id, dedupeKey, live, live.nextSeq - 1);
         return { kind: 'attach', bus: live, tailFrom: live.nextSeq - 1 };
       }
-      const ctrl = new AbortController();
-      const newBus = createBus(ctrl);
-      installRuntimeEventLog(newBus, 'coder', id);
-      activeRuns.set(id, newBus);
+      const newBus = await workerPool.runFresh(id, {
+        userMessage: '',
+        maxTurns: body.max_turns,
+        planMode: body.plan_mode,
+        agent: runAgent,
+        agentSelectionId,
+        customAgentPrompt: customAgent?.prompt,
+        allowedToolNames: customAgent?.toolNames ?? undefined,
+        profile: body.profile,
+        resume: true,
+        modelSupportsVision: resolveModelSupportsVision(id),
+        describeImages: body.describe_images,
+        previewAvailable: resolvePreviewAvailable(id),
+        browserAvailable: resolveBrowserAvailable(),
+        ...deps.buildAgentDecisionRuntimeOptions(),
+      });
       if (dedupeKey) recentMessageKeys.record(id, dedupeKey, newBus, -1);
       return { kind: 'fresh', bus: newBus };
     });
@@ -1078,83 +873,7 @@ export function mountCoderStreamRoutes(
       max_turns: body.max_turns,
     });
 
-    void (async () => {
-      let pluginHost: PluginWorkerHost | null = null;
-      try {
-        const { toolPlugins, bundles } = listEnabledPluginRuntime({
-          projectRoot: projectRootForSession(deps, id),
-        });
-        let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
-        if (toolPlugins.length > 0) {
-          const host = new PluginWorkerHost({ bundles, hostInvoke: getPluginHostInvoke() });
-          pluginHost = host;
-          pluginTools = buildPluginTools(toolPlugins, (ns, name, args, ctx) =>
-            host.invokeTool(ns, name, args, ctx),
-          );
-        }
-        const handle = await runCoder({
-          session: { id },
-          resolveRuntimeEnv: resolveAgentRuntimeEnv,
-          userMessage: '',
-          maxTurns: body.max_turns,
-          planMode: body.plan_mode,
-          agent: runAgent,
-          agentSelectionId,
-          customAgentPrompt: customAgent?.prompt,
-          allowedToolNames: customAgent?.toolNames ?? undefined,
-          profile: body.profile,
-          resume: true,
-          modelSupportsVision: resolveModelSupportsVision(id),
-          describeImages: body.describe_images,
-          previewAvailable: resolvePreviewAvailable(id),
-          pluginTools,
-          signal: bus.ctrl.signal,
-          mcpBearerResolver: deps.mcpBearerResolver,
-          // Mem C — proactive project-memory injection (in-process path).
-          memoryRetriever: deps.memoryRetriever,
-          // Smart recall query for meta/continuation messages (in-process path).
-          memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
-          // Mem C write-back — distill durable memory at run-end (in-process path).
-          runEndMemory: deps.runEndMemory,
-          // Direct agent ports — save_note scope 'project' + recall_memory.
-          projectMemory: deps.projectMemory,
-          // Same pool reuse as the fresh-run path — `continue` resumes
-          // an existing session, but we still spin a fresh runCoder()
-          // call which would otherwise rebuild McpServerManager.
-          externalMcpManager: getGlobalMcpExternalPool() ?? undefined,
-          onSnapshotRecorded: (info) => publish(bus, 'session_snapshot_changed', info),
-          // Same docs_deep_research wiring as the fresh-run path so resumed
-          // sessions get the escalation tool on turn 1.
-          onRunnerReady: (runner) => {
-            installDocsDeepResearch(runner);
-          },
-          toolSelectionFilter: deps.buildToolSelectionFilter(),
-          ...deps.buildAgentDecisionRuntimeOptions(),
-        });
-        setBusRunner(bus, handle.runner);
-        publish(bus, 'session', handle.session);
-        publish(bus, 'index_status', handle.indexStatus);
-        wireRunnerToBus(handle.runner, bus);
-        await handle.done;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        publish(bus, 'error', { message });
-        markEnded(bus, 'error', { message });
-      } finally {
-        void pluginHost?.dispose();
-        // Turn ended → free the agent's preview window (see /fresh path).
-        closePreviewWindow(id);
-        // Builder checkpoint (in-process mirror of the pool's bus.end hook).
-        notifyBuilderRunEnded(id);
-        setTimeout(() => {
-          if (activeRuns.get(id) === bus) {
-            activeRuns.delete(id);
-            closePreviewSession(id);
-          }
-        }, BUS_LINGER_MS);
-      }
-    })();
-
+    // The resume request is already executing in the mandatory worker.
     return pumpBusToSSE(c, bus);
   });
 }

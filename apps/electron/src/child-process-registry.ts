@@ -14,10 +14,12 @@
  * Contract of `TrackedChild.kill(force)`:
  *   - force=false → graceful native teardown (`pty.kill()`, `server.close()`).
  *   - force=true  → escalate now (used from the synchronous crash path).
- * In BOTH cases `killAll`/`killAllSync` additionally `killTree(pid)` for any
- * entry that carries a `pid`, so detached grandchildren are reaped regardless.
+ * Both paths additionally tree-kill entries carrying a `pid`: normal cleanup
+ * awaits the asynchronous helper queue; the exit-only path uses one bounded
+ * synchronous batch.
  */
 
+import { killProcessTreesSync } from '@mcp/shared/utils/process-tree.js';
 import { killTree } from './tree-kill.js';
 
 export type ChildKind = 'pty' | 'process' | 'server';
@@ -35,10 +37,16 @@ export interface TrackedChild {
 }
 
 function withTimeout(p: Promise<unknown>, ms: number): Promise<unknown> {
-  return Promise.race([
-    Promise.resolve(p).catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
-  ]);
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    void Promise.resolve(p)
+      .catch(() => undefined)
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
+  });
 }
 
 class ChildProcessRegistry {
@@ -73,7 +81,7 @@ class ChildProcessRegistry {
       // promise (swallowed by withTimeout) instead of escaping the map.
       snapshot.map((c) => withTimeout((async () => c.kill(false))(), graceMs)),
     );
-    for (const c of snapshot) killTree(c.pid);
+    await Promise.all(snapshot.map((c) => killTree(c.pid)));
   }
 
   /**
@@ -90,8 +98,8 @@ class ChildProcessRegistry {
       } catch {
         /* best-effort */
       }
-      killTree(c.pid);
     }
+    killProcessTreesSync(snapshot.map((c) => c.pid));
   }
 }
 

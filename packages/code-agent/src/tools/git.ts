@@ -27,6 +27,22 @@ async function git(args: string[], ctx: ToolContext): Promise<ToolResult> {
   return ok(out || '(no output)');
 }
 
+/** Add public bot co-authorship only for commits created by the code agent. */
+export function withManagedCommitAttribution(
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (env.MEGABRAIN_GIT_IDENTITY_DEFAULT !== 'managed' || env.MEGABRAIN_GIT_PUBLIC_ATTRIBUTION === '0') {
+    return message;
+  }
+  const botId = (env.MEGABRAIN_GITHUB_BOT_USER_ID || '306376051').trim();
+  const botLogin = (env.MEGABRAIN_GITHUB_BOT_LOGIN || 'megabrainstudio[bot]').trim();
+  if (!/^\d+$/.test(botId) || !/^[A-Za-z0-9_.-]+\[bot\]$/.test(botLogin)) return message;
+  const email = `${botId}+${botLogin}@users.noreply.github.com`;
+  if (message.toLowerCase().includes(email.toLowerCase())) return message;
+  return `${message}\n\nCo-authored-by: MegaBrainStudio <${email}>`;
+}
+
 const gitStatus: CoderTool = {
   name: 'git_status',
   description: maybeTerse(GIT_STATUS_DESC),
@@ -108,7 +124,7 @@ const gitCommit: CoderTool = {
   handler: async (args, ctx) => {
     const message = String(args.message ?? '').trim();
     if (!message) return err('message cannot be empty');
-    return git(['commit', '-m', message], ctx);
+    return git(['commit', '-m', withManagedCommitAttribution(message)], ctx);
   },
 };
 

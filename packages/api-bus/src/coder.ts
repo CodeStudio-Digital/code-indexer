@@ -27,6 +27,7 @@ import type { ApiContext, AsyncStream } from './common.js';
 
 export type BuiltInAgentPreset =
   | 'explore'
+  | 'research'
   | 'plan'
   | 'build'
   | 'admin'

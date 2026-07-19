@@ -18,6 +18,7 @@ export interface WorkerMemStats {
   /** Per-isolate V8 heap, MB. */
   heapUsedMB: number;
   heapTotalMB: number;
+  heapLimitMB: number;
   /** ArrayBuffers + external strings attributed to this isolate, MB. */
   externalMB: number;
   /** Native allocations tracked by V8 (malloc'd), MB. */
@@ -39,6 +40,7 @@ export function buildMemStats(loop?: ReturnType<typeof monitorEventLoopDelay>): 
   const stats: WorkerMemStats = {
     heapUsedMB: mb(s.used_heap_size),
     heapTotalMB: mb(s.total_heap_size),
+    heapLimitMB: mb(s.heap_size_limit),
     externalMB: mb(s.external_memory),
     mallocedMB: mb(s.malloced_memory),
     loopP50Ms: loop ? ns(loop.percentile(50)) : 0,

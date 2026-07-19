@@ -47,6 +47,8 @@ export interface NetEntry {
 const CAP = 250;
 const MAX_CONSOLE_ENTRY_CHARS = 20_000;
 const MAX_URL_CHARS = 8_000;
+const CDP_INITIALIZE_TIMEOUT_MS = 30_000;
+const CDP_DOMAINS = ['Runtime', 'Network', 'Log', 'Page', 'Performance', 'DOM', 'CSS', 'Accessibility'] as const;
 
 function capText(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max)}\n[entry capped at ${max} chars]` : value;
@@ -110,17 +112,40 @@ export class PreviewWindow {
     dbg.on('detach', this.onDetach);
   }
 
-  static async create(win: BrowserWindow, url: string): Promise<PreviewWindow> {
+  static async create(
+    win: BrowserWindow,
+    url: string,
+    navigate?: () => Promise<void>,
+  ): Promise<PreviewWindow> {
     const preview = new PreviewWindow(win, url);
     const dbg = win.webContents.debugger;
     try {
       if (!dbg.isAttached()) dbg.attach('1.3');
       if (!dbg.isAttached()) throw new Error('debugger did not attach');
-      await Promise.all(
-        ['Runtime', 'Network', 'Log', 'Page', 'Performance', 'DOM', 'CSS', 'Accessibility'].map((domain) =>
-          dbg.sendCommand(`${domain}.enable`),
+      // Start CDP capture before navigation so the initial console/network
+      // activity is retained. DOM/CSS/Accessibility can remain pending while
+      // the target is about:blank, however, so navigation must run in parallel
+      // with domain initialization instead of waiting behind it.
+      const pending = new Set<string>(CDP_DOMAINS);
+      const initialize = Promise.all(
+        CDP_DOMAINS.map((domain) =>
+          dbg.sendCommand(`${domain}.enable`).finally(() => pending.delete(domain)),
         ),
       );
+      const boundedInitialize = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(
+            `CDP initialization timed out after ${CDP_INITIALIZE_TIMEOUT_MS}ms` +
+              (pending.size ? ` (pending: ${[...pending].join(', ')})` : ''),
+          ));
+        }, CDP_INITIALIZE_TIMEOUT_MS);
+        initialize.then(
+          () => { clearTimeout(timer); resolve(); },
+          (error) => { clearTimeout(timer); reject(error); },
+        );
+      });
+      if (navigate) await Promise.all([boundedInitialize, navigate()]);
+      else await boundedInitialize;
       await dbg.sendCommand('Page.setLifecycleEventsEnabled', { enabled: true });
       return preview;
     } catch (error) {

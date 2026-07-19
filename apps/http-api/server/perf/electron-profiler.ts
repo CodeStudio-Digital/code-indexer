@@ -21,7 +21,7 @@ export interface ElectronProfiler {
 
 let impl: ElectronProfiler | null = null;
 
-export function setElectronProfiler(p: ElectronProfiler): void {
+export function setElectronProfiler(p: ElectronProfiler | null): void {
   impl = p;
 }
 

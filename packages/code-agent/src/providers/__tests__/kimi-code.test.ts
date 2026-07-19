@@ -34,6 +34,10 @@ const {
   toKimiMessages,
   toKimiToolParam,
 } = await import('../kimi-code.js');
+const {
+  kimiCodeSeedUpsertModels,
+  mapKimiCodeModels,
+} = await import('@mcp/services/services/oauth/kimi-code.js');
 import type { AgentMessage, ChatDelta } from '../../core/messages.js';
 
 describe('isEffectivelyEmptyText', () => {
@@ -196,5 +200,73 @@ describe('KimiCodeChatProvider.chat() — H6 skip empty tool_call deltas', () =>
 
     const ends = deltas.filter((d) => d.type === 'tool_call_end');
     expect(ends).toHaveLength(0);
+  });
+});
+
+describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
+  function completedStream(): AsyncIterable<unknown> {
+    return (async function* () {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    })();
+  }
+
+  async function run(model: string, reasoningEffort?: string): Promise<Record<string, unknown>> {
+    mockCreate.mockResolvedValueOnce(completedStream());
+    const provider = new KimiCodeChatProvider({ apiKey: 'test', model });
+    for await (const _delta of provider.chat({
+      system: 'sys',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      tools: [],
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    })) {
+      // Drain the stream so the provider request completes.
+    }
+    const calls = mockCreate.mock.calls;
+    return calls[calls.length - 1][0] as Record<string, unknown>;
+  }
+
+  it('forwards the selected level as reasoning_effort for K3', async () => {
+    const body = await run('k3', 'max');
+    expect(body.reasoning_effort).toBe('max');
+  });
+
+  it('leaves K3 reasoning_effort unset when the session uses the model default', async () => {
+    const body = await run('k3');
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('does not send reasoning_effort to older Kimi models', async () => {
+    const body = await run('kimi-k2.6', 'high');
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+});
+
+describe('Kimi Code K3 model metadata', () => {
+  it('maps live K3 discovery to its discrete reasoning levels', () => {
+    const [model] = mapKimiCodeModels([{ id: 'k3' }]);
+
+    expect(model).toMatchObject({
+      model_id: 'k3',
+      can_reason: true,
+      context_window: 1_048_576,
+      default_reasoning_level: 'max',
+      supported_reasoning_levels: ['low', 'high', 'max'],
+    });
+  });
+
+  it('keeps K3 available with the same capability when live discovery falls back', () => {
+    const model = kimiCodeSeedUpsertModels().find((candidate) => candidate.model_id === 'k3');
+
+    expect(model).toMatchObject({
+      default_reasoning_level: 'max',
+      supported_reasoning_levels: ['low', 'high', 'max'],
+    });
+  });
+
+  it('does not change the established K2 reasoning levels', () => {
+    const [model] = mapKimiCodeModels([{ id: 'kimi-k2.6' }]);
+
+    expect(model.supported_reasoning_levels).toEqual(['low', 'medium', 'high']);
+    expect(model.default_reasoning_level).toBe('high');
   });
 });

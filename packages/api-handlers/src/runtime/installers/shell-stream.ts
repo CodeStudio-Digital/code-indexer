@@ -8,6 +8,19 @@
  */
 
 import { spawn } from 'node:child_process';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
+
+const activeChildren = new Set<ReturnType<typeof spawn>>();
+
+/** Hard-stop installer subprocess trees that are still streaming at shutdown. */
+export function disposeShellStreamProcesses(): void {
+  const snapshot = [...activeChildren];
+  activeChildren.clear();
+  for (const child of snapshot) {
+    killProcessTree(child.pid, 'SIGKILL');
+    try { child.kill('SIGKILL'); } catch { /* already closed */ }
+  }
+}
 
 export interface ShellStreamOpts {
   cwd?: string;
@@ -28,7 +41,10 @@ export async function* spawnLogStream(
     cwd: opts.cwd,
     env: opts.env ?? process.env,
     shell: opts.shell ?? false,
+    detached: process.platform !== 'win32',
+    windowsHide: true,
   });
+  activeChildren.add(child);
 
   const lines: string[] = [];
   let resolveNext: (() => void) | null = null;
@@ -57,6 +73,7 @@ export async function* spawnLogStream(
   child.stdout?.on('data', onChunk);
   child.stderr?.on('data', onChunk);
   child.on('error', (err) => {
+    activeChildren.delete(child);
     failure =
       (err as NodeJS.ErrnoException).code === 'ENOENT'
         ? new Error(`'${program}' was not found on PATH`)
@@ -66,6 +83,7 @@ export async function* spawnLogStream(
   });
   const okCodes = opts.okExitCodes ?? [0];
   child.on('close', (code) => {
+    activeChildren.delete(child);
     if (buf.length) lines.push(buf.replace(/\r$/, ''));
     if (!failure && (code == null || !okCodes.includes(code))) {
       failure = new Error(`${program} exited with code ${code}`);
@@ -74,11 +92,20 @@ export async function* spawnLogStream(
     wake();
   });
 
-  for (;;) {
+  try {
+    for (;;) {
+      while (lines.length) yield lines.shift()!;
+      if (done) break;
+      await new Promise<void>((r) => (resolveNext = r));
+    }
     while (lines.length) yield lines.shift()!;
-    if (done) break;
-    await new Promise<void>((r) => (resolveNext = r));
+    if (failure) throw failure;
+  } finally {
+    if (activeChildren.delete(child)) {
+      // Generator cancellation happens during normal background work. Avoid a
+      // Windows taskkill traversal here; shutdown still uses the tree-aware
+      // disposer above for children that remain active.
+      try { child.kill('SIGKILL'); } catch { /* already closed */ }
+    }
   }
-  while (lines.length) yield lines.shift()!;
-  if (failure) throw failure;
 }

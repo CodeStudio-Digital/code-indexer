@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { realpath, rm } from 'node:fs/promises';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import {
   ApiError,
   type ProjectGitApi,
@@ -107,19 +108,17 @@ function safeGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   return env;
 }
 
+const activeGitProcesses = new Set<ReturnType<typeof spawn>>();
+
 function terminateProcessTree(child: ReturnType<typeof spawn>): void {
-  if (!child.pid) return;
-  if (process.platform === 'win32') {
-    const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    killer.unref();
-    return;
-  }
-  child.kill('SIGTERM');
-  const hardKill = setTimeout(() => child.kill('SIGKILL'), 1_000);
-  hardKill.unref?.();
+  killProcessTree(child.pid, 'SIGKILL');
+}
+
+/** Reap any Git command/hook/credential-helper tree still running at quit. */
+export function disposeProjectGitProcesses(): void {
+  const snapshot = [...activeGitProcesses];
+  activeGitProcesses.clear();
+  for (const child of snapshot) terminateProcessTree(child);
 }
 
 function throwGitReadFailure(operation: string, result: GitResult, fallback: string): never {
@@ -159,13 +158,16 @@ function runGit(
     const child = spawn('git', args, {
       cwd,
       windowsHide: true,
+      detached: process.platform !== 'win32',
       env: safeGitEnv({ ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
     });
+    activeGitProcesses.add(child);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const finish = (result: GitResult) => {
       if (settled) return;
       settled = true;
+      activeGitProcesses.delete(child);
       if (timer) clearTimeout(timer);
       recordGitProcess({
         outputBytes: Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8'),
@@ -571,6 +573,7 @@ function commandPreview(operation: GitPlanOperation): string {
 
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
+  const managedGit = deps.managedGit;
   const statusInflight = new Map<string, Promise<GitStatus>>();
   const STATUS_SNAPSHOT_TTL_MS = Number(process.env.MCP_GIT_STATUS_SNAPSHOT_TTL_MS ?? 30_000);
   const statusSnapshots = new Map<string, {
@@ -922,6 +925,19 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     if (!remote) throw new ApiError('git_push_remote_required', 409, 'No unambiguous push remote is configured.');
     await ensureRemote(root, remote);
 
+    const remoteUrlResult = await runGit(root, ['remote', 'get-url', '--push', remote], { profile: 'read' });
+    const remoteUrl = remoteUrlResult.code === 0 ? remoteUrlResult.stdout.trim() : '';
+    const managedIdentity = managedGit && remoteUrl
+      ? await managedGit.describe(remoteUrl)
+      : {
+          available: false,
+          configured: false,
+          label: 'MegaBrainStudio',
+          host: null,
+          repository: null,
+          reason: 'not_configured' as const,
+        };
+
     const targetBranch = upstream && upstreamRemote === remote
       ? upstream.slice(remote.length + 1)
       : branch;
@@ -953,6 +969,19 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     });
     const tagsTruncated = parsedTags.length > 500;
     const tags = parsedTags.slice(0, 500);
+    const defaultHead = await runGit(root, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`], { profile: 'read' });
+    let defaultBranch = defaultHead.code === 0
+      ? defaultHead.stdout.trim().replace(new RegExp(`^${remote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`), '') || null
+      : null;
+    if (!defaultBranch) {
+      for (const candidate of ['main', 'master']) {
+        const exists = await runGit(root, ['show-ref', '--verify', '--quiet', `refs/remotes/${remote}/${candidate}`], { profile: 'read' });
+        if (exists.code === 0) {
+          defaultBranch = candidate;
+          break;
+        }
+      }
+    }
     return {
       branch,
       headSha: headResult.stdout.trim(),
@@ -966,6 +995,11 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       tags,
       tagCount: tagsTruncated ? 501 : tags.length,
       tagsTruncated,
+      defaultBranch,
+      identity: {
+        defaultMode: managedIdentity.available ? managedGit?.defaultIdentityMode ?? 'project' : 'project',
+        managed: managedIdentity,
+      },
     };
   }
 
@@ -1596,7 +1630,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return buildPushPreview(input);
     },
 
-    async push({ projectId, remote, branch, targetBranch, expectedHead, force, setUpstream, pushTags, repoPath }) {
+    async push({ projectId, remote, branch, targetBranch, expectedHead, force, setUpstream, pushTags, identityMode = 'project', managedGrant, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
       await ensureRemote(root, remote);
       if (branch) await ensureCommitRef(root, branch);
@@ -1618,6 +1652,39 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       if (pushTags) args.push('--atomic', '--tags');
       if (remote) args.push(remote);
       if (branch) args.push(targetBranch && targetBranch !== branch ? `${branch}:${targetBranch}` : branch);
+      let managedRemoteUrl: string | null = null;
+      if (identityMode === 'managed') {
+        if (!managedGit) throw new ApiError('managed_identity_not_configured', 409, 'MegaBrain managed Git identity is not configured.');
+        if (!remote) throw new ApiError('managed_identity_remote_required', 409, 'Managed Git identity requires an explicit remote.');
+        if (!branch) throw new ApiError('managed_identity_branch_required', 409, 'Managed Git identity requires an explicit local branch.');
+        const remoteUrlResult = await runGit(root, ['remote', 'get-url', '--push', remote], { profile: 'read' });
+        if (remoteUrlResult.code !== 0 || !remoteUrlResult.stdout.trim()) {
+          throw new ApiError('managed_identity_remote_unavailable', 409, remoteUrlResult.stderr.trim() || 'Could not resolve the selected remote URL.');
+        }
+        managedRemoteUrl = remoteUrlResult.stdout.trim();
+        const availability = await managedGit.describe(managedRemoteUrl);
+        if (!availability.available) {
+          throw new ApiError(
+            `managed_identity_${availability.reason || 'unavailable'}`,
+            409,
+            availability.reason === 'unsupported_host'
+              ? `MegaBrainStudio is not registered for ${availability.host || 'this Git host'}. Use the project identity or configure a separate enterprise app.`
+              : 'MegaBrainStudio is not available for this repository. Check the app configuration and installation.',
+          );
+        }
+        const lfsAttributes = await runGit(
+          root,
+          ['grep', '-l', 'filter=lfs', 'HEAD', '--', ':(glob)**/.gitattributes'],
+          { profile: 'read' },
+        );
+        if (lfsAttributes.code === 0 && lfsAttributes.stdout.trim()) {
+          throw new ApiError(
+            'managed_identity_lfs_unsupported',
+            409,
+            'Managed push is disabled for Git LFS repositories until LFS credentials can be isolated from repository hooks. Use the project identity for this push.',
+          );
+        }
+      }
       if (remote && branch) {
         const outcome = await pushWithAutoUpdate({
           pushArgs: args,
@@ -1626,8 +1693,30 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
           targetBranch: targetBranch ?? branch,
           expectedHead,
           pushTags,
-          allowAutoUpdate: !force,
+          // Cloud grants are deliberately single-use. A managed non-FF push
+          // returns action-required instead of hiding fetch+retry behind the
+          // operation the user reviewed.
+          allowAutoUpdate: !force && identityMode !== 'managed',
           run: async (gitArgs, runOptions): Promise<GitRunResult> => {
+            if (identityMode === 'managed' && (runOptions.kind === 'push' || runOptions.kind === 'fetch')) {
+              try {
+                const result = await managedGit!.runGit({
+                  cwd: root,
+                  remoteUrl: managedRemoteUrl!,
+                  remoteName: remote,
+                  args: gitArgs,
+                  timeoutMs: GIT_NETWORK_TIMEOUT_MS,
+                  authorizationGrant: managedGrant,
+                });
+                return { command: 'git', args: gitArgs, ...result };
+              } catch (error) {
+                throw new ApiError(
+                  'managed_identity_operation_failed',
+                  502,
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
+            }
             if (runOptions.kind === 'read') {
               const result = await runGit(root, gitArgs, {
                 env: runOptions.env,
@@ -1659,6 +1748,38 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         return { ...outcome.result, updatedBeforePush: outcome.updatedBeforePush };
       }
       return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
+    },
+
+    async createPullRequest({ projectId, repoPath, remote, head, base, title, body, draft, identityMode }) {
+      if (identityMode !== 'managed') {
+        throw new ApiError('managed_identity_required', 400, 'Pull request creation through this endpoint requires the explicit managed identity.');
+      }
+      if (!managedGit) throw new ApiError('managed_identity_not_configured', 409, 'MegaBrain managed Git identity is not configured.');
+      const root = await resolveCwd(projectId, repoPath);
+      if (!remote) throw new ApiError('managed_identity_remote_required', 409, 'Pull request creation requires an explicit remote.');
+      await ensureRemote(root, remote);
+      await ensureLocalBranch(root, head);
+      await ensureBranchName(root, base);
+      const remoteUrlResult = await runGit(root, ['remote', 'get-url', '--push', remote], { profile: 'read' });
+      if (remoteUrlResult.code !== 0 || !remoteUrlResult.stdout.trim()) {
+        throw new ApiError('managed_identity_remote_unavailable', 409, remoteUrlResult.stderr.trim() || 'Could not resolve the selected remote URL.');
+      }
+      try {
+        return await managedGit.createPullRequest({
+          remoteUrl: remoteUrlResult.stdout.trim(),
+          head,
+          base,
+          title,
+          body,
+          draft,
+        });
+      } catch (error) {
+        throw new ApiError(
+          'managed_pull_request_failed',
+          502,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     },
 
     async fetch({ projectId, remote, prune, repoPath }) {

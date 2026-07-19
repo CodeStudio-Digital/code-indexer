@@ -25,6 +25,27 @@ function fixture(): { debuggerApi: FakeDebugger; win: BrowserWindow } {
 }
 
 describe('PreviewWindow CDP capture', () => {
+  it('navigates while document-dependent CDP domains are still initializing', async () => {
+    const { debuggerApi, win } = fixture();
+    let releaseCss: (() => void) | undefined;
+    debuggerApi.sendCommand.mockImplementation(async (method: string) => {
+      if (method === 'CSS.enable') {
+        await new Promise<void>((resolve) => { releaseCss = resolve; });
+      }
+      return {};
+    });
+
+    const navigate = vi.fn(async () => {
+      expect(releaseCss).toBeTypeOf('function');
+      releaseCss?.();
+    });
+    const preview = await PreviewWindow.create(win, 'http://localhost:5173', navigate);
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith('CSS.enable');
+    preview.close();
+  });
+
   it('fails initialization when a required CDP domain cannot be enabled', async () => {
     const { debuggerApi, win } = fixture();
     debuggerApi.sendCommand.mockImplementation(async (method: string) => {

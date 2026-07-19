@@ -160,7 +160,10 @@ export function loadPluginProviders(opts: LoadPluginProvidersOptions): LoadPlugi
       }
       try {
         const useAdapter = blessed && ref.runtime?.kinds.includes(spec.kind);
-        opts.register(useAdapter ? buildProviderPluginDefinition(spec, ref.runtime!) : opts.buildDefinition(spec));
+        const hostDefinition = opts.buildDefinition(spec);
+        opts.register(useAdapter
+          ? buildProviderPluginDefinition(spec, ref.runtime!, hostDefinition)
+          : hostDefinition);
         kinds.push(spec.kind);
       } catch (err) {
         opts.onError?.(ref.namespace, err);

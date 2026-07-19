@@ -161,7 +161,10 @@ describe('loadPluginProviders (declarative DATA → buildDefinition → register
         }),
       ],
     });
-    expect(buildDefinition).not.toHaveBeenCalled();
+    // Executable adapters own credentials/auth/discovery while the host-built
+    // definition supplies the shared wire implementation without bundling it
+    // into every plugin.
+    expect(buildDefinition).toHaveBeenCalledTimes(1);
     expect(register).toHaveBeenCalledTimes(1);
     expect((register.mock.calls[0][0] as ProviderDefinition).resolveCredentials).toEqual(expect.any(Function));
     expect(res.loaded).toEqual([{ namespace: 'provider-acme', kinds: ['acme'] }]);

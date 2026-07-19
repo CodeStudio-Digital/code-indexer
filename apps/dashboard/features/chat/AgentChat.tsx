@@ -1846,7 +1846,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 }
 function isAgentPreset(value: unknown): value is AgentPreset {
   return typeof value === 'string' && (
-    value === 'explore' || value === 'plan' || value === 'build' || value === 'admin' ||
+    value === 'explore' || value === 'research' || value === 'plan' || value === 'build' || value === 'admin' ||
     value === 'spec' || value === 'app_orchestrator' || value === 'app_db' || value === 'api' ||
     value === 'diagram' || value === 'builder' || /^custom:[a-zA-Z0-9-]{8,80}$/.test(value)
   );

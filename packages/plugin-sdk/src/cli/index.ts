@@ -9,9 +9,11 @@ import { buildPlugin } from './build.js';
 import { publishPlugin } from './publish.js';
 
 const USAGE = 'usage: mcp-plugin <create|validate|build|publish> [name|dir]';
+const BUILD_USAGE = 'usage: mcp-plugin build [dir] [--trust-providers]';
 
 async function main(argv: string[]): Promise<void> {
-  const [cmd, arg] = argv;
+  const [cmd, ...args] = argv;
+  const arg = args[0];
   switch (cmd) {
     case 'create': {
       if (!arg) throw new Error('usage: create <name>');
@@ -29,7 +31,12 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'build': {
-      const r = await buildPlugin(arg ?? '.');
+      const trustProviders = args.includes('--trust-providers');
+      const unknownFlags = args.filter((value) => value.startsWith('-') && value !== '--trust-providers');
+      const dirs = args.filter((value) => !value.startsWith('-'));
+      if (unknownFlags.length > 0 || dirs.length > 1) throw new Error(BUILD_USAGE);
+
+      const r = await buildPlugin(dirs[0] ?? '.', { trustProviders });
       console.log(`Built ${r.tools} tool(s) -> ${r.bundle}; wrote ${r.appJson}`);
       for (const f of r.uiFiles) console.log(`Inlined UI -> ${f}`);
       return;

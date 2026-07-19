@@ -4,12 +4,15 @@
  * PROJECT, so it needs the session's linked project; when a session has no
  * linked project we fall back to Docs-only (Scalar reads the sandbox spec).
  */
-import { useState } from 'react';
-import { ApiClientTab } from '../api-client/ApiClientTab.js';
+import { lazy, Suspense, useState } from 'react';
 import { CompanyApiReferenceTab } from './CompanyApiReferenceTab.js';
 import type { SessionProject } from '../builder/preview/useSessionProjects.js';
 
 type Mode = 'client' | 'docs';
+
+const ApiClientTab = lazy(() =>
+  import('../api-client/ApiClientTab.js').then((module) => ({ default: module.ApiClientTab })),
+);
 
 interface Props {
   sessionId: number;
@@ -39,7 +42,7 @@ export function CompanyApiTab({ sessionId, projects }: Props) {
       </div>
       <div className="flex-1 min-h-0">
         {mode === 'client' && projectId != null
-          ? <ApiClientTab projectId={projectId} />
+          ? <Suspense fallback={null}><ApiClientTab projectId={projectId} /></Suspense>
           : <CompanyApiReferenceTab sessionId={sessionId} />}
       </div>
     </div>

@@ -24,8 +24,8 @@ function toEntry(dir: string, e: FileEntryWithStats): SftpEntry {
 
 interface SftpSession {
   sftp: SFTPWrapper;
-  /** Idempotently return the pooled-connection ref this session holds. */
-  release: () => void;
+  /** Idempotently close listeners/channel and return the pooled ref. */
+  close: (endChannel: boolean) => void;
 }
 
 export class SftpManager {
@@ -53,33 +53,36 @@ export class SftpManager {
     // Client that a shell/tunnel may keep alive), or close() is called. Without
     // this, an independent SFTP-channel close would strand the ref and the
     // pooled connection could never reach refCount 0 (leak).
-    let released = false;
-    const release = (): void => {
-      if (released) return;
-      released = true;
+    let closed = false;
+    const onClientClose = (): void => close(false);
+    const onSftpClose = (): void => close(false);
+    const close = (endChannel: boolean): void => {
+      if (closed) return;
+      closed = true;
+      if (this.sessions.get(spec.hostId) === session) this.sessions.delete(spec.hostId);
+      client.removeListener('close', onClientClose);
+      sftp.removeListener('close', onSftpClose);
+      if (endChannel) {
+        try { sftp.end(); } catch { /* already closed */ }
+      }
       this.manager.release(spec.hostId);
     };
-    const session: SftpSession = { sftp, release };
+    const session: SftpSession = { sftp, close };
     this.sessions.set(spec.hostId, session);
-    const drop = (): void => {
-      if (this.sessions.get(spec.hostId) === session) this.sessions.delete(spec.hostId);
-      release();
-    };
-    client.on('close', drop);
-    sftp.on('close', drop);
+    client.once('close', onClientClose);
+    sftp.once('close', onSftpClose);
     return sftp;
   }
 
   close(hostId: string): void {
     const session = this.sessions.get(hostId);
     if (!session) return;
-    this.sessions.delete(hostId);
-    try {
-      session.sftp.end();
-    } catch {
-      /* already closed */
-    }
-    session.release(); // idempotent — a no-op if the channel already closed
+    session.close(true);
+  }
+
+  closeAll(): void {
+    for (const transferId of [...this.transfers.keys()]) this.cancel(transferId);
+    for (const session of [...this.sessions.values()]) session.close(true);
   }
 
   async realpath(spec: SshConnectSpec, path: string): Promise<string> {
@@ -135,6 +138,9 @@ export class SftpManager {
       let settled = false;
       let acquired = false;
       let released = false;
+      const onChannelClose = (): void =>
+        settle(new ApiError('sftp_closed', 502, 'SFTP channel closed during transfer'));
+      const onChannelError = (error: Error): void => settle(error);
       const release = (): void => {
         if (released) return;
         released = true;
@@ -144,6 +150,8 @@ export class SftpManager {
         if (settled) return;
         settled = true;
         this.transfers.delete(transferId);
+        channel?.removeListener('close', onChannelClose);
+        channel?.removeListener('error', onChannelError);
         try {
           channel?.end();
         } catch {
@@ -174,6 +182,8 @@ export class SftpManager {
             return;
           }
           channel = sftp;
+          sftp.once('close', onChannelClose);
+          sftp.once('error', onChannelError);
           run(sftp, onProgress, (err) => settle(err ?? undefined));
         })
         .catch((err) => settle(err instanceof Error ? err : new Error(String(err))));

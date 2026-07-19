@@ -11,6 +11,7 @@
  * Keyed `coder-<sessionId>` to match `previewKey()` for coder sessions.
  */
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import { getGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
 
 function invoke(sessionId: number, method: PreviewInvoke['method']): void {
   const svc = getGlobalPreviewDevtools();
@@ -34,16 +35,20 @@ function invokeKey(key: string, method: PreviewInvoke['method']): void {
 
 export function closePreviewWindow(sessionId: number): void {
   invoke(sessionId, 'closeWindow');
+  void getGlobalResearchBrowser()?.invoke({ key: `coder-${sessionId}`, method: 'close' }).catch(() => undefined);
 }
 
 export function closePreviewSession(sessionId: number): void {
   invoke(sessionId, 'closeSession');
+  void getGlobalResearchBrowser()?.invoke({ key: `coder-${sessionId}`, method: 'close' }).catch(() => undefined);
 }
 
 export function closeCompanyPreviewWindows(sessionId: number): void {
   invokeKey(`company-session-${sessionId}`, 'closeWindowPrefix');
+  void getGlobalResearchBrowser()?.invoke({ key: `company-session-${sessionId}`, method: 'closePrefix' }).catch(() => undefined);
 }
 
 export function closeCompanyPreviewSession(sessionId: number): void {
   invokeKey(`company-session-${sessionId}`, 'closeSessionPrefix');
+  void getGlobalResearchBrowser()?.invoke({ key: `company-session-${sessionId}`, method: 'closePrefix' }).catch(() => undefined);
 }

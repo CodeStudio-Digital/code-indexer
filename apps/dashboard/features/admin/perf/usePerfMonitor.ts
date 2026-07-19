@@ -14,6 +14,7 @@ import { getModelStats } from '../../workspace/editor/editor-models.js';
 export interface WorkerMemStats {
   heapUsedMB: number;
   heapTotalMB: number;
+  heapLimitMB: number;
   externalMB: number;
   mallocedMB: number;
   loopP50Ms: number;
@@ -29,6 +30,7 @@ export interface PerfSample {
     rssMB: number;
     heapUsedMB: number;
     heapTotalMB: number;
+    heapLimitMB: number;
     externalMB: number;
     arrayBuffersMB: number;
     nativeMB: number;

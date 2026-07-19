@@ -1,6 +1,6 @@
 /** ID-based routing from semantic namespaces to distributed sqlite-vec files. */
 import { dirname, join, resolve as resolvePath } from 'node:path';
-import { existsSync, rmSync, statSync } from 'node:fs';
+import { rmSync, statSync } from 'node:fs';
 import type { VectorMatch, VectorRecord } from '@mcp/shared/types.js';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import { resolveProjectDbLocation } from './project-db/paths.js';
@@ -110,7 +110,7 @@ function parseId(value: string, namespace: string): number {
 }
 
 function fileSize(path: string): number {
-  try { return existsSync(path) ? statSync(path).size : 0; } catch { return 0; }
+  try { return statSync(path).size; } catch { return 0; }
 }
 
 function physicalDbKey(dbPath: string): string {
@@ -223,14 +223,44 @@ export class LocalVectorRouter {
   }
 
   getNamespaceStatus(namespace: string): LocalVectorNamespaceStatus {
-    const state = this.namespaceState(namespace);
+    return this.buildNamespaceStatus(namespace, this.namespaceState(namespace));
+  }
+
+  /** Resolve a diagnostics snapshot with one namespace-state query and one
+   * filesystem size probe per physical database. Admin surfaces commonly ask
+   * for code, snapshots and memory together; those share the same vectors.db. */
+  getNamespaceStatuses(namespaces: string[]): LocalVectorNamespaceStatus[] {
+    const states = this.options.semanticStore?.listNamespaceGenerations() ?? [];
+    const stateByNamespace = new Map(states.map((state) => [state.namespace, state]));
+    const sizeByDbPath = new Map<string, number>();
+    return namespaces.map((namespace) => this.buildNamespaceStatus(
+      namespace,
+      stateByNamespace.get(namespace) ?? null,
+      sizeByDbPath,
+    ));
+  }
+
+  private buildNamespaceStatus(
+    namespace: string,
+    state: SemanticNamespaceGenerationRow | null,
+    sizeByDbPath?: Map<string, number>,
+  ): LocalVectorNamespaceStatus {
     // Generation 1 is used only to parse the namespace and resolve its physical path.
     const base = this.resolve(namespace, state?.active_generation_id ?? state?.building_generation_id ?? 1);
+    const dbKey = physicalDbKey(base.dbPath);
+    let sizeBytes = sizeByDbPath?.get(dbKey);
+    if (sizeBytes === undefined) {
+      sizeBytes = ['', '-wal', '-shm'].reduce(
+        (total, suffix) => total + fileSize(base.dbPath + suffix),
+        0,
+      );
+      sizeByDbPath?.set(dbKey, sizeBytes);
+    }
     return {
       namespace,
       purpose: state?.purpose ?? base.purpose,
       dbPath: base.dbPath,
-      size_bytes: ['', '-wal', '-shm'].reduce((total, suffix) => total + fileSize(base.dbPath + suffix), 0),
+      size_bytes: sizeBytes,
       active: state?.active_generation_id ? this.resolve(namespace, state.active_generation_id) : null,
       building: state?.building_generation_id ? this.resolve(namespace, state.building_generation_id) : null,
       expected_items: state?.expected_items ?? 0,
