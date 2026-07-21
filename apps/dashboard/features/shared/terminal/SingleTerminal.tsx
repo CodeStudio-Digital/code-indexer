@@ -12,11 +12,18 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { apiCall, apiStream } from '../../../lib/api-client.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
+import { findTerminalPathMatches } from './terminal-links.js';
 
 export interface SingleTerminalProps {
   terminalId: string;
   /** Notified when the underlying PTY process exits (user typed `exit`). */
   onProcessExited: () => void;
+  /**
+   * When provided, project-relative paths in the output (with optional
+   * `:line:col`) become clickable links routed here. Omitted by callers with
+   * no editor to open into (e.g. the agents view).
+   */
+  onOpenPath?: (path: string, line?: number, column?: number) => void;
 }
 
 /**
@@ -70,7 +77,7 @@ type TerminalOutputChunk =
   | { type: 'data'; data: string }
   | { type: 'exit'; code: number | null; signal: string | null };
 
-export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalProps) {
+export function SingleTerminal({ terminalId, onProcessExited, onOpenPath }: SingleTerminalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const dark = useIsDark();
@@ -83,6 +90,9 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
   // here would blank the very log the user wanted to read.
   const onExitedRef = useRef(onProcessExited);
   onExitedRef.current = onProcessExited;
+  // Same latest-ref trick for the (usually inline) open-path callback.
+  const onOpenPathRef = useRef(onOpenPath);
+  onOpenPathRef.current = onOpenPath;
 
   // Re-apply the xterm theme live when the user flips light/dark — the
   // terminal is NOT rebuilt (that would wipe the scrollback), only its
@@ -124,6 +134,23 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+
+    // Clickable file links: project-relative paths (+ optional :line:col) in the
+    // output open in the editor. Registered only when the host wired a handler.
+    const linkProvider = onOpenPathRef.current
+      ? term.registerLinkProvider({
+          provideLinks(bufferLineNumber, callback) {
+            const lineText = term.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true);
+            const matches = lineText ? findTerminalPathMatches(lineText) : [];
+            if (matches.length === 0) { callback(undefined); return; }
+            callback(matches.map((mm) => ({
+              range: { start: { x: mm.startX + 1, y: bufferLineNumber }, end: { x: mm.endX, y: bufferLineNumber } },
+              text: lineText!.slice(mm.startX, mm.endX),
+              activate: () => onOpenPathRef.current?.(mm.path, mm.line, mm.column),
+            })));
+          },
+        })
+      : null;
 
     // ── Clipboard wiring ───────────────────────────────────────────
     // xterm.js doesn't bind clipboard shortcuts by design — Ctrl+C is
@@ -280,6 +307,7 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       // container's closeTab handler is the only path that kills.
       void iterator.return?.();
       onDataDisposable.dispose();
+      linkProvider?.dispose();
       term.dispose();
       termRef.current = null;
     };

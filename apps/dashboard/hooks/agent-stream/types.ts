@@ -205,6 +205,41 @@ export interface AgentAttachment {
   text?: string;
 }
 
+// ─── workflow tool (Ultra) ─────────────────────────────────────
+
+export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped';
+export type WorkflowRunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'aborted';
+
+export interface WorkflowStepView {
+  id: string;
+  title: string;
+  profile: string;
+  dependsOn: string[];
+  wave: number;
+  status: WorkflowStepStatus;
+  /** agents_group id of the wave this step ran in (live lane correlation). */
+  groupId?: string;
+  summary?: string;
+  error?: string;
+  toolCallCount?: number;
+  maxToolCalls?: number;
+  lastToolName?: string;
+  phase?: string;
+  usage?: Usage;
+}
+
+export interface WorkflowRunState {
+  workflowId: string;
+  name: string;
+  status: WorkflowRunStatus;
+  totalWaves: number;
+  steps: WorkflowStepView[];
+  totalUsage?: Usage;
+  resumed?: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 // ─── Parallel agents ──────────────────────────────────────────
 
 export type AgentStatus = 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
@@ -321,6 +356,7 @@ export type StreamBlock =
   | { type: 'decision'; decision: DecisionPrompt }
   | { type: 'tasks'; tasks: TasksPrompt }
   | { type: 'task_run'; run: TaskRunState }
+  | { type: 'workflow'; run: WorkflowRunState }
   | { type: 'agents'; group: AgentsGroup };
 
 export interface AssistantTurn {

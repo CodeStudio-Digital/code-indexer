@@ -26,8 +26,11 @@ export const OUTPUT_CAP_LEVELS: readonly OutputCapLevelMeta[] = [
   { key: 'medium', labelKey: 'toolbar.outputCap.medium', defaultLabel: 'Médio', hint: '48 KB' },
   { key: 'high', labelKey: 'toolbar.outputCap.high', defaultLabel: 'Alto', hint: '96 KB' },
   { key: 'extra', labelKey: 'toolbar.outputCap.extra', defaultLabel: 'Extra', hint: '144 KB' },
+  // Label renamed 'Ultra' → 'XL' (P2 do plano ultra-agent): "Ultra" agora é a
+  // identidade do MODO de execução; este seletor só controla bytes de saída.
+  // O valor persistido `ultra` (migration 153) permanece intocado.
   { key: 'max', labelKey: 'toolbar.outputCap.max', defaultLabel: 'Máximo', hint: '1 MB' },
-  { key: 'ultra', labelKey: 'toolbar.outputCap.ultra', defaultLabel: 'Ultra', hint: '4 MB' },
+  { key: 'ultra', labelKey: 'toolbar.outputCap.ultra', defaultLabel: 'XL', hint: '4 MB' },
 ];
 
 /** Any level above the production default. Drives the amber "active" styling. */

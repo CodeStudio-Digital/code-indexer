@@ -1,0 +1,247 @@
+/**
+ * workflow-run — wave executor for the `workflow` tool. Dispatches pending
+ * steps whose dependencies completed, one parallel wave at a time, on the
+ * SAME engine as spawn_agent/execute_tasks: per-profile provider/effort/
+ * limits, live agents_group_* events, resume retention and per-agent abort.
+ * Dependency results are injected as bounded DIGESTS — never transcripts.
+ */
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
+import {
+  runParallelAgents, countSubagentOutcomes, isPartialSubagentReason, type ParallelAgentSpec,
+} from '@mcp/code-agent/tools/implement-subagent.js';
+import { describeProvider, type SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import { providerForProfile, effortForProfile } from '@mcp/code-agent/tools/subagent-provider.js';
+import { MICRO_AGENT_PROFILES } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import { buildResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
+import {
+  limitsForAgent, systemPromptForAgent, taskWithWorkspaceBriefing, toRetentionAgent,
+  type NormalizedAgent,
+} from '@mcp/code-agent/tools/spawn-agent-core.js';
+import { retainSpawnGroup } from '@mcp/code-agent/tools/spawn-agent-resume.js';
+import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
+import { saveWorkflow } from './workflow-registry.js';
+import { workflowStatusFromSteps, type WorkflowRecord, type WorkflowStepState } from './workflow-types.js';
+
+const DEP_DIGEST_CHARS = 3_500;
+const DEP_DIGEST_TOTAL_CHARS = 10_500;
+
+function addUsage(acc: ChatUsage, usage: ChatUsage | undefined): void {
+  acc.input_tokens += usage?.input_tokens ?? 0;
+  acc.output_tokens += usage?.output_tokens ?? 0;
+}
+
+/** Bounded digest of completed prerequisite steps, appended to the step prompt. */
+export function buildDependencyContext(record: WorkflowRecord, step: WorkflowStepState): string {
+  const parts: string[] = [];
+  let budget = DEP_DIGEST_TOTAL_CHARS;
+  for (const depId of step.dependsOn) {
+    const dep = record.steps.find((s) => s.id === depId);
+    if (!dep?.summary || budget <= 0) continue;
+    const slice = dep.summary.slice(0, Math.min(DEP_DIGEST_CHARS, budget));
+    budget -= slice.length;
+    parts.push(`## Result of prerequisite '${dep.id}' — ${dep.title} [${dep.status}]\n${slice}`);
+  }
+  return parts.length > 0
+    ? `\n\n# Results from prerequisite steps (digests)\n${parts.join('\n\n')}`
+    : '';
+}
+
+function toNormalizedAgent(step: WorkflowStepState, record: WorkflowRecord): NormalizedAgent {
+  const profile = MICRO_AGENT_PROFILES[step.profileId];
+  const task = step.prompt + buildDependencyContext(record, step);
+  const researchPolicy = profile.capability === 'explore' || profile.capability === 'review'
+    ? buildResearchPolicy({ task })
+    : undefined;
+  return {
+    task,
+    type: profile.capability,
+    profile,
+    label: step.id,
+    maxTurns: 0,
+    files: step.files,
+    researchPolicy,
+  };
+}
+
+function emitStepUpdate(ctx: ToolContext, record: WorkflowRecord, step: WorkflowStepState): void {
+  ctx.runner?.emit('workflow_step_update', {
+    workflow_id: record.id,
+    step_id: step.id,
+    status: step.status,
+    ...(step.groupId ? { group_id: step.groupId } : {}),
+    ...(step.summary ? { summary: step.summary.slice(0, 500) } : {}),
+    ...(step.error ? { error: step.error.slice(0, 500) } : {}),
+    ...(step.toolCallCount != null ? { tool_call_count: step.toolCallCount } : {}),
+    ...(step.usage ? { usage: step.usage } : {}),
+  });
+}
+
+function persist(ctx: ToolContext, record: WorkflowRecord): void {
+  const sessionId = ctx.runner?.sessionId;
+  if (sessionId != null) saveWorkflow(sessionId, record);
+}
+
+/** Mark pending steps whose dependencies failed/skipped as skipped (recursive via loop). */
+function skipBlockedSteps(ctx: ToolContext, record: WorkflowRecord): void {
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const step of record.steps) {
+      if (step.status !== 'pending') continue;
+      const bad = step.dependsOn.find((depId) => {
+        const dep = record.steps.find((s) => s.id === depId);
+        return dep && (dep.status === 'failed' || dep.status === 'skipped');
+      });
+      if (!bad) continue;
+      step.status = 'skipped';
+      step.error = `dependency '${bad}' did not complete`;
+      emitStepUpdate(ctx, record, step);
+      changed = true;
+    }
+  }
+}
+
+export async function executeWorkflow(
+  deps: SubagentDeps,
+  ctx: ToolContext,
+  record: WorkflowRecord,
+): Promise<WorkflowRecord> {
+  const parentSessionId = ctx.runner?.sessionId;
+  let waveNo = 0;
+
+  for (;;) {
+    if (ctx.signal?.aborted) { record.status = 'aborted'; break; }
+    skipBlockedSteps(ctx, record);
+    const ready = record.steps.filter((step) =>
+      step.status === 'pending'
+      && step.dependsOn.every((depId) => {
+        const dep = record.steps.find((s) => s.id === depId);
+        return dep?.status === 'completed' || dep?.status === 'partial';
+      }));
+    if (ready.length === 0) break;
+
+    waveNo++;
+    const groupId = `wf${record.runCount}-${record.id}-w${waveNo}`;
+    const agents = ready.map((step) => toNormalizedAgent(step, record));
+    const agentProviders = await Promise.all(agents.map((a) => providerForProfile(deps, a.profile)));
+    const agentInfos = agentProviders.map((p) => describeProvider(p));
+    const agentLimits = agents.map((a) => limitsForAgent(a, deps));
+    const controllers = ready.map(() => new AbortController());
+    const unregisters = ready.map((step, i) =>
+      registerActiveAgent(parentSessionId, groupId, i, step.id, controllers[i]));
+
+    for (const step of ready) {
+      step.status = 'running';
+      step.groupId = groupId;
+      emitStepUpdate(ctx, record, step);
+    }
+    persist(ctx, record);
+
+    ctx.runner?.emit('agents_group_start', {
+      groupId,
+      provider: agentInfos[0]?.provider,
+      model: agentInfos[0]?.model,
+      agents: agents.map((a, i) => ({
+        index: i,
+        label: a.label,
+        provider: agentInfos[i]?.provider,
+        model: agentInfos[i]?.model,
+        task: a.task,
+        researchDepth: a.researchPolicy?.depth,
+        maxToolCalls: agentLimits[i]?.maxToolCalls,
+        hardTimeoutMs: agentLimits[i]?.timeoutMs,
+      })),
+    });
+
+    const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
+      task: taskWithWorkspaceBriefing(a.task, ctx),
+      label: a.label,
+      maxTurns: 0,
+      profile: a.profile.id,
+      provider: agentProviders[i],
+      reasoningEffort: effortForProfile(deps, a.profile),
+      spawnId: groupId,
+      systemPrompt: systemPromptForAgent(a),
+      researchPolicy: a.researchPolicy,
+      allowlist: a.profile.allowlist,
+      pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0 ? a.files : undefined,
+      pathScopeMode: a.profile.pathScopeMode,
+      limits: agentLimits[i],
+      signal: controllers[i].signal,
+    }));
+
+    let waveRun: Awaited<ReturnType<typeof runParallelAgents>>;
+    try {
+      waveRun = await runParallelAgents(
+        {
+          provider: deps.provider,
+          tools: deps.parentTools,
+          ctx,
+          sessionId: parentSessionId,
+          sessionStore: deps.sessionStore,
+          agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+          toolSelectionFilter: deps.toolSelectionFilter,
+          externalToolTiers: deps.externalToolTiers,
+        },
+        specs,
+        MICRO_AGENT_PROFILES.explore.systemPrompt,
+        MICRO_AGENT_PROFILES.explore.allowlist,
+        (progress) => {
+          const info = agentInfos[progress.agentIndex];
+          ctx.runner?.emit('agent_progress', {
+            groupId,
+            task: agents[progress.agentIndex]?.task,
+            provider: info?.provider,
+            model: info?.model,
+            ...progress,
+          });
+        },
+      );
+    } finally {
+      for (const unregister of unregisters) unregister();
+    }
+
+    const { results, totalUsage } = waveRun;
+    addUsage(record.totalUsage, totalUsage);
+    for (let i = 0; i < ready.length; i++) {
+      const step = ready[i];
+      const result = results[i];
+      step.status = result.reason === 'completed'
+        ? 'completed'
+        : isPartialSubagentReason(result.reason)
+          ? 'partial'
+          : 'failed';
+      step.summary = result.finalText || undefined;
+      step.error = step.status === 'failed' ? (result.failureDetail ?? result.finalText ?? 'failed') : undefined;
+      step.toolCallCount = result.toolCallCount;
+      step.usage = result.usage;
+      emitStepUpdate(ctx, record, step);
+    }
+    persist(ctx, record);
+
+    const outcomeCounts = countSubagentOutcomes(results);
+    const resumableCount = retainSpawnGroup({
+      sessionId: parentSessionId,
+      spawnId: groupId,
+      provider: agentInfos[0]?.provider ?? 'unknown',
+      model: agentInfos[0]?.model ?? 'unknown',
+      agents: results.map((r, i) => ({
+        ...toRetentionAgent(i, agents[i], r, agentLimits[i]),
+        toolCallCount: r.toolCallCount,
+      })),
+    });
+    ctx.runner?.emit('agents_group_end', {
+      groupId,
+      totalUsage,
+      agentCount: results.length,
+      successCount: outcomeCounts.completedCount,
+      ...outcomeCounts,
+      resumableCount,
+    });
+  }
+
+  skipBlockedSteps(ctx, record);
+  if (record.status !== 'aborted') record.status = workflowStatusFromSteps(record);
+  persist(ctx, record);
+  return record;
+}

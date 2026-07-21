@@ -22,6 +22,7 @@ import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
 import { TaskExecutionBlock, parseExecuteTasksResult } from './TaskExecutionBlock.js';
+import { WorkflowBlock, parseWorkflowResult } from './WorkflowBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
@@ -851,6 +852,14 @@ export function renderAssistantBlock(
     const parsedRun = parseExecuteTasksResult(result.content);
     if (parsedRun) {
       return <TaskExecutionBlock key={`trp-${b.id}-${i}`} run={parsedRun} defaultOpen={false} />;
+    }
+  }
+
+  // workflow (Ultra): rebuild the DAG card from the persisted result text.
+  if (b.name === 'workflow' && result && !result.isError) {
+    const parsedWorkflow = parseWorkflowResult(result.content);
+    if (parsedWorkflow) {
+      return <WorkflowBlock key={`wfp-${b.id}-${i}`} run={parsedWorkflow} defaultOpen={false} />;
     }
   }
 

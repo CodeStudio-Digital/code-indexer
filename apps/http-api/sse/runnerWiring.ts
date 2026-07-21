@@ -139,6 +139,16 @@ export function wireRunnerEventsToBus(
   runner.on('agents_group_end', (payload) => {
     publish(bus, 'agents_group_end', payload);
   });
+  // workflow tool (Ultra) — live DAG card in the dashboard.
+  runner.on('workflow_run_started', (payload) => {
+    publish(bus, 'workflow_run_started', payload);
+  });
+  runner.on('workflow_step_update', (payload) => {
+    publish(bus, 'workflow_step_update', payload);
+  });
+  runner.on('workflow_run_finished', (payload) => {
+    publish(bus, 'workflow_run_finished', payload);
+  });
   runner.on('auto_continue', (count, max) => {
     publish(bus, 'auto_continue', { count, max });
   });

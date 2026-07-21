@@ -25,6 +25,7 @@ import { SingleTerminal, TERMINAL_SURFACE_BG } from '../shared/terminal/SingleTe
 import { TerminalTabBar } from '../shared/terminal/TerminalTabBar.js';
 import { useShellPicker } from '../shared/terminal/use-shell-picker.js';
 import { useIsDark } from '../builder/preview/files/viewer/useIsDark.js';
+import { navigateToProjectLocation } from './editor/nav-commands.js';
 
 interface WorkspaceTerminalProps {
   projectId: number;
@@ -193,6 +194,8 @@ export function WorkspaceTerminal({ projectId }: WorkspaceTerminalProps) {
             key={activeId}
             terminalId={activeId}
             onProcessExited={() => void closeTab(activeId)}
+            onOpenPath={(path, line, column) =>
+              navigateToProjectLocation({ projectId, path, line: line ?? 1, column: column ?? 1 })}
           />
         )}
       </div>

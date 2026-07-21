@@ -35,4 +35,8 @@ export type {
   TasksPrompt,
   ToolCallEvent,
   Usage,
+  WorkflowRunState,
+  WorkflowRunStatus,
+  WorkflowStepStatus,
+  WorkflowStepView,
 } from './types.js';

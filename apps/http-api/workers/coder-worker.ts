@@ -989,6 +989,49 @@ bridge.handle('setToolPermissionMode', (payload) => {
   return { ok: true };
 });
 
+/**
+ * Abort ONE running ephemeral subagent (spawn_agent row / workflow step)
+ * without touching the parent run. Registry lives in THIS realm (module
+ * globals don't cross workers), hence the RPC.
+ */
+bridge.handle('abortAgent', async (payload) => {
+  recordRpc('abortAgent');
+  const { groupId, agentRef } = payload as { groupId: string; agentRef: number | string };
+  const { abortActiveAgent } = await import('@mcp/code-agent/tools/active-agent-registry.js');
+  const aborted = abortActiveAgent(sessionId, groupId, agentRef);
+  return aborted ? { ok: true, agent: aborted } : { ok: false, reason: 'not_running' };
+});
+
+/**
+ * Render a finished subagent's retained transcript (resume registry) for the
+ * dashboard's Transcript tab. Returns the digest text — same renderer the
+ * `read_agent_transcript` tool uses.
+ */
+bridge.handle('readAgentTranscript', async (payload) => {
+  recordRpc('readAgentTranscript');
+  const { spawnId, agentRef, maxChars } = payload as {
+    spawnId: string;
+    agentRef?: number | string;
+    maxChars?: number;
+  };
+  const { findRetainedAgent, renderAgentTranscript } = await import(
+    '@mcp/code-agent/tools/read-agent-transcript.js'
+  );
+  const agent = findRetainedAgent(sessionId, spawnId, agentRef);
+  if (!agent) return { ok: false, reason: 'not_found' };
+  const hasTranscript = (agent.transcript?.length ?? 0) > 0;
+  return {
+    ok: true,
+    label: agent.label,
+    agentIndex: agent.agentIndex,
+    status: agent.reason,
+    hasTranscript,
+    text: hasTranscript
+      ? renderAgentTranscript(agent, { maxChars })
+      : (agent.finalText || '(no retained transcript)'),
+  };
+});
+
 bridge.handle('swapProvider', async (payload) => {
   recordRpc('swapProvider');
   const { provider, model } = payload as { provider: string; model: string };

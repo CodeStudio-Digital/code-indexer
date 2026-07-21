@@ -89,6 +89,63 @@ export function mountCoderInteractionRoutes(
   });
 
   /**
+   * P1 (ultra-agent parity): abort ONE running subagent row — spawn_agent
+   * single/parallel or a workflow step — leaving the parent run alive.
+   * `agent` is the 0-based index (number) or the label (string), matching
+   * the identity carried by agents_group_start/agent_progress.
+   */
+  app.post('/api/coder/sessions/:id/agents/abort', async (c) => {
+    const id = parseIdParam(c);
+    const body = await c.req.json().catch(() => null) as
+      { group_id?: string; agent?: number | string } | null;
+    const groupId = typeof body?.group_id === 'string' ? body.group_id.trim() : '';
+    if (!groupId || body?.agent == null) {
+      return c.json({ error: 'group_id and agent are required' }, 400);
+    }
+    logRouteHit(id, `/agents/abort ${groupId}#${body.agent}`, body);
+    try {
+      const result = await workerPool.abortAgent(id, groupId, body.agent);
+      return c.json(result, result.ok ? 200 : 404);
+    } catch (err) {
+      console.warn(
+        `[coder] agent abort failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return c.json({ ok: false, error: 'agent abort failed' }, 503);
+    }
+  });
+
+  /**
+   * P1 (ultra-agent parity): retained transcript digest of a finished
+   * subagent (resume registry, worker realm). Query: spawn_id (required),
+   * agent (label or 1-based index; optional for single-agent groups),
+   * max_chars. 404 when the worker was evicted or the state expired.
+   */
+  app.get('/api/coder/sessions/:id/agents/transcript', async (c) => {
+    const id = parseIdParam(c);
+    const spawnId = (c.req.query('spawn_id') ?? '').trim();
+    if (!spawnId) return c.json({ error: 'spawn_id is required' }, 400);
+    const agentRaw = c.req.query('agent');
+    const agentRef = agentRaw == null || agentRaw === ''
+      ? undefined
+      : (/^\d+$/.test(agentRaw) ? Number.parseInt(agentRaw, 10) : agentRaw);
+    const maxCharsRaw = Number.parseInt(c.req.query('max_chars') ?? '', 10);
+    try {
+      const result = await workerPool.readAgentTranscript(
+        id,
+        spawnId,
+        agentRef,
+        Number.isFinite(maxCharsRaw) ? maxCharsRaw : undefined,
+      );
+      return c.json(result, result.ok ? 200 : 404);
+    } catch (err) {
+      console.warn(
+        `[coder] agent transcript fetch failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return c.json({ ok: false, error: 'transcript fetch failed' }, 503);
+    }
+  });
+
+  /**
    * Inject a follow-up user message into a LIVE run WITHOUT opening a new SSE
    * stream. Persists the message + pushes it onto the runner's
    * `pendingUserMessages` (drained at the next turn). The caller's ALREADY-OPEN

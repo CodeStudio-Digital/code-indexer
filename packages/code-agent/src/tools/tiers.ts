@@ -248,9 +248,17 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // can always await/retry a delegation it started.
   'collect_agents',
   'resume_agent',
+  // read_agent_transcript — observability companion (audit a finished
+  // agent's retained transcript). Read-only; same tier so audits never
+  // require a tier unlock.
+  'read_agent_transcript',
   // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
   // spawn_agent: orchestration that any session must be able to call.
   'execute_tasks',
+  // workflow — Ultra's declarative DAG orchestrator. Registered only under
+  // the Ultra posture (index.ts); bootstrap tier so it is visible whenever
+  // registered.
+  'workflow',
   // update_task demoted to navigate (Phase B) — 0 calls in 12k turns.
   // self_review — pipeline-based review of the session's own snapshots; always on.
   'self_review',

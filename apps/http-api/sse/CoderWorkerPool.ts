@@ -489,6 +489,31 @@ export class CoderWorkerPool {
     await entry.host.requireBridge().request('setToolPermissionMode', { mode });
   }
 
+  /** Abort ONE running ephemeral subagent (dashboard row cancel). */
+  async abortAgent(
+    sessionId: number,
+    groupId: string,
+    agentRef: number | string,
+  ): Promise<{ ok: boolean; reason?: string }> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return { ok: false, reason: 'no_worker' };
+    return await entry.host.requireBridge().request('abortAgent', { groupId, agentRef }) as
+      { ok: boolean; reason?: string };
+  }
+
+  /** Fetch a finished subagent's retained transcript digest from the worker realm. */
+  async readAgentTranscript(
+    sessionId: number,
+    spawnId: string,
+    agentRef?: number | string,
+    maxChars?: number,
+  ): Promise<{ ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean }> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return { ok: false, reason: 'no_worker' };
+    return await entry.host.requireBridge().request('readAgentTranscript', { spawnId, agentRef, maxChars }) as
+      { ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean };
+  }
+
   /** Replace the provider of a live worker-side runner after persistence updates. */
   async swapProvider(sessionId: number, provider: string, model: string): Promise<void> {
     const entry = this.entries.get(sessionId);

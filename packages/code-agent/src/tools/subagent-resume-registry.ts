@@ -33,11 +33,13 @@ export interface ResumableAgentState {
   researchPolicy?: SubagentResearchPolicy;
   maxTurns: number;
   limits: SubagentLimits;
-  /** Pairing-repaired; undefined for completed agents (nothing to resume). */
+  /** Pairing-repaired; retained for completed agents too (observability). */
   transcript?: AgentMessage[];
   reason: StopReason;
   /** Watchdog message / error text — feeds the continuation nudge. */
   failureNote?: string;
+  /** Final report text (capped) — read_agent_transcript's fallback/summary. */
+  finalText?: string;
   toolCallCount: number;
   usage: ChatUsage;
   /** 1 = original run; bumped on each resume. */
@@ -180,12 +182,22 @@ function sweep(sessionId: number): void {
 }
 
 /**
- * Retain a finished spawn group. Transcripts are kept only for agents whose
- * reason !== 'completed' (CODER_RESUME_RETAIN_COMPLETED=1 keeps all) and are
- * sanitized + byte-capped here so `resume_agent` can use them verbatim.
+ * Whether transcripts of COMPLETED agents are retained too. Default ON since
+ * the observability work (read_agent_transcript + the dashboard Transcript
+ * tab need them); `CODER_RESUME_RETAIN_COMPLETED=0` restores failed-only.
+ * Byte caps (per-agent/per-session) and TTL bound the extra memory.
+ */
+export function retainCompletedTranscripts(): boolean {
+  return process.env.CODER_RESUME_RETAIN_COMPLETED !== '0';
+}
+
+/**
+ * Retain a finished spawn group. Transcripts are sanitized + byte-capped here
+ * so `resume_agent` can use them verbatim. Completed agents keep theirs too
+ * (observability) unless CODER_RESUME_RETAIN_COMPLETED=0.
  */
 export function retainGroup(sessionId: number, group: ResumableGroup): void {
-  const retainCompleted = process.env.CODER_RESUME_RETAIN_COMPLETED === '1';
+  const retainCompleted = retainCompletedTranscripts();
   for (const agent of group.agents) {
     if (agent.transcript && (agent.reason !== 'completed' || retainCompleted)) {
       agent.transcript = sanitizeTranscriptForResume(agent.transcript, agent.reason);
@@ -217,7 +229,7 @@ export function replaceAgentState(sessionId: number, spawnId: string, next: Resu
   if (!group) return;
   const idx = group.agents.findIndex((a) => a.agentIndex === next.agentIndex);
   if (idx === -1) return;
-  if (next.transcript && next.reason !== 'completed') {
+  if (next.transcript && (next.reason !== 'completed' || retainCompletedTranscripts())) {
     next.transcript = sanitizeTranscriptForResume(next.transcript, next.reason);
   } else {
     next.transcript = undefined;
@@ -235,10 +247,35 @@ export function listResumable(
   const out: Array<{ spawnId: string; agentIndex: number; label: string; reason: StopReason; attempt: number }> = [];
   for (const g of bySession.get(sessionId)?.values() ?? []) {
     for (const a of g.agents) {
-      if (a.transcript) out.push({ spawnId: g.spawnId, agentIndex: a.agentIndex, label: a.label, reason: a.reason, attempt: a.attempt });
+      // Completed agents may carry a transcript (observability retention) —
+      // they are readable, never resumable.
+      if (a.transcript && a.reason !== 'completed') {
+        out.push({ spawnId: g.spawnId, agentIndex: a.agentIndex, label: a.label, reason: a.reason, attempt: a.attempt });
+      }
     }
   }
   return out;
+}
+
+/** Groups with at least one retained transcript — feed for read_agent_transcript. */
+export function listReadableGroups(
+  sessionId: number,
+): Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }> {
+  sweep(sessionId);
+  const out: Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }> = [];
+  for (const g of bySession.get(sessionId)?.values() ?? []) {
+    out.push({
+      spawnId: g.spawnId,
+      createdAt: g.createdAt,
+      agents: g.agents.map((a) => ({
+        agentIndex: a.agentIndex,
+        label: a.label,
+        reason: a.reason,
+        hasTranscript: (a.transcript?.length ?? 0) > 0,
+      })),
+    });
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export function clearSession(sessionId: number): void {

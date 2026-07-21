@@ -369,6 +369,46 @@ export interface RunnerEvents {
     /** Terminal disposition of a background group. */
     status?: 'completed' | 'aborted';
   }) => void;
+  /**
+   * Emitted when the `workflow` tool starts (or resumes) a declarative DAG
+   * run. Steps carry the full roster so the dashboard can render the card
+   * immediately; per-step transitions arrive via `workflow_step_update`.
+   */
+  workflow_run_started: (payload: {
+    workflow_id: string;
+    name: string;
+    resumed?: boolean;
+    total_waves: number;
+    steps: Array<{
+      id: string;
+      title: string;
+      profile: string;
+      depends_on: string[];
+      wave: number;
+      status: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped';
+    }>;
+  }) => void;
+  /** Per-step lifecycle transition within a workflow run. */
+  workflow_step_update: (payload: {
+    workflow_id: string;
+    step_id: string;
+    status: 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'skipped';
+    /** agents_group id of the wave this step ran in — links to live agent lanes. */
+    group_id?: string;
+    summary?: string;
+    error?: string;
+    tool_call_count?: number;
+    usage?: ChatUsage;
+  }) => void;
+  /** Terminal disposition of a workflow run. */
+  workflow_run_finished: (payload: {
+    workflow_id: string;
+    status: 'completed' | 'partial' | 'failed' | 'aborted';
+    completed_count: number;
+    failed_count: number;
+    skipped_count: number;
+    total_usage: ChatUsage;
+  }) => void;
   /** Emitted when the runner auto-continues after hitting maxTurns. */
   auto_continue: (count: number, max: number) => void;
   /**
@@ -427,6 +467,13 @@ export interface RunnerEvents {
     profile: string | null;
     planMode: boolean;
     maxTurns: number;
+    /**
+     * Ultra execution identity — present only when Ultra is active for this
+     * run. 'session' = the sticky execution-mode toggle; 'turn' = the
+     * `ultracode` keyword triggered Ultra for THIS run only (nothing
+     * persisted). The dashboard renders the Ultra chip from this.
+     */
+    ultra?: 'session' | 'turn';
   }) => void;
   /**
    * Emitted right before each `provider.chat()` call. Useful for measuring

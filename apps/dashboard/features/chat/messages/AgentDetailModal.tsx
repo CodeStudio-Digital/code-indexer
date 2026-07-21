@@ -17,26 +17,63 @@ import type { AgentsGroupResultSource } from './AgentsGroupBlock.js';
 interface AgentDetailModalProps {
   agent: ParallelAgent;
   resultSource?: AgentsGroupResultSource;
+  /** P1: enables the retained-transcript fetch (worker realm, ~45min TTL). */
+  transcriptSource?: { sessionId: number; groupId: string };
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 /**
- * Static, after-the-fact detail for a single spawned agent: its task (prompt),
- * final report, and metrics. Subagents are ephemeral (no persisted step-by-step
- * transcript), so this surfaces what survives — the report + task + meta.
+ * After-the-fact detail for a single spawned agent: its task (prompt), final
+ * report, metrics — and, while the retention window lasts, the step-by-step
+ * TRANSCRIPT digest kept by the resume registry (P1 of the ultra-agent
+ * parity plan): every tool call with inputs and result excerpts.
  */
-export function AgentDetailModal({ agent, resultSource, open, onOpenChange }: AgentDetailModalProps) {
+export function AgentDetailModal({ agent, resultSource, transcriptSource, open, onOpenChange }: AgentDetailModalProps) {
   const { t } = useTranslation('chat');
   const [fullAgent, setFullAgent] = useState<ParallelAgent | null>(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [fullError, setFullError] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   useEffect(() => {
     setFullAgent(null);
     setLoadingFull(false);
     setFullError(null);
+    setTranscript(null);
+    setLoadingTranscript(false);
+    setTranscriptError(null);
   }, [agent.index, resultSource?.toolUseId, open]);
+
+  const loadTranscript = async () => {
+    if (!transcriptSource) return;
+    setLoadingTranscript(true);
+    setTranscriptError(null);
+    try {
+      const params = new URLSearchParams({
+        spawn_id: transcriptSource.groupId,
+        agent: String(agent.index + 1),
+      });
+      const r = await fetch(
+        `/api/coder/sessions/${transcriptSource.sessionId}/agents/transcript?${params.toString()}`,
+      );
+      const data = (await r.json().catch(() => null)) as
+        { ok?: boolean; text?: string; hasTranscript?: boolean; reason?: string } | null;
+      if (!r.ok || !data?.ok) {
+        throw new Error(data?.reason ?? `HTTP ${r.status}`);
+      }
+      setTranscript(data.text ?? '');
+    } catch (err) {
+      console.warn('[agent-detail] failed to load transcript', err);
+      setTranscriptError(t('agentGroup.transcriptError', {
+        defaultValue: 'Transcript indisponível — a retenção dura ~45min e não sobrevive a restarts.',
+      }));
+    } finally {
+      setLoadingTranscript(false);
+    }
+  };
 
   const displayAgent = fullAgent ?? agent;
   const isError = !!displayAgent.error;
@@ -169,6 +206,35 @@ export function AgentDetailModal({ agent, resultSource, open, onOpenChange }: Ag
             </div>
           )}
         </div>
+
+        {/* Retained transcript digest (P1) */}
+        {transcriptSource && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+              {t('agentGroup.transcript', { defaultValue: 'Transcript' })}
+            </div>
+            {transcript !== null ? (
+              <pre className="font-mono text-[11px] text-foreground/80 whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 max-h-72 overflow-y-auto">
+                {transcript || t('agentGroup.transcriptEmpty', { defaultValue: '(vazio)' })}
+              </pre>
+            ) : (
+              <button
+                type="button"
+                onClick={loadTranscript}
+                disabled={loadingTranscript}
+                className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted disabled:cursor-wait disabled:opacity-70"
+              >
+                {loadingTranscript && <Loader2 className="h-3 w-3 animate-spin" />}
+                {loadingTranscript
+                  ? t('agentGroup.loadingMore', { defaultValue: 'Loading...' })
+                  : t('agentGroup.showTranscript', { defaultValue: 'Ver passo-a-passo (tools + resultados)' })}
+              </button>
+            )}
+            {transcriptError && (
+              <div className="mt-2 text-xs text-muted-foreground">{transcriptError}</div>
+            )}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

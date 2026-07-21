@@ -24,6 +24,23 @@ import { Button } from '../../../../../components/ui/button.js';
 import { toast } from '../../../../../components/ui/prompt-dialog.js';
 import { readGitAiDiffConsent, writeGitAiDiffConsent } from './git-ai-consent.js';
 import { openProjectPushDialog } from '../../../../git-push/push-dialog-store.js';
+import { usePaginatedGitLog } from './use-paginated-git-log.js';
+
+/** Autosquash directives + recent subjects for the commit-message dropdown. */
+function buildCommitSuggestions(subjects: string[], typed: string): string[] {
+  const recent = subjects.filter(Boolean).slice(0, 8);
+  const all = [
+    ...recent.map((s) => `fixup! ${s}`),
+    ...recent.map((s) => `squash! ${s}`),
+    ...recent,
+  ];
+  const q = typed.trim().toLowerCase();
+  const seen = new Set<string>();
+  return all
+    .filter((s) => !seen.has(s) && (seen.add(s), true))
+    .filter((s) => !q || s.toLowerCase().includes(q))
+    .slice(0, 8);
+}
 
 interface CommitBoxProps {
   projectId: number;
@@ -45,6 +62,11 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
   const [committing, setCommitting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [aiDiffConsent, setAiDiffConsent] = useState(readGitAiDiffConsent);
+  // Commit-message completion: `fixup!`/`squash!` + recent subjects. The git
+  // log is fetched lazily — only once the textarea is focused.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const { commits } = usePaginatedGitLog({ enabled: suggestOpen, projectId, repoPath, pageSize: 15 });
+  const suggestions = buildCommitSuggestions(commits.map((c) => c.subject), message);
 
   // The commit handler always reads the message from stdin (`-F -`), so a
   // message is required even when amending. You also need something to
@@ -121,10 +143,35 @@ export function CommitBox({ projectId, repoPath, stagedCount, upstream, onCommit
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              onFocus={() => setSuggestOpen(true)}
+              onBlur={() => setSuggestOpen(false)}
+              onKeyDown={(e) => { if (e.key === 'Escape' && suggestOpen) { e.stopPropagation(); setSuggestOpen(false); } }}
               placeholder={t('git.commitMessagePlaceholder')}
               disabled={committing}
               className="w-full min-h-[64px] max-h-[200px] rounded-md border bg-card px-3 py-2 pr-8 text-[12px] focus:outline-none focus:ring-2 focus:ring-ring/40 resize-y"
             />
+            {suggestOpen && suggestions.length > 0 && (
+              <ul
+                role="listbox"
+                aria-label={t('git.commitSuggestions', { defaultValue: 'Message suggestions' })}
+                className="absolute left-0 right-0 top-full mt-1 z-20 max-h-48 overflow-auto rounded-md border bg-popover shadow-md py-1 text-[12px]"
+              >
+                {suggestions.map((s) => (
+                  <li key={s}>
+                    <button
+                      type="button"
+                      // preventDefault keeps textarea focus so onBlur doesn't
+                      // close the list before this click applies.
+                      onMouseDown={(e) => { e.preventDefault(); setMessage(s); setSuggestOpen(false); }}
+                      className="block w-full truncate px-3 py-1 text-left hover:bg-muted"
+                      title={s}
+                    >
+                      {s}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <button
               type="button"
               onClick={() => void generate()}

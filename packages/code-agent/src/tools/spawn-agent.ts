@@ -101,6 +101,7 @@ import {
   tryGlobalSubAgentRead,
   writeGlobalSubAgentResult,
 } from '@mcp/services/sub-agent-cache/index.js';
+import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
 
 const SPAWN_AGENT_DESC =
   'Spawn one or more agents to run a task in a dedicated context window. ' +
@@ -380,6 +381,10 @@ async function runSingleEphemeral(
     role: 'user',
     content: [{ type: 'text', text: taskWithWorkspaceBriefing(agent.task, ctx) }],
   }];
+  // Per-agent abort surface (dashboard row cancel) — same identity as the
+  // agents_group events (groupId=spawnId, index 0).
+  const abortController = new AbortController();
+  const unregisterActive = registerActiveAgent(parentSessionId, spawnId, 0, agent.label, abortController);
   let result: SubagentRunResult;
   try {
     result = await runSubagent(
@@ -397,6 +402,7 @@ async function runSingleEphemeral(
         label: agent.label,
         profile: agent.profile.id,
         spawnId,
+        signal: abortController.signal,
         reasoningEffort: effortForProfile(deps, agent.profile),
         systemPrompt: systemPromptForAgent(agent),
         researchPolicy: agent.researchPolicy,
@@ -439,6 +445,8 @@ async function runSingleEphemeral(
     });
     emitEnd({ input_tokens: 0, output_tokens: 0 }, 'error');
     throw error;
+  } finally {
+    unregisterActive();
   }
 
   const terminal = classifySubagentTerminal(result.reason, result.finalText);
@@ -550,6 +558,12 @@ async function runParallelEphemeral(
     } catch { /* best-effort */ }
   }
 
+  // Per-agent abort surface (dashboard row cancel) — one controller per spec,
+  // addressed by the same (groupId, index) the events carry.
+  const abortControllers = agents.map(() => new AbortController());
+  const unregisterActives = agents.map((a, i) =>
+    registerActiveAgent(parentSessionId, groupId, i, a.label, abortControllers[i]));
+
   const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
     task: taskWithWorkspaceBriefing(a.task, ctx),
     label: a.label,
@@ -566,34 +580,41 @@ async function runParallelEphemeral(
       : undefined,
     pathScopeMode: a.profile.pathScopeMode,
     limits: agentLimits[i],
+    signal: abortControllers[i].signal,
   }));
 
-  const { results, totalUsage } = await runParallelAgents(
-    {
-      provider: deps.provider,
-      tools: deps.parentTools,
-      ctx,
-      sessionId: parentSessionId,
-      sessionStore: deps.sessionStore,
-      agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-      toolSelectionFilter: deps.toolSelectionFilter,
-      externalToolTiers: deps.externalToolTiers,
-    },
-    specs,
-    MICRO_AGENT_PROFILES.explore.systemPrompt,
-    MICRO_AGENT_PROFILES.explore.allowlist,
-    (progress) => {
-      const info = agentInfos[progress.agentIndex] ?? headInfo;
-      ctx.runner?.emit('agent_progress', {
-        groupId,
-        toolUseId,
-        task: agents[progress.agentIndex]?.task,
-        provider: info.provider,
-        model: info.model,
-        ...progress,
-      });
-    },
-  );
+  let parallelOutcome: Awaited<ReturnType<typeof runParallelAgents>>;
+  try {
+    parallelOutcome = await runParallelAgents(
+      {
+        provider: deps.provider,
+        tools: deps.parentTools,
+        ctx,
+        sessionId: parentSessionId,
+        sessionStore: deps.sessionStore,
+        agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        toolSelectionFilter: deps.toolSelectionFilter,
+        externalToolTiers: deps.externalToolTiers,
+      },
+      specs,
+      MICRO_AGENT_PROFILES.explore.systemPrompt,
+      MICRO_AGENT_PROFILES.explore.allowlist,
+      (progress) => {
+        const info = agentInfos[progress.agentIndex] ?? headInfo;
+        ctx.runner?.emit('agent_progress', {
+          groupId,
+          toolUseId,
+          task: agents[progress.agentIndex]?.task,
+          provider: info.provider,
+          model: info.model,
+          ...progress,
+        });
+      },
+    );
+  } finally {
+    for (const unregister of unregisterActives) unregister();
+  }
+  const { results, totalUsage } = parallelOutcome;
 
   const header = renderParallelHeader(results.length, headInfo, totalUsage, groupId);
   const body = renderParallelBody(results.map((r, i) => ({

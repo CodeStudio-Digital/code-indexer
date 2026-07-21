@@ -9,6 +9,8 @@ import { AgentDetailModal } from './AgentDetailModal.js';
 interface AgentsGroupBlockProps {
   group: AgentsGroup;
   resultSource?: AgentsGroupResultSource;
+  /** Enables per-agent abort on live rows (POST /agents/abort). */
+  sessionId?: number;
 }
 
 export interface AgentsGroupResultSource {
@@ -21,6 +23,7 @@ export interface AgentsGroupResultSource {
 export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) => {
   // Re-render when any agent's status, toolCallCount, or summary changes,
   // or when the group status/totalUsage changes.
+  if (prev.sessionId !== next.sessionId) return false;
   if (prev.group.status !== next.group.status) return false;
   if (prev.group.totalUsage !== next.group.totalUsage) return false;
   if (prev.group.provider !== next.group.provider) return false;
@@ -64,10 +67,11 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
   return true;
 });
 
-function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
+function AgentsGroupBlockInner({ group, resultSource, sessionId }: AgentsGroupBlockProps) {
   const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(true);
   const [openAgent, setOpenAgent] = useState<number | null>(null);
+  const abortSessionId = sessionId ?? resultSource?.sessionId;
 
   const isRunning = group.status === 'running';
   const hasFailure = group.agents.some((agent) => (
@@ -158,6 +162,9 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
               key={agent.index}
               agent={agent}
               onOpen={() => setOpenAgent(agent.index)}
+              onAbort={abortSessionId != null && group.status === 'running'
+                ? () => abortOneAgent(abortSessionId, group.groupId, agent.index)
+                : undefined}
             />
           ))}
         </div>
@@ -167,6 +174,9 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
         <AgentDetailModal
           agent={openAgentEntry}
           resultSource={resultSource}
+          transcriptSource={abortSessionId != null
+            ? { sessionId: abortSessionId, groupId: group.groupId }
+            : undefined}
           open
           onOpenChange={(o) => {
             if (!o) setOpenAgent(null);
@@ -180,9 +190,11 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
 interface AgentRowProps {
   agent: ParallelAgent;
   onOpen: () => void;
+  /** Present only while the row can still be aborted (live run + sessionId). */
+  onAbort?: () => void;
 }
 
-function AgentRow({ agent, onOpen }: AgentRowProps) {
+function AgentRow({ agent, onOpen, onAbort }: AgentRowProps) {
   const { t } = useTranslation('chat');
   const StatusIcon =
     agent.status === 'running' || agent.status === 'pending'
@@ -289,6 +301,31 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
             {formatTokens(agent.usage.input_tokens + agent.usage.output_tokens)}
           </span>
         )}
+        {onAbort && (agent.status === 'running' || agent.status === 'pending') && (
+          <span
+            role="button"
+            tabIndex={0}
+            title={t('agents.abortOne', { defaultValue: 'Cancelar este agente' })}
+            aria-label={t('agents.abortOne', { defaultValue: 'Cancelar este agente' })}
+            className={cn(
+              'shrink-0 h-4 w-4 rounded flex items-center justify-center',
+              'text-muted-foreground hover:text-destructive hover:bg-destructive/10',
+              !agent.usage && 'ml-auto',
+            )}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAbort();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              event.stopPropagation();
+              onAbort();
+            }}
+          >
+            <X className="h-3 w-3" />
+          </span>
+        )}
       </button>
       {agent.status === 'running' && (agent.progressNote || agent.phase || agent.lastToolName) && (
         <AgentActivityLine agent={agent} runningMeta={runningMeta} />
@@ -316,6 +353,15 @@ function AgentActivityLine({ agent, runningMeta }: { agent: ParallelAgent; runni
       </div>
     </div>
   );
+}
+
+/** Fire-and-forget per-agent abort — the SSE stream reflects the outcome. */
+function abortOneAgent(sessionId: number, groupId: string, agentIndex: number): void {
+  void fetch(`/api/coder/sessions/${sessionId}/agents/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ group_id: groupId, agent: agentIndex }),
+  }).catch(() => { /* row keeps its live state; next agent_progress reconciles */ });
 }
 
 function formatTokens(n: number): string {

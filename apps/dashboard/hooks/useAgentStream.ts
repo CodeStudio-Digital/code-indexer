@@ -34,4 +34,8 @@ export type {
   TasksPrompt,
   ToolCallEvent,
   Usage,
+  WorkflowRunState,
+  WorkflowRunStatus,
+  WorkflowStepStatus,
+  WorkflowStepView,
 } from './agent-stream/index.js';

@@ -24,6 +24,7 @@ export class BootstrapNode implements BehaviorNode {
       profile: ctx.opts.profile ?? null,
       planMode: !!ctx.opts.planMode,
       maxTurns: ctx.opts.maxTurns ?? 50,
+      ...(ctx.opts.executionUltra ? { ultra: ctx.opts.executionUltra } : {}),
     });
 
     // Invariant defence: when tier filtering is active the BT never enters

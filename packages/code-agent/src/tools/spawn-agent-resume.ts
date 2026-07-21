@@ -12,7 +12,11 @@ import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
-import { retainGroup, type ResumableGroup } from '@mcp/code-agent/tools/subagent-resume-registry.js';
+import {
+  retainCompletedTranscripts,
+  retainGroup,
+  type ResumableGroup,
+} from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
 export interface SpawnRetentionAgent {
   index: number;
@@ -49,9 +53,11 @@ export function countFailed(agents: Array<{ reason: StopReason }>): number {
 }
 
 /**
- * Build + retain a resumable group from finished spawn results. Skipped when
- * there is no session (retention is session-scoped) or nothing failed (all
- * completed → nothing to resume, no memory spent).
+ * Build + retain a resumable/readable group from finished spawn results.
+ * Skipped only when there is no session (retention is session-scoped).
+ * All-completed groups ARE retained now — their transcripts back
+ * read_agent_transcript and the dashboard Transcript tab; with
+ * CODER_RESUME_RETAIN_COMPLETED=0 the old failed-only economy returns.
  */
 export function retainSpawnGroup(args: {
   sessionId: number | undefined;
@@ -62,7 +68,7 @@ export function retainSpawnGroup(args: {
 }): number {
   if (args.sessionId == null) return 0;
   const resumableCount = args.agents.filter((a) => a.reason !== 'completed' && (a.transcript?.length ?? 0) > 0).length;
-  if (countFailed(args.agents) === 0 && process.env.CODER_RESUME_RETAIN_COMPLETED !== '1') return 0;
+  if (countFailed(args.agents) === 0 && !retainCompletedTranscripts()) return 0;
   const now = Date.now();
   const group: ResumableGroup = {
     spawnId: args.spawnId,
@@ -85,6 +91,7 @@ export function retainSpawnGroup(args: {
       failureNote: a.reason !== 'completed'
         ? (a.failureDetail || a.finalText).slice(0, 500)
         : undefined,
+      finalText: a.finalText ? a.finalText.slice(0, 8_000) : undefined,
       toolCallCount: a.toolCallCount || countToolUses(a.transcript),
       usage: a.usage,
       attempt: 1,

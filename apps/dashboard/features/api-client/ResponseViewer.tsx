@@ -5,7 +5,7 @@
  */
 import { useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2, Braces, List, FlaskConical, Cookie, Clock, BookmarkPlus } from 'lucide-react';
+import { CheckCircle2, Braces, List, FlaskConical, Cookie, Clock, BookmarkPlus, Filter } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import type { SendResponse } from './types.js';
 import { ResponseBody } from './response/ResponseBody.js';
@@ -13,6 +13,7 @@ import { ResponseHeaders } from './response/ResponseHeaders.js';
 import { TestResultsTab } from './response/TestResultsTab.js';
 import { CookiesTab } from './response/CookiesTab.js';
 import { TimingTab } from './response/TimingTab.js';
+import { JsonPathPanel } from './response/JsonPathPanel.js';
 import { formatBytes } from './response/format-body.js';
 
 function statusColor(s: number): string {
@@ -22,7 +23,7 @@ function statusColor(s: number): string {
   return 'text-red-500';
 }
 
-type Tab = 'body' | 'headers' | 'tests' | 'cookies' | 'timing';
+type Tab = 'body' | 'headers' | 'jsonpath' | 'tests' | 'cookies' | 'timing';
 
 type BadgeTone = 'primary' | 'danger' | 'success';
 interface TabDef {
@@ -67,6 +68,7 @@ export function ResponseViewer({ response, error, sending, verifiedStatus, onMar
   const testBadge = failedTests || tests.length || response.updatedVars?.length || (response.scriptError ? 1 : 0) || undefined;
   const tabs: TabDef[] = [
     { id: 'body', label: t('response.tabBody'), Icon: Braces },
+    { id: 'jsonpath', label: t('response.tabJsonPath', { defaultValue: 'JSONPath' }), Icon: Filter },
     { id: 'headers', label: t('response.tabHeaders'), Icon: List, badge: Object.keys(response.headers).length, badgeTone: 'primary' },
     { id: 'tests', label: t('response.tabTestResults'), Icon: FlaskConical, badge: testBadge, badgeTone: failedTests || response.scriptError ? 'danger' : 'success' },
     { id: 'cookies', label: t('response.tabCookies'), Icon: Cookie, badge: response.cookies?.length, badgeTone: 'primary' },
@@ -135,6 +137,7 @@ export function ResponseViewer({ response, error, sending, verifiedStatus, onMar
       </div>
       <div data-text-selectable className="flex-1 min-h-0">
         {tab === 'body' && <ResponseBody body={response.body} headers={response.headers} truncated={response.truncated} />}
+        {tab === 'jsonpath' && <JsonPathPanel body={response.body} />}
         {tab === 'headers' && <div className="h-full overflow-auto"><ResponseHeaders headers={response.headers} /></div>}
         {tab === 'tests' && <TestResultsTab tests={response.tests} consoleLogs={response.consoleLogs} scriptError={response.scriptError} updatedVars={response.updatedVars} />}
         {tab === 'cookies' && <CookiesTab cookies={response.cookies} />}

@@ -24,3 +24,22 @@ export function resolveSessionExecutionPolicy(
     reasoningEffort: ultraEnabled ? 'ultra' : effort,
   };
 }
+
+const TURN_ULTRA_KEYWORD_RE = /\bultracode\b/i;
+
+/**
+ * Per-TURN Ultra trigger (Claude-Code-style `ultracode` keyword): the user
+ * writes `ultracode` anywhere in the message and THAT run executes with the
+ * full Ultra posture (max reasoning, workflow tool, proactive delegation)
+ * without touching the session's sticky execution mode. Deliberately only the
+ * unambiguous token — bare "ultra" appears in normal prose (and in talk ABOUT
+ * the mode) far too often. Kill switch: CODER_ULTRA_KEYWORD=0.
+ */
+export function detectTurnUltraKeyword(
+  userMessage: string | null | undefined,
+  sessionUltraEnabled: boolean,
+): boolean {
+  if (sessionUltraEnabled) return false;
+  if (process.env.CODER_ULTRA_KEYWORD === '0') return false;
+  return TURN_ULTRA_KEYWORD_RE.test(userMessage ?? '');
+}

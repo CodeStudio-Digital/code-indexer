@@ -156,7 +156,13 @@ export interface DocChange {
 export interface DiagnosticsFrame {
   /** Project-relative forward-slash path (the editor's model key). */
   file: string;
-  source: 'ts' | `lsp:${string}` | 'index' | 'syntax';
+  /**
+   * Producer identity — also the Monaco marker owner (`mcp-lsp:${source}`), so
+   * each producer owns a disjoint marker set. `lint:${tool}` is the external
+   * linter adapter (stylelint/eslint/shellcheck/…); it never clears `syntax`
+   * (a linter augments, it doesn't supersede tree-sitter highlighting).
+   */
+  source: 'ts' | `lsp:${string}` | `lint:${string}` | 'index' | 'syntax';
   diagnostics: DiagnosticItem[];
 }
 

@@ -1343,6 +1343,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       onFork: handleFork,
       onRollback: handleRollback,
       onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
+      // P1 (ultra-agent parity): lets live agent rows abort ONE subagent /
+      // fetch its retained transcript without plumbing a separate context.
+      sessionId: selectedId ?? undefined,
     }),
     // handleFork / handleRollback depend on selectedId — re-create on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps

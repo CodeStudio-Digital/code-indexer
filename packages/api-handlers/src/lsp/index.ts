@@ -55,6 +55,7 @@ import { getLspExecutor } from './executor-holder.js';
 import type { LspBackendExecutor, LspOpCtx } from './executor-types.js';
 import { syntaxDiagnosticsFor } from './syntax-diagnostics.js';
 import { createEditorOpsHandlers } from './editor-ops-handlers.js';
+import { startLintService } from '../lint/service.js';
 
 const TS_DIAG_DEBOUNCE_MS = 500;
 /** Module singleton — debounce timers survive the dual handler instances. */
@@ -101,6 +102,11 @@ function mergeCompletions(server: CompletionItem[], index: CompletionItem[]): Co
 
 export function createLspHandlers(deps: HandlerDeps): LspApi {
   const { db } = deps;
+
+  // External-linter diagnostics producer (stylelint/eslint over the unsaved
+  // buffer → `lint:${tool}` frames). Idempotent: subscribes the document store
+  // once even though this factory runs twice on Electron.
+  startLintService(db);
 
   // Synchronous compute goes through the executor: the worker-backed one
   // from the holder when server.ts wired it, else this local in-process

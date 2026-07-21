@@ -8,6 +8,7 @@ import type { PromptHandlers } from '../types.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { LiveTextBlock, LiveThinkingBlock } from './live-blocks.js';
 import { TaskExecutionBlock } from './TaskExecutionBlock.js';
+import { WorkflowBlock } from './WorkflowBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { taskListIsApprove } from './MessageView.js';
@@ -102,8 +103,17 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   if (block.type === 'task_run') {
     return <TaskExecutionBlock key={`tr-${block.run.runId}`} run={block.run} />;
   }
+  if (block.type === 'workflow') {
+    return <WorkflowBlock key={`wf-${block.run.workflowId}`} run={block.run} />;
+  }
   if (block.type === 'agents') {
-    return <AgentsGroupBlock key={`ag-${block.group.groupId}`} group={block.group} />;
+    return (
+      <AgentsGroupBlock
+        key={`ag-${block.group.groupId}`}
+        group={block.group}
+        sessionId={handlers.sessionId}
+      />
+    );
   }
   if (block.type === 'decision') {
     return (

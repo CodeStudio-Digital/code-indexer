@@ -25,6 +25,7 @@ import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
 import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
 import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
 import {
+  detectTurnUltraKeyword,
   resolveSessionExecutionPolicy,
   type SessionExecutionPolicy,
 } from '@mcp/code-agent/sessions/execution-mode.js';
@@ -438,8 +439,22 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     reasoning_effort_override: executionResolution.storedReasoningEffort,
   };
   const sessionExecutionMode = executionResolution.sessionExecutionMode;
-  const ultraExecutionEnabled = executionResolution.policy.ultraEnabled;
-  const effectiveReasoningEffort = executionResolution.policy.reasoningEffort;
+  // P2 (ultra-agent parity): the `ultracode` keyword upgrades THIS run to the
+  // full Ultra posture (max reasoning + workflow tool + proactive delegation)
+  // WITHOUT persisting anything — the sticky execution mode stays whatever the
+  // user selected. Costs one prompt-cache re-prime on the turn (tool array +
+  // posture block change), which the explicit keyword opt-in justifies.
+  const turnUltraTriggered = detectTurnUltraKeyword(
+    opts.userMessage,
+    executionResolution.policy.ultraEnabled,
+  );
+  const ultraExecutionEnabled = executionResolution.policy.ultraEnabled || turnUltraTriggered;
+  const effectiveReasoningEffort = ultraExecutionEnabled
+    ? 'ultra'
+    : executionResolution.policy.reasoningEffort;
+  if (turnUltraTriggered) {
+    console.log(`[coder s=${session.id}] ultracode keyword — Ultra posture for this run only`);
+  }
 
   // Sticky agent: if the caller didn't specify one, fall back to the value
   // stored on the session. If they did and it differs, persist the new choice.
@@ -1109,12 +1124,26 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // (relaunch failed ephemeral subagents; wait on/fetch background jobs).
   // Ephemeral capability only (company masters have resume_subordinate).
   if (subagentDeps) {
-    const [{ buildResumeAgentTool }, { buildCollectAgentsTool }] = await Promise.all([
+    const [{ buildResumeAgentTool }, { buildCollectAgentsTool }, { buildReadAgentTranscriptTool }] = await Promise.all([
       import('@mcp/code-agent/tools/resume-agent.js'),
       import('@mcp/code-agent/tools/collect-agents.js'),
+      import('@mcp/code-agent/tools/read-agent-transcript.js'),
     ]);
     registry.register(buildResumeAgentTool(subagentDeps));
     registry.register(buildCollectAgentsTool(subagentDeps));
+    // P1 (ultra-agent parity): read-only audit of a finished subagent's
+    // retained transcript — the observability half of spawn_agent.
+    registry.register(buildReadAgentTranscriptTool());
+  }
+
+  // workflow — Ultra's standing declarative DAG orchestrator (P0 of the
+  // ultra-agent parity plan). Registered ONLY when this run executes with
+  // the Ultra posture (sticky mode or `ultracode` turn keyword) so Ultra
+  // visibly unlocks a capability; registration is per-run, so the tool
+  // array stays byte-stable while the mode is stable.
+  if (subagentDeps && ultraExecutionEnabled) {
+    const { buildWorkflowTool } = await import('@mcp/code-agent/tools/workflow/workflow-tool.js');
+    registry.register(buildWorkflowTool(subagentDeps));
   }
 
   // execute_tasks — wave-based orchestrator (PR 3). Needs subagentDeps to
@@ -2438,6 +2467,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     initialMessages,
     sessionId: session.id,
     sessionStore: store,
+    // Ultra chip for the dashboard (run_started.ultra) — session toggle vs
+    // per-turn `ultracode` keyword.
+    ...(ultraExecutionEnabled
+      ? { executionUltra: (turnUltraTriggered ? 'turn' : 'session') as 'turn' | 'session' }
+      : {}),
     // Perf W1 — per-turn telemetry INSERT goes through the dbWriter worker
     // (same per-session FIFO as persistAssistantTurn) instead of a second
     // synchronous commit on the shared-central handle in the coder thread.

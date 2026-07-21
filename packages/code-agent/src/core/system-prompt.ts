@@ -434,6 +434,10 @@ function multiAgentModeSection(
 Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
   }
 
+  const workflowLine = toolAvailable(available, 'workflow')
+    ? `
+- \`workflow\` is available: for multi-step work with a real dependency structure (parallel investigations feeding an implementation, then verification), prefer ONE \`workflow({steps})\` DAG over hand-chained spawn_agent calls — independent steps run in parallel and dependents receive result digests. Failed runs resume with \`workflow({resume_workflow_id, retry_failed:true})\`.`
+    : '';
   return `
 
 # Multi-agent mode (Ultra)
@@ -443,7 +447,7 @@ Proactive delegation is active. Spawn sub-agents without an explicit request whe
 - At most 3 proactive children; use only read-only \`investigator\` or \`reviewer\`. \`verifier\` has shell and requires an explicit request or the controlled internal verifier.
 - Delegation is one level deep; children cannot spawn further sub-agents.
 - Never proactively spawn \`implementer\` or \`full\`. Keep writes in root, or use \`task_list({gate:'approve'})\` then \`execute_tasks\` after normal approval.
-- Mutations retain ordinary permission, sandbox, and human-approval gates; Ultra grants no write bypass.
+- Mutations retain ordinary permission, sandbox, and human-approval gates; Ultra grants no write bypass.${workflowLine}
 - Wait and synthesize. Repeat a broad sweep only for a named unresolved criterion.`;
 }
 

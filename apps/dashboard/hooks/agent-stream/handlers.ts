@@ -24,6 +24,16 @@ import {
   type AgentProgressPayload,
 } from './agents-blocks.js';
 import {
+  applyWorkflowRunFinished,
+  applyWorkflowRunStarted,
+  applyWorkflowStepUpdate,
+  isWorkflowWaveGroup,
+  patchWorkflowStepFromAgentProgress,
+  type WorkflowRunFinishedPayload,
+  type WorkflowRunStartedPayload,
+  type WorkflowStepUpdatePayload,
+} from './workflow-blocks.js';
+import {
   AGENT_WRAPPER_TOOLS,
   removeActiveProcesses,
   replaceActiveProcesses,
@@ -640,6 +650,41 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       flush();
     },
 
+    // ─── workflow tool (Ultra) ───────────────────────────────────
+    workflow_run_started: (data) => {
+      const d = data as unknown as WorkflowRunStartedPayload;
+      // The live `workflow` tool block is superseded by the rich card.
+      removeLiveToolBlockByName(blocks, toolIndex, 'workflow');
+      applyWorkflowRunStarted(blocks, d);
+      flush();
+    },
+
+    workflow_step_update: (data) => {
+      const d = data as unknown as WorkflowStepUpdatePayload;
+      if (applyWorkflowStepUpdate(blocks, d)) flush();
+    },
+
+    workflow_run_finished: (data) => {
+      const d = data as unknown as WorkflowRunFinishedPayload;
+      if (applyWorkflowRunFinished(blocks, d)) flush();
+    },
+
+    /**
+     * Run identity frame. Today only the Ultra chip consumes it: a per-turn
+     * `ultracode` trigger renders an inline notice so the user SEES that this
+     * run is executing with the Ultra posture without any settings change.
+     */
+    run_started: (data) => {
+      const d = data as { ultra?: 'session' | 'turn' };
+      if (d.ultra === 'turn') {
+        blocks.push({
+          type: 'text',
+          text: '⚡ **Ultra ativado para este turno** — palavra-chave `ultracode` detectada: effort máximo, delegação proativa e a tool `workflow` disponíveis só nesta execução.\n\n',
+        });
+        flush();
+      }
+    },
+
     agents_group_start: (data) => {
       const d = data as {
         groupId: string;
@@ -668,6 +713,29 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // representation. Its internal task-wave agents are implementation
       // telemetry and must not create a second card or panel entry.
       if (isTaskWaveGroup(d.groupId)) return;
+      // Workflow waves: the WorkflowBlock card is canonical — no second
+      // agents card. Still surface each step as a live process row so the
+      // Session-state rail shows the running agents.
+      if (isWorkflowWaveGroup(d.groupId)) {
+        const wavePatches: ActiveProcessPatch[] = d.agents.map((agent) => ({
+          id: agentProcessId(d.groupId, agent.index),
+          source: 'agent',
+          kind: 'subagent',
+          label: agent.label,
+          status: 'running',
+          groupId: d.groupId,
+          phase: 'queued',
+        }));
+        updateSession(sid, (state) => ({
+          activeProcesses: replaceActiveProcesses(
+            state.activeProcesses,
+            (process) => process.source === 'agent' && process.groupId === d.groupId,
+            wavePatches,
+          ),
+        }));
+        flush();
+        return;
+      }
       // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
       // still-running background job MERGES into the existing block (rows flip
       // back to running) instead of pushing a duplicate. `message_complete`
@@ -759,13 +827,19 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           });
         }
       }
+      if (isWorkflowWaveGroup(d.groupId)) {
+        // Live telemetry folds into the workflow card's step row instead of a
+        // separate agents card (label === step id).
+        if (patchWorkflowStepFromAgentProgress(blocks, d)) flush();
+        return;
+      }
       if (!isTaskWaveGroup(d.groupId) && applyAgentProgress(blocks, d)) flush();
     },
 
     agents_group_end: (data) => {
       const d = data as { groupId: string; totalUsage?: Usage; jobId?: string; status?: string; agentCount?: number; successCount?: number };
       removeProcesses((process) => process.source === 'agent' && process.groupId === d.groupId);
-      if (!isTaskWaveGroup(d.groupId) && applyAgentsGroupEnd(blocks, d)) flush();
+      if (!isTaskWaveGroup(d.groupId) && !isWorkflowWaveGroup(d.groupId) && applyAgentsGroupEnd(blocks, d)) flush();
     },
 
     auto_continue: (data) => {
@@ -1218,10 +1292,19 @@ function removeLiveExecuteTasksToolBlock(
   blocks: StreamBlock[],
   toolIndex: Map<string, number>,
 ): void {
+  removeLiveToolBlockByName(blocks, toolIndex, 'execute_tasks');
+}
+
+/** Drop a still-running generic tool block once its rich card takes over. */
+function removeLiveToolBlockByName(
+  blocks: StreamBlock[],
+  toolIndex: Map<string, number>,
+  toolName: string,
+): void {
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i];
     if (block.type !== 'tool') continue;
-    if (block.call.name !== 'execute_tasks') continue;
+    if (block.call.name !== toolName) continue;
     if (block.call.status !== 'running') continue;
     toolIndex.delete(block.call.id);
     blocks.splice(i, 1);

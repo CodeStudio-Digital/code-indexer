@@ -54,6 +54,7 @@ const SLOW_NATIVE_NAMES = new Set<string>([
   // those caps instead of the 5-min NORMAL default that was killing them.
   'spawn_agent',
   'execute_tasks',
+  'workflow',
   // Fallback for synthetic/test definitions that omit code_exec's explicit
   // wall-clock backstop. The real tool declares its own timeoutMs.
   'code_exec',

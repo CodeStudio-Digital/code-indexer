@@ -164,12 +164,14 @@ export async function relaunchResumedAgents(
       // If the relaunch failed AGAIN but produced no fresh transcript (a throw
       // before/around runSubagent → outer-catch result has transcript=undefined),
       // KEEP the prior transcript so resume state isn't cannibalized (the agent
-      // could still retry). A completed resume legitimately clears it.
-      const nextTranscript = r.reason === 'completed' ? undefined : (r.transcript ?? state.transcript);
+      // could still retry). Completed resumes keep theirs too — replaceAgentState
+      // applies the retention policy (readable via read_agent_transcript).
+      const nextTranscript = r.transcript ?? state.transcript;
       replaceAgentState(sessionId, group.spawnId, {
         ...state,
         reason: r.reason,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
+        finalText: r.finalText ? r.finalText.slice(0, 8_000) : state.finalText,
         transcript: nextTranscript,
         toolCallCount: r.toolCallCount,
         usage: r.usage,

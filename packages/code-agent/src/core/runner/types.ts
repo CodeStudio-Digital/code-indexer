@@ -107,6 +107,13 @@ export interface RunnerOptions {
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /**
+   * Ultra execution identity for this run — 'session' when the sticky
+   * execution mode is Ultra, 'turn' when the `ultracode` keyword upgraded
+   * only this run. Surfaced in `run_started` so the dashboard renders the
+   * Ultra chip; absent for standard runs.
+   */
+  executionUltra?: 'session' | 'turn';
+  /**
    * Plan depth (simple|normal|complex) — surfaced on the runner so the
    * soft-mandatory decision-gate nudge can skip trivial (`simple`) tasks.
    * Resolved by runCoder from opts/session; defaults to 'normal'.

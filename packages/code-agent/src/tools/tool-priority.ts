@@ -81,6 +81,10 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // tool the prompt just told it to call. Floor it so the nudge is always
   // actionable. (The CODER_SELF_REVIEW toggle governs only the reminder.)
   'self_review',
+  // workflow — registered ONLY under the Ultra posture, and the Ultra prompt
+  // block tells the model to prefer it by NAME. If the catalog cap trimmed it
+  // the prompt would reference an uncallable tool — same trap as self_review.
+  'workflow',
 ]);
 
 /**

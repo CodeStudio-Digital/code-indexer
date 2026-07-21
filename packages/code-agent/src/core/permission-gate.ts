@@ -56,6 +56,9 @@ export function buildUserDeniedText(toolName: string, note?: string): string {
  */
 const NEVER_GATE: ReadonlySet<string> = new Set([
   'code_exec', 'spawn_agent', 'spawn_agents', 'execute_tasks', 'get_tool_output',
+  // workflow — DAG orchestrator; its steps' INNER tool calls are gated
+  // individually inside each subagent (same rationale as execute_tasks).
+  'workflow',
 ]);
 
 const READ_VERB_REGEX = /(?:^|_)(list|get|read|search|find|query|status|describe|fetch|count|head|show|view|preview)(?:_|$)/i;

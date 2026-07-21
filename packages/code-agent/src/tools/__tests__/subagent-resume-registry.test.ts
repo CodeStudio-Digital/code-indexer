@@ -60,11 +60,23 @@ beforeEach(() => { SID += 100; });
 afterEach(() => { for (let s = SID - 100; s <= SID + 20; s++) clearSession(s); vi.useRealTimers(); });
 
 describe('subagent-resume-registry', () => {
-  it('keeps transcripts for failed agents and drops them for completed ones', () => {
+  it('keeps transcripts for failed AND completed agents by default (P1 observability)', () => {
     retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
     const g = getGroup(SID, 'g1')!;
     expect(g.agents[0].transcript).toBeDefined();
-    expect(g.agents[1].transcript).toBeUndefined();
+    expect(g.agents[1].transcript).toBeDefined();
+  });
+
+  it('drops completed transcripts when CODER_RESUME_RETAIN_COMPLETED=0 (old economy)', () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '0');
+    try {
+      retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
+      const g = getGroup(SID, 'g1')!;
+      expect(g.agents[0].transcript).toBeDefined();
+      expect(g.agents[1].transcript).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('records a failureNote from the finalText/detail for failed agents', () => {
@@ -161,7 +173,8 @@ describe('subagent-resume-registry', () => {
     replaceAgentState(SID, 'g1', agent(0, 'completed', { attempt: 2 }));
     const g = getGroup(SID, 'g1')!;
     expect(g.agents[0].attempt).toBe(2);
-    expect(g.agents[0].transcript).toBeUndefined(); // completed → dropped
+    // Completed resumes keep their transcript now (readable, never resumable).
+    expect(g.agents[0].transcript).toBeDefined();
     expect(g.agents[1].reason).toBe('error');
   });
 

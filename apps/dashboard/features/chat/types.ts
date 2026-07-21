@@ -458,6 +458,12 @@ export interface PromptHandlers {
   /** Resolve a `decision_gate` questionnaire — the user's chosen approaches.
    *  Optional so hosts that don't render plan-mode forks can omit it. */
   onDecide?: (answers: DecisionAnswers) => Promise<void>;
+  /**
+   * Session the stream belongs to. Live agent rows use it for per-agent
+   * abort (POST /agents/abort) and retained-transcript fetches; persisted
+   * paths already carry it via resultSource.
+   */
+  sessionId?: number;
 }
 
 // ─── Visual grouping for chat display ───────────────────────────

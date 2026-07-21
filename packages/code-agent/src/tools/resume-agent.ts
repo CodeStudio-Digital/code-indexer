@@ -74,8 +74,9 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
       }
 
       try {
-        // Only failed agents carry a transcript.
-        const resumable = group.agents.filter((a) => a.transcript);
+        // Completed agents may ALSO carry a transcript now (observability
+        // retention — read_agent_transcript). Resumable = non-completed only.
+        const resumable = group.agents.filter((a) => a.transcript && a.reason !== 'completed');
         if (resumable.length === 0) {
           return ok(`resume_agent: nothing to resume in '${spawnId}' — all agents completed or their state expired.`);
         }
