@@ -1,5 +1,5 @@
 /**
- * Seed the FIRST-PARTY provider plugins that ship inside the app into the
+ * Seed the FIRST-PARTY plugins that ship inside the app into the
  * installed-plugins store on first boot, so they register through the normal
  * plugin path (syncPluginProviders) with NO new runtime code path — zero UX
  * regression vs. shipping them as built-ins.
@@ -186,5 +186,5 @@ export async function seedBundledPlugins(): Promise<void> {
   } finally {
     store.close();
   }
-  if (changed) console.log(`[bundled-plugins] seeded/refreshed ${changed} bundled provider plugin(s)`);
+  if (changed) console.log(`[bundled-plugins] seeded/refreshed ${changed} bundled plugin(s)`);
 }

@@ -95,6 +95,18 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
   useEffect(() => {
     if (!containerRef.current) return;
     let disposed = false;
+    let terminalMissing = false;
+
+    const handleTerminalRpcError = (error: unknown) => {
+      if (disposed) return;
+      if ((error as { code?: string })?.code === 'not_found') {
+        if (terminalMissing) return;
+        terminalMissing = true;
+        onExitedRef.current();
+        return;
+      }
+      console.error('[terminal] PTY request failed:', error);
+    };
 
     const term = new XTerm({
       fontSize: 13,
@@ -216,7 +228,7 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
       rafId = requestAnimationFrame(() => {
         try { fit.fit(); } catch { /* detached mid-resize */ }
         if (term.cols && term.rows) {
-          void apiCall('terminal.resize', { terminalId, cols: term.cols, rows: term.rows });
+          void apiCall('terminal.resize', { terminalId, cols: term.cols, rows: term.rows }).catch(handleTerminalRpcError);
         }
       });
     });
@@ -224,7 +236,12 @@ export function SingleTerminal({ terminalId, onProcessExited }: SingleTerminalPr
 
     // Wire keystrokes → PTY.
     const onDataDisposable = term.onData((data) => {
-      void apiCall('terminal.write', { terminalId, data });
+      void apiCall('terminal.write', { terminalId, data }).catch((error) => {
+        // A renderer can outlive its main-process PTY after a dev reload or a
+        // process exit. Treat the authoritative 404 as an exit instead of
+        // leaking an unhandled rejection into DevTools on the next keystroke.
+        handleTerminalRpcError(error);
+      });
     });
 
     // Open the output stream. The backend subscribe() replays

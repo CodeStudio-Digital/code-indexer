@@ -145,6 +145,56 @@ describe('ExecutingNode', () => {
     expect(event.kind).toBe('TokenThresholdHit');
   });
 
+  it('does not compact a queued milestone while a 1M context still has ample room', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu1', name: 'echo' },
+        { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'ok' } },
+        { type: 'usage', usage: { input_tokens: 189_217, output_tokens: 5 } as ChatUsage },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry: makeRegistry({ echo: () => 'ok' }),
+      toolContext: emptyToolContext(),
+    });
+    ctx.opts.contextWindow = 1_000_000;
+    ctx.bridge = {
+      peekMilestoneCompaction: () => 'milestone:error-resolved',
+    };
+    // Reproduces the old >=12-message shortcut without making the prompt large.
+    ctx.messages = Array.from({ length: 12 }, (_, i): AgentMessage => ({
+      role: 'user',
+      content: [{ type: 'text', text: `small message ${i}` }],
+    }));
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event.kind).toBe('TurnSucceeded');
+  });
+
+  it('uses a queued milestone only after a real size gate fires', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'tool_call_start', id: 'tu1', name: 'echo' },
+        { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'ok' } },
+        { type: 'usage', usage: { input_tokens: 960_000, output_tokens: 5 } as ChatUsage },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+      registry: makeRegistry({ echo: () => 'ok' }),
+      toolContext: emptyToolContext(),
+    });
+    ctx.opts.contextWindow = 1_000_000;
+    ctx.bridge = {
+      peekMilestoneCompaction: () => 'milestone:task-closed',
+    };
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event).toMatchObject({
+      kind: 'TokenThresholdHit',
+      trigger: 'milestone:task-closed',
+    });
+  });
+
   it('emits TurnSucceeded and pushes tool_result when assistant emits a tool_use', async () => {
     const { ctx, recordedEvents } = makeTestContext({
       provider: makeStreamingProvider([

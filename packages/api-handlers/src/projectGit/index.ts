@@ -1421,7 +1421,19 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
         throw new ApiError('git_commit_failed', 500, r.stderr.trim() || 'git commit failed');
       }
       const sha = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
-      return { sha };
+      return {
+        sha,
+        command: 'git',
+        args,
+        ok: true,
+        code: r.code,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        errorCode: r.errorCode,
+        durationMs: r.durationMs,
+        timedOut: r.timedOut,
+        truncated: r.truncated,
+      };
     },
 
     async branchList({ projectId, repoPath }) {

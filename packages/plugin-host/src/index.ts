@@ -35,6 +35,16 @@ export {
   isProviderPluginMethodNotImplementedError,
 } from './provider-adapter-definition.js';
 export type { ProviderAdapterRuntimeRef } from './provider-adapter-definition.js';
+export {
+  listDebuggerPlugins,
+  loadDebugAdapter,
+  isFirstPartyBundledDebugger,
+} from './debugger-loader.js';
+export type {
+  DebuggerPluginRef,
+  LoadedDebugAdapter,
+  LoadDebugAdapterOptions,
+} from './debugger-loader.js';
 export { readPluginAsset } from './assets.js';
 export { isActivated } from './activation.js';
 export type { ActivationRule } from './activation.js';

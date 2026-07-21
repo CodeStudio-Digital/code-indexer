@@ -48,7 +48,12 @@ import { useSessionExecutionMode } from './useSessionExecutionMode.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { LiveMessageList } from './messages/LiveMessageList.js';
-import { mergeEarlierMessagePage, sessionDataForSelection } from './messages/session-message-data.js';
+import {
+  allocateOptimisticMessageId,
+  appendOptimisticUserMessage,
+  mergeEarlierMessagePage,
+  sessionDataForSelection,
+} from './messages/session-message-data.js';
 import { StuckBanner } from './StuckBanner.js';
 import { ApprovalBanner } from './ApprovalBanner.js';
 import { NotificationBanner } from './notifications/NotificationBanner.js';
@@ -683,9 +688,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     // Block sending while the project is still indexing — covers BOTH the click
     // path and the Cmd/Ctrl+Enter keyboard path (the overlay only blocks mouse).
     if (indexing) return;
-    // The mode is baked into runner construction. Never let the send race the
-    // preceding PATCH (including sends initiated outside the visible composer).
-    await awaitPendingExecutionMode();
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Builder studio: prepend the selected-element block(s) and drain any
@@ -694,6 +696,17 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     const shots = selectionPrefixSessionId ? consumePendingAttachments(selectionPrefixSessionId) : [];
     const outgoing = prefix ? `${prefix}\n${text}` : text;
     const allAtts = shots.length ? [...atts, ...shots] : atts;
+    const optimisticMessageId = allocateOptimisticMessageId();
+    updateSessionData((previous) => appendOptimisticUserMessage(previous, {
+      sessionId: selectedId,
+      messageId: optimisticMessageId,
+      text: outgoing,
+      attachments: allAtts,
+      selectedSkillIds,
+    }));
+    // The mode is baked into runner construction. Never let the send race the
+    // preceding PATCH (including sends initiated outside the visible composer).
+    await awaitPendingExecutionMode();
     await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
@@ -710,7 +723,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           });
       }
     }, { attachments: allAtts, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
-  }, [selectedId, indexing, awaitPendingExecutionMode, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
+  }, [selectedId, indexing, updateSessionData, awaitPendingExecutionMode, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:

@@ -13,7 +13,11 @@ import {
   type CoderRunBus,
 } from '../coder-bus.js';
 
-export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): void {
+export function wireRunnerEventsToBus(
+  runner: CoderRunner,
+  bus: CoderRunBus,
+  opts: { deferTerminalEvent?: boolean } = {},
+): void {
   runner.on('text_delta', (text) => {
     publish(bus, 'text', { text });
   });
@@ -167,6 +171,10 @@ export function wireRunnerEventsToBus(runner: CoderRunner, bus: CoderRunBus): vo
       console.error(`[coder] session run failed (${reason}):`, error.message);
       if (error.stack) console.error(error.stack);
     }
+    // Worker runs defer the public terminal frame until runCoder confirms the
+    // final assistant/tool transaction is durable. Publishing here lets the
+    // renderer refetch one microtask too early and produces a stale transcript.
+    if (opts.deferTerminalEvent) return;
     publish(bus, 'done', { reason, error: error?.message });
     markEnded(bus, 'done', { reason, error: error?.message });
   });

@@ -8,6 +8,7 @@ import {
 } from '@mcp/code-agent/ports/shell-port.js';
 import { pathFor, resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
 import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
+import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 // Ceiling for a one-shot command. One-shot shell work (builds, installs,
@@ -197,6 +198,9 @@ const runCommandTool: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const command = String(args.command ?? '');
     if (!command.trim()) return err('command cannot be empty');
+
+    const unsafeProcessCommand = unsafeProcessCommandRefusal(command);
+    if (unsafeProcessCommand) return err(unsafeProcessCommand);
 
     // Plan mode: gate run_command to the read-only allowlist until the user
     // approves a plan. The runner removed run_command from MUTATING_TOOLS

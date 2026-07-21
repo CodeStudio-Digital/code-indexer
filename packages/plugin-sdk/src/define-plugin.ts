@@ -6,6 +6,7 @@ import type {
   ContributedEditorAction,
   ContributedStatusBarItem,
   ContributedRunConfiguration,
+  ContributedDebugger,
   ContributedProjectModule,
   PluginModule,
 } from './contributions/types.js';
@@ -20,6 +21,7 @@ export interface DefinePluginSpec {
   editorActions?: ContributedEditorAction[];
   statusBarItems?: ContributedStatusBarItem[];
   runConfigurations?: ContributedRunConfiguration[];
+  debuggers?: ContributedDebugger[];
   modules?: ContributedProjectModule[];
   permissions?: PluginPermissions;
   /** LLM provider metadata this plugin contributes. */
@@ -40,6 +42,7 @@ export function definePlugin(spec: DefinePluginSpec): PluginModule {
     editorActions: spec.editorActions ?? [],
     statusBarItems: spec.statusBarItems ?? [],
     runConfigurations: spec.runConfigurations ?? [],
+    debuggers: spec.debuggers ?? [],
     modules: spec.modules ?? [],
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.providers && spec.providers.length ? { providers: spec.providers } : {}),

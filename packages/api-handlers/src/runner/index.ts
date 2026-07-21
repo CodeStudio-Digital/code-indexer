@@ -177,6 +177,9 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       posixExtraEnv,
       shell: shellSel?.file,
       shellArgs: shellSel?.args,
+      // A finished task stays visible until the user dismisses it, so its
+      // bounded PTY replay buffer must follow the same lifecycle.
+      retainOnExit: true,
     });
     const task: RunnerTask = {
       taskId: randomUUID(),
@@ -304,15 +307,9 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     async dismiss({ taskId }) {
       const task = tasks.get(taskId);
       if (!task) return;
-      // If somehow still running, terminate the PTY before dropping it so
-      // we don't orphan the process.
-      if (task.status === 'running') {
-        try {
-          manager.kill(task.terminalId);
-        } catch {
-          /* already gone */
-        }
-      }
+      // Releases the retained replay buffer and also terminates the process
+      // tree if the task is somehow still running.
+      manager.release(task.terminalId);
       tasks.delete(taskId);
       emit();
     },
@@ -321,7 +318,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       const task = tasks.get(taskId);
       if (!task) throw new ApiError('not_found', 404, 'task not found');
       try {
-        manager.kill(task.terminalId);
+        manager.release(task.terminalId);
       } catch {
         /* already gone */
       }

@@ -290,6 +290,27 @@ describe('isLiveTurnDuplicatedInHistory', () => {
     ).toBe(false);
   });
 
+  it('detects an accumulated multi-cycle live run across persisted assistant rows', () => {
+    const first = assistantTextAndTool('First cycle', 'tool-1');
+    const second = assistantText('Second cycle');
+
+    expect(
+      isLiveTurnDuplicatedInHistory(
+        {
+          blocks: [
+            textBlock('First cycle'),
+            {
+              type: 'tool',
+              call: { id: 'tool-1', name: 'run_command', status: 'done' },
+            } as StreamBlock,
+            textBlock('Second cycle'),
+          ],
+        },
+        [first, second],
+      ),
+    ).toBe(true);
+  });
+
   it('detects live interactive prompts already persisted as matching prompts even when ids differ', () => {
     const cases: Array<[StreamBlock, PersistedMessage]> = [
       [roadmapDecisionBlock('dg_live_456'), assistantTextAndDecisionGate('Vou pedir uma escolha estratégica única para calibrar o roadmap antes do plano final.', 'toolu_123')],

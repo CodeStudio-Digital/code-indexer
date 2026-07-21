@@ -342,6 +342,13 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return info as DbTableInfo;
     },
 
+    async incomingForeignKeys({ connectionId, schema, table }) {
+      assertRelational(connectionId, 'incomingForeignKeys');
+      const driver = requireDriver(connectionId);
+      if (!driver.listIncomingForeignKeys) return [];
+      return driver.listIncomingForeignKeys(schema, table);
+    },
+
     async tableRows({ connectionId, schema, table, limit, offset, orderBy, where }) {
       const started = Date.now();
       const res = await requireDriver(connectionId).tablePreview(schema, table, { limit, offset, orderBy, where });

@@ -429,6 +429,20 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
 .mcp-run-glyph-disabled::before { color: var(--muted-foreground); opacity: 0.45; }
 .mcp-run-glyph-disabled:hover::before { color: var(--muted-foreground); opacity: 0.45; }
 
+/* JavaScript/TypeScript breakpoints — center glyph lane, IntelliJ-style red dot. */
+.mcp-debug-breakpoint-glyph { cursor: pointer; text-align: center; }
+.mcp-debug-breakpoint-glyph::before {
+  content: '';
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin: 5px auto 0;
+  border-radius: 999px;
+  background: #e5484d;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #e5484d 78%, black);
+}
+.mcp-debug-breakpoint-glyph:hover::before { background: #ff6369; }
+
 /* Host-owned glyphs for declarative plugin editor actions (left gutter lane). */
 .mcp-plugin-gutter { cursor: pointer; text-align: center; }
 .mcp-plugin-gutter::before { color: var(--success); font-size: 11px; opacity: 0.9; }

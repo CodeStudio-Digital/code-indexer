@@ -18,6 +18,7 @@ export type {
   DbColumn,
   DbIndex,
   DbForeignKey,
+  DbIncomingForeignKey,
   DbTableRef,
   DbTableInfo,
   DbQueryResult,

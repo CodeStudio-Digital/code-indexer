@@ -16,7 +16,7 @@ import { resolveDriverEntry } from './driver-registry.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
-  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IndexInfo, QueryResult, RunBatchOptions, RunBatchStatement, RunQueryOptions, TableInfo, TableRef,
+  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IncomingForeignKeyInfo, IndexInfo, QueryResult, RunBatchOptions, RunBatchStatement, RunQueryOptions, TableInfo, TableRef,
 } from './types.js';
 
 interface OraResult {
@@ -201,6 +201,42 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     return { schema: schemaName, name, kind: 'table', columns, indexes, foreignKeys };
   }
 
+  async function listIncomingForeignKeys(schemaName: string, name: string): Promise<IncomingForeignKeyInfo[]> {
+    const fkRows = await rows<{
+      CONSTRAINT_NAME: string; SOURCE_SCHEMA: string; SOURCE_TABLE: string; COLUMN_NAME: string;
+      REF_SCHEMA: string; REF_TABLE: string; REF_COLUMN: string; DELETE_RULE: string;
+    }>(
+      `SELECT c.constraint_name, c.owner AS source_schema, c.table_name AS source_table, cc.column_name,
+              rc.owner AS ref_schema, rc.table_name AS ref_table, rcc.column_name AS ref_column, c.delete_rule
+         FROM all_constraints c
+         JOIN all_cons_columns cc ON cc.owner = c.owner AND cc.constraint_name = c.constraint_name
+         JOIN all_constraints rc ON rc.owner = c.r_owner AND rc.constraint_name = c.r_constraint_name
+         JOIN all_cons_columns rcc ON rcc.owner = rc.owner AND rcc.constraint_name = rc.constraint_name AND rcc.position = cc.position
+        WHERE rc.owner = :1 AND rc.table_name = :2 AND c.constraint_type = 'R'
+        ORDER BY c.owner, c.table_name, c.constraint_name, cc.position`,
+      [schemaName, name],
+    );
+    const grouped = new Map<string, IncomingForeignKeyInfo>();
+    for (const row of fkRows) {
+      const key = `${row.SOURCE_SCHEMA}\0${row.SOURCE_TABLE}\0${row.CONSTRAINT_NAME}`;
+      let relation = grouped.get(key);
+      if (!relation) {
+        relation = {
+          schema: row.SOURCE_SCHEMA,
+          table: row.SOURCE_TABLE,
+          foreignKey: {
+            name: row.CONSTRAINT_NAME, columns: [], refSchema: row.REF_SCHEMA,
+            refTable: row.REF_TABLE, refColumns: [], onDelete: row.DELETE_RULE,
+          },
+        };
+        grouped.set(key, relation);
+      }
+      relation.foreignKey.columns.push(row.COLUMN_NAME);
+      relation.foreignKey.refColumns.push(row.REF_COLUMN);
+    }
+    return [...grouped.values()];
+  }
+
   const driver: DatabaseDriver = {
     kind: 'relational',
     async testConnection() {
@@ -218,6 +254,7 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       );
       return r.map((x) => x.USERNAME);
     },
+    listIncomingForeignKeys,
     async listTables(schemaName) {
       const r = await rows<{ NAME: string; KIND: string }>(
         `SELECT table_name AS name, 'table' AS kind FROM all_tables WHERE owner = :1

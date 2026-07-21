@@ -111,6 +111,7 @@ export const COMMAND_CATALOG: readonly CommandSpec[] = [
   { id: 'editor.addFileToChat', title: 'Add File to Chat', titlePt: 'Adicionar arquivo ao chat', category: 'AI', target: 'editor', context: E, allowInInputs: true },
   { id: 'editor.semanticSearch', title: 'Find Semantically Related Code', titlePt: 'Buscar código semanticamente relacionado', category: 'Search', categoryPt: 'Busca', target: 'editor', context: E, monacoCommand: 'mcp.semanticSearch', allowInInputs: true },
   { id: 'run.file', title: 'Run File', titlePt: 'Executar arquivo', category: 'Run', categoryPt: 'Executar', target: 'editor', defaultKeys: keys('Shift+F10', 'Shift+F10'), context: E, allowInInputs: true },
+  { id: 'debug.selected', title: 'Debug Selected Configuration', titlePt: 'Depurar configuração selecionada', category: 'Run', categoryPt: 'Executar', target: 'project', defaultKeys: keys('Shift+F9', 'F5'), allowInInputs: true },
 ];
 
 const specs = new Map(COMMAND_CATALOG.map((spec) => [spec.id, spec]));

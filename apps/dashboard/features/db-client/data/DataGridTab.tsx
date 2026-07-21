@@ -2,10 +2,11 @@
  * Table-data tab (double-click a table). Shows the rows paginated (server-side
  * LIMIT/OFFSET) in an EDITABLE grid when the table has a primary key — edit
  * cells / add / delete rows, then preview the generated SQL and apply. An in-tab
- * SQL bar (pre-filled `SELECT * FROM <table>`) runs arbitrary SQL right here;
- * custom-SQL results are shown read-only.
+ * SQL bar (pre-filled `SELECT * FROM <table>`) runs arbitrary SQL right here.
+ * A conservative single-table SELECT containing the PK keeps the same inline
+ * editing workflow; joins/aggregates/ambiguous projections stay read-only.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Play, RotateCcw, ChevronLeft, ChevronRight, RefreshCw, Loader2, Eye, Undo2, Check } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -17,6 +18,7 @@ import { useGridEdits } from '../grid/use-grid-edits.js';
 import { SqlEditor } from '../query/SqlEditor.js';
 import { FilterBar } from './FilterBar.js';
 import { RelatedRowsDialog } from './RelatedRowsDialog.js';
+import { analyzeSqlResultEditability } from './sql-result-editability.js';
 import type { DbColumn, DbEngine, DbQueryResult, DbTableInfo, DbTableSort, DbWhereCondition } from '../types.js';
 
 const PAGE_SIZES = [50, 100, 200, 500];
@@ -42,6 +44,7 @@ export function DataGridTab({
   const [mode, setMode] = useState<'preview' | 'custom'>('preview');
   const [viewMode, setViewMode] = useState<'filter' | 'sql'>('filter');
   const [sql, setSql] = useState(`SELECT * FROM ${table}`);
+  const [executedSql, setExecutedSql] = useState('');
   const [sort, setSort] = useState<DbTableSort | null>(null);
   const [where, setWhere] = useState<DbWhereCondition[]>([]);
   const [appliedWhere, setAppliedWhere] = useState<DbWhereCondition[]>([]);
@@ -135,6 +138,9 @@ export function DataGridTab({
     if (!q) return;
     const myReq = ++reqIdRef.current;
     setMode('custom');
+    setExecutedSql(q);
+    setResult(null);
+    edits.revertAll(); // a different result set invalidates row-keyed pending edits
     setLoading(true);
     setError(null);
     try {
@@ -148,7 +154,7 @@ export function DataGridTab({
     } finally {
       if (myReq === reqIdRef.current) setLoading(false);
     }
-  }, [cid, sql]);
+  }, [cid, edits, sql]);
 
   const changesForApply = useCallback(
     () => edits.buildChanges(result?.rows ?? [], pkCols, schema, table),
@@ -190,13 +196,24 @@ export function DataGridTab({
       // Successful application reloads the canonical generated/default values.
       if (succeeded) {
         edits.revertAll();
-        await loadPreview(page, pageSize);
+        if (mode === 'custom' && executedSql) await runCustom(executedSql);
+        else await loadPreview(page, pageSize);
       }
       setExecuting(false);
     }
-  }, [changesForApply, cid, t, edits, loadPreview, page, pageSize]);
+  }, [changesForApply, cid, t, edits, mode, executedSql, runCustom, loadPreview, page, pageSize]);
 
-  const editable = mode === 'preview' && pkCols.length > 0 && result != null && !error;
+  const customEditability = useMemo(() => analyzeSqlResultEditability({
+    sql: executedSql,
+    schema,
+    table,
+    primaryKeyColumns: pkCols,
+    tableColumns: cols,
+    result,
+  }), [cols, executedSql, pkCols, result, schema, table]);
+  const editable = (mode === 'preview' || customEditability.editable) && pkCols.length > 0 && result != null && !error;
+  const relatedRowsEnabled = !!tableInfo && (mode === 'preview' || customEditability.completeRow);
+  const canAddRow = editable && (mode === 'preview' || customEditability.completeRow);
   const atLastPage = mode === 'preview' && result != null && result.rows.length < pageSize;
 
   return (
@@ -248,6 +265,11 @@ export function DataGridTab({
         {mode === 'preview' && !error && pkCols.length === 0 && result != null && (
           <div className="border-b bg-amber-500/10 px-2 py-1 text-[11px] text-amber-400">{t('edit.noPk')}</div>
         )}
+        {mode === 'custom' && !error && result != null && !customEditability.editable && (
+          <div className="border-b bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
+            {customEditability.reason === 'missing-primary-key' ? t('edit.customMissingPk') : t('edit.customReadOnly')}
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           <VirtualResultGrid
             result={result}
@@ -259,7 +281,7 @@ export function DataGridTab({
             onSort={mode === 'preview' ? toggleSort : undefined}
             hiddenColumns={hiddenCols}
             columnMeta={columnMeta}
-            onRelatedRows={tableInfo ? setRelatedRow : undefined}
+            onRelatedRows={relatedRowsEnabled ? setRelatedRow : undefined}
           />
         </div>
       </div>
@@ -284,13 +306,17 @@ export function DataGridTab({
         <RelatedRowsDialog open connKey={cid} schema={schema} tableInfo={tableInfo} row={relatedRow} onClose={() => setRelatedRow(null)} />
       )}
 
-      {/* Pager (preview mode only) */}
-      {mode === 'preview' && (
+      {/* Table actions; paging only applies to the normal preview query. */}
+      {(mode === 'preview' || editable) && (
         <div className="flex items-center gap-2 border-t px-2 py-1 text-xs">
-          <button className="rounded p-1 hover:bg-muted" title={t('data.reload')} onClick={() => void loadPreview(page, pageSize)}>
+          <button
+            className="rounded p-1 hover:bg-muted"
+            title={t('data.reload')}
+            onClick={() => void (mode === 'custom' ? runCustom(executedSql) : loadPreview(page, pageSize))}
+          >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          {pkCols.length > 0 && (
+          {canAddRow && (
             <button
               className="rounded p-1 hover:bg-muted"
               title={t('edit.addRow')}
@@ -300,38 +326,42 @@ export function DataGridTab({
             </button>
           )}
           <div className="flex-1" />
-          <button
-            className="rounded p-1 hover:bg-muted disabled:opacity-40"
-            title={t('data.prev')}
-            disabled={page === 0 || loading}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </button>
-          <span className="tabular-nums text-muted-foreground">{t('data.page', { n: page + 1 })}</span>
-          <button
-            className="rounded p-1 hover:bg-muted disabled:opacity-40"
-            title={t('data.next')}
-            disabled={atLastPage || loading}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-          <select
-            className="h-6 rounded border bg-background px-1"
-            value={pageSize}
-            onChange={(e) => {
-              setPage(0);
-              setPageSize(Number(e.target.value));
-            }}
-            title={t('data.pageSize')}
-          >
-            {PAGE_SIZES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
+          {mode === 'preview' && (
+            <>
+              <button
+                className="rounded p-1 hover:bg-muted disabled:opacity-40"
+                title={t('data.prev')}
+                disabled={page === 0 || loading}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <span className="tabular-nums text-muted-foreground">{t('data.page', { n: page + 1 })}</span>
+              <button
+                className="rounded p-1 hover:bg-muted disabled:opacity-40"
+                title={t('data.next')}
+                disabled={atLastPage || loading}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+              <select
+                className="h-6 rounded border bg-background px-1"
+                value={pageSize}
+                onChange={(e) => {
+                  setPage(0);
+                  setPageSize(Number(e.target.value));
+                }}
+                title={t('data.pageSize')}
+              >
+                {PAGE_SIZES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
       )}
 

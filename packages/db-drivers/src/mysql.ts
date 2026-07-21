@@ -13,6 +13,7 @@ import type {
   DatabaseDriver,
   DbConnectConfig,
   ForeignKeyInfo,
+  IncomingForeignKeyInfo,
   IndexInfo,
   QueryResult,
   RunBatchOptions,
@@ -239,6 +240,44 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     return { schema: schemaName, name, kind: 'table', columns, indexes, foreignKeys };
   }
 
+  async function listIncomingForeignKeys(schemaName: string, name: string): Promise<IncomingForeignKeyInfo[]> {
+    const rows = await poolRows<{
+      CONSTRAINT_NAME: string; SOURCE_SCHEMA: string; SOURCE_TABLE: string; COLUMN_NAME: string;
+      REFERENCED_TABLE_SCHEMA: string; REFERENCED_TABLE_NAME: string; REFERENCED_COLUMN_NAME: string;
+      DELETE_RULE: string; UPDATE_RULE: string;
+    }>(
+      `SELECT k.CONSTRAINT_NAME, k.TABLE_SCHEMA AS SOURCE_SCHEMA, k.TABLE_NAME AS SOURCE_TABLE, k.COLUMN_NAME,
+              k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME,
+              rc.DELETE_RULE, rc.UPDATE_RULE
+         FROM information_schema.KEY_COLUMN_USAGE k
+         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+           ON rc.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND rc.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+          AND rc.TABLE_NAME = k.TABLE_NAME
+        WHERE k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ?
+        ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`,
+      [schemaName, name],
+    );
+    const grouped = new Map<string, IncomingForeignKeyInfo>();
+    for (const row of rows) {
+      const key = `${row.SOURCE_SCHEMA}\0${row.SOURCE_TABLE}\0${row.CONSTRAINT_NAME}`;
+      let relation = grouped.get(key);
+      if (!relation) {
+        relation = {
+          schema: row.SOURCE_SCHEMA,
+          table: row.SOURCE_TABLE,
+          foreignKey: {
+            name: row.CONSTRAINT_NAME, columns: [], refSchema: row.REFERENCED_TABLE_SCHEMA,
+            refTable: row.REFERENCED_TABLE_NAME, refColumns: [], onDelete: row.DELETE_RULE, onUpdate: row.UPDATE_RULE,
+          },
+        };
+        grouped.set(key, relation);
+      }
+      relation.foreignKey.columns.push(row.COLUMN_NAME);
+      relation.foreignKey.refColumns.push(row.REFERENCED_COLUMN_NAME);
+    }
+    return [...grouped.values()];
+  }
+
   const driver: DatabaseDriver = {
     kind: 'relational',
     async testConnection() {
@@ -253,6 +292,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       if (database) return [database];
       return driver.listDatabases();
     },
+    listIncomingForeignKeys,
     async listTables(schemaName) {
       const target = schemaName ?? config.database;
       const rows = await poolRows<{ TABLE_NAME: string; TABLE_TYPE: string }>(

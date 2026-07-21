@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePage, SessionData } from '../../types.js';
 import { shouldLoadEarlierAtScrollTop } from '../MessageList.js';
+import { groupMessages } from '../../utils.js';
 import {
+  appendOptimisticUserMessage,
   mergeEarlierMessagePage,
   normalizeSessionMessageData,
   sessionDataForSelection,
@@ -86,5 +88,51 @@ describe('conversation scroll pagination', () => {
 
     expect(result.addedRows).toBe(0);
     expect(result.data).toBe(current);
+  });
+
+  it('appends an aligned optimistic user row with attachments and skills', () => {
+    const current = { ...sessionData(10, []), total_messages: 0 };
+    const updated = appendOptimisticUserMessage(current, {
+      sessionId: 10,
+      messageId: -101,
+      text: 'inspect this',
+      attachments: [
+        { name: 'shot.png', mediaType: 'image/png', base64: 'aW1hZ2U=' },
+        { name: 'notes.txt', mediaType: 'text/plain', text: 'details' },
+      ],
+      selectedSkillIds: ['unity'],
+    });
+
+    expect(updated.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'inspect this' },
+        { type: 'image', mediaType: 'image/png', base64: 'aW1hZ2U=' },
+        { type: 'document', name: 'notes.txt', mediaType: 'text/plain', text: 'details', base64: undefined },
+      ],
+      selectedSkillIds: ['unity'],
+    }]);
+    expect(updated.message_rows).toEqual([{
+      id: -101,
+      input_tokens: 0,
+      output_tokens: 0,
+      optimistic: true,
+    }]);
+    expect(updated.total_messages).toBe(1);
+
+    const groups = groupMessages(updated.messages, updated.message_rows);
+    expect(groups[0]?.kind).toBe('user');
+    if (groups[0]?.kind === 'user') expect(groups[0].messageId).toBeUndefined();
+  });
+
+  it('rejects an optimistic row for a stale session updater', () => {
+    const current = sessionData(20, []);
+    const updated = appendOptimisticUserMessage(current, {
+      sessionId: 10,
+      messageId: -102,
+      text: 'stale',
+    });
+
+    expect(updated).toBe(current);
   });
 });

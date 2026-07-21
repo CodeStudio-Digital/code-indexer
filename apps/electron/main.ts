@@ -22,6 +22,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol, ses
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createApp } from '@apps/http-api/server.js';
+import { seedBundledPlugins } from '@apps/http-api/server/bundled-plugins.js';
 import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 import { installLlmDispatcher } from '@apps/http-api/install-llm-dispatcher.js';
 import { mountIpcHandlers } from './src/handlers-mount.js';
@@ -225,6 +226,17 @@ async function bootstrap() {
   createSplashWindow();
   await whenSplashPainted();
   updateSplashStatus('Iniciando o servidor…');
+
+  // The HTTP entrypoint seeds bundled plugins before createApp(), but the
+  // desktop imports createApp() directly and never crosses that entrypoint.
+  // Keep the ordering identical here so first-party debugger/provider
+  // contributions are installed and visible to handlers on the same boot.
+  updateSplashStatus('Carregando plugins integrados…');
+  try {
+    await seedBundledPlugins();
+  } catch (error) {
+    console.warn(`[bundled-plugins] desktop seed failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl

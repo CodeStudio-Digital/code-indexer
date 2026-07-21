@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, GitBranch, Loader2, Play, Square } from 'lucide-react';
+import { Bug, ChevronDown, GitBranch, Loader2, Play, Square } from 'lucide-react';
 import type { DetectedRunners, RunnerManager } from '@mcp/api-bus';
 import { apiCall } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
@@ -8,6 +8,13 @@ import { useGitRevision } from '../../state/git-revision.js';
 import { useContributions } from '../../state/contribution-registry.js';
 import { launchRun } from '../../state/run-launch.js';
 import { stopTask, tasksForProject, useRunningTasks } from '../../state/running-tasks.js';
+import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import {
+  activeDebugSessionForProject,
+  startDebugSession,
+  stopDebugSession,
+  useDebugSessions,
+} from '../../state/debug-sessions.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover.js';
 import {
   DropdownMenu,
@@ -18,6 +25,9 @@ import {
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu.js';
 import { BranchPopover } from '../workspace/jetbrains/status-bar/BranchPopover.js';
+import { registerCommandHandlers } from '../../keymap/commands.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
+import { debugBreakpointsForProject } from '../../state/debug-breakpoints.js';
 
 interface GitSummary {
   branch?: string | null;
@@ -99,6 +109,13 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
         command: [config.command, ...(config.args ?? []).map(quoteArg)].join(' '),
         manager: managerFor(config.command),
         cwd: config.cwd,
+        debugRunner: {
+          manager: managerFor(config.command),
+          executable: config.command,
+          args: config.args,
+          cwd: config.cwd,
+          env: config.env,
+        },
         source: 'plugin' as const,
       })),
     [allConfigurations],
@@ -118,6 +135,12 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
       description: `${group.manager} · ${group.source}`,
       command: runner.command,
       manager: runner.manager,
+      cwd: group.cwd,
+      debugRunner: {
+        manager: runner.manager,
+        script: runner.id.includes(':') ? runner.id.slice(runner.id.indexOf(':') + 1) : runner.label,
+        cwd: group.cwd,
+      },
       source: 'detected' as const,
     }))), [detected]);
   const configurations = useMemo(
@@ -130,9 +153,42 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
   });
   const selectedId = selection.projectId === projectId ? selection.id : null;
   const allTasks = useRunningTasks((state) => state.tasks);
+  const debugSessions = useDebugSessions((state) => state.sessions);
+  const [debugStarting, setDebugStarting] = useState(false);
+  const [debugError, setDebugError] = useState<string | null>(null);
   const tasks = useMemo(() => tasksForProject(allTasks, projectId), [allTasks, projectId]);
   const running = tasks.filter((task) => task.status === 'running').sort((a, b) => b.startedAt - a.startedAt)[0];
+  const activeDebug = activeDebugSessionForProject(debugSessions, projectId);
   const selected = configurations.find((config) => config.key === selectedId) ?? configurations[0];
+  const javascriptDebuggable = selected
+    ? ['node', 'npm', 'pnpm', 'yarn', 'bun'].includes(selected.manager)
+    : false;
+
+  const launchSelectedDebug = () => {
+    if (!selected || !javascriptDebuggable || debugStarting || activeDebug) return;
+    setDebugStarting(true);
+    setDebugError(null);
+    // Debug sessions publish stdout/stderr and startup diagnostics to the
+    // unified Output panel, including failures before a connection is made.
+    useWorkspaceLayout.getState().setActiveBottom('output');
+    void startDebugSession({
+      projectId,
+      adapterId: 'javascript',
+      request: 'launch',
+      name: `Debug ${selected.title}`,
+      runner: selected.debugRunner,
+      breakpoints: debugBreakpointsForProject(projectId),
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      setDebugError(message);
+      toast.error(t('output.debugStartFailed'), { description: message });
+    }).finally(() => setDebugStarting(false));
+  };
+
+  useEffect(() => registerCommandHandlers([{
+    id: 'debug.selected',
+    run: launchSelectedDebug,
+  }]), [projectId, selected?.key, javascriptDebuggable, debugStarting, activeDebug?.sessionId]);
 
   useEffect(() => {
     if (selection.projectId !== projectId || !selected || selected.key === selectedId) return;
@@ -181,32 +237,46 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
         </DropdownMenuContent>
       </DropdownMenu>
       <span className="h-4 w-px bg-[var(--workbench-border)]" />
-      {running ? (
+      {running || activeDebug ? (
         <button
           type="button"
-          onClick={() => void stopTask(running.taskId)}
+          onClick={() => void (activeDebug ? stopDebugSession(activeDebug.sessionId) : stopTask(running!.taskId))}
           className="grid h-full w-7 place-items-center text-red-400 hover:bg-red-500/10"
-          aria-label={`Stop ${running.label}`}
-          title={`Stop ${running.label}`}
+          aria-label={`Stop ${activeDebug?.name ?? running?.label ?? selected.title}`}
+          title={`Stop ${activeDebug?.name ?? running?.label ?? selected.title}`}
         >
           <Square className="h-3.5 w-3.5 fill-current" />
         </button>
       ) : (
-        <button
-          type="button"
-          onClick={() => void launchRun({
-            projectId,
-            command: selected.command,
-            label: selected.title,
-            manager: selected.manager,
-            cwd: selected.cwd,
-          })}
-          className="grid h-full w-7 place-items-center text-emerald-400 hover:bg-emerald-500/10"
-          aria-label={`Run ${selected.title}`}
-          title={`Run ${selected.title}`}
-        >
-          <Play className="h-3.5 w-3.5 fill-current" />
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => void launchRun({
+              projectId,
+              command: selected.command,
+              label: selected.title,
+              manager: selected.manager,
+              cwd: selected.cwd,
+            })}
+            className="grid h-full w-7 place-items-center text-emerald-400 hover:bg-emerald-500/10"
+            aria-label={`Run ${selected.title}`}
+            title={`Run ${selected.title}`}
+          >
+            <Play className="h-3.5 w-3.5 fill-current" />
+          </button>
+          {javascriptDebuggable && (
+            <button
+              type="button"
+              disabled={debugStarting}
+              onClick={launchSelectedDebug}
+              className="grid h-full w-7 place-items-center text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+              aria-label={`Debug ${selected.title}`}
+              title={debugError ?? `Debug ${selected.title} (Shift+F9)`}
+            >
+              {debugStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bug className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

@@ -146,6 +146,13 @@ export interface DbForeignKey {
   onUpdate?: string;
 }
 
+/** A foreign key owned by another table that points at the requested table. */
+export interface DbIncomingForeignKey {
+  schema: string;
+  table: string;
+  foreignKey: DbForeignKey;
+}
+
 export interface DbTableRef {
   schema: string;
   name: string;
@@ -348,6 +355,12 @@ export interface DbClientApi {
     input: { connectionId: string; schema: string; table: string },
     ctx: ApiContext,
   ): Promise<DbTableInfo>;
+
+  /** Targeted reverse-FK lookup used by related-row navigation. */
+  incomingForeignKeys(
+    input: { connectionId: string; schema: string; table: string },
+    ctx: ApiContext,
+  ): Promise<DbIncomingForeignKey[]>;
 
   /** Paginated `SELECT *` for a table (double-click → data tab), with optional column sort + WHERE filter. */
   tableRows(

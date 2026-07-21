@@ -1,10 +1,9 @@
 /**
- * Resolved-plan sweep. The `plan` card lands in the live buffer AFTER its
- * turn's message_complete, so the per-turn clear never removes it and it used
- * to stay pinned above the NEXT turn's streaming content ("thinking below its
- * own plan"). The runner only resumes after the plan is resolved, so the
- * first streamed content of the next turn sweeps the card and triggers the
- * history refetch (the persisted row renders the resolved card instead).
+ * Resolved-plan sweep. The `plan` card lands in the run-level live buffer
+ * after message_complete and must survive while approval is pending. The
+ * runner only resumes after the plan is resolved, so the first streamed
+ * content of the next provider cycle sweeps the card and triggers the history
+ * refetch (the persisted row renders the resolved card instead).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { createEventHandlers } from '../handlers.js';

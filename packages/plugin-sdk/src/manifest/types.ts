@@ -17,8 +17,11 @@ import type {
   editorGutterLineMatcherSchema,
   statusBarItemDeclSchema,
   runConfigurationDeclSchema,
+  debuggerCapabilitiesDeclSchema,
+  debuggerDeclSchema,
   projectModuleDeclSchema,
   providerRuntimeDeclSchema,
+  debuggerRuntimeDeclSchema,
 } from './app-json.schema.js';
 import type {
   marketplaceManifestSchema,
@@ -40,8 +43,11 @@ export type EditorGutterDecl = z.infer<typeof editorGutterDeclSchema>;
 export type EditorGutterLineMatcherDecl = z.infer<typeof editorGutterLineMatcherSchema>;
 export type StatusBarItemDecl = z.infer<typeof statusBarItemDeclSchema>;
 export type RunConfigurationDecl = z.infer<typeof runConfigurationDeclSchema>;
+export type DebuggerCapabilitiesDecl = z.infer<typeof debuggerCapabilitiesDeclSchema>;
+export type DebuggerDecl = z.infer<typeof debuggerDeclSchema>;
 export type ProjectModuleDecl = z.infer<typeof projectModuleDeclSchema>;
 export type ProviderRuntimeDecl = z.infer<typeof providerRuntimeDeclSchema>;
+export type DebuggerRuntimeDecl = z.infer<typeof debuggerRuntimeDeclSchema>;
 export type MarketplaceManifest = z.infer<typeof marketplaceManifestSchema>;
 export type MarketplacePluginEntry = z.infer<typeof marketplacePluginEntrySchema>;
 export type PluginSource = z.infer<typeof pluginSourceSchema>;

@@ -258,7 +258,6 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     } else if (requested === 'api-navigation') {
       useWorkspaceLayout.getState().setPrimarySurface('api');
     } else if (BOTTOM_BUILTIN_TAB_IDS.has(requested)) {
-      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveBottom(requested);
     } else if (INDEX_ALIASES.has(requested)) {
       useWorkspaceLayout.getState().setPrimarySurface('index');
@@ -277,7 +276,6 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveRight(requested);
     } else if (pluginWindow?.side === 'bottom') {
-      useWorkspaceLayout.getState().setPrimarySurface('editor');
       useWorkspaceLayout.getState().setActiveBottom(requested);
     }
   }, [location.search, contribWindows]);
@@ -391,11 +389,6 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // live (this closure is registered once per project).
       toggleBottomTerminal: () => {
         const l = useWorkspaceLayout.getState();
-        if (l.primarySurface !== 'editor') {
-          l.setPrimarySurface('editor');
-          l.setActiveBottom('terminal');
-          return;
-        }
         l.setActiveBottom(l.activeBottom ? null : 'terminal');
       },
       toggleProjectFiles: () => {

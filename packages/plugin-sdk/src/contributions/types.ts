@@ -210,6 +210,31 @@ export interface ContributedRunConfiguration {
   activation?: ActivationRule;
 }
 
+export interface ContributedDebuggerCapabilities {
+  launch?: boolean;
+  attach?: boolean;
+  conditionalBreakpoints?: boolean;
+  hitConditionalBreakpoints?: boolean;
+  logpoints?: boolean;
+  exceptionBreakpoints?: boolean;
+}
+
+/**
+ * Declarative debugger metadata. The host can surface this contribution
+ * without importing executable plugin code. A trusted bundled plugin may pair
+ * it with a named `debugAdapter` export recorded in `debuggerRuntime`.
+ */
+export interface ContributedDebugger {
+  id: string;
+  label: string;
+  description?: string;
+  languageIds: string[];
+  filePatterns?: string[];
+  runnerManagers?: string[];
+  supports?: ContributedDebuggerCapabilities;
+  activation?: ActivationRule;
+}
+
 /**
  * A project module/facet in the IntelliJ sense: a detected slice of a project
  * with its own actions, run configs and UI. Tool handlers still live in the
@@ -236,6 +261,7 @@ export interface PluginModule {
   editorActions: ContributedEditorAction[];
   statusBarItems: ContributedStatusBarItem[];
   runConfigurations: ContributedRunConfiguration[];
+  debuggers: ContributedDebugger[];
   modules: ContributedProjectModule[];
   /** Capabilities the plugin requires (fs/exec/storage). Extracted to .app.json. */
   permissions?: PluginPermissions;

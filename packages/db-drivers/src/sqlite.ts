@@ -14,6 +14,7 @@ import type {
   DatabaseDriver,
   DbConnectConfig,
   ForeignKeyInfo,
+  IncomingForeignKeyInfo,
   IndexInfo,
   QueryResult,
   RunBatchOptions,
@@ -139,7 +140,8 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
 
     const fkList = db
       .prepare('SELECT * FROM pragma_foreign_key_list(?)')
-      .all(name) as Array<{ id: number; table: string; from: string; to: string; on_update: string; on_delete: string }>;
+      .all(name) as Array<{ id: number; seq: number; table: string; from: string; to: string | null; on_update: string; on_delete: string }>;
+    const referencedPk = new Map<string, string[]>();
     const fkMap = new Map<number, ForeignKeyInfo>();
     for (const fk of fkList) {
       let entry = fkMap.get(fk.id);
@@ -155,10 +157,47 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
         fkMap.set(fk.id, entry);
       }
       entry.columns.push(fk.from);
-      entry.refColumns.push(fk.to);
+      if (!referencedPk.has(fk.table)) {
+        const targetCols = db.prepare('SELECT * FROM pragma_table_info(?)').all(fk.table) as Array<{ name: string; pk: number }>;
+        referencedPk.set(fk.table, targetCols.filter((column) => column.pk > 0).sort((a, b) => a.pk - b.pk).map((column) => column.name));
+      }
+      entry.refColumns.push(fk.to || referencedPk.get(fk.table)?.[fk.seq] || 'rowid');
     }
 
     return Promise.resolve({ schema: 'main', name, kind: 'table', columns, indexes, foreignKeys: [...fkMap.values()] });
+  }
+
+  function listIncomingForeignKeys(_schema: string, table: string): Promise<IncomingForeignKeyInfo[]> {
+    const sources = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>;
+    const target = table.toLocaleLowerCase();
+    const relations: IncomingForeignKeyInfo[] = [];
+    const targetPk = db.prepare('SELECT * FROM pragma_table_info(?)').all(table) as Array<{ name: string; pk: number }>;
+    const targetPkColumns = targetPk.filter((column) => column.pk > 0).sort((a, b) => a.pk - b.pk).map((column) => column.name);
+    for (const source of sources) {
+      const rows = db.prepare('SELECT * FROM pragma_foreign_key_list(?)').all(source.name) as Array<{
+        id: number; seq: number; table: string; from: string; to: string | null; on_update: string; on_delete: string;
+      }>;
+      const grouped = new Map<number, IncomingForeignKeyInfo>();
+      for (const row of rows) {
+        if (row.table.toLocaleLowerCase() !== target) continue;
+        let relation = grouped.get(row.id);
+        if (!relation) {
+          relation = {
+            schema: 'main',
+            table: source.name,
+            foreignKey: {
+              name: `fk_${source.name}_${row.id}`, columns: [], refSchema: 'main', refTable: table, refColumns: [],
+              onDelete: row.on_delete, onUpdate: row.on_update,
+            },
+          };
+          grouped.set(row.id, relation);
+        }
+        relation.foreignKey.columns.push(row.from);
+        relation.foreignKey.refColumns.push(row.to || targetPkColumns[row.seq] || 'rowid');
+      }
+      relations.push(...grouped.values());
+    }
+    return Promise.resolve(relations);
   }
 
   const driver: DatabaseDriver = {
@@ -174,6 +213,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     listSchemas() {
       return Promise.resolve(['main']);
     },
+    listIncomingForeignKeys,
     listTables() {
       const rows = db
         .prepare(

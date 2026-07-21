@@ -63,6 +63,22 @@ describe('exec_command + write_stdin', () => {
     expect(result.content).toContain('cmd cannot be empty');
   });
 
+  it('blocks broad process termination before spawning a persistent shell', async () => {
+    // The nonexistent head also makes the test harmless if the guard ever
+    // regresses: shell short-circuiting prevents taskkill/pkill from running.
+    const destructiveTail = process.platform === 'win32'
+      ? 'taskkill /IM node.exe /T /F'
+      : 'pkill -f node';
+    const result = await execCommand.handler(
+      { cmd: `definitely-not-a-real-command && ${destructiveTail}` },
+      makeCtx(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Broad process termination blocked');
+    expect(__testing.sessions.size).toBe(0);
+  });
+
   it('runs a one-shot command and reports status=exited', async () => {
     const result = await execCommand.handler(
       { cmd: process.platform === 'win32' ? 'echo hello-world' : 'echo hello-world', yield_time_ms: 5000 },

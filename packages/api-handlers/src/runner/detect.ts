@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type {
   DetectedGroup,
   DetectedRunner,
@@ -23,6 +23,7 @@ import {
   type DotnetProjectScan,
 } from './dotnet-project-files.js';
 import { quoteShellArgument, type ShellFamily } from '../terminal/shell-quote.js';
+import { scanComposerProjects, scanComposerProjectsAsync } from './composer-project-files.js';
 
 function readJson(path: string): Record<string, unknown> | null {
   try {
@@ -91,19 +92,23 @@ function detectJs(root: string, override: RunnerManager | undefined, shellFamily
   };
 }
 
-function detectPhp(root: string, shellFamily: ShellFamily): DetectedGroup | null {
-  const composer = readJson(join(root, 'composer.json'));
+function detectPhp(root: string, source: string, shellFamily: ShellFamily): DetectedGroup | null {
+  const composer = readJson(join(root, source));
   if (!composer) return null;
+  const manifestDir = dirname(source).replace(/\\/g, '/');
+  const cwd = manifestDir === '.' ? undefined : manifestDir;
   const scripts = (composer.scripts ?? {}) as Record<string, unknown>;
   const runners: DetectedRunner[] = Object.keys(scripts).flatMap((name) => {
     const argument = safeShellArgument(name, shellFamily);
-    return argument ? [{ id: `composer:${name}`, label: name, manager: 'composer' as const, command: `composer run ${argument}` }] : [];
+    const id = cwd ? `composer:${cwd}:${name}` : `composer:${name}`;
+    return argument ? [{ id, label: name, manager: 'composer' as const, command: `composer run ${argument}` }] : [];
   });
   return {
     manager: 'composer',
-    source: 'composer.json',
+    source,
+    cwd,
     runners,
-    installNeeded: !existsSync(join(root, 'vendor')),
+    installNeeded: !existsSync(join(root, cwd ?? '', 'vendor')),
     installCommand: 'composer install',
   };
 }
@@ -246,8 +251,10 @@ export function detectRunners(root: string, opts?: DetectOptions): DetectedRunne
   const shellFamily = opts?.shellFamily ?? defaultShellFamily();
   const js = detectJs(root, opts?.nodeManager, shellFamily);
   if (js) groups.push(js);
-  const php = detectPhp(root, shellFamily);
-  if (php) groups.push(php);
+  for (const source of scanComposerProjects(root)) {
+    const php = detectPhp(root, source, shellFamily);
+    if (php) groups.push(php);
+  }
   const py = detectPython(root, opts?.pythonManager);
   if (py) groups.push(py);
   groups.push(...detectJava(root, opts?.javaManager, shellFamily));
@@ -260,14 +267,18 @@ export function detectRunners(root: string, opts?: DetectOptions): DetectedRunne
 export async function detectRunnersAsync(root: string, opts?: DetectOptions): Promise<DetectedRunners> {
   const groups: DetectedGroup[] = [];
   const shellFamily = opts?.shellFamily ?? defaultShellFamily();
+  const composerProjects = scanComposerProjectsAsync(root);
+  const dotnetProject = detectDotnetAsync(root, shellFamily);
   const js = detectJs(root, opts?.nodeManager, shellFamily);
   if (js) groups.push(js);
-  const php = detectPhp(root, shellFamily);
-  if (php) groups.push(php);
+  for (const source of await composerProjects) {
+    const php = detectPhp(root, source, shellFamily);
+    if (php) groups.push(php);
+  }
   const py = detectPython(root, opts?.pythonManager);
   if (py) groups.push(py);
   groups.push(...detectJava(root, opts?.javaManager, shellFamily));
-  const dotnet = await detectDotnetAsync(root, shellFamily);
+  const dotnet = await dotnetProject;
   if (dotnet) groups.push(dotnet);
   return { groups };
 }

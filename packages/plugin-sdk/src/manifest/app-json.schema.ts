@@ -167,6 +167,30 @@ export const runConfigurationDeclSchema = z.object({
   activation: activationRuleSchema.optional(),
 });
 
+export const debuggerCapabilitiesDeclSchema = z
+  .object({
+    launch: z.boolean().optional(),
+    attach: z.boolean().optional(),
+    conditionalBreakpoints: z.boolean().optional(),
+    hitConditionalBreakpoints: z.boolean().optional(),
+    logpoints: z.boolean().optional(),
+    exceptionBreakpoints: z.boolean().optional(),
+  })
+  .strict();
+
+export const debuggerDeclSchema = z
+  .object({
+    id: contribId,
+    label: z.string().min(1).max(128),
+    description: z.string().max(512).optional(),
+    languageIds: z.array(z.string().min(1).max(64)).min(1).max(32),
+    filePatterns: z.array(z.string().min(1).max(256)).min(1).max(64).optional(),
+    runnerManagers: z.array(z.string().min(1).max(64)).min(1).max(32).optional(),
+    supports: debuggerCapabilitiesDeclSchema.optional(),
+    activation: activationRuleSchema.optional(),
+  })
+  .strict();
+
 export const projectModuleDeclSchema = z.object({
   id: contribId,
   title: z.string().min(1),
@@ -185,6 +209,14 @@ export const providerRuntimeDeclSchema = z
     protocol: z.literal('provider-adapter-v2'),
     entry: relPath.optional(),
     kinds: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+
+export const debuggerRuntimeDeclSchema = z
+  .object({
+    protocol: z.literal('debug-adapter-v1'),
+    entry: relPath.optional(),
+    adapters: z.array(contribId).min(1),
   })
   .strict();
 
@@ -223,8 +255,10 @@ function buildAppManifestSchema(providers: z.ZodTypeAny) {
     editorActions: z.array(manifestEditorActionDeclSchema).optional(),
     statusBarItems: z.array(statusBarItemDeclSchema).optional(),
     runConfigurations: z.array(runConfigurationDeclSchema).optional(),
+    debuggers: z.array(debuggerDeclSchema).optional(),
     modules: z.array(projectModuleDeclSchema).optional(),
     providerRuntime: providerRuntimeDeclSchema.optional(),
+    debuggerRuntime: debuggerRuntimeDeclSchema.optional(),
     permissions: permissionsSchema.optional(),
     // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
     providers: z.array(providers).optional(),

@@ -49,6 +49,7 @@ import { useEnsureFileContent } from './useEnsureFileContent.js';
 import { useConflictMarkers } from './useConflictMarkers.js';
 import { useChangeMarkers } from './useChangeMarkers.js';
 import { useRunGutter } from './run/useRunGutter.js';
+import { useDebugBreakpointGutter } from './debug/useDebugBreakpointGutter.js';
 import { usePluginEditorGutter } from './usePluginEditorGutter.js';
 import { useSymbolNavigationGutter } from './useSymbolNavigationGutter.js';
 import { registerRunActions } from './run/run-actions.js';
@@ -164,6 +165,10 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // IntelliJ-style ▶ run gutter for scripts, project manifests, and source
   // entry points (gated inside the hook to the relevant files).
   useRunGutter(file, editorInstance, monacoInstance);
+  // JavaScript/TypeScript breakpoint lane. Click the glyph margin or press
+  // Ctrl+F8; persisted markers are passed to the next debug launch and kept
+  // synchronized with an already-running DAP session.
+  useDebugBreakpointGutter(file, editorInstance, monacoInstance);
   // Declarative, project-scoped gutters contributed by installed plugins.
   usePluginEditorGutter(file, editorInstance, monacoInstance);
   const handleMount = useCallback<OnMount>(

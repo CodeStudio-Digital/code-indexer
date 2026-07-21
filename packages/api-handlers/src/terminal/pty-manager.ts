@@ -128,6 +128,13 @@ export class PtyManager {
     posixPathPrepend?: string[];
     /** Extra env exported inside the distro before the command (WSL only). */
     posixExtraEnv?: Record<string, string>;
+    /**
+     * Keep the bounded replay buffer after process exit until `release(id)`.
+     * Runner tasks use this so their output remains readable for as long as
+     * the finished task remains in the UI. Interactive terminals keep the
+     * short automatic reap used by the generic terminal lifecycle.
+     */
+    retainOnExit?: boolean;
   }): { id: string; entry: PtyEntry } {
     const pty = loadPty();
     const shell = opts.shell ?? defaultShell();
@@ -175,7 +182,7 @@ export class PtyManager {
       ...(isWindows && inElectron ? { useConpty: false } : {}),
     });
 
-    return this.register(child);
+    return this.register(child, opts.retainOnExit === true);
   }
 
   /**
@@ -185,7 +192,7 @@ export class PtyManager {
    * both `spawn` (node-pty) and `registerExternalPty` (e.g. an SSH channel)
    * share identical buffering/exit/reap semantics.
    */
-  private register(child: IPty): { id: string; entry: PtyEntry } {
+  private register(child: IPty, retainOnExit = false): { id: string; entry: PtyEntry } {
     const entry: PtyEntry = {
       pty: child,
       buffer: [],
@@ -227,14 +234,17 @@ export class PtyManager {
       entry.exitHooks.clear();
       dataSub.dispose();
       exitSub.dispose();
-      // Keep the entry around briefly so a late consumer still sees
-      // the exit code; reap on the next spawn cycle.
-      reapTimer = setTimeout(() => {
-        this.entries.delete(id);
-        entry.buffer.length = 0;
-        entry.exitChunk = undefined;
-      }, 30_000);
-      reapTimer.unref?.();
+      if (!retainOnExit) {
+        // Generic/interactive terminals get a short grace period for late
+        // consumers. Runner-owned entries instead live until runner.dismiss
+        // or runner.restart explicitly releases them.
+        reapTimer = setTimeout(() => {
+          this.entries.delete(id);
+          entry.buffer.length = 0;
+          entry.exitChunk = undefined;
+        }, 30_000);
+        reapTimer.unref?.();
+      }
     });
     entry.dispose = () => {
       dataSub.dispose();
@@ -260,8 +270,31 @@ export class PtyManager {
    * responsible for mapping its transport (channel data/close/resize) onto the
    * `IPty` surface; this just plugs it into the shared buffered fan-out.
    */
-  registerExternalPty(pty: IPty): { id: string; entry: PtyEntry } {
-    return this.register(pty);
+  registerExternalPty(
+    pty: IPty,
+    options: { retainOnExit?: boolean } = {},
+  ): { id: string; entry: PtyEntry } {
+    return this.register(pty, options.retainOnExit === true);
+  }
+
+  /**
+   * Drop a terminal and its replay buffer explicitly. If it is still alive,
+   * terminate its full process tree first so releasing registry state can
+   * never orphan a child process.
+   */
+  release(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    if (!entry.exited) {
+      killProcessTree(entry.pty.pid);
+      try {
+        entry.pty.kill();
+      } catch {
+        /* already exited */
+      }
+    }
+    entry.dispose?.();
+    this.entries.delete(id);
   }
 
   get(id: string): PtyEntry {
@@ -313,6 +346,7 @@ export class PtyManager {
   /** Kill a terminal and every process it launched. */
   kill(id: string, signal?: string): void {
     const entry = this.get(id);
+    if (entry.exited) return;
     const pid = entry.pty.pid;
     // Tree-first is intentional: once the shell exits, Windows can no longer
     // discover descendants by walking the vanished parent pid.
@@ -333,6 +367,7 @@ export class PtyManager {
   listPids(): number[] {
     const pids: number[] = [];
     for (const entry of this.entries.values()) {
+      if (entry.exited) continue;
       const pid = entry.pty.pid;
       if (typeof pid === 'number' && pid > 0) pids.push(pid);
     }
@@ -346,11 +381,13 @@ export class PtyManager {
    */
   killAll(): void {
     for (const entry of this.entries.values()) {
-      killProcessTree(entry.pty.pid);
-      try {
-        entry.pty.kill();
-      } catch {
-        /* already exited */
+      if (!entry.exited) {
+        killProcessTree(entry.pty.pid);
+        try {
+          entry.pty.kill();
+        } catch {
+          /* already exited */
+        }
       }
       entry.dispose?.();
     }

@@ -1,4 +1,83 @@
-import type { MessagePage, SessionData, ToolResultFallback } from '../types.js';
+import type {
+  AgentAttachment,
+  ContentBlock,
+  MessagePage,
+  SessionData,
+  ToolResultFallback,
+} from '../types.js';
+
+let optimisticMessageSequence = 0;
+
+/** Allocate an id that can never collide with SQLite's positive message ids. */
+export function allocateOptimisticMessageId(): number {
+  optimisticMessageSequence = (optimisticMessageSequence + 1) % 1000;
+  return -(Date.now() * 1000 + optimisticMessageSequence);
+}
+
+function optimisticContent(text: string, attachments: readonly AgentAttachment[]): ContentBlock[] {
+  const content: ContentBlock[] = [{ type: 'text', text }];
+  for (const attachment of attachments) {
+    if (attachment.mediaType.startsWith('image/') && attachment.base64) {
+      content.push({
+        type: 'image',
+        mediaType: attachment.mediaType,
+        base64: attachment.base64,
+      });
+      continue;
+    }
+    content.push({
+      type: 'document',
+      name: attachment.name || 'attachment',
+      mediaType: attachment.mediaType,
+      text: attachment.text,
+      base64: attachment.base64,
+    });
+  }
+  return content;
+}
+
+/**
+ * Show a submitted user turn immediately, before preflight or the first model
+ * cycle completes. A later session refetch replaces this client-only row with
+ * the authoritative database row.
+ */
+export function appendOptimisticUserMessage(
+  previous: SessionData,
+  input: {
+    sessionId: number;
+    messageId: number;
+    text: string;
+    attachments?: readonly AgentAttachment[];
+    selectedSkillIds?: readonly string[];
+  },
+): SessionData {
+  if (previous.session.id !== input.sessionId) return previous;
+  if (previous.message_rows.some((row) => row.id === input.messageId)) return previous;
+
+  return {
+    ...previous,
+    messages: [
+      ...previous.messages,
+      {
+        role: 'user',
+        content: optimisticContent(input.text, input.attachments ?? []),
+        ...(input.selectedSkillIds?.length
+          ? { selectedSkillIds: [...input.selectedSkillIds] }
+          : {}),
+      },
+    ],
+    message_rows: [
+      ...previous.message_rows,
+      {
+        id: input.messageId,
+        input_tokens: 0,
+        output_tokens: 0,
+        optimistic: true,
+      },
+    ],
+    total_messages: (previous.total_messages ?? previous.message_rows.length) + 1,
+  };
+}
 
 function dedupeToolResults(
   earlier: ToolResultFallback[] = [],

@@ -128,6 +128,13 @@ export interface ForeignKeyInfo {
   onUpdate?: string;
 }
 
+/** A foreign key owned by another table that points at the requested table. */
+export interface IncomingForeignKeyInfo {
+  schema: string;
+  table: string;
+  foreignKey: ForeignKeyInfo;
+}
+
 export interface TableInfo {
   schema: string;
   name: string;
@@ -204,6 +211,8 @@ export interface DatabaseDriver {
   listTables(schema?: string): Promise<TableRef[]>;
   /** Deep single-table introspection: columns + indexes + foreign keys. */
   describeTable(schema: string, name: string): Promise<TableInfo>;
+  /** Foreign keys from other tables that reference this table. */
+  listIncomingForeignKeys?(schema: string, table: string): Promise<IncomingForeignKeyInfo[]>;
   /** Names of schema/table objects of a kind (triggers/functions/sequences) for the tree. */
   listObjects(kind: DbObjectKind, schema?: string, table?: string): Promise<string[]>;
   /** Paginated `SELECT *` for a table, with engine-correct quoting + optional sort + WHERE filter. */

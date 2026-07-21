@@ -3197,6 +3197,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       Boolean(result.isError),
       result.isError ? String(result.content ?? '').slice(0, 200) : '',
       runnerRef?.turn ?? 0,
+      result.ledgerEntry?.logicalOperationId,
     );
     if (capturedMilestone) runnerRef?.requestMilestoneCompaction('milestone:error-resolved');
     if (!pendingTurn) return;
@@ -3452,10 +3453,32 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // both reuse summaries that are already paid for, replacing the old
   // per-run-end capture that burned an extra summarizeSpanV2 on every run.
 
+  type RunOutcome = { reason: string; usage: ChatUsage; error?: string };
+  let resolveTranscriptFlushed!: (outcome: RunOutcome) => void;
+  let rejectTranscriptFlushed!: (error: unknown) => void;
+  const transcriptFlushed = new Promise<RunOutcome>((resolve, reject) => {
+    resolveTranscriptFlushed = resolve;
+    rejectTranscriptFlushed = reject;
+  });
+  // Most in-process consumers only await `done`; keep a rejected persistence
+  // boundary from becoming an unhandled rejection when no transport observes
+  // the earlier promise.
+  void transcriptFlushed.catch(() => undefined);
+
   const donePromise = runner
     .run()
     .then(async (res) => {
       await flushPendingTurn();
+      store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
+      const outcome: RunOutcome = {
+        reason: res.reason,
+        usage: res.totalUsage,
+        error: lastRunnerError?.message,
+      };
+      // The SSE terminal event must not race the final DB writer. Expose this
+      // earlier lifecycle boundary so the worker can close the stream only
+      // after a transcript refetch is guaranteed to see the terminal turn.
+      resolveTranscriptFlushed(outcome);
       await checkpointCoordinator.retry(runner.turn, true);
       // Terminal Quality runs after the runner emitted `done` (the response is
       // already visible) but before this handle resolves and the worker is
@@ -3486,13 +3509,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       } catch (error) {
         console.warn(`[quality] terminal assessment skipped: ${error instanceof Error ? error.message : String(error)}`);
       }
-      store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
-      return { reason: res.reason, usage: res.totalUsage, error: lastRunnerError?.message };
+      return outcome;
     })
     .catch(async (e) => {
       await flushPendingTurn();
-      await checkpointCoordinator.retry(runner.turn, true);
       store.updateSessionStatus(session.id, 'error');
+      rejectTranscriptFlushed(e);
+      await checkpointCoordinator.retry(runner.turn, true);
       throw e;
     })
     .finally(async () => {
@@ -3518,7 +3541,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // (worker stop handler) + the process-exit hook close it once on teardown.
     });
 
-  return { session, runner, done: donePromise, indexStatus };
+  return { session, runner, transcriptFlushed, done: donePromise, indexStatus };
 }
 
 /**

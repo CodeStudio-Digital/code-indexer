@@ -927,6 +927,10 @@ export function mountCoderSessionsRoutes(
    * live-runner push: the agent identity (system prompt, tier seed, gates) is
    * baked into the runner at construction, so a switch applies to the NEXT
    * run — mid-run transitions (plan→build) are driven by the runner itself.
+   * Every real manual transition also appends a hidden system reminder. That
+   * reminder gives the next runner a fresh, near-tail authority marker so
+   * persisted reasoning from the previous agent cannot masquerade as the
+   * current mode.
    * `null` clears the column.
    */
   app.patch('/api/coder/sessions/:id/agent', async (c) => {
@@ -936,7 +940,31 @@ export function mountCoderSessionsRoutes(
     if (agent !== null && !validateAgentSelection(agent)) {
       return c.json({ error: 'agent must reference an enabled built-in or custom agent, or null' }, 400);
     }
+    const previous = sessionStore.getSession(id);
+    if (!previous) return notFound(c);
+
+    if (previous.agent === agent) return c.json(previous);
+
+    const previousAgent = previous.agent;
     sessionStore.setSessionAgent(id, agent);
+    const from = previousAgent ?? 'session-default';
+    const to = agent ?? 'session-default';
+    const reminder =
+      `<system-reminder>Agent transition: ${from} → ${to}. ` +
+      `The active agent is now ${to}. Follow the current system prompt, behavior, ` +
+      `tool rules, and mutation policy for this new agent. Earlier assistant claims ` +
+      `about the active agent or mode are stale.</system-reminder>`;
+    sessionStore.appendMessage(id, {
+      role: 'user',
+      content: [{ type: 'text', text: reminder }],
+      isMeta: true,
+    });
+    sessionStore.recordSessionInput({
+      session_id: id,
+      kind: 'system_reminder',
+      source_label: 'reminder:agent-transition',
+      content: reminder,
+    });
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);

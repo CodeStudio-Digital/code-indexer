@@ -16,6 +16,7 @@ import { create } from 'zustand';
 import type { RunnerTask, RuntimeTarget } from '@mcp/api-bus';
 import { isDevServerCommand } from '@mcp/shared/utils/dev-server-url.js';
 import { apiCall, apiStream, electronApi } from '../lib/api-client.js';
+import { recordExecutionFailure } from './execution-output.js';
 
 interface RunningTasksState {
   tasks: RunnerTask[];
@@ -83,7 +84,18 @@ export async function startTask(input: {
   cwd?: string;
   target?: RuntimeTarget;
 }): Promise<RunnerTask> {
-  return apiCall<RunnerTask>('runner.start', input);
+  try {
+    return await apiCall<RunnerTask>('runner.start', input);
+  } catch (error) {
+    recordExecutionFailure({
+      projectId: input.projectId,
+      source: 'runner',
+      label: input.label,
+      command: input.command,
+      error,
+    });
+    throw error;
+  }
 }
 
 /** Run a markdown fenced code block (materialised + run by the backend). */
@@ -93,7 +105,18 @@ export async function startSnippet(input: {
   code: string;
   label: string;
 }): Promise<RunnerTask> {
-  return apiCall<RunnerTask>('runner.runSnippet', input);
+  try {
+    return await apiCall<RunnerTask>('runner.runSnippet', input);
+  } catch (error) {
+    recordExecutionFailure({
+      projectId: input.projectId,
+      source: 'runner',
+      label: input.label,
+      command: `${input.language} snippet`,
+      error,
+    });
+    throw error;
+  }
 }
 
 export async function stopTask(taskId: string): Promise<void> {

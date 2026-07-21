@@ -32,6 +32,7 @@ import type {
   DbQueryBatchResult,
   DbSavedQuery,
   DbTableInfo,
+  DbIncomingForeignKey,
   DbQueryHistoryRow,
   DbRowChangeKind,
   DbDdlOp,
@@ -301,6 +302,9 @@ export const schemaSnapshot = (connectionId: string, schema: string) =>
 
 export const describeTable = (connectionId: string, schema: string, table: string) =>
   withReconnect(connectionId, () => apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table }));
+
+export const incomingForeignKeys = (connectionId: string, schema: string, table: string) =>
+  withReconnect(connectionId, () => apiCall<DbIncomingForeignKey[]>('dbClient.incomingForeignKeys', { connectionId, schema, table }));
 
 export const tableRows = (
   connectionId: string,

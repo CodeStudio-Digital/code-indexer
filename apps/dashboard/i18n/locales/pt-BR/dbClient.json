@@ -181,6 +181,8 @@
   "grid": {
     "export": "Exportar",
     "relatedRows": "Linhas relacionadas",
+    "discoveringRelations": "Buscando tabelas relacionadas…",
+    "relationsError": "Não foi possível buscar relações de entrada",
     "noRelations": "Nenhuma chave estrangeira relacionada a esta linha.",
     "copyCsv": "Copiar como CSV",
     "copy": "Copiar",
@@ -368,6 +370,8 @@
     "restoreRow": "Restaurar linha",
     "setNull": "Definir NULL",
     "noPk": "Esta tabela não tem chave primária — as linhas são somente leitura (use a barra de SQL acima).",
+    "customReadOnly": "Resultado somente leitura: a edição inline exige um SELECT simples desta tabela usando colunas físicas.",
+    "customMissingPk": "Resultado somente leitura: inclua todas as colunas da chave primária no SELECT para habilitar a edição inline.",
     "previewTitle": "Revise as alterações antes de aplicar",
     "execute": "Executar",
     "cancel": "Cancelar",

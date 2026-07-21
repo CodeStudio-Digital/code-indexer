@@ -158,6 +158,7 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'ssh:sftpDownloadStream',
   'ssh:sftpUploadStream',
   'runner:events',
+  'debug:events',
   'runtime:download',
   // Universal "Inspect" — stream of element selections from the CDP preview
   // window. Implemented by apps/electron/src/preview-inspect-ipc.ts.

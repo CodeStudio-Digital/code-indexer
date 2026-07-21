@@ -279,15 +279,9 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           onToggle={handleToggleLeft}
           onSelectSurface={handleWorkspaceSelect}
           previewEnabled={props.previewEnabled}
-          bottomOpen={editorMode && layout.activeBottom !== null}
+          bottomOpen={layout.activeBottom !== null}
           onToggleBottom={() => {
-            const state = useWorkspaceLayout.getState();
-            if (state.primarySurface !== 'editor') {
-              state.setPrimarySurface('editor');
-              state.setActiveBottom('terminal');
-              return;
-            }
-            state.toggleBottom('terminal');
+            useWorkspaceLayout.getState().toggleBottom('terminal');
           }}
           pluginTabs={leftPlugins.map(pluginTab)}
         />
@@ -333,7 +327,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                 )}
               </PanelGroup>
             </Panel>
-            {editorMode && layout.activeBottom && bottomKnown && (
+            {layout.activeBottom && bottomKnown && (
               <>
                 <WorkbenchResizeHandle direction="vertical" />
                 <Panel id="bottom-dock" order={2} defaultSize={28} minSize={12} maxSize={62} className="min-h-0">

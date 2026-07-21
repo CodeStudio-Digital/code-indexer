@@ -118,7 +118,7 @@ export function useGridEdits(): GridEdits {
     [edited, deleted, newRows],
   );
 
-  return {
+  return useMemo(() => ({
     edited,
     deleted,
     newRows,
@@ -132,5 +132,8 @@ export function useGridEdits(): GridEdits {
     cellValue,
     isEdited,
     buildChanges,
-  };
+  }), [
+    edited, deleted, newRows, dirtyCount, setCell, toggleDelete, addRow,
+    setNewCell, removeNewRow, revertAll, cellValue, isEdited, buildChanges,
+  ]);
 }

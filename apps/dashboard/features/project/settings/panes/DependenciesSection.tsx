@@ -105,12 +105,12 @@ export function DependenciesSection({
   }
   function install(): void {
     if (group?.installCommand) {
-      void launchRun({ projectId: project.id, command: group.installCommand, label: t('runtime.deps.install'), manager: group.manager, target });
+      void launchRun({ projectId: project.id, command: group.installCommand, label: t('runtime.deps.install'), manager: group.manager, cwd: group.cwd, target });
     }
   }
   function update(): void {
     if (group) {
-      void launchRun({ projectId: project.id, command: group.updateCommand ?? updateCommand(group.manager), label: t('runtime.deps.update'), manager: group.manager, target });
+      void launchRun({ projectId: project.id, command: group.updateCommand ?? updateCommand(group.manager), label: t('runtime.deps.update'), manager: group.manager, cwd: group.cwd, target });
     }
   }
   const packageManager = group && (group.manager === 'maven' || group.manager === 'gradle' || group.manager === 'dotnet')

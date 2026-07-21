@@ -2,18 +2,28 @@
  * Unit test for PATCH /api/coder/sessions/:id/agent.
  *
  * Mounts the coder session routes with a STUB sessionStore (no DB) so the
- * test is ABI-free — the /agent handler only touches setSessionAgent +
- * getSession. Validates persistence of a known agent, null-clear, the
- * unknown-agent 400, and the unknown-session 404.
+ * test is ABI-free — the /agent handler uses a stub session store. Validates
+ * persistence plus the hidden transition reminder for built-in/custom/null
+ * targets, idempotence, the unknown-agent 400, and the unknown-session 404.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
+vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
+  getCoderWorkerPool: () => ({
+    abort: vi.fn(),
+    isRunning: () => false,
+    getBus: () => null,
+  }),
+}));
+
 function setup() {
   const calls: Array<{ id: number; agent: string | null }> = [];
+  const messages: Array<{ id: number; message: Record<string, unknown> }> = [];
+  const inputs: Array<Record<string, unknown>> = [];
   const sessions = new Map<number, { id: number; agent: string | null }>([
     [1, { id: 1, agent: 'explore' }],
   ]);
@@ -24,6 +34,14 @@ function setup() {
       if (s) s.agent = agent;
     },
     getSession: (id: number) => sessions.get(id) ?? null,
+    appendMessage: (id: number, message: Record<string, unknown>) => {
+      messages.push({ id, message });
+      return messages.length;
+    },
+    recordSessionInput: (input: Record<string, unknown>) => {
+      inputs.push(input);
+      return input;
+    },
     listRecentSessionsGlobal: () => [],
   };
   const customAgent = {
@@ -53,32 +71,65 @@ function setup() {
       body: JSON.stringify({ agent }),
     });
 
-  return { app, calls, patchAgent, customAgent };
+  return { app, calls, messages, inputs, patchAgent, customAgent };
 }
 
 describe('coder PATCH /sessions/:id/agent', () => {
   it('persists a valid agent and echoes the updated session', async () => {
-    const { calls, patchAgent } = setup();
+    const { calls, inputs, messages, patchAgent } = setup();
     const r = await patchAgent(1, 'build');
     expect(r.status).toBe(200);
     const body = (await r.json()) as { agent: string };
     expect(body.agent).toBe('build');
     expect(calls).toEqual([{ id: 1, agent: 'build' }]);
+    expect(messages).toEqual([{
+      id: 1,
+      message: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: expect.stringContaining('Agent transition: explore → build.'),
+        }],
+        isMeta: true,
+      },
+    }]);
+    expect(inputs).toEqual([expect.objectContaining({
+      session_id: 1,
+      kind: 'system_reminder',
+      source_label: 'reminder:agent-transition',
+      content: expect.stringContaining('The active agent is now build.'),
+    })]);
   });
 
   it('accepts null to clear the column', async () => {
-    const { calls, patchAgent } = setup();
+    const { calls, messages, patchAgent } = setup();
     const r = await patchAgent(1, null);
     expect(r.status).toBe(200);
     expect(calls).toEqual([{ id: 1, agent: null }]);
+    expect(messages[0]?.message).toMatchObject({
+      isMeta: true,
+      content: [{ text: expect.stringContaining('explore → session-default') }],
+    });
   });
 
   it('accepts an enabled custom agent selection id', async () => {
-    const { calls, customAgent, patchAgent } = setup();
+    const { calls, customAgent, messages, patchAgent } = setup();
     const selectionId = `custom:${customAgent.id}`;
     const r = await patchAgent(1, selectionId);
     expect(r.status).toBe(200);
     expect(calls).toEqual([{ id: 1, agent: selectionId }]);
+    expect(messages[0]?.message).toMatchObject({
+      content: [{ text: expect.stringContaining(`explore → ${selectionId}`) }],
+    });
+  });
+
+  it('does not append another reminder when the selected agent is unchanged', async () => {
+    const { calls, inputs, messages, patchAgent } = setup();
+    const r = await patchAgent(1, 'explore');
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([]);
+    expect(messages).toEqual([]);
+    expect(inputs).toEqual([]);
   });
 
   it('rejects an unknown agent with 400 and does not persist', async () => {
@@ -89,9 +140,12 @@ describe('coder PATCH /sessions/:id/agent', () => {
   });
 
   it('404s on an unknown session', async () => {
-    const { patchAgent } = setup();
+    const { calls, inputs, messages, patchAgent } = setup();
     const r = await patchAgent(999, 'build');
     expect(r.status).toBe(404);
+    expect(calls).toEqual([]);
+    expect(messages).toEqual([]);
+    expect(inputs).toEqual([]);
   });
 });
 

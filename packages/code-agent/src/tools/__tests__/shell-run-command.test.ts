@@ -193,6 +193,48 @@ describe('run_command — cwd containment', () => {
   });
 });
 
+describe('run_command — host process safety', () => {
+  it.each([
+    'powershell -NoProfile -Command "$p = Start-Process node app.js -PassThru; Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force"',
+    'powershell -Command "Stop-Process -Name node -Force"',
+    'taskkill /IM node.exe /T /F',
+    'wmic process where "name=\'node.exe\'" delete',
+    'pkill -f node',
+    'killall node',
+    'kill $(pgrep node)',
+  ])('blocks broad process termination before invoking the shell: %s', async (command) => {
+    const exec = vi.fn();
+    const guardedCtx = {
+      ...ctx,
+      ports: { shell: { exec } as unknown as IShellPort },
+    } as ToolContext;
+
+    const res = await runCommand.handler({ command }, guardedCtx);
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('Broad process termination blocked');
+    expect(res.content).toContain('terminate only that PID');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'powershell -Command "Stop-Process -Id $p.Id -Force"',
+    'taskkill /PID 12345 /T /F',
+    'kill 12345',
+  ])('allows cleanup scoped to a captured PID: %s', async (command) => {
+    const exec = vi.fn(async () => ({ stdout: 'scoped', stderr: '', exitCode: 0, timedOut: false }));
+    const guardedCtx = {
+      ...ctx,
+      ports: { shell: { exec } as unknown as IShellPort },
+    } as ToolContext;
+
+    const res = await runCommand.handler({ command }, guardedCtx);
+
+    expect(res.isError).toBeFalsy();
+    expect(exec).toHaveBeenCalledOnce();
+  });
+});
+
 describe('run_command — plan-mode read-only gate', () => {
   const planCtx = (): ToolContext =>
     ({

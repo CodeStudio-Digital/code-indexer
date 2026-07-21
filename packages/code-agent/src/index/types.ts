@@ -418,6 +418,12 @@ export interface IndexStatus {
 export interface RunCoderHandle {
   session: CoderSession;
   runner: CoderRunner;
+  /**
+   * Resolves as soon as the terminal assistant/tool transcript is durable.
+   * This intentionally precedes `done`, which also waits for terminal quality
+   * assessment and resource cleanup.
+   */
+  transcriptFlushed: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
   /** Awaits completion. Resolves with the run reason, usage, and optional error detail. */
   done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
   /** Whether the project is indexed and MCP tools were registered. */
@@ -426,7 +432,7 @@ export interface RunCoderHandle {
 
 /**
  * Structured-clone-safe projection of `RunCoderHandle`. A live handle holds a
- * `runner` (EventEmitter) and a `done` Promise that can't survive
+ * `runner` (EventEmitter) plus lifecycle Promises that can't survive
  * `structuredClone`, so methods that cross a worker boundary (e.g.
  * `CompanyOrchestrator.startMaster`) return this POJO summary instead.
  */

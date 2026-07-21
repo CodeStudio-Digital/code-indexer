@@ -422,13 +422,37 @@ export function isLiveTurnDuplicatedInHistory(
   persistedIds: Set<string> = collectPersistedToolUseIds(messages),
 ): boolean {
   if (!turn || turn.blocks.length === 0) return false;
-  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
-  if (!lastAssistant) return false;
+
+  // A live buffer spans the complete run initiated by the latest visible user
+  // message. One run can contain many provider/tool cycles, persisted as many
+  // assistant rows. Compare against that whole assistant tail instead of only
+  // the final row; otherwise the accumulated live transcript can never clear
+  // after a multi-turn run and would duplicate the freshly refetched history.
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'user' && !message.isMeta && !isToolImagePlumbing(message)) {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  const assistantRun = messages
+    .slice(latestUserIndex + 1)
+    .filter((message) => message.role === 'assistant');
+  if (assistantRun.length === 0) return false;
 
   const liveText = getCurrentTurnText(turn).trim();
-  const persistedText = getPersistedAssistantText(lastAssistant).trim();
+  const persistedText = assistantRun
+    .map(getPersistedAssistantText)
+    .filter((text) => text.trim().length > 0)
+    .join('\n')
+    .trim();
   const liveThinking = getCurrentTurnThinkingText(turn).trim();
-  const persistedThinking = getPersistedAssistantThinkingText(lastAssistant).trim();
+  const persistedThinking = assistantRun
+    .map(getPersistedAssistantThinkingText)
+    .filter((text) => text.trim().length > 0)
+    .join('\n')
+    .trim();
   const persistedInteractivePromptSignatures = collectLatestPersistedInteractivePromptSignatures(messages);
   let checkedText = false;
   let checkedThinking = false;
@@ -533,7 +557,14 @@ export function groupMessages(
 
     if (msg.role === 'user') {
       flushPending();
-      groups.push({ kind: 'user', message: msg, messageId: row?.id, usage: row });
+      groups.push({
+        kind: 'user',
+        message: msg,
+        // Optimistic ids are client-only. Do not expose fork/rollback or lazy
+        // attachment endpoints until the authoritative DB row replaces them.
+        messageId: row?.optimistic ? undefined : row?.id,
+        usage: row,
+      });
       continue;
     }
 

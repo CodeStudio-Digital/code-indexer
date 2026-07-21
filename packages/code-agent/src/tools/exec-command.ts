@@ -34,6 +34,7 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -547,6 +548,9 @@ export const execCommand: CoderTool = {
     reapIdleSessions();
     const cmd = String(args.cmd ?? '').trim();
     if (!cmd) return err('exec_command: cmd cannot be empty');
+
+    const unsafeProcessCommand = unsafeProcessCommandRefusal(cmd);
+    if (unsafeProcessCommand) return err(unsafeProcessCommand);
 
     const cwd = resolveWorkdir(ctx, args.workdir);
     const mode: 'pipe' | 'pty' = args.tty === true ? 'pty' : 'pipe';

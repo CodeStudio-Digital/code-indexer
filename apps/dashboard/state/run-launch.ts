@@ -10,6 +10,7 @@ import type { FileRunTarget, RunnerManager, RuntimeTarget } from '@mcp/api-bus';
 import { apiCall } from '../lib/api-client.js';
 import { startSnippet, startTask } from './running-tasks.js';
 import { useWorkspaceLayout } from './workspace-layout.js';
+import { recordExecutionFailure } from './execution-output.js';
 import { toast } from '../components/ui/prompt-dialog.js';
 
 export async function launchRun(input: {
@@ -27,6 +28,7 @@ export async function launchRun(input: {
     useWorkspaceLayout.getState().setActiveBottom('runners');
   } catch (e) {
     // Dynamic message only — no literal so the i18n dialog-literal guard stays green.
+    useWorkspaceLayout.getState().setActiveBottom('output');
     toast.error(e instanceof Error ? e.message : String(e));
   }
 }
@@ -55,6 +57,14 @@ export async function launchFileRun(input: {
       target: input.target,
     });
   } catch (error) {
+    recordExecutionFailure({
+      projectId: input.projectId,
+      source: 'runner',
+      label: input.label ?? `Run ${input.file}`,
+      command: input.script ? `resolve ${input.script}` : `resolve ${input.file}`,
+      error,
+    });
+    useWorkspaceLayout.getState().setActiveBottom('output');
     toast.error(error instanceof Error ? error.message : String(error));
   }
 }
@@ -74,6 +84,7 @@ export async function launchSnippet(input: {
     await startSnippet(input);
     useWorkspaceLayout.getState().setActiveBottom('runners');
   } catch (e) {
+    useWorkspaceLayout.getState().setActiveBottom('output');
     toast.error(e instanceof Error ? e.message : String(e));
   }
 }

@@ -23,10 +23,10 @@ export function DetectedList({ projectId, detected, loading, error, onStarted }:
   const { t } = useTranslation(['projects', 'common']);
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function run(label: string, command: string, manager: RunnerManager, key: string) {
+  async function run(label: string, command: string, manager: RunnerManager, key: string, cwd?: string) {
     setBusy(key);
     try {
-      const task = await startTask({ projectId, command, label, manager });
+      const task = await startTask({ projectId, command, label, manager, cwd });
       onStarted(task.taskId);
     } finally {
       setBusy(null);
@@ -68,7 +68,7 @@ function Group({
 }: {
   group: DetectedGroup;
   busy: string | null;
-  onRun: (label: string, command: string, manager: RunnerManager, key: string) => void;
+  onRun: (label: string, command: string, manager: RunnerManager, key: string, cwd?: string) => void;
 }) {
   const { t } = useTranslation(['projects']);
   return (
@@ -82,7 +82,7 @@ function Group({
         <button
           type="button"
           disabled={busy !== null}
-          onClick={() => onRun(t('runners.install'), group.installCommand!, group.manager, `install:${group.manager}`)}
+          onClick={() => onRun(t('runners.install'), group.installCommand!, group.manager, `install:${group.manager}:${group.source}`, group.cwd)}
           className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5 shrink-0" />
@@ -99,7 +99,7 @@ function Group({
               key={key}
               type="button"
               disabled={busy !== null}
-              onClick={() => onRun(r.label, r.command, r.manager, key)}
+              onClick={() => onRun(r.label, r.command, r.manager, key, group.cwd)}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 disabled:opacity-50 group"
             >
               <Play className="h-3.5 w-3.5 shrink-0 text-emerald-400" />

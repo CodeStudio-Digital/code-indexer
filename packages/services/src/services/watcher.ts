@@ -107,6 +107,7 @@ const IGNORED_DIRS = new Set<string>([
 ]);
 
 const PROJECT_DISCOVERY_MARKERS = new Set([
+  'composer.json',
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle',
   'settings.gradle.kts', 'gradlew', 'mvnw', '.classpath',
   'global.json', 'directory.build.props', 'directory.build.targets',

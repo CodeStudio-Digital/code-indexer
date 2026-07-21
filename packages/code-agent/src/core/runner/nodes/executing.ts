@@ -1144,24 +1144,12 @@ export class ExecutingNode implements BehaviorNode {
       });
     }
 
-    // Semantic chapter mode: lifecycle hooks queue a milestone, but we only
-    // compact when the span is substantial enough to avoid noisy micro-
-    // chapters. The signal remains pending across turns until this guard is
-    // satisfied. A milestone compaction still preserves the normal recent
-    // tail and therefore remains safe for an autonomous run.
+    // Semantic chapter mode: lifecycle hooks may queue a milestone, but a
+    // milestone must never manufacture context pressure. It only labels the
+    // next REAL size-triggered compaction below. Previously 12 messages or
+    // 20K chars were enough to emit a fake ratio=1 TokenThresholdHit; on a 1M
+    // model that could rewrite a ~190K prompt after an unrelated tool success.
     const milestoneTrigger = ctx.bridge?.peekMilestoneCompaction?.() ?? null;
-    if (milestoneTrigger) {
-      const renderableMessages = ctx.messages.reduce(
-        (count, message) => count + (message.role === 'tool' ? 0 : 1),
-        0,
-      );
-      const milestoneChars = ctx.messages.reduce((total, message) => {
-        try { return total + JSON.stringify(message.content).length; } catch { return total; }
-      }, 0);
-      if (renderableMessages >= 12 || milestoneChars >= 20_000) {
-        return events.tokenThresholdHit({ ratio: 1, trigger: milestoneTrigger });
-      }
-    }
 
     // Fix B — compaction decision. Works WITH or WITHOUT provider `usage`:
     // when usage is absent (the ChatGPT backend) we fall back to the
@@ -1218,11 +1206,17 @@ export class ExecutingNode implements BehaviorNode {
       const ratio = Math.max(bodyDecision.ratio, totalDecision.ratio);
       // A6 — most specific gate wins for telemetry: a behavioral reason
       // (polling-loop/stuck-progress/cumulative) over the generic size gates.
-      const trigger = loopAware.shouldCompact
+      const pressureTrigger = loopAware.shouldCompact
         ? loopAware.reason
         : totalDecision.shouldCompact
           ? 'token-budget'
           : 'body-after-prefix';
+      // A queued semantic milestone may label a compaction only when a real
+      // prompt-size gate fired. Behavioral-only gates (cumulative/stuck) keep
+      // their causal trigger and cannot accidentally consume the milestone.
+      const trigger = milestoneTrigger && (totalDecision.shouldCompact || bodyDecision.shouldCompact)
+        ? milestoneTrigger
+        : pressureTrigger;
       return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1, trigger });
     }
 

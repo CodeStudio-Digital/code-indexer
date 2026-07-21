@@ -73,6 +73,8 @@ export async function buildPlugin(
     default?: PluginModule;
     providerAdapter?: { sdkVersion?: number; kind?: string };
     providerAdapters?: Array<{ sdkVersion?: number; kind?: string }>;
+    debugAdapter?: { sdkVersion?: number; id?: string };
+    debugAdapters?: Array<{ sdkVersion?: number; id?: string }>;
   };
   const pm = mod.default;
   if (!pm || !Array.isArray(pm.tools)) {
@@ -82,6 +84,10 @@ export async function buildPlugin(
     ...(mod.providerAdapter ? [mod.providerAdapter] : []),
     ...(Array.isArray(mod.providerAdapters) ? mod.providerAdapters : []),
   ].filter((a): a is { sdkVersion: 2; kind: string } => a?.sdkVersion === 2 && typeof a.kind === 'string' && a.kind.length > 0);
+  const debugAdapters = [
+    ...(mod.debugAdapter ? [mod.debugAdapter] : []),
+    ...(Array.isArray(mod.debugAdapters) ? mod.debugAdapters : []),
+  ].filter((a): a is { sdkVersion: 1; id: string } => a?.sdkVersion === 1 && typeof a.id === 'string' && a.id.length > 0);
 
   const app = {
     worker: './dist/plugin.js',
@@ -99,6 +105,7 @@ export async function buildPlugin(
     editorActions: pm.editorActions ?? [],
     statusBarItems: pm.statusBarItems ?? [],
     runConfigurations: pm.runConfigurations ?? [],
+    debuggers: pm.debuggers ?? [],
     modules: pm.modules ?? [],
     ...(providerAdapters.length
       ? {
@@ -106,6 +113,15 @@ export async function buildPlugin(
             protocol: 'provider-adapter-v2',
             entry: './dist/plugin.js',
             kinds: providerAdapters.map((a) => a.kind),
+          },
+        }
+      : {}),
+    ...(debugAdapters.length
+      ? {
+          debuggerRuntime: {
+            protocol: 'debug-adapter-v1',
+            entry: './dist/plugin.js',
+            adapters: debugAdapters.map((a) => a.id),
           },
         }
       : {}),

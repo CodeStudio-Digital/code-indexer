@@ -7,6 +7,7 @@ import {
   contributeEditorAction,
   contributeStatusBarItem,
   contributeRunConfiguration,
+  contributeDebugger,
 } from '@mcp/plugin-sdk/define.js';
 
 describe('definePlugin', () => {
@@ -19,6 +20,7 @@ describe('definePlugin', () => {
     expect(mod.editorActions).toEqual([]);
     expect(mod.statusBarItems).toEqual([]);
     expect(mod.runConfigurations).toEqual([]);
+    expect(mod.debuggers).toEqual([]);
     expect(mod.modules).toEqual([]);
   });
 
@@ -34,6 +36,11 @@ describe('definePlugin', () => {
         }),
       ],
       commands: [contributeCommand({ id: 'c', label: 'C' })],
+      debuggers: [contributeDebugger({
+        id: 'javascript',
+        label: 'JavaScript',
+        languageIds: ['javascript'],
+      })],
       modules: [
         contributeProjectModule({
           id: 'node-project',
@@ -68,6 +75,7 @@ describe('definePlugin', () => {
     const res = await mod.tools[0].handler({ text: 'hi' }, {} as never);
     expect(res.content).toBe('hi');
     expect(mod.commands[0].id).toBe('c');
+    expect(mod.debuggers[0].id).toBe('javascript');
     expect(mod.modules[0].id).toBe('node-project');
     expect(mod.modules[0].editorActions?.[0].runsTool).toBe('echo');
     expect(mod.modules[0].editorActions?.[0].gutter?.line.text).toBe('FROM');

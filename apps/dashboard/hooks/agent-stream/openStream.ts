@@ -181,8 +181,9 @@ export async function openStream(
       }
     }, 50);
   };
-  // Terminal events (message_complete/done/error) call flushNow to guarantee
-  // the final state is committed synchronously before the buffer is cleared.
+  // Provider/terminal events (message_complete/done/error) call flushNow to
+  // guarantee the boundary state is committed synchronously. The block buffer
+  // itself spans the complete run and is reconciled with persisted history.
   const flushNow = () => {
     if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
     if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }

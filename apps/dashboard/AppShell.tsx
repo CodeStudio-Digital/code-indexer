@@ -56,6 +56,7 @@ import { installKeymapDispatcher } from './keymap/dispatcher.js';
 import { registerCommandHandlers } from './keymap/commands.js';
 import { useWindowChrome } from './hooks/useWindowChrome.js';
 import { initRunningTasks } from './state/running-tasks.js';
+import { initDebugSessions } from './state/debug-sessions.js';
 import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
@@ -141,6 +142,7 @@ export function AppShell() {
   // project Runners tab) reflect live task state across navigation.
   useEffect(() => {
     initRunningTasks();
+    initDebugSessions();
   }, []);
 
   // Install the single global dispatcher at shell lifetime. Ctrl+K is a

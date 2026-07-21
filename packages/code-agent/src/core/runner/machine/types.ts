@@ -368,7 +368,7 @@ export interface BehaviorNode {
  * through to its default (e.g. no skills block, allow all tool calls).
  */
 export interface BridgeCallbacks {
-  /** Pending semantic lifecycle milestone that should compact at a safe size. */
+  /** Pending semantic lifecycle milestone awaiting the next real size compaction. */
   peekMilestoneCompaction?: () => string | null;
   /** Clear the milestone only after Executing actually emits its trigger. */
   clearMilestoneCompaction?: () => void;

@@ -181,6 +181,8 @@
   "grid": {
     "export": "Export",
     "relatedRows": "Related rows",
+    "discoveringRelations": "Finding related tables…",
+    "relationsError": "Could not find incoming relations",
     "noRelations": "No foreign keys relate to this row.",
     "copyCsv": "Copy as CSV",
     "copy": "Copy",
@@ -368,6 +370,8 @@
     "restoreRow": "Restore row",
     "setNull": "Set NULL",
     "noPk": "This table has no primary key — rows are read-only (use the SQL bar above).",
+    "customReadOnly": "Read-only result: inline editing requires a simple SELECT from this table using physical columns.",
+    "customMissingPk": "Read-only result: include every primary-key column in the SELECT to enable inline editing.",
     "previewTitle": "Review changes before applying",
     "execute": "Execute",
     "cancel": "Cancel",

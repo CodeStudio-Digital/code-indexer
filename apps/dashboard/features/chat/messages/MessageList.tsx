@@ -750,7 +750,8 @@ export const MessageList = React.memo(function MessageList({
     for (let index = sessionData.messages.length - 1; index >= 0; index--) {
       const message = sessionData.messages[index];
       if (message.role === 'user' && !message.isMeta) {
-        return sessionData.message_rows[index]?.id;
+        const row = sessionData.message_rows[index];
+        return row?.optimistic ? undefined : row?.id;
       }
     }
     return sessionData.preceding_user_message_id ?? undefined;

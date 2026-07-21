@@ -33,7 +33,13 @@ export interface AutoCapture {
       result?: { summary?: string; files_modified?: string[]; errors?: string } | null;
     },
   ): boolean;
-  onToolResult(name: string, isError: boolean, errorSnippet: string, turn: number): boolean;
+  onToolResult(
+    name: string,
+    isError: boolean,
+    errorSnippet: string,
+    turn: number,
+    logicalOperationId?: string | null,
+  ): boolean;
 }
 
 /** Consecutive failures of the same tool before a success mints a note. */
@@ -62,7 +68,11 @@ export function buildAutoCapture(args: {
     }
   };
 
-  // Error-streak tracker: toolName → { count, lastError }.
+  // Error-streak tracker: logical operation → { count, lastError }.
+  // Tool names such as `run_command` are too broad: unrelated commands can
+  // fail and later any successful command would otherwise look like a fix.
+  // Ephemeral/test callers without a logical id retain the legacy tool-name
+  // key, while production passes the ledger's stable operation id.
   const streaks = new Map<string, { count: number; lastError: string }>();
 
   return {
@@ -105,17 +115,18 @@ export function buildAutoCapture(args: {
       return true;
     },
 
-    onToolResult(name, isError, errorSnippet, turn) {
+    onToolResult(name, isError, errorSnippet, turn, logicalOperationId) {
       if (args.isRepeatable?.(name)) return false;
-      const cur = streaks.get(name);
+      const streakKey = logicalOperationId?.trim() || name;
+      const cur = streaks.get(streakKey);
       if (isError) {
-        streaks.set(name, {
+        streaks.set(streakKey, {
           count: (cur?.count ?? 0) + 1,
           lastError: errorSnippet || cur?.lastError || '',
         });
         return false;
       }
-      streaks.delete(name);
+      streaks.delete(streakKey);
       if (cur && cur.count >= FIX_STREAK_THRESHOLD) {
         save({
           title: `Fixed: ${name}`,

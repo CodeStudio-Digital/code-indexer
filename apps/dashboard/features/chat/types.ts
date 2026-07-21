@@ -214,6 +214,8 @@ export interface MessageRow {
   output_tokens: number;
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
+  /** Client-only placeholder rendered while the authoritative row is being persisted. */
+  optimistic?: boolean;
 }
 
 /**

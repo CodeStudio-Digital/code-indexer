@@ -33,7 +33,12 @@ import type { SessionLaunchConfig } from '../../chat/SessionLaunchDialog.js';
 import { fetchSnapshotList } from '../../snapshots/api.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
 import { buildSnapshotFileMap, type SnapshotActions } from '../../chat/messages/snapshot-files-context.js';
-import { mergeEarlierMessagePage, sessionDataForSelection } from '../../chat/messages/session-message-data.js';
+import {
+  allocateOptimisticMessageId,
+  appendOptimisticUserMessage,
+  mergeEarlierMessagePage,
+  sessionDataForSelection,
+} from '../../chat/messages/session-message-data.js';
 import type { CoderSession, CoderSessionGroup, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
 import {
   editorChatContextActions,
@@ -515,7 +520,6 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
-    await settings.awaitPendingExecutionMode();
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Prepend staged code selections as <selected-code> blocks — pinned
@@ -547,6 +551,15 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     const outgoing = prefix ? `${prefix}\n\n${text}` : text;
     const allAtts = shots.length ? [...atts, ...shots] : atts;
     const lockedAgentOverride = agentLock && selectedSessionData?.session.agent !== agentLock ? agentLock : undefined;
+    const optimisticMessageId = allocateOptimisticMessageId();
+    updateSessionData((previous) => appendOptimisticUserMessage(previous, {
+      sessionId: selectedId,
+      messageId: optimisticMessageId,
+      text: outgoing,
+      attachments: allAtts,
+      selectedSkillIds,
+    }));
+    await settings.awaitPendingExecutionMode();
     await ensureAgentLock();
     await sendMessage(outgoing, async () => {
       refetchSession();
@@ -556,7 +569,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
     }, { attachments: allAtts, agent: lockedAgentOverride, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
-  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, sendMessage, refetchSession, refetchSessions, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
+  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Live run → POST /inject (no new stream; the open SSE renders the injected

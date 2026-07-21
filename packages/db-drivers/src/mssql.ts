@@ -17,6 +17,7 @@ import type {
   DatabaseDriver,
   DbConnectConfig,
   ForeignKeyInfo,
+  IncomingForeignKeyInfo,
   IndexInfo,
   QueryResult,
   RunBatchOptions,
@@ -355,6 +356,49 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
     return { schema, name, kind: 'table', columns, indexes, foreignKeys };
   }
 
+  async function listIncomingForeignKeys(schemaName: string, name: string): Promise<IncomingForeignKeyInfo[]> {
+    const targetSchema = schemaName || 'dbo';
+    const fkRows = await rows<{
+      FK_NAME: string; SOURCE_SCHEMA: string; SOURCE_TABLE: string; COLUMN_NAME: string;
+      REF_SCHEMA: string; REF_TABLE: string; REF_COLUMN: string; DELETE_RULE: string; UPDATE_RULE: string;
+    }>(
+      `SELECT fk.name AS FK_NAME, s.name AS SOURCE_SCHEMA, o.name AS SOURCE_TABLE, pc.name AS COLUMN_NAME,
+              rs.name AS REF_SCHEMA, rt.name AS REF_TABLE, rc.name AS REF_COLUMN,
+              fk.delete_referential_action_desc AS DELETE_RULE, fk.update_referential_action_desc AS UPDATE_RULE
+         FROM sys.foreign_keys fk
+         JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+         JOIN sys.objects o ON o.object_id = fk.parent_object_id
+         JOIN sys.schemas s ON s.schema_id = o.schema_id
+         JOIN sys.columns pc ON pc.object_id = fk.parent_object_id AND pc.column_id = fkc.parent_column_id
+         JOIN sys.objects rt ON rt.object_id = fk.referenced_object_id
+         JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
+         JOIN sys.columns rc ON rc.object_id = fk.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+        WHERE rs.name = @p0 AND rt.name = @p1
+        ORDER BY s.name, o.name, fk.name, fkc.constraint_column_id`,
+      [targetSchema, name],
+    );
+    const grouped = new Map<string, IncomingForeignKeyInfo>();
+    const normalizeAction = (value: string): string => value.replace(/_/g, ' ');
+    for (const row of fkRows) {
+      const key = `${row.SOURCE_SCHEMA}\0${row.SOURCE_TABLE}\0${row.FK_NAME}`;
+      let relation = grouped.get(key);
+      if (!relation) {
+        relation = {
+          schema: row.SOURCE_SCHEMA,
+          table: row.SOURCE_TABLE,
+          foreignKey: {
+            name: row.FK_NAME, columns: [], refSchema: row.REF_SCHEMA, refTable: row.REF_TABLE, refColumns: [],
+            onDelete: normalizeAction(row.DELETE_RULE), onUpdate: normalizeAction(row.UPDATE_RULE),
+          },
+        };
+        grouped.set(key, relation);
+      }
+      relation.foreignKey.columns.push(row.COLUMN_NAME);
+      relation.foreignKey.refColumns.push(row.REF_COLUMN);
+    }
+    return [...grouped.values()];
+  }
+
   const driver: DatabaseDriver = {
     kind: 'relational',
     async testConnection() {
@@ -369,6 +413,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       const r = await rows<{ name: string }>('SELECT name FROM sys.schemas ORDER BY name');
       return r.map((x) => x.name).filter((s) => !SYSTEM_SCHEMAS.has(s));
     },
+    listIncomingForeignKeys,
     async listTables(schemaName) {
       const r = await rows<{ TABLE_SCHEMA: string; TABLE_NAME: string; TABLE_TYPE: string }>(
         `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES

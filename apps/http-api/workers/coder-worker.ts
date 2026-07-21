@@ -879,17 +879,27 @@ bridge.handle('runFresh', async (payload) => {
     setBusRunner(run.bus, result.runner);
     publish(run.bus, 'session', result.session);
     publish(run.bus, 'index_status', result.indexStatus);
-    wireRunnerEventsToBus(result.runner, run.bus);
+    wireRunnerEventsToBus(result.runner, run.bus, { deferTerminalEvent: true });
 
-    // Fire the runner's lifecycle awaiter in the background so the
-    // RPC returns quickly — caller doesn't want to wait for the
-    // whole turn.
-    void result.done
+    // Close the public stream only after the terminal assistant/tool pair is
+    // durable. `runner.done` fires before runCoder drains its DB writer; ending
+    // the SSE there made the dashboard refetch a one-turn-behind transcript.
+    void result.transcriptFlushed
+      .then((outcome) => {
+        const data = { reason: outcome.reason, error: outcome.error };
+        publish(run.bus, 'done', data);
+        markEnded(run.bus, 'done', data);
+      })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         publish(run.bus, 'error', { message });
         markEnded(run.bus, 'error', { message });
-      })
+      });
+
+    // Terminal quality assessment and resource cleanup may continue after the
+    // transcript/SSE boundary; keep the worker run alive until all of it ends.
+    void result.done
+      .catch(() => undefined)
       .finally(() => {
         void pluginHost?.dispose();
         // The main side mirrors the bus and owns linger/replay. Worker-local

@@ -18,6 +18,7 @@ import { createTerminalHandlers } from './terminal/index.js';
 import { createSshHandlers } from './ssh/index.js';
 import { createDbClientHandlers } from './db-client/index.js';
 import { createRunnerHandlers } from './runner/index.js';
+import { createDebugHandlers } from './debug/index.js';
 import { createRuntimeHandlers } from './runtime/index.js';
 import { createCoderHandlers } from './coder/index.js';
 import { createLspHandlers } from './lsp/index.js';
@@ -67,6 +68,7 @@ export { createTerminalHandlers } from './terminal/index.js';
 export { createSshHandlers, sharedSshManager, disposeSharedSshResources } from './ssh/index.js';
 export { createDbClientHandlers } from './db-client/index.js';
 export { createRunnerHandlers } from './runner/index.js';
+export { createDebugHandlers, disposeDebugSessions, DebugSessionManager, DapConnection } from './debug/index.js';
 export { sharedPtyManager } from './terminal/pty-manager.js';
 export { createRuntimeHandlers } from './runtime/index.js';
 export { disposeShellStreamProcesses } from './runtime/installers/shell-stream.js';
@@ -127,6 +129,7 @@ export function createHandlers(deps: HandlerDeps): Partial<Api> {
     ssh: createSshHandlers(deps),
     dbClient: createDbClientHandlers(deps),
     runner: createRunnerHandlers(deps),
+    debug: createDebugHandlers(deps),
     runtime: createRuntimeHandlers(deps),
     coder: createCoderHandlers(deps),
     lsp: createLspHandlers(deps),

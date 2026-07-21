@@ -10,7 +10,7 @@
  *     struck-through; all go through the `useGridEdits` changeset.
  *   - Export/copy from the toolbar.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban, Pencil, Link2 } from 'lucide-react';
@@ -49,7 +49,7 @@ function hasActiveTextSelection(): boolean {
   return !!selection && !selection.isCollapsed && selection.toString().length > 0;
 }
 
-export function VirtualResultGrid({
+export const VirtualResultGrid = memo(function VirtualResultGrid({
   result,
   error,
   tableName,
@@ -95,7 +95,10 @@ export function VirtualResultGrid({
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const editable = !!(edits && pkCols && pkCols.length > 0);
-  const columns = (result ? columnNames(result) : []).filter((c) => !hiddenColumns?.has(c));
+  const columns = useMemo(
+    () => (result ? columnNames(result) : []).filter((column) => !hiddenColumns?.has(column)),
+    [hiddenColumns, result],
+  );
   const editorColumns = useMemo<DbColumn[]>(() => {
     const byName = new Map((columnMeta ?? []).map((column) => [column.name, column]));
     return columns.map((name) => byName.get(name) ?? {
@@ -125,7 +128,9 @@ export function VirtualResultGrid({
   });
 
   const colW = (c: string): number => widths[c] ?? DEFAULT_COL_W;
-  const totalW = ROWNUM_W + columns.reduce((w, c) => w + colW(c), 0);
+  const rowActionCount = (onRelatedRows ? 1 : 0) + (editable ? 2 : onRowOpen ? 1 : 0);
+  const rowNumW = Math.max(ROWNUM_W, 28 + rowActionCount * 20);
+  const totalW = rowNumW + columns.reduce((w, c) => w + colW(c), 0);
   const sortCol = onSort ? sort?.column : internalSort?.col;
   const sortDir = onSort ? sort?.dir : internalSort?.dir;
 
@@ -194,7 +199,7 @@ export function VirtualResultGrid({
         <div style={{ width: totalW, position: 'relative' }}>
           {/* Sticky header */}
           <div className="sticky top-0 z-10 flex bg-card" style={{ width: totalW }}>
-            <div className="shrink-0 border-b border-r px-2 py-1 text-right text-muted-foreground/50" style={{ width: ROWNUM_W }}>
+            <div className="shrink-0 border-b border-r px-2 py-1 text-right text-muted-foreground/50" style={{ width: rowNumW }}>
               #
             </div>
             {columns.map((c) => (
@@ -221,13 +226,20 @@ export function VirtualResultGrid({
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((v) => {
               const isNew = v.index >= baseRows.length;
-              const style: React.CSSProperties = { top: 0, transform: `translateY(${v.start}px)`, height: v.size, width: totalW };
+              const style: React.CSSProperties = {
+                top: 0,
+                transform: `translateY(${v.start}px)`,
+                height: v.size,
+                width: totalW,
+                contain: 'strict',
+              };
 
               if (isNew) {
                 const nr = newRows[v.index - baseRows.length];
                 return (
                   <div key={nr.tempId} className="absolute left-0 flex bg-emerald-500/5" style={style}>
-                    <div className="flex shrink-0 items-center justify-center border-b border-r" style={{ width: ROWNUM_W }}>
+                    <div className="flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r px-1" style={{ width: rowNumW }}>
+                      <span className="mr-auto min-w-4 text-center text-emerald-500">+</span>
                       <button type="button" className="rounded p-0.5 text-muted-foreground hover:text-primary" title={t('edit.editRow')} onClick={() => setRowEdit({ kind: 'new', tempId: nr.tempId, row: nr.values })}>
                         <Pencil className="h-3 w-3" />
                       </button>
@@ -261,11 +273,12 @@ export function VirtualResultGrid({
               const isDeleted = editable && edits!.deleted.has(rk);
               return (
                 <div key={rk} className={cn('group absolute left-0 flex hover:bg-muted/30', isDeleted && 'opacity-50')} style={style}>
-                  <div className="flex shrink-0 items-center justify-end gap-1 border-b border-r px-1 text-right text-muted-foreground/40 tabular-nums" style={{ width: ROWNUM_W }}>
+                  <div className="flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r px-1 text-right text-muted-foreground tabular-nums" style={{ width: rowNumW }}>
+                    <span className="mr-auto min-w-4 text-right text-muted-foreground/60">{v.index + 1}</span>
                     {onRelatedRows && (
                       <button
                         type="button"
-                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                        className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
                         title={t('grid.relatedRows')}
                         onClick={() => onRelatedRows(row)}
                       >
@@ -277,7 +290,7 @@ export function VirtualResultGrid({
                         {!isDeleted && (
                           <button
                             type="button"
-                            className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
                             title={t('edit.editRow')}
                             onClick={() => setRowEdit({ kind: 'existing', rowKey: rk, row })}
                           >
@@ -286,7 +299,7 @@ export function VirtualResultGrid({
                         )}
                         <button
                           type="button"
-                          className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-red-400 group-hover:opacity-100"
+                          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-red-400"
                           title={isDeleted ? t('edit.restoreRow') : t('edit.deleteRow')}
                           onClick={() => edits!.toggleDelete(rk)}
                         >
@@ -296,14 +309,12 @@ export function VirtualResultGrid({
                     ) : onRowOpen ? (
                       <button
                         type="button"
-                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                        className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
                         title={t('docs.openRow')}
                         onClick={() => onRowOpen(row)}
                       >
                         <Pencil className="h-3 w-3" />
                       </button>
-                    ) : !onRelatedRows ? (
-                      v.index + 1
                     ) : null}
                   </div>
                   {columns.map((c) => {
@@ -356,7 +367,7 @@ export function VirtualResultGrid({
       )}
     </div>
   );
-}
+});
 
 function sameGridValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -371,9 +382,7 @@ function sameGridValue(a: unknown, b: unknown): boolean {
 }
 
 /** One body cell — read-only (click → view) or editable (click → inline edit, dbl-click → view). */
-function BodyCell({
-  cellId, value, width, edited, deleted, active, editable, onActivate, onCommit, onCancel, onNull, onView, t,
-}: {
+interface BodyCellProps {
   cellId: string;
   value: unknown;
   width: number;
@@ -387,9 +396,14 @@ function BodyCell({
   onNull: () => void;
   onView: () => void;
   t: (k: string) => string;
-}) {
+}
+
+function BodyCellImpl({
+  cellId, value, width, edited, deleted, active, editable, onActivate, onCommit, onCancel, onNull, onView, t,
+}: BodyCellProps) {
   const isNull = value == null; // treat undefined (unset new-row cell) like null
-  const initial = isNull ? '' : cellText(value);
+  const text = useMemo(() => (isNull ? '' : cellText(value)), [isNull, value]);
+  const initial = text;
   // Only record an edit when the text actually changed.
   const commit = (raw: string): void => (raw === initial ? onCancel() : onCommit(raw));
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -434,8 +448,8 @@ function BodyCell({
         edited && 'bg-amber-500/15',
         isNull && 'italic text-muted-foreground/50',
       )}
-      style={{ width }}
-      title={cellText(value)}
+      style={{ width, contentVisibility: 'auto', containIntrinsicSize: `${width}px ${ROW_H}px` }}
+      title={text}
       onClick={() => {
         if (hasActiveTextSelection()) return;
         if (editable) onActivate();
@@ -443,9 +457,20 @@ function BodyCell({
       }}
       onDoubleClick={editable ? onView : undefined}
     >
-      {isNull ? '∅' : cellText(value)}
+      {isNull ? '∅' : text}
     </div>
   );
 }
+
+const BodyCell = memo(BodyCellImpl, (previous, next) => (
+  previous.cellId === next.cellId
+  && Object.is(previous.value, next.value)
+  && previous.width === next.width
+  && previous.edited === next.edited
+  && previous.deleted === next.deleted
+  && previous.active === next.active
+  && previous.editable === next.editable
+  && previous.t === next.t
+));
 
 export { cellToCopy };

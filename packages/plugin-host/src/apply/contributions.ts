@@ -8,8 +8,10 @@ export interface PluginContributions {
   editorActions: NonNullable<AppManifest['editorActions']>;
   statusBarItems: NonNullable<AppManifest['statusBarItems']>;
   runConfigurations: NonNullable<AppManifest['runConfigurations']>;
+  debuggers: NonNullable<AppManifest['debuggers']>;
   modules: NonNullable<AppManifest['modules']>;
   providerRuntime: NonNullable<AppManifest['providerRuntime']> | null;
+  debuggerRuntime: NonNullable<AppManifest['debuggerRuntime']> | null;
   worker: string | null;
   permissions: NonNullable<AppManifest['permissions']> | null;
   /** LLM-provider metadata. V2 executable ownership is described by providerRuntime. */
@@ -31,8 +33,10 @@ export function buildContributions(app: AppManifest | null): PluginContributions
     editorActions: app.editorActions ?? [],
     statusBarItems: app.statusBarItems ?? [],
     runConfigurations: app.runConfigurations ?? [],
+    debuggers: app.debuggers ?? [],
     modules: app.modules ?? [],
     providerRuntime: app.providerRuntime ?? null,
+    debuggerRuntime: app.debuggerRuntime ?? null,
     worker: app.worker ?? null,
     permissions: app.permissions ?? null,
     providers: app.providers ?? [],

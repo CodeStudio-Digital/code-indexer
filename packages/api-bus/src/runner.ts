@@ -81,8 +81,10 @@ export interface DetectedRunner {
 /** Runners grouped by manager, plus an install hint per group. */
 export interface DetectedGroup {
   manager: RunnerManager;
-  /** Source file that produced this group (package.json, pom.xml, …). */
+  /** Project-relative source file that produced this group (package.json, app/composer.json, …). */
   source: string;
+  /** Project-relative working directory for every command in this group. */
+  cwd?: string;
   runners: DetectedRunner[];
   /** True when dependencies appear to be missing (no node_modules/vendor). */
   installNeeded: boolean;

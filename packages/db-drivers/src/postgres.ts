@@ -12,6 +12,7 @@ import type {
   DatabaseDriver,
   DbConnectConfig,
   ForeignKeyInfo,
+  IncomingForeignKeyInfo,
   IndexInfo,
   QueryResult,
   RunBatchOptions,
@@ -280,6 +281,50 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     return { schema: schemaName, name, kind: 'table', columns, indexes, foreignKeys };
   }
 
+  async function listIncomingForeignKeys(schemaName: string, name: string): Promise<IncomingForeignKeyInfo[]> {
+    const res = await pool.query(
+      `SELECT con.conname AS constraint_name,
+              ns.nspname AS source_schema, cl.relname AS source_table,
+              att.attname AS column_name,
+              fns.nspname AS ref_schema, fcl.relname AS ref_table, fatt.attname AS ref_column,
+              con.confdeltype AS delete_rule, con.confupdtype AS update_rule
+         FROM pg_constraint con
+         JOIN pg_class cl ON cl.oid = con.conrelid
+         JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+         JOIN pg_class fcl ON fcl.oid = con.confrelid
+         JOIN pg_namespace fns ON fns.oid = fcl.relnamespace
+         JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(att_local, att_ref, ord) ON true
+         JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.att_local
+         JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid AND fatt.attnum = k.att_ref
+        WHERE con.contype = 'f' AND fns.nspname = $1 AND fcl.relname = $2
+        ORDER BY ns.nspname, cl.relname, con.conname, k.ord`,
+      [schemaName, name],
+    );
+    type IncomingRow = {
+      constraint_name: string; source_schema: string; source_table: string; column_name: string;
+      ref_schema: string; ref_table: string; ref_column: string; delete_rule: string; update_rule: string;
+    };
+    const grouped = new Map<string, IncomingForeignKeyInfo>();
+    for (const row of res.rows as IncomingRow[]) {
+      const key = `${row.source_schema}\0${row.source_table}\0${row.constraint_name}`;
+      let relation = grouped.get(key);
+      if (!relation) {
+        relation = {
+          schema: row.source_schema,
+          table: row.source_table,
+          foreignKey: {
+            name: row.constraint_name, columns: [], refSchema: row.ref_schema, refTable: row.ref_table, refColumns: [],
+            onDelete: pgFkAction(row.delete_rule), onUpdate: pgFkAction(row.update_rule),
+          },
+        };
+        grouped.set(key, relation);
+      }
+      relation.foreignKey.columns.push(row.column_name);
+      relation.foreignKey.refColumns.push(row.ref_column);
+    }
+    return [...grouped.values()];
+  }
+
   const driver: DatabaseDriver = {
     kind: 'relational',
     async testConnection() {
@@ -301,6 +346,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       );
       return (res.rows as Array<{ schema_name: string }>).map((r) => r.schema_name);
     },
+    listIncomingForeignKeys,
     async listTables(schemaName = 'public') {
       const res = await pool.query(
         `SELECT table_name, table_type FROM information_schema.tables

@@ -49,8 +49,8 @@ interface HandlerContext {
   blocks: StreamBlock[];
   toolIndex: Map<string, number>;
   flush: () => void;
-  /** Synchronous flush — used on terminal events where we must commit state
-   *  before clearing buffers or resolving `onMessageComplete`. */
+  /** Synchronous flush — used on provider/terminal events where state must be
+   *  committed before resolving `onMessageComplete`. */
   flushNow: () => void;
   updateSession: UpdateSession;
   onMessageComplete?: () => void;
@@ -61,6 +61,13 @@ export type EventHandler = (data: Record<string, unknown>, eventName: string) =>
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
   const providerProcessIds = new Set<string>();
+  // The callback refetches the persisted transcript. The first provider turn
+  // is enough to publish the just-written user message (and generate a title).
+  // Later assistant turns are not durable yet when `message_complete` fires:
+  // their assistant + tool pair is flushed at the following `turn_start`.
+  // Refetching every boundary can therefore replace the history with a
+  // one-turn-behind snapshot while the live transcript is advancing.
+  let messageCompleteNotified = false;
   let contentBlockSequence = 0;
   const nextContentBlockId = (kind: 'text' | 'thinking') =>
     `${kind}:${sid}:${Date.now().toString(36)}:${++contentBlockSequence}`;
@@ -92,15 +99,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     removeProcesses((process) => ids.has(process.id));
   };
 
-  // A plan card is pushed into the live buffer AFTER its turn's
-  // message_complete (the `plan` event fires at tool dispatch), so the
-  // per-turn clear never reaches it and it stays pinned at the TOP of the
-  // live container while the post-approval turn streams underneath — reads
-  // as "the model is thinking below its own plan". The runner only resumes
-  // after the plan is resolved, so the first streamed content of the next
-  // turn is proof of resolution: sweep the card and refetch history, where
-  // the persisted row now renders the collapsed resolved card
-  // (MessageView `submit_plan` branch handles pending AND resolved states).
+  // A plan card is pushed into the live buffer AFTER `message_complete` (the
+  // `plan` event fires at tool dispatch). The run-level buffer intentionally
+  // survives provider boundaries, so without an explicit resolution sweep the
+  // pending card would stay pinned above the post-approval turn — reading as
+  // "the model is thinking below its own plan". The runner only resumes after
+  // the plan is resolved, so the first streamed content of the next turn is
+  // proof of resolution: sweep the card and refetch history, where the
+  // persisted row renders the collapsed resolved card.
   const sweepResolvedPlanCards = (): void => {
     let swept = false;
     for (let i = blocks.length - 1; i >= 0; i--) {
@@ -899,13 +905,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           },
         }));
       }
-      // Commit the final live buffer before notifying the caller, then clear
-      // only the local buffer for the next assistant turn. Keeping currentTurn
-      // rendered until the refetch proves it exists in history avoids a blank
-      // gap where the final answer disappears at the SSE boundary.
+      // `message_complete` is a PROVIDER boundary, not a persistence boundary.
+      // Tool execution starts after this event and the assistant + tool pair is
+      // only durable at the following `turn_start` (or run end). Keep the full
+      // run in the live buffer so the just-finished thinking/text remains on
+      // screen and the subsequent tool result can still patch its indexed
+      // block. Clearing here caused the whole turn to disappear and left only
+      // the next tool/activity until the user reopened the conversation.
       flushNow();
-      blocks.length = 0;
-      toolIndex.clear();
       // Bump the tasks tick too: the turn just persisted may have approved the
       // list (or run a task), so the persisted TaskListReview card must refetch
       // the row to pick up `approved`/runtime status instead of waiting for the
@@ -915,7 +922,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         activeProcesses: retainBackgroundProcesses(cur.activeProcesses),
       }));
       providerProcessIds.clear();
-      onMessageComplete?.();
+      if (!messageCompleteNotified) {
+        messageCompleteNotified = true;
+        onMessageComplete?.();
+      }
     },
 
     done: (data) => {

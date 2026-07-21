@@ -61,9 +61,9 @@ export class CompactingNode implements BehaviorNode {
       model: contextProvider.model,
       contextWindow: ctx.opts.contextWindow,
     });
-    // Milestones can be requested well before context pressure reaches 90%.
-    // Preserve a proportional recent tail in that case, otherwise the normal
-    // wide-window protect budget would make every milestone a permanent no-op.
+    // Milestones can be queued well before context pressure reaches 90%, but
+    // Executing emits them only once a real size gate fires. Keep the semantic
+    // boundary's proportional-tail policy distinct from ordinary compaction.
     const estimatedHistoryTokens = Math.max(1, Math.ceil(charsBefore / 4));
     const milestoneProtectTokens = Math.min(
       defaultProtectTokens,

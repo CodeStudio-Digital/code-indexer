@@ -74,6 +74,31 @@ describe('dbClient handler flow (sqlite)', () => {
     expect(after.rows[0].name).toBe('Linus');
   });
 
+  it('finds incoming foreign keys without taking a full schema snapshot', async () => {
+    await handlers.query({
+      connectionId: cid,
+      sql: 'CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT, FOREIGN KEY (user_id) REFERENCES users(id))',
+    }, ctx);
+    await handlers.query({ connectionId: cid, sql: `INSERT INTO posts (user_id, title) VALUES (1, 'Hello')` }, ctx);
+
+    const incoming = await handlers.incomingForeignKeys({ connectionId: cid, schema: 'main', table: 'users' }, ctx);
+    expect(incoming).toMatchObject([{
+      schema: 'main',
+      table: 'posts',
+      foreignKey: { columns: ['user_id'], refTable: 'users', refColumns: ['id'] },
+    }]);
+
+    const related = await handlers.tableRows({
+      connectionId: cid,
+      schema: 'main',
+      table: 'posts',
+      limit: 10,
+      offset: 0,
+      where: [{ column: 'user_id', op: '=', value: '1' }],
+    }, ctx);
+    expect(related.rows).toMatchObject([{ user_id: 1, title: 'Hello' }]);
+  });
+
   it('editRows applies parameterized changes atomically and rolls the whole batch back on failure', async () => {
     const preview = await handlers.editRows({
       connectionId: cid,

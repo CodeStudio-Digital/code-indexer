@@ -22,6 +22,7 @@ import type { TerminalApi } from './terminal.js';
 import type { SshApi } from './ssh.js';
 import type { DbClientApi } from './dbClient.js';
 import type { RunnerApi } from './runner.js';
+import type { DebugApi } from './debug.js';
 import type { RuntimeApi } from './runtime.js';
 import type { SnapshotsApi } from './snapshots.js';
 import type { SearchApi } from './search.js';
@@ -64,6 +65,7 @@ export * from './terminal.js';
 export * from './ssh.js';
 export * from './dbClient.js';
 export * from './runner.js';
+export * from './debug.js';
 export * from './runtime.js';
 export * from './snapshots.js';
 export * from './search.js';
@@ -96,6 +98,7 @@ export interface Api {
   ssh: SshApi;
   dbClient: DbClientApi;
   runner: RunnerApi;
+  debug: DebugApi;
   runtime: RuntimeApi;
 
   // Project artifacts

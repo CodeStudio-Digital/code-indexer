@@ -529,7 +529,7 @@ export interface ProjectGitApi {
   commit(
     input: GitScope & { message: string; amend?: boolean },
     ctx: ApiContext,
-  ): Promise<{ sha: string }>;
+  ): Promise<GitRunResult & { sha: string }>;
 
   branchList(input: GitScope, ctx: ApiContext): Promise<{ current: string | null; all: string[] }>;
   branchCheckout(

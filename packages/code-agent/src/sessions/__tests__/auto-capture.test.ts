@@ -72,20 +72,31 @@ describe('buildAutoCapture', () => {
 
   it('mints a "Fixed:" note only when a ≥3-error streak resolves', () => {
     const { store, ac } = capture();
-    ac.onToolResult('run_command', true, 'ENOENT', 1);
-    ac.onToolResult('run_command', true, 'ENOENT', 2);
-    ac.onToolResult('run_command', false, '', 3); // streak of 2 — below threshold
+    ac.onToolResult('run_command', true, 'ENOENT', 1, 'run_command:missing-file');
+    ac.onToolResult('run_command', true, 'ENOENT', 2, 'run_command:missing-file');
+    ac.onToolResult('run_command', false, '', 3, 'run_command:missing-file'); // streak of 2 — below threshold
     expect(store.saved).toHaveLength(0);
 
-    ac.onToolResult('run_command', true, 'vitest: not found', 4);
-    ac.onToolResult('run_command', true, 'vitest: not found', 5);
-    ac.onToolResult('run_command', true, 'vitest: not found', 6);
-    ac.onToolResult('run_command', false, '', 7);
+    ac.onToolResult('run_command', true, 'vitest: not found', 4, 'run_command:vitest');
+    ac.onToolResult('run_command', true, 'vitest: not found', 5, 'run_command:vitest');
+    ac.onToolResult('run_command', true, 'vitest: not found', 6, 'run_command:vitest');
+    ac.onToolResult('run_command', false, '', 7, 'run_command:vitest');
     expect(store.saved).toHaveLength(1);
     expect(store.saved[0]).toMatchObject({ title: 'Fixed: run_command', kind: 'auto:fix' });
     expect(store.saved[0].body).toContain('After 3 consecutive failures');
     expect(store.saved[0].body).toContain('turn 7');
     expect(store.saved[0].body).toContain('vitest: not found');
+  });
+
+  it('does not resolve failures from unrelated logical operations of the same tool', () => {
+    const { store, ac } = capture();
+    ac.onToolResult('run_command', true, 'server start timed out', 1, 'run_command:start-a');
+    ac.onToolResult('run_command', true, 'server start timed out', 2, 'run_command:start-b');
+    ac.onToolResult('run_command', true, 'smoke fetch failed', 3, 'run_command:smoke');
+
+    // A different command succeeding is not proof that any failure above was fixed.
+    ac.onToolResult('run_command', false, '', 4, 'run_command:unit-tests');
+    expect(store.saved).toHaveLength(0);
   });
 
   it('exempts repeatable/polling tools from streak notes', () => {

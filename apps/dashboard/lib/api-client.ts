@@ -21,6 +21,8 @@ import {
   startApiCallRouteSpan,
 } from './perf/route-startup-metrics.js';
 import { gitOperationKey, useGitOperationState } from '../state/git-operation-state.js';
+import { beginExecution, finishExecution } from '../state/execution-output.js';
+import { useWorkspaceLayout } from '../state/workspace-layout.js';
 
 type DotPath = string;
 export interface ApiCallOptions { signal?: AbortSignal }
@@ -141,6 +143,79 @@ const WRITE_VERBS = new Set<string>([
   'lsp.restartServer',
   'lsp.setLanguageLevel',
 ]);
+
+interface GitExecutionResult {
+  command?: string;
+  args?: string[];
+  ok?: boolean;
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+  sha?: string;
+  durationMs?: number;
+  results?: GitExecutionResult[];
+  aborted?: boolean;
+}
+
+function gitOperationLabel(path: string): string {
+  const method = path.slice('projectGit.'.length);
+  const words = method.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  return `Git · ${words}`;
+}
+
+function gitCommand(path: string, result?: unknown): string {
+  const value = result && typeof result === 'object' ? result as GitExecutionResult : undefined;
+  if (value?.command) return [value.command, ...(value.args ?? [])].join(' ');
+  return path;
+}
+
+function withTerminalEol(value: string): string {
+  if (!value) return '';
+  const normalized = value.replace(/\r?\n/g, '\r\n');
+  return normalized.endsWith('\r\n') ? normalized : `${normalized}\r\n`;
+}
+
+function formatGitExecution(path: string, result: unknown): {
+  command: string;
+  status: 'succeeded' | 'failed';
+  output: string;
+} {
+  const value = result && typeof result === 'object' ? result as GitExecutionResult : undefined;
+  const command = gitCommand(path, result);
+  const nestedFailed = value?.results?.some((entry) => entry.ok === false || (entry.code != null && entry.code !== 0));
+  const failed = value?.ok === false
+    || (typeof value?.code === 'number' && value.code !== 0)
+    || value?.aborted === true
+    || nestedFailed === true;
+  let output = `$ ${command}\r\n`;
+  if (value?.results?.length) {
+    for (const entry of value.results) {
+      const nestedCommand = gitCommand(path, entry);
+      output += `\r\n$ ${nestedCommand}\r\n`;
+      if (entry.stdout) output += withTerminalEol(entry.stdout);
+      if (entry.stderr) {
+        if (entry.stdout) output += '\r\n[stderr]\r\n';
+        output += withTerminalEol(entry.stderr);
+      }
+      if (!entry.stdout && !entry.stderr && entry.code != null) {
+        output += `[process exited code=${entry.code}]\r\n`;
+      }
+    }
+    if (value.aborted) output += '\r\n[operation aborted]\r\n';
+  }
+  if (value?.stdout) output += withTerminalEol(value.stdout);
+  if (value?.stderr) {
+    if (value.stdout) output += '\r\n[stderr]\r\n';
+    output += withTerminalEol(value.stderr);
+  }
+  if (!value?.results?.length && !value?.stdout && !value?.stderr) {
+    if (value?.sha) output += `commit ${value.sha}\r\n`;
+    else if (typeof value?.code === 'number') output += `[process exited code=${value.code}]\r\n`;
+    else output += '[completed successfully]\r\n';
+  }
+  if (value?.durationMs != null) output += `[duration ${value.durationMs} ms]\r\n`;
+  return { command, status: failed ? 'failed' : 'succeeded', output };
+}
 
 /** Stable cache key for a read verb + its args. */
 function callKey(path: DotPath, input: unknown): string {
@@ -500,11 +575,38 @@ export function apiCall<T>(path: DotPath, input?: unknown, options: ApiCallOptio
     const operationKey = path.startsWith('projectGit.') && value?.projectId
       ? gitOperationKey(value.projectId, value.repoPath)
       : null;
+    const executionId = path.startsWith('projectGit.') && value?.projectId
+      ? beginExecution({
+          projectId: value.projectId,
+          source: 'git',
+          label: gitOperationLabel(path),
+          command: gitCommand(path),
+          status: 'running',
+          output: `$ ${gitCommand(path)}\r\n`,
+        })
+      : null;
     if (operationKey) useGitOperationState.getState().begin(operationKey);
     return apiCallRaw<T>(path, input)
       .then((r) => {
         invalidateAll();
+        if (executionId) {
+          const completed = formatGitExecution(path, r);
+          finishExecution(executionId, completed);
+          if (completed.status === 'failed') useWorkspaceLayout.getState().setActiveBottom('output');
+        }
         return r;
+      })
+      .catch((error) => {
+        if (executionId) {
+          const command = gitCommand(path);
+          finishExecution(executionId, {
+            status: 'failed',
+            command,
+            output: `$ ${command}\r\n${withTerminalEol(errorMessage(error))}`,
+          });
+          useWorkspaceLayout.getState().setActiveBottom('output');
+        }
+        throw error;
       })
       .finally(() => {
         if (operationKey) useGitOperationState.getState().end(operationKey);
