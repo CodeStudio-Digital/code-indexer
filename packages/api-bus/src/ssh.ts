@@ -253,7 +253,7 @@ export interface SshTunnelInput {
   kind: SshTunnelKind;
   /** Bind address for the listener. Default 127.0.0.1. */
   bindHost?: string;
-  /** Local listen port (local/dynamic) or the remote bind port (remote). */
+  /** Local listen port (local/dynamic) or the remote bind port (remote). Use 0 for an OS-assigned local port. */
   bindPort: number;
   /** Destination host — required for local/remote, ignored for dynamic. */
   destHost?: string;

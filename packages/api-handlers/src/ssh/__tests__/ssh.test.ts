@@ -234,8 +234,20 @@ describe('TunnelManager validation', () => {
     const manager = fakeManager();
     const tunnels = new TunnelManager(manager);
 
-    await expect(tunnels.start({ spec, kind: 'dynamic', bindPort: 0 })).rejects.toMatchObject({ code: 'ssh_tunnel_bad_port' });
+    await expect(tunnels.start({ spec, kind: 'dynamic', bindPort: -1 })).rejects.toMatchObject({ code: 'ssh_tunnel_bad_port' });
     expect(manager.acquire).not.toHaveBeenCalled();
+  });
+
+  it('asks the OS for a collision-free local port when bindPort is zero', async () => {
+    const manager = fakeManager();
+    vi.mocked(manager.acquire).mockResolvedValue({ once: vi.fn(), removeListener: vi.fn() } as never);
+    const tunnels = new TunnelManager(manager);
+
+    const tunnel = await tunnels.start({ spec, kind: 'local', bindPort: 0, destHost: 'localhost', destPort: 5432 });
+    expect(tunnel.bindHost).toBe('127.0.0.1');
+    expect(tunnel.bindPort).toBeGreaterThan(0);
+    tunnels.stop(tunnel.id);
+    expect(manager.release).toHaveBeenCalledWith(spec.hostId);
   });
 
   it('rejects missing local-forward destination before acquiring an SSH connection', async () => {

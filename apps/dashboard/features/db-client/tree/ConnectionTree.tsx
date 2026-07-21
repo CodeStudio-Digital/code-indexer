@@ -3,7 +3,7 @@
  * (if needed) and lazily fetches databases → schemas → tables → columns. Each
  * level fetches its children on first expand and shows a per-node spinner.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -286,6 +286,7 @@ function buildNodeMenu(
       { id: 'query', label: t('node.newQuery'), onSelect: () => db.openQueryTab(node.connectionId, node.schema, undefined, node.database) },
       { id: 'newtable', label: t('node.newTable'), onSelect: () => void db.openNewTable(node.connectionId, node.schema, node.database) },
       { id: 'er', label: t('node.erDiagram'), onSelect: () => void db.openErDiagram(node.connectionId, node.schema, node.database) },
+      { id: 'schema-diff', label: t('node.schemaDiff'), onSelect: () => void db.openSchemaDiff(node.connectionId, node.schema, node.database) },
       { id: 'dump-schema', label: t('node.dumpSchema'), separatorBefore: true, onSelect: () => void dumpSchema(node, db.connKeyFor(node.connectionId, node.database), t) },
       { id: 'restore', label: t('node.restore'), onSelect: () => void restoreScript(node, db.connKeyFor(node.connectionId, node.database), db, t) },
       { id: 'refresh', label: t('node.refresh'), separatorBefore: true, onSelect: () => db.refreshNode(node.id) },
@@ -463,13 +464,60 @@ export function ConnectionTree({
 }) {
   const { t } = useTranslation('dbClient');
   const [filter, setFilter] = useState('');
+  const [catalogRows, setCatalogRows] = useState<DbTreeNode[]>([]);
+  const [catalogSearching, setCatalogSearching] = useState(false);
   // Per-schema table filter (keyed by the schema node id) — the input that
   // appears right above a schema's tables once it's expanded.
   const [schemaFilters, setSchemaFilters] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    const query = filter.trim();
+    if (query.length < 2) {
+      setCatalogRows([]);
+      setCatalogSearching(false);
+      return;
+    }
+    const connected = db.connections.filter((connection) =>
+      db.statusById[connection.id] === 'connected' && engineKindFor(connection.engine) === 'relational',
+    );
+    if (connected.length === 0) return;
+    let cancelled = false;
+    setCatalogSearching(true);
+    const timer = window.setTimeout(() => {
+      void Promise.all(connected.map(async (connection) => ({
+        connection,
+        objects: await api.searchCatalog(String(connection.id), query, 100),
+      }))).then((groups) => {
+        if (cancelled) return;
+        setCatalogRows(groups.flatMap(({ connection, objects }) => objects.map((object) => ({
+          id: `catalog:${connection.id}:${object.kind}:${object.schema ?? ''}:${object.name}`,
+          kind: object.kind === 'function' ? 'function' as const
+            : object.kind === 'sequence' ? 'sequence' as const
+              : object.kind,
+          label: object.schema && object.kind !== 'schema' ? `${object.schema}.${object.name}` : object.name,
+          name: object.name,
+          connectionId: connection.id,
+          schema: object.kind === 'schema' ? object.name : object.schema,
+          table: object.kind === 'table' || object.kind === 'view' ? object.name : undefined,
+          depth: 1,
+          expandable: object.kind === 'schema' || object.kind === 'table' || object.kind === 'view',
+        }))));
+      }).catch(() => {
+        if (!cancelled) setCatalogRows([]);
+      }).finally(() => {
+        if (!cancelled) setCatalogSearching(false);
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [db.connections, db.statusById, filter]);
+
   const visibleRows = useMemo(() => {
     const q = normalizeSearchText(filter.trim());
     if (!q) return db.treeRows;
+    if (catalogRows.length > 0) return catalogRows;
 
     const connById = new Map(db.connections.map((conn) => [conn.id, conn]));
     const parentById = new Map<string, string>();
@@ -513,7 +561,7 @@ export function ConnectionTree({
     }
 
     return db.treeRows.filter((row) => includeIds.has(row.id));
-  }, [filter, db.treeRows, db.connections]);
+  }, [catalogRows, filter, db.treeRows, db.connections]);
 
   const renderItems = useMemo(
     () => buildConnectionTreeRenderItems({
@@ -561,7 +609,7 @@ export function ConnectionTree({
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
-        {filter.trim() && visibleRows.length === 0 && db.connections.length > 0 && (
+        {filter.trim() && visibleRows.length === 0 && db.connections.length > 0 && !catalogSearching && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             {t('connections.noSearchResults', { query: filter.trim() })}
           </div>
@@ -597,6 +645,12 @@ export function ConnectionTree({
                 </div>
               );
             })}
+          </div>
+        )}
+        {catalogSearching && visibleRows.length === 0 && (
+          <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {t('tree.searchingCatalog')}
           </div>
         )}
       </div>

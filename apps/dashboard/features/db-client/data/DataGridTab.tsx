@@ -16,7 +16,8 @@ import { SqlPreviewDialog } from '../grid/SqlPreviewDialog.js';
 import { useGridEdits } from '../grid/use-grid-edits.js';
 import { SqlEditor } from '../query/SqlEditor.js';
 import { FilterBar } from './FilterBar.js';
-import type { DbColumn, DbEngine, DbQueryResult, DbTableSort, DbWhereCondition } from '../types.js';
+import { RelatedRowsDialog } from './RelatedRowsDialog.js';
+import type { DbColumn, DbEngine, DbQueryResult, DbTableInfo, DbTableSort, DbWhereCondition } from '../types.js';
 
 const PAGE_SIZES = [50, 100, 200, 500];
 
@@ -48,6 +49,8 @@ export function DataGridTab({
   const [pkCols, setPkCols] = useState<string[]>([]);
   const [cols, setCols] = useState<string[]>([]);
   const [columnMeta, setColumnMeta] = useState<DbColumn[]>([]);
+  const [tableInfo, setTableInfo] = useState<DbTableInfo | null>(null);
+  const [relatedRow, setRelatedRow] = useState<Record<string, unknown> | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewSql, setPreviewSql] = useState('');
   const [executing, setExecuting] = useState(false);
@@ -64,6 +67,7 @@ export function DataGridTab({
           setPkCols(info.columns.filter((c) => c.isPrimaryKey).map((c) => c.name));
           setCols(info.columns.map((c) => c.name));
           setColumnMeta(info.columns);
+          setTableInfo(info);
         }
       })
       .catch(() => void 0);
@@ -155,12 +159,8 @@ export function DataGridTab({
     const changes = changesForApply();
     if (changes.length === 0) return;
     try {
-      const sqls = await Promise.all(
-        changes.map((c) =>
-          api.editRow({ connectionId: cid, op: c.op, schema, table, pk: c.pk, values: c.values, dryRun: true }).then((r) => r.sql),
-        ),
-      );
-      setPreviewSql(sqls.join(';\n') + ';');
+      const preview = await api.editRows({ connectionId: cid, changes, dryRun: true });
+      setPreviewSql(preview.sql);
       setPreviewOpen(true);
     } catch (e) {
       toast.error(t('edit.applyError'), { description: e instanceof Error ? e.message : String(e) });
@@ -177,26 +177,24 @@ export function DataGridTab({
       tone: 'destructive',
     }))) return;
     setExecuting(true);
-    let applied = 0;
+    let succeeded = false;
     try {
-      for (const c of changes) {
-        await api.editRow({ connectionId: cid, op: c.op, schema, table, pk: c.pk, values: c.values });
-        applied += 1;
-      }
+      await api.editRows({ connectionId: cid, changes });
+      succeeded = true;
       toast.success(t('edit.applied'));
     } catch (e) {
-      // Some changes already committed — surface how many, then reset so a retry
-      // can't re-run the already-applied ones (e.g. duplicate INSERTs).
-      toast.error(t('edit.applyError'), { description: `${t('edit.applied')}: ${applied}/${changes.length} · ${e instanceof Error ? e.message : String(e)}` });
+      toast.error(t('edit.applyError'), { description: e instanceof Error ? e.message : String(e) });
     } finally {
-      // Always clear the changeset + reload from the DB — the grid then reflects
-      // actual state regardless of partial success.
       setPreviewOpen(false);
-      edits.revertAll();
-      await loadPreview(page, pageSize);
+      // A failed transaction leaves every pending edit intact for correction/retry.
+      // Successful application reloads the canonical generated/default values.
+      if (succeeded) {
+        edits.revertAll();
+        await loadPreview(page, pageSize);
+      }
       setExecuting(false);
     }
-  }, [changesForApply, cid, schema, table, t, edits, loadPreview, page, pageSize]);
+  }, [changesForApply, cid, t, edits, loadPreview, page, pageSize]);
 
   const editable = mode === 'preview' && pkCols.length > 0 && result != null && !error;
   const atLastPage = mode === 'preview' && result != null && result.rows.length < pageSize;
@@ -261,6 +259,7 @@ export function DataGridTab({
             onSort={mode === 'preview' ? toggleSort : undefined}
             hiddenColumns={hiddenCols}
             columnMeta={columnMeta}
+            onRelatedRows={tableInfo ? setRelatedRow : undefined}
           />
         </div>
       </div>
@@ -280,6 +279,9 @@ export function DataGridTab({
             {t('edit.preview')}
           </Button>
         </div>
+      )}
+      {relatedRow && tableInfo && (
+        <RelatedRowsDialog open connKey={cid} schema={schema} tableInfo={tableInfo} row={relatedRow} onClose={() => setRelatedRow(null)} />
       )}
 
       {/* Pager (preview mode only) */}

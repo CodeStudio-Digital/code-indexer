@@ -38,6 +38,8 @@ export interface UseDbClient {
   openNewTable: (connectionId: number, schema?: string, database?: string) => Promise<void>;
   /** Open an ER-diagram tab for a schema. */
   openErDiagram: (connectionId: number, schema?: string, database?: string) => Promise<void>;
+  /** Compare a schema with another live connection/schema and generate a migration. */
+  openSchemaDiff: (connectionId: number, schema?: string, database?: string) => Promise<void>;
   /** Live-op routing key for a node — `id`, or `id@db` for a dedicated catalog pool. */
   connKeyFor: (connectionId: number, database?: string) => string;
   /** Pending "import CSV into this table" request (drives the import dialog). */
@@ -626,6 +628,20 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
     [connKeyFor, ensureDbConnected, publishWorkTab],
   );
 
+  const openSchemaDiff = useCallback(
+    async (connectionId: number, schema?: string, database?: string) => {
+      const connKey = connKeyFor(connectionId, database);
+      if (!(await ensureDbConnected(connKey))) return;
+      const id = `schema-diff:${connKey}:${schema ?? ''}`;
+      const tab: WorkTab = { id, kind: 'schema-diff', title: `Diff · ${schema ?? ''}`, connectionId, connKey, schema };
+      setWorkTabs((tabs) => (tabs.some((item) => item.id === id) ? tabs : [...tabs, tab]));
+      setActiveTabId(id);
+      setActiveConnectionId(connectionId);
+      publishWorkTab(tab);
+    },
+    [connKeyFor, ensureDbConnected, publishWorkTab],
+  );
+
   const requestImportCsv = useCallback((node: DbTreeNode) => {
     if (!node.table) return;
     setImportRequest({ connectionId: node.connectionId, connKey: connKeyFor(node.connectionId, node.database), schema: node.schema, table: node.table });
@@ -737,6 +753,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
     openStructureTab,
     openNewTable,
     openErDiagram,
+    openSchemaDiff,
     connKeyFor,
     importRequest,
     requestImportCsv,

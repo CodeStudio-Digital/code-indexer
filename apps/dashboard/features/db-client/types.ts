@@ -21,7 +21,11 @@ export type {
   DbTableRef,
   DbTableInfo,
   DbQueryResult,
+  DbQueryBatchResult,
   DbIntrospectResult,
+  DbCatalogObject,
+  DbCatalogSnapshot,
+  DbSchemaSnapshot,
   DbRowChangeKind,
   DbColumnSpec,
   DbCreateTableSpec,
@@ -31,6 +35,10 @@ export type {
   DbDdlOp,
   DbDdlSpec,
   DbEditResult,
+  DbRowChangeInput,
+  DbBatchEditResult,
+  DbMigrationInput,
+  DbMigrationResult,
   DbObjectKind,
   DbGenerateKind,
   DbRowBatch,
@@ -83,7 +91,7 @@ export interface DbTreeNode {
 export type DbConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
 /** A tab in the center work area (like the editor's file tabs). */
-export type WorkTabKind = 'query' | 'data' | 'structure' | 'er' | 'documents' | 'keyvalue';
+export type WorkTabKind = 'query' | 'data' | 'structure' | 'er' | 'schema-diff' | 'documents' | 'keyvalue';
 
 export interface WorkTab {
   id: string;

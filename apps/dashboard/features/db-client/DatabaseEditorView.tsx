@@ -1,13 +1,16 @@
 import type { OpenDatabaseTab } from '../../state/workspace.js';
+import { useWorkspaceStore } from '../../state/workspace.js';
 import { cn } from '../../lib/utils.js';
 import { DataGridTab } from './data/DataGridTab.js';
 import { DocumentsTab } from './data/DocumentsTab.js';
 import { KeyValueTab } from './data/KeyValueTab.js';
 import { QueryConsole } from './query/QueryConsole.js';
 import { ErDiagramTab } from './structure/ErDiagramTab.js';
+import { SchemaDiffTab } from './structure/SchemaDiffTab.js';
 import { TableStructureEditor } from './structure/TableStructureEditor.js';
 
 export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
+  const updateDatabaseTab = useWorkspaceStore((state) => state.updateDatabaseTab);
   const work = tab.workTab;
   // DatabaseEditorStack normally gives every tab its own retained component
   // instance. Keep the child keyed as a defensive boundary for standalone
@@ -30,6 +33,9 @@ export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
   }
   if (work.kind === 'er') {
     return <ErDiagramTab key={viewKey} connKey={work.connKey} schema={work.schema} />;
+  }
+  if (work.kind === 'schema-diff' && work.schema) {
+    return <SchemaDiffTab key={viewKey} projectId={tab.projectId} sourceConnKey={work.connKey} sourceSchema={work.schema} />;
   }
   if (work.kind === 'structure') {
     return (
@@ -54,6 +60,7 @@ export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
       schema={work.schema}
       initialSql={work.initialSql}
       onSaved={() => window.dispatchEvent(new CustomEvent('mcp:database-query-saved'))}
+      onSqlChange={(sql) => updateDatabaseTab(tab.projectId, tab.path, { workTab: { ...work, initialSql: sql, dirty: sql.length > 0 } })}
     />
   );
 }

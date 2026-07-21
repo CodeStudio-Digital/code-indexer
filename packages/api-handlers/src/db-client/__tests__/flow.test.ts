@@ -53,6 +53,12 @@ describe('dbClient handler flow (sqlite)', () => {
 
     const rows = await handlers.tableRows({ connectionId: cid, schema: 'main', table: 'users', limit: 10, offset: 0 }, ctx);
     expect(rows.rowCount).toBe(1);
+
+    const catalog = await handlers.catalog({ connectionId: cid, force: true }, ctx);
+    expect(catalog.objects).toContainEqual({ kind: 'table', name: 'users', schema: 'main' });
+    await expect(handlers.searchCatalog({ connectionId: cid, query: 'USER' }, ctx)).resolves.toContainEqual({
+      kind: 'table', name: 'users', schema: 'main',
+    });
   });
 
   it('editRow: dryRun previews, then applies a PK-scoped UPDATE', async () => {
@@ -68,6 +74,60 @@ describe('dbClient handler flow (sqlite)', () => {
     expect(after.rows[0].name).toBe('Linus');
   });
 
+  it('editRows applies parameterized changes atomically and rolls the whole batch back on failure', async () => {
+    const preview = await handlers.editRows({
+      connectionId: cid,
+      changes: [
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" } },
+        { op: 'insert', table: 'users', values: { id: 2, name: 'Grace', email: 'grace@x.io' } },
+      ],
+      dryRun: true,
+    }, ctx);
+    expect(preview.sql).toContain("O''Hara");
+
+    await handlers.editRows({
+      connectionId: cid,
+      changes: [
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" } },
+        { op: 'insert', table: 'users', values: { id: 2, name: 'Grace', email: 'grace@x.io' } },
+      ],
+    }, ctx);
+    const committed = await handlers.query({ connectionId: cid, sql: 'SELECT id, name FROM users ORDER BY id' }, ctx);
+    expect(committed.rows).toMatchObject([{ id: 1, name: "O'Hara" }, { id: 2, name: 'Grace' }]);
+
+    await expect(handlers.editRows({
+      connectionId: cid,
+      changes: [
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Should rollback' } },
+        { op: 'insert', table: 'users', values: { id: 2, name: 'Duplicate' } },
+      ],
+    }, ctx)).rejects.toThrow();
+    const rolledBack = await handlers.query({ connectionId: cid, sql: 'SELECT name FROM users WHERE id = 1' }, ctx);
+    expect(rolledBack.rows[0].name).toBe("O'Hara");
+  });
+
+  it('queryBatch keeps statements on one session, returns every result and rolls back failures', async () => {
+    const batch = await handlers.queryBatch({
+      connectionId: cid,
+      statements: [
+        { sql: 'INSERT INTO users (id, name) VALUES (?, ?)', params: [3, 'Batch'] },
+        { sql: 'SELECT name FROM users WHERE id = ?', params: [3] },
+      ],
+    }, ctx);
+    expect(batch.results).toHaveLength(2);
+    expect(batch.results[1].rows[0].name).toBe('Batch');
+
+    await expect(handlers.queryBatch({
+      connectionId: cid,
+      statements: [
+        { sql: 'UPDATE users SET name = ? WHERE id = ?', params: ['Nope', 1] },
+        { sql: 'INSERT INTO users (id, name) VALUES (?, ?)', params: [3, 'Duplicate'] },
+      ],
+    }, ctx)).rejects.toThrow(/rolled back/i);
+    const after = await handlers.query({ connectionId: cid, sql: 'SELECT name FROM users WHERE id = 1' }, ctx);
+    expect(after.rows[0].name).toBe("O'Hara");
+  });
+
   it('ddl: dryRun previews an ALTER without touching the schema', async () => {
     const preview = await handlers.ddl(
       { connectionId: cid, op: 'alter', spec: { alter: { table: 'users', actions: [{ kind: 'addColumn', column: { name: 'age', type: 'INTEGER' } }] } }, dryRun: true },
@@ -75,6 +135,25 @@ describe('dbClient handler flow (sqlite)', () => {
     );
     expect(preview.sql).toMatch(/ALTER TABLE .*users.* ADD COLUMN .*age/i);
     expect(preview.result).toBeUndefined();
+  });
+
+  it('previews and applies selected schema migrations, including sequential SQLite rebuilds', async () => {
+    await handlers.query({ connectionId: cid, sql: 'ALTER TABLE users ADD COLUMN legacy_a TEXT' }, ctx);
+    await handlers.query({ connectionId: cid, sql: 'ALTER TABLE users ADD COLUMN legacy_b TEXT' }, ctx);
+    const changes = [
+      { op: 'alter' as const, spec: { alter: { schema: 'main', table: 'users', actions: [{ kind: 'modifyColumn' as const, name: 'legacy_a', column: { name: 'legacy_a', type: 'INTEGER', nullable: true } }] } } },
+      { op: 'alter' as const, spec: { alter: { schema: 'main', table: 'users', actions: [{ kind: 'modifyColumn' as const, name: 'legacy_b', column: { name: 'legacy_b', type: 'BLOB', nullable: true } }] } } },
+    ];
+    const preview = await handlers.migration({ connectionId: cid, changes, dryRun: true }, ctx);
+    expect(preview.sql).toContain('legacy_a');
+    expect(preview.atomic).toBe(false);
+
+    const applied = await handlers.migration({ connectionId: cid, changes }, ctx);
+    expect(applied.applied).toBe(2);
+    const info = await handlers.describeTable({ connectionId: cid, schema: 'main', table: 'users' }, ctx);
+    expect(info.columns.find((column) => column.name === 'legacy_a')?.dataType).toBe('INTEGER');
+    expect(info.columns.find((column) => column.name === 'legacy_b')?.dataType).toBe('BLOB');
+    expect((await handlers.query({ connectionId: cid, sql: 'SELECT COUNT(*) AS n FROM users' }, ctx)).rows[0].n).toBe(3);
   });
 });
 

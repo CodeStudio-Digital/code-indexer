@@ -166,7 +166,12 @@ export interface RunBatchOptions {
   signal?: AbortSignal;
   /** Hard cap on rows for any statement in the batch that returns rows. */
   maxRows?: number;
+  /** Observe every result without giving up the backwards-compatible last-result return value. */
+  onResult?: (result: QueryResult, index: number) => void;
 }
+
+/** One statement in a pinned batch. Structured entries keep DML parameterized. */
+export type RunBatchStatement = string | { sql: string; params?: unknown[] };
 
 /**
  * A non-relational command (Mongo document op / Redis command). The shape is
@@ -221,7 +226,9 @@ export interface DatabaseDriver {
    * pins every statement to one connection (no pool hop), but the transactional
    * rollback only covers DML there. Postgres, SQL Server and SQLite roll back DDL.
    */
-  runBatch?(statements: string[], opts?: RunBatchOptions): Promise<QueryResult>;
+  runBatch?(statements: RunBatchStatement[], opts?: RunBatchOptions): Promise<QueryResult>;
+  /** Engine-native estimated execution plan without running the statement. */
+  explain?(sql: string, opts?: RunQueryOptions): Promise<QueryResult>;
   /** Back-compat alias for the agent tools. */
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   /** Non-relational entry point (document/key-value). Rows hold documents / KV pairs. */

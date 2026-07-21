@@ -20,6 +20,7 @@ import type {
   IndexInfo,
   QueryResult,
   RunBatchOptions,
+  RunBatchStatement,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -196,7 +197,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
     }
   }
 
-  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+  async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
     if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // A node-mssql Transaction pins a single connection for begin→commit; every
@@ -221,10 +222,15 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       await txn.begin();
       inTxn = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
-      for (const stmt of statements) {
+      for (let index = 0; index < statements.length; index += 1) {
+        const stmt = statements[index];
         const request = new mssql.Request(txn);
         current = request;
-        last = shapeMssqlResult(await request.query(stmt), max);
+        if (typeof stmt !== 'string') {
+          (stmt.params ?? []).forEach((param, paramIndex) => request.input(`p${paramIndex}`, param ?? null));
+        }
+        last = shapeMssqlResult(await request.query(typeof stmt === 'string' ? stmt : stmt.sql), max);
+        opts.onResult?.(last, index);
       }
       await txn.commit();
       inTxn = false;
@@ -234,6 +240,46 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       throw err;
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  async function explainQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    const txn = new mssql.Transaction(pool);
+    let inTxn = false;
+    let showplan = false;
+    let current: MssqlRequest | null = null;
+    const cancel = (): void => current?.cancel();
+    try {
+      if (opts.signal?.aborted) throw new Error('query cancelled');
+      opts.signal?.addEventListener('abort', cancel, { once: true });
+      await txn.begin();
+      inTxn = true;
+      current = new mssql.Request(txn, mssqlRequestOverrides(opts.timeoutMs));
+      await current.query('SET SHOWPLAN_XML ON');
+      showplan = true;
+      current = new mssql.Request(txn, mssqlRequestOverrides(opts.timeoutMs));
+      const result = shapeMssqlResult(await current.query(sql), opts.maxRows ?? DEFAULT_MAX_ROWS);
+      current = new mssql.Request(txn);
+      await current.query('SET SHOWPLAN_XML OFF');
+      showplan = false;
+      await txn.rollback();
+      inTxn = false;
+      return result;
+    } catch (error) {
+      // SHOWPLAN is session state. Always turn it off before this pinned
+      // connection can return to the pool, even when compilation/cancel fails.
+      if (showplan) {
+        try {
+          current = new mssql.Request(txn);
+          await current.query('SET SHOWPLAN_XML OFF');
+        } catch {
+          /* rollback/connection disposal below is the remaining containment */
+        }
+      }
+      if (inTxn) await txn.rollback().catch(() => void 0);
+      throw error;
+    } finally {
+      opts.signal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -376,6 +422,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
     },
     runQuery,
     runBatch,
+    explain: explainQuery,
     query(sql, params) {
       return runQuery(sql, { params });
     },

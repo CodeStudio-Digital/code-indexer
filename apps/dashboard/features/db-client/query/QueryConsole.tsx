@@ -8,19 +8,27 @@
  * sub-tabs (stops at the first error). A bottom status bar shows rows / time /
  * statement count / the schema scope. Each run is written to history.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Play, Square, Loader2, Save, Network, WandSparkles } from 'lucide-react';
+import { Play, Square, Loader2, Save, Network, WandSparkles, ShieldCheck } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
-import { prompt, toast } from '../../../components/ui/prompt-dialog.js';
+import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import * as api from '../api.js';
 import { VirtualResultGrid } from '../grid/VirtualResultGrid.js';
 import { SubTabs } from '../../api-client/SubTabs.js';
 import { SqlEditor } from './SqlEditor.js';
+import { ExplainPlanView } from './ExplainPlanView.js';
 import { splitStatements } from './sql-split.js';
 import { formatSql } from './format-sql.js';
+import {
+  analyzeSql,
+  bindNamedParameters,
+  findNamedParameters,
+  parseParameterValue,
+  type SqlTableReference,
+} from './sql-intelligence.js';
 import {
   DEFAULT_QUERY_TIMEOUT_SECONDS,
   MAX_QUERY_TIMEOUT_SECONDS,
@@ -33,6 +41,7 @@ interface ResultSet {
   sql: string;
   result?: DbQueryResult;
   error?: string;
+  kind?: 'query' | 'plan';
 }
 
 export function QueryConsole({
@@ -44,6 +53,7 @@ export function QueryConsole({
   schema,
   initialSql,
   onSaved,
+  onSqlChange,
 }: {
   projectId: number;
   connectionId: number | null;
@@ -58,6 +68,8 @@ export function QueryConsole({
   initialSql?: string;
   /** Called after saving a query, so a side panel can refresh. */
   onSaved?: () => void;
+  /** Debounced draft hook used by workspace tab persistence. */
+  onSqlChange?: (sql: string) => void;
 }) {
   const { t } = useTranslation('dbClient');
   const [sql, setSql] = useState(initialSql ?? '');
@@ -65,14 +77,57 @@ export function QueryConsole({
   const [results, setResults] = useState<ResultSet[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [timeoutSeconds, setTimeoutSeconds] = useState(String(DEFAULT_QUERY_TIMEOUT_SECONDS));
+  const [transactional, setTransactional] = useState(true);
+  const [catalogNames, setCatalogNames] = useState<string[]>([]);
   const queryIdRef = useRef<string | null>(null);
   const runningRef = useRef(false);
+  const onSqlChangeRef = useRef(onSqlChange);
+  onSqlChangeRef.current = onSqlChange;
+  const allSuggestions = useMemo(
+    () => [...new Set([...suggestions, ...catalogNames])],
+    [catalogNames, suggestions],
+  );
+
+  useEffect(() => {
+    if (!onSqlChangeRef.current) return;
+    const timeout = setTimeout(() => onSqlChangeRef.current?.(sql), 300);
+    return () => clearTimeout(timeout);
+  }, [sql]);
+
+  useEffect(() => {
+    if (connectionId == null || engine === 'mongodb' || engine === 'redis') return;
+    let cancelled = false;
+    void api.catalog(connKey ?? String(connectionId)).then((snapshot) => {
+      if (!cancelled) setCatalogNames(snapshot.objects.filter((object) => object.kind === 'table' || object.kind === 'view').map((object) => object.name));
+    }).catch(() => void 0);
+    return () => { cancelled = true; };
+  }, [connectionId, connKey, engine]);
 
   const run = useCallback(
     async (text: string) => {
       if (connectionId == null || runningRef.current) return;
       const statements = splitStatements(text);
       if (statements.length === 0) return;
+      const safetyDiagnostics = analyzeSql(text, allSuggestions).filter((item) =>
+        item.code === 'write-without-where' || item.code === 'destructive-ddl',
+      );
+      if (safetyDiagnostics.length > 0 && !(await confirm({
+        title: t('query.unsafeTitle'),
+        description: safetyDiagnostics.map((item) => t(`query.diagnostic.${item.code}`)).join('\n'),
+        confirmLabel: t('query.runAnyway'),
+        tone: 'destructive',
+      }))) return;
+      const parameterValues: Record<string, unknown> = {};
+      for (const name of findNamedParameters(text)) {
+        const value = await prompt({
+          title: t('query.parameterTitle', { name }),
+          placeholder: t('query.parameterPlaceholder'),
+          confirmLabel: t('query.parameterApply'),
+        });
+        if (value == null) return;
+        parameterValues[name] = parseParameterValue(value);
+      }
+      const boundStatements = statements.map((statement) => bindNamedParameters(statement, parameterValues, engine));
       const timeoutMs = queryTimeoutMsFromSeconds(timeoutSeconds);
       if (timeoutMs == null) {
         toast.error(t('query.timeoutInvalid', { min: MIN_QUERY_TIMEOUT_SECONDS, max: MAX_QUERY_TIMEOUT_SECONDS }));
@@ -86,17 +141,37 @@ export function QueryConsole({
       let totalRows = 0;
       let failed: string | null = null;
       try {
-        for (const stmt of statements) {
+        if (transactional && statements.length > 1) {
           const queryId = crypto.randomUUID();
           queryIdRef.current = queryId;
           try {
-            const res = await api.runQuery(cid, stmt, { queryId, schema, timeoutMs });
-            out.push({ sql: stmt, result: res });
-            totalRows += res.rowCount;
+            const batch = await api.runQueryBatch(
+              cid,
+              boundStatements,
+              { queryId, schema, timeoutMs },
+            );
+            batch.results.forEach((result, index) => {
+              out.push({ sql: statements[index], result });
+              totalRows += result.rowCount;
+            });
           } catch (e) {
             failed = e instanceof Error ? e.message : String(e);
-            out.push({ sql: stmt, error: failed });
-            break; // stop the batch on the first failing statement
+            out.push({ sql: text, error: failed });
+          }
+        } else {
+          for (const stmt of statements) {
+            const queryId = crypto.randomUUID();
+            queryIdRef.current = queryId;
+            try {
+              const bound = boundStatements[out.length];
+              const res = await api.runQuery(cid, bound.sql, { params: bound.params, queryId, schema, timeoutMs });
+              out.push({ sql: stmt, result: res });
+              totalRows += res.rowCount;
+            } catch (e) {
+              failed = e instanceof Error ? e.message : String(e);
+              out.push({ sql: stmt, error: failed });
+              break;
+            }
           }
         }
       } finally {
@@ -116,8 +191,19 @@ export function QueryConsole({
         })
         .catch(() => void 0);
     },
-    [connectionId, connKey, projectId, schema, t, timeoutSeconds],
+    [allSuggestions, connectionId, connKey, engine, projectId, schema, t, timeoutSeconds, transactional],
   );
+
+  const resolveColumns = useCallback(async (reference: SqlTableReference) => {
+    if (connectionId == null) return [];
+    const fallbackSchema = engine === 'mssql' ? 'dbo' : engine === 'postgres' ? 'public' : '';
+    const info = await api.describeTable(
+      connKey ?? String(connectionId),
+      reference.schema ?? schema ?? fallbackSchema,
+      reference.table,
+    );
+    return info.columns;
+  }, [connectionId, connKey, engine, schema]);
 
   const cancel = useCallback(() => {
     if (connectionId != null && queryIdRef.current) void api.cancelQuery(connKey ?? String(connectionId), queryIdRef.current);
@@ -131,7 +217,7 @@ export function QueryConsole({
     setRunning(true);
     try {
       const res = await api.explain(connKey ?? String(connectionId), sql);
-      setResults([{ sql, result: res }]);
+      setResults([{ sql, result: res, kind: 'plan' }]);
     } catch (e) {
       setResults([{ sql, error: e instanceof Error ? e.message : String(e) }]);
     } finally {
@@ -185,6 +271,17 @@ export function QueryConsole({
         <Button size="sm" variant="ghost" onClick={() => void save()} disabled={!sql.trim()} title={t('query.saveTitle')}>
           <Save className="h-3 w-3" />
         </Button>
+        <Button
+          size="sm"
+          variant={transactional ? 'outline' : 'ghost'}
+          onClick={() => setTransactional((value) => !value)}
+          disabled={running}
+          title={transactional ? t('query.transactionalOn') : t('query.transactionalOff')}
+          aria-pressed={transactional}
+        >
+          <ShieldCheck className="mr-1.5 h-3 w-3" />
+          {t('query.transactional')}
+        </Button>
         <label className="ml-auto flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
           {t('query.timeout')}
           <Input
@@ -210,7 +307,8 @@ export function QueryConsole({
             onRun={(s) => void run(s)}
             onRunAll={(s) => void run(s)}
             onFormat={format}
-            suggestions={suggestions}
+            suggestions={allSuggestions}
+            resolveColumns={resolveColumns}
             engine={engine}
             height="100%"
           />
@@ -231,7 +329,9 @@ export function QueryConsole({
               />
             )}
             <div className="min-h-0 flex-1">
-              <VirtualResultGrid result={active?.result ?? null} error={active?.error ?? null} />
+              {active?.kind === 'plan' && active.result
+                ? <ExplainPlanView result={active.result} />
+                : <VirtualResultGrid result={active?.result ?? null} error={active?.error ?? null} />}
             </div>
           </div>
         </Panel>

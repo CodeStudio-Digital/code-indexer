@@ -13,11 +13,23 @@
  */
 import { apiBaseUrl, apiCall, apiStream } from '../../lib/api-client.js';
 import { encryptSecret, decryptSecret } from '@mcp/secret-box';
+import {
+  findHostByKey,
+  listHosts as listSshHosts,
+  listIdentities as listSshIdentities,
+  resolveSpecFromHost as resolveSshSpec,
+  sshHostKey,
+} from '../ssh/api.js';
+import type { SshHost } from '../ssh/types.js';
 import type {
   DbConnection,
   DbConnectSpec,
   DbIntrospectResult,
+  DbCatalogObject,
+  DbCatalogSnapshot,
+  DbSchemaSnapshot,
   DbQueryResult,
+  DbQueryBatchResult,
   DbSavedQuery,
   DbTableInfo,
   DbQueryHistoryRow,
@@ -25,6 +37,10 @@ import type {
   DbDdlOp,
   DbDdlSpec,
   DbEditResult,
+  DbRowChangeInput,
+  DbBatchEditResult,
+  DbMigrationInput,
+  DbMigrationResult,
   DbObjectKind,
   DbGenerateKind,
   DbRowBatch,
@@ -144,6 +160,38 @@ async function resolveSsl(conn: DbConnection): Promise<DbConnectSpec['ssl']> {
   };
 }
 
+interface StoredDbTunnel {
+  hostKey?: string;
+  remoteHost?: string;
+  remotePort?: number;
+}
+
+function parseTunnelOptions(conn: DbConnection): StoredDbTunnel {
+  if (!conn.ssh_tunnel_json) return {};
+  try {
+    return JSON.parse(conn.ssh_tunnel_json) as StoredDbTunnel;
+  } catch {
+    return {};
+  }
+}
+
+/** Resolve a saved SSH host (including identity + jump chain) for a DB forward. */
+export async function resolveSshTunnel(
+  projectId: number,
+  hostKey: string,
+  remoteHost: string,
+  remotePort: number,
+): Promise<NonNullable<DbConnectSpec['sshTunnel']>> {
+  const [hosts, identities] = await Promise.all([listSshHosts(projectId), listSshIdentities(projectId)]);
+  const host = findHostByKey(hosts, hostKey) ?? hosts.find((item) => String(item.id) === hostKey);
+  if (!host) throw new Error(`SSH host not found: ${hostKey}`);
+  return { spec: await resolveSshSpec(host, hosts, identities), remoteHost, remotePort };
+}
+
+export async function listDbTunnelHosts(projectId: number): Promise<Array<{ key: string; host: SshHost }>> {
+  return (await listSshHosts(projectId)).map((host) => ({ key: sshHostKey(host), host }));
+}
+
 /**
  * Build a live connect spec from a saved connection row, decrypting secrets
  * just-in-time. In URL mode the encrypted blob IS the full connection string
@@ -155,6 +203,15 @@ export async function resolveSpec(conn: DbConnection, dbOverride?: string): Prom
   const secret = conn.enc_password ? await decryptSecret(conn.enc_password) : '';
   const ssl = await resolveSsl(conn);
   const connectOptions = pickConnectOptions(options);
+  const tunnelOptions = parseTunnelOptions(conn);
+  const sshTunnel = conn.ssh_tunnel_host_id != null && conn.host && conn.port
+    ? await resolveSshTunnel(
+        conn.project_id,
+        tunnelOptions.hostKey ?? String(conn.ssh_tunnel_host_id),
+        tunnelOptions.remoteHost ?? conn.host,
+        tunnelOptions.remotePort ?? conn.port,
+      )
+    : undefined;
   // Postgres and SQL Server bind a pool to one database; browsing another db
   // needs a separate pool. Key it `id@db` so the manager keeps it distinct. URL mode
   // bakes the db into the DSN with no field to override, so it's field-mode only
@@ -166,6 +223,7 @@ export async function resolveSpec(conn: DbConnection, dbOverride?: string): Prom
     ssl,
     options: connectOptions,
     readOnly: conn.is_read_only === 1,
+    sshTunnel,
   };
   if (options.urlMode === true) {
     return { ...base, connectionString: secret || undefined };
@@ -232,6 +290,15 @@ export const listDatabases = (connectionId: string) =>
 export const introspect = (connectionId: string, database?: string, schema?: string) =>
   withReconnect(connectionId, () => apiCall<DbIntrospectResult>('dbClient.introspect', { connectionId, database, schema }));
 
+export const catalog = (connectionId: string, force = false) =>
+  withReconnect(connectionId, () => apiCall<DbCatalogSnapshot>('dbClient.catalog', { connectionId, force }));
+
+export const searchCatalog = (connectionId: string, query: string, limit = 100) =>
+  withReconnect(connectionId, () => apiCall<DbCatalogObject[]>('dbClient.searchCatalog', { connectionId, query, limit }));
+
+export const schemaSnapshot = (connectionId: string, schema: string) =>
+  withReconnect(connectionId, () => apiCall<DbSchemaSnapshot>('dbClient.schemaSnapshot', { connectionId, schema }));
+
 export const describeTable = (connectionId: string, schema: string, table: string) =>
   withReconnect(connectionId, () => apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table }));
 
@@ -261,6 +328,15 @@ export const runQuery = (
   opts?: { params?: unknown[]; maxRows?: number; timeoutMs?: number; queryId?: string; schema?: string },
 ) => withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.query', { connectionId, sql, ...opts }));
 
+export const runQueryBatch = (
+  connectionId: string,
+  statements: Array<{ sql: string; params?: unknown[] }>,
+  opts?: { maxRows?: number; timeoutMs?: number; queryId?: string; schema?: string },
+) => withReconnect(connectionId, () => apiCall<DbQueryBatchResult>('dbClient.queryBatch', { connectionId, statements, ...opts }));
+
+export const runMigration = (connectionId: string, changes: DbMigrationInput[], dryRun = false) =>
+  withReconnect(connectionId, () => apiCall<DbMigrationResult>('dbClient.migration', { connectionId, changes, dryRun }));
+
 export const cancelQuery = (connectionId: string, queryId: string) =>
   apiCall<void>('dbClient.cancel', { connectionId, queryId });
 
@@ -276,6 +352,9 @@ export const editRow = (input: {
   values?: Record<string, unknown>;
   dryRun?: boolean;
 }) => withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.editRow', input));
+
+export const editRows = (input: { connectionId: string; changes: DbRowChangeInput[]; dryRun?: boolean }) =>
+  withReconnect(input.connectionId, () => apiCall<DbBatchEditResult>('dbClient.editRows', input));
 
 export const ddl = (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) =>
   withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.ddl', input));

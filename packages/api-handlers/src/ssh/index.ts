@@ -34,7 +34,7 @@ export function sharedSshManager(): SshConnectionManager {
 }
 
 let _tunnels: TunnelManager | null = null;
-function sharedTunnelManager(): TunnelManager {
+export function sharedTunnelManager(): TunnelManager {
   if (!_tunnels) _tunnels = new TunnelManager(sharedSshManager());
   return _tunnels;
 }

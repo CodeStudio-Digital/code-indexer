@@ -17,6 +17,7 @@ import type {
   IndexInfo,
   QueryResult,
   RunBatchOptions,
+  RunBatchStatement,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -68,7 +69,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     }
   }
 
-  function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+  function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // One synchronous db handle (no pool to hop), but wrap the list in an explicit
     // transaction so a mid-list failure rolls back instead of leaving a partial apply.
@@ -77,7 +78,15 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
       db.exec('BEGIN');
       inTxn = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
-      for (const stmt of statements) last = execStatement(stmt, [], max);
+      for (let index = 0; index < statements.length; index += 1) {
+        const stmt = statements[index];
+        last = execStatement(
+          typeof stmt === 'string' ? stmt : stmt.sql,
+          typeof stmt === 'string' ? [] : (stmt.params ?? []),
+          max,
+        );
+        opts.onResult?.(last, index);
+      }
       db.exec('COMMIT');
       inTxn = false;
       return Promise.resolve(last);

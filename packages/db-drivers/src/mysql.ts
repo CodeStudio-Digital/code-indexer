@@ -16,6 +16,7 @@ import type {
   IndexInfo,
   QueryResult,
   RunBatchOptions,
+  RunBatchStatement,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -110,7 +111,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     }
   }
 
-  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+  async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
     if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection for the whole batch so START TRANSACTION/COMMIT and
@@ -133,9 +134,14 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       await conn.query('START TRANSACTION');
       inTxn = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
-      for (const stmt of statements) {
-        const [rows, fields] = await conn.query(stmt);
+      for (let index = 0; index < statements.length; index += 1) {
+        const stmt = statements[index];
+        const [rows, fields] = await conn.query(
+          typeof stmt === 'string' ? stmt : stmt.sql,
+          typeof stmt === 'string' ? undefined : stmt.params,
+        );
         last = shapeMysqlResult(rows, fields, max);
+        opts.onResult?.(last, index);
       }
       await conn.query('COMMIT');
       inTxn = false;

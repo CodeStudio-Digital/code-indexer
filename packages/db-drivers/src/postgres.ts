@@ -15,6 +15,7 @@ import type {
   IndexInfo,
   QueryResult,
   RunBatchOptions,
+  RunBatchStatement,
   RunQueryOptions,
   TableInfo,
   TableRef,
@@ -117,7 +118,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
     }
   }
 
-  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+  async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
     if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pinned client for the whole batch — a runQuery loop could hand each
@@ -141,8 +142,13 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       await client.query({ text: 'BEGIN' });
       inTxn = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
-      for (const stmt of statements) {
-        last = shapePgResult(await client.query({ text: stmt }), max);
+      for (let index = 0; index < statements.length; index += 1) {
+        const stmt = statements[index];
+        last = shapePgResult(await client.query({
+          text: typeof stmt === 'string' ? stmt : stmt.sql,
+          values: typeof stmt === 'string' ? undefined : stmt.params,
+        }), max);
+        opts.onResult?.(last, index);
       }
       await client.query({ text: 'COMMIT' });
       inTxn = false;

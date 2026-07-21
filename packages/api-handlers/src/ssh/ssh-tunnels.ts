@@ -100,6 +100,8 @@ export class TunnelManager {
     return new Promise<ActiveTunnel>((resolve, reject) => {
       server.once('error', (err) => reject(new ApiError('ssh_tunnel_failed', 502, `listen ${meta.bindHost}:${meta.bindPort} failed: ${err.message}`)));
       server.listen(meta.bindPort, meta.bindHost, () => {
+        const address = server.address();
+        if (address && typeof address !== 'string') meta.bindPort = address.port;
         server.removeAllListeners('error');
         server.on('error', () => undefined); // post-bind runtime socket errors are non-fatal
         resolve({ meta, hostId, stop: () => server.close() });
@@ -187,8 +189,9 @@ function validateTunnelInput(input: SshTunnelInput, bindHost: string): void {
   if (!isLoopback(bindHost)) {
     throw new ApiError('ssh_tunnel_bind_forbidden', 400, `non-loopback bind '${bindHost}' is not allowed`);
   }
-  if (!isPort(input.bindPort)) {
-    throw new ApiError('ssh_tunnel_bad_port', 400, 'bindPort must be between 1 and 65535');
+  const ephemeralLocalPort = input.bindPort === 0 && (input.kind === 'local' || input.kind === 'dynamic');
+  if (!ephemeralLocalPort && !isPort(input.bindPort)) {
+    throw new ApiError('ssh_tunnel_bad_port', 400, 'bindPort must be 0 for an automatic local port, or between 1 and 65535');
   }
   if (input.kind !== 'local' && input.kind !== 'remote' && input.kind !== 'dynamic') {
     throw new ApiError('ssh_tunnel_bad_kind', 400, 'tunnel kind must be local, remote or dynamic');

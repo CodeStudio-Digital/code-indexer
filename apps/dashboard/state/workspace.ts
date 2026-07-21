@@ -218,6 +218,8 @@ interface WorkspaceState {
   openMerge: (tab: OpenMerge) => void;
   /** Open a database table/query/result in the normal editor tab strip. */
   openDatabaseTab: (tab: OpenDatabaseTab) => void;
+  /** Update a retained database tab without refocusing the editor surface. */
+  updateDatabaseTab: (projectId: number, path: string, patch: Partial<OpenDatabaseTab>) => void;
   /** Open (or focus, if already open) a remote file from SFTP for in-editor editing. */
   openSftpFile: (tab: OpenSftpFile) => void;
   /** Flip the unsaved-edits dot on an open SFTP tab. */
@@ -403,6 +405,8 @@ interface PersistedLayout {
 }
 interface PersistedTabs {
   openFiles: Array<{ projectId: number; path: string }>;
+  /** Safe reconnectable descriptors; no credentials or live session handles. */
+  databaseTabs?: OpenDatabaseTab[];
   activeFilePath: string | null;
   /** Optional — absent in legacy payloads, which hydrate as a single pane. */
   layout?: PersistedLayout;
@@ -498,6 +502,9 @@ export function loadPersistedTabs(projectId: number): PersistedTabs {
     const openFiles = (Array.isArray(parsed.openFiles) ? parsed.openFiles : []).filter(
       (f) => !isIndexerInternalPath(f.path),
     );
+    const databaseTabs = (Array.isArray(parsed.databaseTabs) ? parsed.databaseTabs : []).filter(
+      (tab): tab is OpenDatabaseTab => tab?.kind === 'database' && tab.projectId === projectId && typeof tab.path === 'string' && !!tab.workTab,
+    );
     // Defensive parse of the optional layout: drop indexer paths inside panes too.
     let layout: PersistedLayout | undefined;
     const rawLayout = parsed.layout;
@@ -513,6 +520,7 @@ export function loadPersistedTabs(projectId: number): PersistedTabs {
     }
     return {
       openFiles,
+      databaseTabs,
       activeFilePath: typeof parsed.activeFilePath === 'string' ? parsed.activeFilePath : null,
       layout,
     };
@@ -544,9 +552,11 @@ export function savePersistedTabs(
       !isIndexerInternalPath(f.path) &&
       f.projectId === projectId,
   );
-  const realSet = new Set(realFiles.map((f) => f.path));
+  const databaseTabs = openFiles.filter((file): file is OpenDatabaseTab => file.kind === 'database' && file.projectId === projectId);
+  const realSet = new Set([...realFiles.map((file) => file.path), ...databaseTabs.map((tab) => tab.path)]);
   const payload: PersistedTabs = {
     openFiles: realFiles.map((f) => ({ projectId: f.projectId, path: f.path })),
+    databaseTabs,
     activeFilePath,
     layout: serializeLayout(panes, splitDir, activePaneId, (p) => realSet.has(p)),
   };
@@ -588,17 +598,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       const validPaths = persisted.openFiles
         .filter((e) => e.projectId === projectId) // guarda de migração p/ chaves contaminadas
         .map((e) => e.path);
+      for (const tab of persisted.databaseTabs ?? []) {
+        if (!validPaths.includes(tab.path)) validPaths.push(tab.path);
+      }
       const { panes, splitDir, activePaneId } = hydrateLayout(persisted, validPaths);
       // Pool = union of pane orders (so pool ⊆ panes, no dangling refs).
       const poolPaths = Array.from(new Set(panes.flatMap((p) => p.order)));
-      const hydrated: OpenTab[] = poolPaths.map((path) => ({
-        kind: 'file',
-        projectId,
-        path,
-        content: null,
-        dirty: false,
-        lastModified: null,
-      }));
+      const hydrated: OpenTab[] = poolPaths.map((path) => {
+        const database = persisted.databaseTabs?.find((tab) => tab.path === path);
+        if (database) return database;
+        return { kind: 'file', projectId, path, content: null, dirty: false, lastModified: null };
+      });
       return {
         activeProjectId: projectId,
         openFiles: hydrated,
@@ -654,7 +664,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   openDatabaseTab: (tab) => {
     set((s) => upsertVirtualTab(s, tab));
+    const state = useWorkspaceStore.getState();
+    savePersistedTabs(tab.projectId, state.openFiles, state.activeFilePath, state.panes, state.splitDir, state.activePaneId);
     requestEditorSurface(tab.projectId);
+  },
+
+  updateDatabaseTab: (projectId, path, patch) => {
+    set((state) => ({
+      openFiles: state.openFiles.map((file) => file.kind === 'database' && sameTab(file, { projectId, path }) ? { ...file, ...patch, kind: 'database', projectId, path } : file),
+    }));
+    const state = useWorkspaceStore.getState();
+    savePersistedTabs(projectId, state.openFiles, state.activeFilePath, state.panes, state.splitDir, state.activePaneId);
   },
 
   openSftpFile: (tab) => {
@@ -685,13 +705,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       ),
     })),
 
-  closeFile: (projectId, path) =>
+  closeFile: (projectId, path) => {
     set((s) => {
       const owner = s.panes.find((p) => p.order.includes(path));
       return closeTabReducer(s, owner?.id ?? s.activePaneId, projectId, path);
-    }),
+    });
+    const state = useWorkspaceStore.getState();
+    savePersistedTabs(projectId, state.openFiles, state.activeFilePath, state.panes, state.splitDir, state.activePaneId);
+  },
 
-  closeTabInPane: (paneId, projectId, path) => set((s) => closeTabReducer(s, paneId, projectId, path)),
+  closeTabInPane: (paneId, projectId, path) => {
+    set((s) => closeTabReducer(s, paneId, projectId, path));
+    const state = useWorkspaceStore.getState();
+    savePersistedTabs(projectId, state.openFiles, state.activeFilePath, state.panes, state.splitDir, state.activePaneId);
+  },
 
   closeOthers: (projectId, keepPath) =>
     set((s) => {

@@ -17,6 +17,7 @@
  */
 
 import type { ApiContext, AsyncStream } from './common.js';
+import type { SshConnectSpec } from './ssh.js';
 
 export type DbEngine =
   | 'postgres'
@@ -105,6 +106,12 @@ export interface DbConnectSpec {
   options?: Record<string, unknown>;
   /** App + driver safety valve — mutating statements/commands are rejected. */
   readOnly?: boolean;
+  /** Optional local SSH forward opened and owned by this DB connection. */
+  sshTunnel?: {
+    spec: SshConnectSpec;
+    remoteHost: string;
+    remotePort: number;
+  };
 }
 
 export interface DbColumn {
@@ -177,6 +184,23 @@ export interface DbIntrospectResult {
   tables: DbTableRef[];
 }
 
+export interface DbCatalogObject {
+  kind: 'schema' | 'table' | 'view' | 'function' | 'sequence';
+  name: string;
+  schema?: string;
+}
+
+export interface DbCatalogSnapshot {
+  objects: DbCatalogObject[];
+  refreshedAt: number;
+}
+
+export interface DbSchemaSnapshot {
+  schema: string;
+  tables: DbTableInfo[];
+  capturedAt: number;
+}
+
 // ─── DDL / DML edit specs (mirror @mcp/db-drivers, kept self-contained here) ──
 export type DbRowChangeKind = 'insert' | 'update' | 'delete';
 
@@ -242,6 +266,40 @@ export interface DbEditResult {
   result?: DbQueryResult;
 }
 
+/** Results from an atomic, single-session statement batch. */
+export interface DbQueryBatchResult {
+  results: DbQueryResult[];
+  durationMs: number;
+}
+
+/** Parameterized row mutation used by the atomic multi-row editor endpoint. */
+export interface DbRowChangeInput {
+  op: DbRowChangeKind;
+  schema?: string;
+  table: string;
+  pk?: Record<string, unknown>;
+  values?: Record<string, unknown>;
+}
+
+/** A whole grid changeset, previewed and committed as one unit. */
+export interface DbBatchEditResult extends DbEditResult {
+  applied: number;
+  results?: DbQueryResult[];
+}
+
+/** One ordered DDL operation in a generated schema migration. */
+export interface DbMigrationInput {
+  op: DbDdlOp;
+  spec: DbDdlSpec;
+}
+
+/** Preview/apply result for a selected schema migration. */
+export interface DbMigrationResult extends DbEditResult {
+  applied: number;
+  /** True when the engine can roll the complete migration back on failure. */
+  atomic: boolean;
+}
+
 export interface DbClientApi {
   /** Open + ping + close — a pre-flight for the editor; never keeps a pool. */
   testConnection(
@@ -266,6 +324,24 @@ export interface DbClientApi {
     input: { connectionId: string; database?: string; schema?: string },
     ctx: ApiContext,
   ): Promise<DbIntrospectResult>;
+
+  /** Build/read a connection-wide names catalog, independent of expanded tree nodes. */
+  catalog(
+    input: { connectionId: string; force?: boolean },
+    ctx: ApiContext,
+  ): Promise<DbCatalogSnapshot>;
+
+  /** Search the complete cached catalog (refreshing it when stale/missing). */
+  searchCatalog(
+    input: { connectionId: string; query: string; limit?: number },
+    ctx: ApiContext,
+  ): Promise<DbCatalogObject[]>;
+
+  /** Capture a detailed schema state for comparison/migration generation. */
+  schemaSnapshot(
+    input: { connectionId: string; schema: string },
+    ctx: ApiContext,
+  ): Promise<DbSchemaSnapshot>;
 
   /** Deep single-table introspection for the column editor. */
   describeTable(
@@ -307,6 +383,19 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbQueryResult>;
 
+  /** Execute statements on one pinned connection and commit them atomically. */
+  queryBatch(
+    input: {
+      connectionId: string;
+      statements: Array<{ sql: string; params?: unknown[] }>;
+      maxRows?: number;
+      timeoutMs?: number;
+      queryId?: string;
+      schema?: string;
+    },
+    ctx: ApiContext,
+  ): Promise<DbQueryBatchResult>;
+
   /** Abort an in-flight query by its client-supplied queryId. */
   cancel(input: { connectionId: string; queryId: string }, ctx: ApiContext): Promise<void>;
 
@@ -330,6 +419,12 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbEditResult>;
 
+  /** Preview or atomically apply a parameterized row changeset on one pinned connection. */
+  editRows(
+    input: { connectionId: string; changes: DbRowChangeInput[]; dryRun?: boolean },
+    ctx: ApiContext,
+  ): Promise<DbBatchEditResult>;
+
   /**
    * Run a DDL change (create/alter/drop table). `dryRun` returns the rendered
    * SQL preview WITHOUT executing. Rejected when the connection is read-only.
@@ -338,6 +433,12 @@ export interface DbClientApi {
     input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean },
     ctx: ApiContext,
   ): Promise<DbEditResult>;
+
+  /** Preview or apply an ordered set of generated DDL changes. */
+  migration(
+    input: { connectionId: string; changes: DbMigrationInput[]; dryRun?: boolean },
+    ctx: ApiContext,
+  ): Promise<DbMigrationResult>;
 
   /**
    * Stream a whole table out in row batches (server-paged, so neither the DB

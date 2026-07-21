@@ -8,10 +8,12 @@
  * the live introspection cache via `suggestions`.
  */
 import { useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { editor } from 'monaco-editor';
 import { LazyMonaco } from '../../api-client/LazyMonaco.js';
 import { registerCommandHandlers } from '../../../keymap/commands.js';
-import type { DbEngine } from '../types.js';
+import type { DbColumn, DbEngine } from '../types.js';
+import { analyzeSql, completionContext, extractTableReferences, type SqlTableReference } from './sql-intelligence.js';
 
 const KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'INSERT INTO', 'UPDATE', 'DELETE FROM', 'VALUES', 'SET',
@@ -36,6 +38,7 @@ export function SqlEditor({
   onRunAll,
   onFormat,
   suggestions,
+  resolveColumns,
   engine,
   height,
 }: {
@@ -47,14 +50,20 @@ export function SqlEditor({
   /** Format the buffer (Cmd/Ctrl+Alt+L). */
   onFormat?: () => void;
   suggestions: string[];
+  /** Resolve columns lazily for relations referenced by the current statement. */
+  resolveColumns?: (reference: SqlTableReference) => Promise<DbColumn[]>;
   /** Engine — adds dialect-specific function completions. */
   engine?: DbEngine;
   height?: string | number;
 }) {
+  const { t } = useTranslation('dbClient');
   const suggRef = useRef(suggestions);
   suggRef.current = suggestions;
   const fnRef = useRef<string[]>([]);
   fnRef.current = (engine && FUNCTIONS_BY_ENGINE[engine]) || [];
+  const resolveColumnsRef = useRef(resolveColumns);
+  resolveColumnsRef.current = resolveColumns;
+  const columnsCacheRef = useRef(new Map<string, DbColumn[]>());
   const runRef = useRef(onRun);
   runRef.current = onRun;
   const runAllRef = useRef(onRunAll);
@@ -64,7 +73,7 @@ export function SqlEditor({
 
   function onMount(ed: editor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')): void {
     const provider = monaco.languages.registerCompletionItemProvider('sql', {
-      provideCompletionItems(model, position) {
+      async provideCompletionItems(model, position) {
         if (model !== ed.getModel()) return { suggestions: [] };
         const word = model.getWordUntilPosition(position);
         const range = {
@@ -73,12 +82,48 @@ export function SqlEditor({
           startColumn: word.startColumn,
           endColumn: word.endColumn,
         };
+        const source = model.getValue();
+        const offset = model.getOffsetAt(position);
+        const context = completionContext(source, offset);
         const idents = suggRef.current.map((name) => ({
           label: name,
-          kind: monaco.languages.CompletionItemKind.Field,
+          kind: context === 'table' ? monaco.languages.CompletionItemKind.Struct : monaco.languages.CompletionItemKind.Field,
           insertText: name,
           range,
         }));
+        const columnItems: import('monaco-editor').languages.CompletionItem[] = [];
+        if (context === 'column' && resolveColumnsRef.current) {
+          const refs = extractTableReferences(source).slice(0, 8);
+          const resolved = await Promise.allSettled(refs.map(async (ref) => {
+            const key = `${ref.schema ?? ''}.${ref.table}`.toLowerCase();
+            const cached = columnsCacheRef.current.get(key);
+            if (cached) return { ref, columns: cached };
+            const columns = await resolveColumnsRef.current!(ref);
+            columnsCacheRef.current.set(key, columns);
+            return { ref, columns };
+          }));
+          for (const item of resolved) {
+            if (item.status !== 'fulfilled') continue;
+            const { ref, columns } = item.value;
+            for (const column of columns) {
+              const qualifier = ref.alias ?? ref.table;
+              columnItems.push({
+                label: `${qualifier}.${column.name}`,
+                detail: column.dataType,
+                kind: monaco.languages.CompletionItemKind.Field,
+                insertText: `${qualifier}.${column.name}`,
+                range,
+              });
+              columnItems.push({
+                label: column.name,
+                detail: `${ref.table} · ${column.dataType}`,
+                kind: monaco.languages.CompletionItemKind.Field,
+                insertText: column.name,
+                range,
+              });
+            }
+          }
+        }
         const kw = KEYWORDS.map((name) => ({
           label: name,
           kind: monaco.languages.CompletionItemKind.Keyword,
@@ -91,9 +136,32 @@ export function SqlEditor({
           insertText: name,
           range,
         }));
-        return { suggestions: [...idents, ...fns, ...kw] };
+        return { suggestions: context === 'table' ? [...idents, ...kw] : [...columnItems, ...idents, ...fns, ...kw] };
       },
     });
+
+    const syncDiagnostics = (): void => {
+      const model = ed.getModel();
+      if (!model) return;
+      const markers = analyzeSql(model.getValue(), suggRef.current).map((diagnostic) => {
+        const start = model.getPositionAt(diagnostic.start);
+        const end = model.getPositionAt(Math.max(diagnostic.end, diagnostic.start + 1));
+        return {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: end.lineNumber,
+          endColumn: end.column,
+          message: t(`query.diagnostic.${diagnostic.code}`),
+          code: diagnostic.code,
+          severity: diagnostic.severity === 'error'
+            ? monaco.MarkerSeverity.Error
+            : monaco.MarkerSeverity.Warning,
+        };
+      });
+      monaco.editor.setModelMarkers(model, 'database-sql', markers);
+    };
+    syncDiagnostics();
+    const diagnosticsDisposable = ed.onDidChangeModelContent(syncDiagnostics);
 
     const unregisterCommands = registerCommandHandlers([
       {
@@ -119,6 +187,9 @@ export function SqlEditor({
 
     ed.onDidDispose(() => {
       provider.dispose();
+      diagnosticsDisposable.dispose();
+      const model = ed.getModel();
+      if (model) monaco.editor.setModelMarkers(model, 'database-sql', []);
       unregisterCommands();
     });
   }

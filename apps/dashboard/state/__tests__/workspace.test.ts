@@ -9,9 +9,12 @@ import {
   useWorkspaceStore,
   serializeLayout,
   hydrateLayout,
+  loadPersistedTabs,
+  savePersistedTabs,
   __resetPaneSeqForTests,
   type OpenFile,
   type OpenSftpFile,
+  type OpenDatabaseTab,
   type EditorPaneState,
 } from '../workspace.js';
 
@@ -435,6 +438,18 @@ describe('abas do editor abertas por outras superfícies', () => {
 
 describe('serializeLayout / hydrateLayout (puro, round-trip)', () => {
   const real = () => true;
+
+  it('persiste descritor e rascunho SQL de abas de banco sem credenciais', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('window', { localStorage: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } });
+    const tab: OpenDatabaseTab = {
+      kind: 'database', projectId: 1, path: 'database:query:1:7', title: 'Query 1', engine: 'postgres', suggestions: ['users'],
+      workTab: { id: 'query:1:7', kind: 'query', title: '', connectionId: 7, connKey: '7', schema: 'public', initialSql: 'SELECT * FROM users', dirty: true },
+    };
+    savePersistedTabs(1, [tab], tab.path, [{ id: 'pane', order: [tab.path], activePath: tab.path }], null, 'pane');
+    expect(loadPersistedTabs(1).databaseTabs?.[0]).toMatchObject({ path: tab.path, workTab: { initialSql: 'SELECT * FROM users' } });
+    vi.unstubAllGlobals();
+  });
 
   it('layout legacy (sem campo layout) hidrata como painel único', () => {
     const { panes, splitDir } = hydrateLayout(

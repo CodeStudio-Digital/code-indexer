@@ -16,7 +16,7 @@ import { resolveDriverEntry } from './driver-registry.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
-  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IndexInfo, QueryResult, RunBatchOptions, RunQueryOptions, TableInfo, TableRef,
+  ColumnInfo, DatabaseDriver, DbConnectConfig, ForeignKeyInfo, IndexInfo, QueryResult, RunBatchOptions, RunBatchStatement, RunQueryOptions, TableInfo, TableRef,
 } from './types.js';
 
 interface OraResult {
@@ -96,7 +96,7 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     }
   }
 
-  async function runBatch(statements: string[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+  async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
     if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection with autoCommit OFF for the whole batch, so the list
@@ -113,13 +113,19 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
-      for (const stmt of statements) {
-        const res = await conn.execute(stmt, [], {
+      for (let index = 0; index < statements.length; index += 1) {
+        const stmt = statements[index];
+        const res = await conn.execute(
+          typeof stmt === 'string' ? stmt : stmt.sql,
+          typeof stmt === 'string' ? [] : (stmt.params ?? []),
+          {
           maxRows: max + 1,
           outFormat: oracledb.OUT_FORMAT_OBJECT,
           autoCommit: false,
-        });
+          },
+        );
         last = shapeOracleResult(res, max);
+        opts.onResult?.(last, index);
       }
       await conn.commit();
       committed = true;

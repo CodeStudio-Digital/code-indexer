@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban, Pencil } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban, Pencil, Link2 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { downloadBlob } from '../../api-client/download.js';
@@ -59,6 +59,7 @@ export function VirtualResultGrid({
   onSort,
   hiddenColumns,
   onRowOpen,
+  onRelatedRows,
   columnMeta,
 }: {
   result: DbQueryResult | null;
@@ -76,6 +77,8 @@ export function VirtualResultGrid({
   hiddenColumns?: Set<string>;
   /** Read-only row action (document store) — pencil per row → open the full record. */
   onRowOpen?: (row: Record<string, unknown>) => void;
+  /** Relational navigation — open rows connected through foreign keys. */
+  onRelatedRows?: (row: Record<string, unknown>) => void;
   /** Introspected relational metadata; enables the shared typed row editor. */
   columnMeta?: DbColumn[];
 }) {
@@ -259,6 +262,16 @@ export function VirtualResultGrid({
               return (
                 <div key={rk} className={cn('group absolute left-0 flex hover:bg-muted/30', isDeleted && 'opacity-50')} style={style}>
                   <div className="flex shrink-0 items-center justify-end gap-1 border-b border-r px-1 text-right text-muted-foreground/40 tabular-nums" style={{ width: ROWNUM_W }}>
+                    {onRelatedRows && (
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-muted-foreground/60 opacity-0 hover:text-primary group-hover:opacity-100"
+                        title={t('grid.relatedRows')}
+                        onClick={() => onRelatedRows(row)}
+                      >
+                        <Link2 className="h-3 w-3" />
+                      </button>
+                    )}
                     {editable ? (
                       <>
                         {!isDeleted && (
@@ -289,9 +302,9 @@ export function VirtualResultGrid({
                       >
                         <Pencil className="h-3 w-3" />
                       </button>
-                    ) : (
+                    ) : !onRelatedRows ? (
                       v.index + 1
-                    )}
+                    ) : null}
                   </div>
                   {columns.map((c) => {
                     const value = editable ? edits!.cellValue(rk, c, row[c]) : row[c];

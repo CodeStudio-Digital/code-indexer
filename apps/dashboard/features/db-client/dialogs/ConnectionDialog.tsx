@@ -43,6 +43,7 @@ interface FormState {
   defaultSchema: string;
   connectTimeoutSec: string;
   applicationName: string;
+  sshHostKey: string;
   is_read_only: boolean;
   color: string;
   group: string;
@@ -52,11 +53,17 @@ const COLORS = ['', '#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4
 
 function initialForm(existing: DbConnection | null): FormState {
   let opts: Record<string, unknown> = {};
+  let tunnel: { hostKey?: string } = {};
   if (existing) {
     try {
       opts = JSON.parse(existing.options_json || '{}') as Record<string, unknown>;
     } catch {
       opts = {};
+    }
+    try {
+      tunnel = existing.ssh_tunnel_json ? JSON.parse(existing.ssh_tunnel_json) as { hostKey?: string } : {};
+    } catch {
+      tunnel = {};
     }
   }
   return {
@@ -77,6 +84,7 @@ function initialForm(existing: DbConnection | null): FormState {
     defaultSchema: typeof opts.defaultSchema === 'string' ? opts.defaultSchema : '',
     connectTimeoutSec: typeof opts.connectTimeoutMs === 'number' ? String(opts.connectTimeoutMs / 1000) : '',
     applicationName: typeof opts.applicationName === 'string' ? opts.applicationName : '',
+    sshHostKey: tunnel.hostKey ?? (existing?.ssh_tunnel_host_id != null ? String(existing.ssh_tunnel_host_id) : ''),
     is_read_only: existing?.is_read_only === 1,
     color: existing?.color ?? '',
     group: existing?.group_name ?? '',
@@ -100,6 +108,7 @@ export function ConnectionDialog({
   const [form, setForm] = useState<FormState>(() => initialForm(existing));
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [sshHosts, setSshHosts] = useState<Array<{ key: string; host: { id: number; label: string; hostname: string } }>>([]);
   const meta = useMemo(() => engineMeta(form.engine), [form.engine]);
   const usesFile = !!meta?.usesFile;
   const isUrl = !usesFile && form.connType === 'url';
@@ -112,8 +121,10 @@ export function ConnectionDialog({
   // The dialog stays mounted between opens. Rehydrate it for New/Edit instead
   // of leaking the previous connection's fields into the next one.
   useEffect(() => {
-    if (open) setForm(initialForm(existing));
-  }, [open, existing]);
+    if (!open) return;
+    setForm(initialForm(existing));
+    void api.listDbTunnelHosts(projectId).then(setSshHosts).catch(() => setSshHosts([]));
+  }, [open, existing, projectId]);
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -150,12 +161,16 @@ export function ConnectionDialog({
           }
         : undefined;
     const options = buildOptions();
+    const sshTunnel = !usesFile && !isUrl && form.sshHostKey && form.host && form.port
+      ? await api.resolveSshTunnel(projectId, form.sshHostKey, form.host, Number(form.port))
+      : undefined;
     const base = {
       connectionId: existing ? String(existing.id) : `draft:${form.label || 'new'}`,
       engine: form.engine,
       ssl,
       options: Object.keys(options).length ? options : undefined,
       readOnly: form.is_read_only,
+      sshTunnel,
     };
     if (usesFile) {
       return { ...base, filePath: form.file_path || undefined };
@@ -206,6 +221,12 @@ export function ConnectionDialog({
         color: form.color || null,
         group_name: form.group.trim() || null,
         options: buildOptions(),
+        ssh_tunnel_host_id: !usesFile && !isUrl && form.sshHostKey
+          ? (sshHosts.find((item) => item.key === form.sshHostKey)?.host.id ?? (Number(form.sshHostKey) || null))
+          : null,
+        ssh_tunnel_json: !usesFile && !isUrl && form.sshHostKey
+          ? JSON.stringify({ hostKey: form.sshHostKey, remoteHost: form.host, remotePort: Number(form.port) })
+          : null,
       };
       // Encrypted secret blob: URL (carries the password) or the password itself.
       // Never reinterpret a saved URL as a password (or vice versa) after the
@@ -400,6 +421,15 @@ export function ConnectionDialog({
                     <Input value={form.applicationName} onChange={(e) => set('applicationName', e.target.value)} />
                   </Field>
                 </div>
+                {!isUrl && (
+                  <Field label={t('dialog.sshTunnel')}>
+                    <select className="h-8 w-full rounded-md border bg-background px-2" value={form.sshHostKey} onChange={(event) => set('sshHostKey', event.target.value)}>
+                      <option value="">{t('dialog.sshNone')}</option>
+                      {sshHosts.map((item) => <option key={item.key} value={item.key}>{item.host.label} · {item.host.hostname}</option>)}
+                    </select>
+                  </Field>
+                )}
+                <p className="text-[11px] text-muted-foreground">{t('dialog.sshHint')}</p>
               </TabsContent>
             </Tabs>
           )}
