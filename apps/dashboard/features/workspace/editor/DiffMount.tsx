@@ -18,6 +18,7 @@ import {
   type HunkData,
   type ViewType,
 } from 'react-diff-view';
+import 'react-diff-view/style/index.css';
 import { GitCompare } from 'lucide-react';
 import type { OpenDiff } from '../../../state/workspace.js';
 
