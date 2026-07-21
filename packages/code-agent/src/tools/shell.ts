@@ -6,7 +6,7 @@ import {
   defaultLocalShellPort,
   type IShellPort,
 } from '@mcp/code-agent/ports/shell-port.js';
-import { pathFor } from '@mcp/code-agent/tools/paths.js';
+import { pathFor, resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
 import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -219,6 +219,14 @@ const runCommandTool: CoderTool = {
       const abs = p.isAbsolute(sub) ? sub : p.resolve(ctx.cwd, sub);
       const rel = p.relative(ctx.cwd, abs);
       if (rel.startsWith('..') || p.isAbsolute(rel)) {
+        const external = resolveAuthorizedPath(sub, ctx.cwd, ctx.externalRoots, 'read');
+        if (external.ok && external.external) {
+          return err(
+            `cwd '${sub}' is an authorized external root, but local shell execution stays project-scoped ` +
+              'because it cannot yet be confined to one host directory. Use glob/read_file/list_directory ' +
+              'and other native filesystem tools for external roots.',
+          );
+        }
         return err(`cwd '${sub}' is outside project root`);
       }
       cwd = abs;

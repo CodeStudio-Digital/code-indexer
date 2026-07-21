@@ -36,6 +36,10 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     if (!s) return null;
     // Global session: a baseline may belong to a linked secondary project; use
     // its project_id when present, else the session's primary project.
+    if (projectId != null && projectId < 0) {
+      return sessionStore.listSessionFilesystemRoots(sessionId)
+        .find((root) => root.id === -projectId)?.root_path ?? null;
+    }
     const p = db.getProject(projectId ?? s.project_id);
     return p?.root_path ?? null;
   });

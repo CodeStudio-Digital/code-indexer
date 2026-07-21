@@ -25,6 +25,10 @@ export interface PromptPermissions {
    * Usually one entry.
    */
   writableRoots: string[];
+  /** Additional roots that native filesystem tools may inspect but not edit. */
+  readableRoots?: string[];
+  /** Whether ask_user can persist and activate an exact folder grant live. */
+  canRequestExternalRoots?: boolean;
   /** Effective tool-approval mode resolved at session start. */
   approvalMode: PromptApprovalMode;
 }
@@ -49,10 +53,19 @@ export function permissionsSection(p?: PromptPermissions): string {
   if (!p || p.writableRoots.length === 0) return '';
   const roots = p.writableRoots.map((r) => `\`${r}\``).join(', ');
   const rootLabel = p.writableRoots.length === 1 ? 'Writable root' : 'Writable roots';
+  const readable = (p.readableRoots ?? []).map((r) => `\`${r}\``).join(', ');
+  const readableLine = readable
+    ? `\n- Additional read-only roots: ${readable}. Use absolute paths for these roots.`
+    : '';
+  const requestLine = p.canRequestExternalRoots
+    ? `\n- When the user explicitly asks for an external directory that is not listed, call \`ask_user\` with \`filesystem_access:{path,access}\` and exactly two option values: \`authorize\` and \`deny\`. Prefer \`read\` unless edits are required. Do not ask the user to copy files or create another workspace.`
+    : '';
   return `
 
 # Permissions & execution boundary
-- Native filesystem tools enforce the authorized root. ${rootLabel}: ${roots}.
-- Local shell commands start inside that root but execute on the host unless a container sandbox is attached. Never read or write an outside path, even when the shell could resolve it.
+- Native filesystem tools enforce the authorized roots. ${rootLabel}: ${roots}.${readableLine}
+- Paths inside the project remain project-relative. Explicitly listed external roots use absolute paths and do not become project/configuration roots.
+- Local shell commands start inside the project root but execute on the host unless a container sandbox is attached. Shell cwd stays project-scoped; use native filesystem tools for external roots.
+- External access is granted per exact directory, never by inferring permission from a path in prose.${requestLine}
 - Tool approval mode: **${p.approvalMode}**. ${approvalLine(p.approvalMode)}`;
 }

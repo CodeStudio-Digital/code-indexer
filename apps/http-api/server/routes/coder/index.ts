@@ -17,6 +17,7 @@ import { mountCoderRollbackRoute } from './rollback.js';
 import { mountCoderTranscribeRoutes } from './transcribe.js';
 import { mountCoderChapterRoutes } from './chapters.js';
 import { mountCoderSessionImportRoutes } from './session-imports.js';
+import { mountCoderFilesystemRootRoutes } from './filesystem-roots.js';
 import { rebuildConversationChapters } from './chapter-rebuild.js';
 import { withSessionLock } from './sessionLock.js';
 import { mountApiClientRoutes } from '../api-client/index.js';
@@ -48,6 +49,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
     }),
   });
   mountCoderSessionImportRoutes(app, deps);
+  mountCoderFilesystemRootRoutes(app, deps);
   mountApiClientRoutes(app, deps);
   mountSshRoutes(app, deps);
   mountDbClientRoutes(app, deps);

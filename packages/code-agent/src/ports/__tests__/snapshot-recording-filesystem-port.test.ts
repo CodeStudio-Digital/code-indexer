@@ -53,7 +53,7 @@ class MemoryFilesystem implements IFilesystemPort {
   }
 }
 
-function harness() {
+function harness(secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: string }>) {
   let nextBaselineId = 1;
   let nextRoundId = 100;
   const recordBaselineAndEdit = vi.fn(() => ({
@@ -72,6 +72,7 @@ function harness() {
     sessionId: 1,
     projectId: 10,
     projectRoot: 'C:\\repo',
+    secondaryRoots,
     store,
     getTurn: () => 3,
     getRoundMessageId: () => 42,
@@ -129,6 +130,20 @@ describe('SnapshotRecordingFilesystemPort round snapshots', () => {
     );
     expect(recordRoundSnapshotMutation).toHaveBeenCalledWith(
       expect.objectContaining({ oversized: true }),
+    );
+  });
+
+  it('records an authorized external root in the negative filesystem-root id namespace', async () => {
+    const { fs, inner, recordBaselineAndEdit } = harness([
+      { projectId: -7, rootPath: 'C:\\external' },
+    ]);
+    inner.files.set('C:\\external\\src\\a.ts', 'before\n');
+
+    await fs.writeFile('C:\\external\\src\\a.ts', 'after\n');
+
+    expect(recordBaselineAndEdit).toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: -7, file_path: 'src/a.ts' }),
+      expect.anything(),
     );
   });
 

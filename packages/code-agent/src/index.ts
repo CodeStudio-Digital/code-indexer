@@ -1,4 +1,4 @@
-import { resolve as resolvePath, join as joinPath } from 'node:path';
+import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
@@ -50,6 +50,7 @@ import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-ma
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
+import { canonicalizeExternalRoot } from '@mcp/code-agent/tools/paths.js';
 import { applyPatchTool } from '@mcp/code-agent/tools/apply-patch.js';
 import { shellTools } from '@mcp/code-agent/tools/shell.js';
 import { gitToolsForProject } from '@mcp/code-agent/tools/git.js';
@@ -1152,6 +1153,53 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const workspace: WorkspaceContext = workspaceFromProject(project, sandboxBinding);
   const effectiveCwd = workspace.rootPath;
+  // External host roots are a local-session capability. A container-bound run
+  // cannot safely translate host paths into its filesystem namespace. Company
+  // agents also run without an interactive session owner, so keep grants scoped
+  // to ordinary local coder sessions.
+  const allowExternalFilesystemRoots = !sandboxBinding && !opts.companyContext;
+  const externalRoots: Array<{ id: number; rootPath: string; access: 'read' | 'write' }> = !allowExternalFilesystemRoots
+    ? []
+    : store.listSessionFilesystemRoots(session.id)
+        .filter((root) => existsSync(root.root_path))
+        .map((root) => ({ id: root.id, rootPath: root.root_path, access: root.access }));
+  // Snapshot rows already key files by project_id. Negative ids form a
+  // collision-free namespace for session filesystem-root ids without
+  // pretending those folders are indexed projects.
+  const snapshotRoots = [
+    ...secondaryRoots.map((root) => ({ projectId: root.projectId, rootPath: root.rootPath })),
+    ...externalRoots
+      .filter((root) => root.access === 'write')
+      .map((root) => ({ projectId: -root.id, rootPath: root.rootPath })),
+  ];
+  const authorizeFilesystemRoot = !allowExternalFilesystemRoots
+    ? undefined
+    : async (rawPath: string, access: 'read' | 'write') => {
+        const canonical = canonicalizeExternalRoot(rawPath);
+        if (!canonical.ok) throw new Error(canonical.reason);
+        const knownProjectRoots = [workspace.rootPath, ...secondaryRoots.map((root) => root.rootPath)];
+        const insideProject = knownProjectRoots.some((root) => {
+          const rel = relativePath(root, canonical.path);
+          return rel === '' || (!rel.startsWith('..') && !isAbsolutePath(rel));
+        });
+        if (insideProject) throw new Error('directory is already inside an authorized project root');
+
+        const persisted = store.listSessionFilesystemRoots(session.id);
+        const exact = persisted.find((root) => root.root_path.toLowerCase() === canonical.path.toLowerCase());
+        if (!exact && persisted.length >= 16) throw new Error('session filesystem root limit reached (16)');
+        const row = store.upsertSessionFilesystemRoot(session.id, canonical.path, access);
+        const active = externalRoots.find((root) => root.id === row.id);
+        if (active) {
+          active.rootPath = row.root_path;
+          active.access = row.access;
+        } else {
+          externalRoots.push({ id: row.id, rootPath: row.root_path, access: row.access });
+        }
+        if (row.access === 'write' && !snapshotRoots.some((root) => root.projectId === -row.id)) {
+          snapshotRoots.push({ projectId: -row.id, rootPath: row.root_path });
+        }
+        return { rootPath: row.root_path, access: row.access };
+      };
   const rawFsPort = sandboxBinding
     ? new SandboxFilesystemAdapter({
         driver: sandboxBinding.driver,
@@ -1187,7 +1235,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     projectId: workspace.projectId,
     // Global session: writes under a linked secondary root are recorded against
     // that root's project (correct diff/revert target). Empty for normal sessions.
-    secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
+    secondaryRoots: snapshotRoots,
     store: snapshotStore,
     getTurn: () => runnerRef?.turn ?? null,
     getRoundMessageId: () => runnerRef?.roundMessageId ?? null,
@@ -1205,7 +1253,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       dbHandle: store.getDb(),
       sessionId: session.id,
       projectRoot: workspace.rootPath,
-      secondaryRoots: secondaryRoots.map((r) => ({ projectId: r.projectId, rootPath: r.rootPath })),
+      secondaryRoots: snapshotRoots,
       // Same-registry access so absence detection resolves references through
       // the project's mcp__find_references (registered above with MCP tools).
       registry,
@@ -1245,6 +1293,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // target via `project: "<slug>"`, plus their overlays. Undefined for normal
     // and company sessions, so the single-root path is unchanged for them.
     roots: secondaryRoots.length > 0 ? secondaryRoots : undefined,
+    externalRoots,
+    authorizeFilesystemRoot,
     overlayByRoot: secondaryOverlays.size > 0 ? secondaryOverlays : undefined,
     overlay,
     toolOutputStore,
@@ -1259,7 +1309,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         const service = new SessionSnapshotService(snapshotStore, (kind, sid, projectId) => {
           if (kind !== 'coder' || sid !== session.id) return null;
           if (projectId != null) {
-            const sec = secondaryRoots.find((r) => r.projectId === projectId);
+            const sec = snapshotRoots.find((r) => r.projectId === projectId);
             if (sec) return sec.rootPath;
           }
           return workspace.rootPath;
@@ -1857,7 +1907,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // writable root (sandbox workdir or project root) + the approval mode.
     // Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
     permissions: {
-      writableRoots: [effectiveCwd],
+      writableRoots: [effectiveCwd, ...externalRoots.filter((root) => root.access === 'write').map((root) => root.rootPath)],
+      readableRoots: externalRoots.filter((root) => root.access === 'read').map((root) => root.rootPath),
+      canRequestExternalRoots: allowExternalFilesystemRoots,
       approvalMode: resolvedPermissionMode,
     },
     // AGENTS.md project instructions (loaded above). '' when none → block omitted.

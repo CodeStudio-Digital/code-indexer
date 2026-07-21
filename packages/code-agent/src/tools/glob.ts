@@ -5,7 +5,7 @@ import ignore from 'ignore';
 import { minimatch } from 'minimatch';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
+import { resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
@@ -59,7 +59,7 @@ export const globTool: CoderTool = {
     "USE: with mcp__grep_code when you need files matching a NAME pattern AND a content regex — glob first, then grep.\n" +
     "DON'T: use for content search — use mcp__grep_code (indexer-aware) or Grep.\n" +
     "DON'T: glob for one known path — just read_file it.\n" +
-    "DON'T: pass patterns starting with / or .. — the tool sandboxes to the project root.\n" +
+    "DON'T: pass absolute patterns — patterns stay relative to the selected project or authorized external root.\n" +
     'Respects .gitignore + .mcpindexignore by default (matching the indexer). Pass respect_ignore:false to bypass.',
   source: 'native',
   parameters: {
@@ -71,7 +71,7 @@ export const globTool: CoderTool = {
       },
       path: {
         type: 'string',
-        description: 'Optional project-relative subdirectory to scope the search. Defaults to the project root.',
+        description: 'Optional project-relative subdirectory or absolute path under an authorized external root. Defaults to the project root.',
       },
       respect_ignore: {
         type: 'boolean',
@@ -96,12 +96,16 @@ export const globTool: CoderTool = {
     const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
 
     let searchRoot = ctx.cwd;
+    let outputRoot = ctx.cwd;
+    let externalSearch = false;
     if (args.path) {
       const subdir = String(args.path).trim();
-      const resolved = resolveSafe(subdir, ctx.cwd);
-      if (!resolved) return err(`path '${subdir}' escapes the project root — rejected`);
-      if (!existsSync(resolved)) return err(`path not found: ${subdir}`);
-      searchRoot = resolved;
+      const resolved = resolveAuthorizedPath(subdir, ctx.cwd, ctx.externalRoots, 'read');
+      if (!resolved.ok) return err(resolved.reason);
+      if (!existsSync(resolved.abs)) return err(`path not found: ${subdir}`);
+      searchRoot = resolved.abs;
+      outputRoot = resolved.rootPath;
+      externalSearch = resolved.external;
     }
 
     const filtered: Array<{ rel: string; mtime: number }> = [];
@@ -135,14 +139,14 @@ export const globTool: CoderTool = {
           dot: false,
           absolute: false,
         });
-        const ig = respectIgnore ? loadIgnore(ctx.cwd) : null;
+        const ig = respectIgnore ? loadIgnore(outputRoot) : null;
         for (const relToRoot of matches) {
           const absPath = join(searchRoot, relToRoot);
-          const projectRel = relative(ctx.cwd, absPath).split('\\').join('/');
+          const projectRel = relative(outputRoot, absPath).split('\\').join('/');
           if (ig && ig.ignores(projectRel)) continue;
           let mtime = 0;
           try { mtime = statSync(absPath).mtimeMs; } catch { continue; }
-          filtered.push({ rel: projectRel, mtime });
+          filtered.push({ rel: externalSearch ? absPath : projectRel, mtime });
         }
       }
     } catch (e) {

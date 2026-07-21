@@ -1,7 +1,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { CASCADING_REPLACERS, type ReplacerHit } from '@mcp/code-agent/tools/edit-replacers.js';
-import { resolveSafe as resolveSafePath, pathFor } from '@mcp/code-agent/tools/paths.js';
+import { resolveAuthorizedPath, pathFor } from '@mcp/code-agent/tools/paths.js';
 import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
@@ -95,6 +95,24 @@ function overlayFor(ctx: ToolContext, projectId: number | undefined): ToolContex
   return ctx.overlay;
 }
 
+function resolveToolPath(
+  input: string,
+  selectedRoot: string,
+  ctx: ToolContext,
+  intent: 'read' | 'write',
+) {
+  return resolveAuthorizedPath(
+    input,
+    selectedRoot,
+    selectedRoot === ctx.cwd ? ctx.externalRoots : undefined,
+    intent,
+  );
+}
+
+function markOverlay(ctx: ToolContext, projectId: number | undefined, path: string, external: boolean): void {
+  if (!external) overlayFor(ctx, projectId)?.mark(path);
+}
+
 const writeFile: CoderTool = {
   name: 'write_file',
   description: maybeTerse(WRITE_FILE_DESC),
@@ -111,7 +129,7 @@ const writeFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root' },
       content: { type: 'string', description: 'Full new content of the file' },
     },
     required: ['path', 'content'],
@@ -123,12 +141,13 @@ const writeFile: CoderTool = {
     const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'write');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
     const fs = fsPort(ctx);
     await fs.mkdir(pathFor(root).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
-    overlayFor(ctx, projectId)?.mark(path);
+    markOverlay(ctx, projectId, path, resolved.external);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     const lines = content.split('\n').length;
     return ok(`Wrote ${path} (${lines} lines, ${content.length} bytes)`);
@@ -142,7 +161,7 @@ const createFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root' },
       content: { type: 'string', description: 'Initial content' },
     },
     required: ['path', 'content'],
@@ -154,8 +173,9 @@ const createFile: CoderTool = {
     const { root, projectId } = picked.sel;
     const path = String(args.path ?? '');
     const content = String(args.content ?? '');
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'write');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
     const fs = fsPort(ctx);
     try {
       await fs.access(abs);
@@ -165,7 +185,7 @@ const createFile: CoderTool = {
     }
     await fs.mkdir(pathFor(root).dirname(abs), { recursive: true });
     await fs.writeFile(abs, content);
-    overlayFor(ctx, projectId)?.mark(path);
+    markOverlay(ctx, projectId, path, resolved.external);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     return ok(`Created ${path} (${content.length} bytes)`);
   },
@@ -355,7 +375,7 @@ const editFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root' },
       old_string: { type: 'string', description: 'Text to find. Should match file content closely — minor whitespace differences are tolerated automatically.' },
       new_string: { type: 'string', description: 'Replacement text' },
       replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
@@ -374,8 +394,9 @@ const editFile: CoderTool = {
     if (!path) return err('path is required and cannot be empty');
     if (!oldStr) return err('old_string cannot be empty');
 
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'write');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
     const fs = fsPort(ctx);
 
     let content: string;
@@ -400,7 +421,7 @@ const editFile: CoderTool = {
       const r = applyEditWithTransform(content, oldStr, newStr, replaceAll, transform, label);
       if (r.applied && r.content !== undefined) {
         await fs.writeFile(abs, r.content);
-        overlayFor(ctx, projectId)?.mark(path);
+        markOverlay(ctx, projectId, path, resolved.external);
         emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
         const suffix = r.strategy === 'exact' ? '' : ` [matched via: ${r.strategy}]`;
         return ok(`Edited ${path} (${r.occurrences} replacement${r.occurrences === 1 ? '' : 's'})${suffix}`);
@@ -433,7 +454,7 @@ const editFile: CoderTool = {
       }
       const updated = applyHits(content, hits, newStr, replaceAll);
       await fs.writeFile(abs, updated);
-      overlayFor(ctx, projectId)?.mark(path);
+      markOverlay(ctx, projectId, path, resolved.external);
       emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
       return ok(`Edited ${path} (${hits.length} replacement${hits.length === 1 ? '' : 's'}) [matched via: ${label}]`);
     }
@@ -478,7 +499,7 @@ const readFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized external root' },
       start_line: { type: 'number', description: '1-indexed start line (optional)' },
       end_line: { type: 'number', description: '1-indexed inclusive end line (optional)' },
       symbol: {
@@ -500,8 +521,9 @@ const readFile: CoderTool = {
     const { root } = picked.sel;
     const path = String(args.path ?? '');
     if (!path) return err('path is required and cannot be empty');
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'read');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
 
     let content: string;
     try {
@@ -607,7 +629,7 @@ const listDirectory: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path (default: project root)' },
+      path: { type: 'string', description: 'Project-relative path (default: project root), or absolute path under an authorized external root' },
       recursive: { type: 'boolean', description: 'Recurse into subdirectories (default false)' },
     },
     additionalProperties: false,
@@ -617,13 +639,15 @@ const listDirectory: CoderTool = {
     if ('error' in picked) return picked.error;
     const { root } = picked.sel;
     const path = String(args.path ?? '.');
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'read');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
 
     try {
       const fs = fsPort(ctx);
       const recursive = Boolean(args.recursive);
-      const p = pathFor(root);
+      const outputRoot = resolved.rootPath;
+      const p = pathFor(outputRoot);
       const atGlobalRoot = !!ctx.globalWorkspace && (path === '.' || path === '');
       if (atGlobalRoot) {
         const lines = recursive
@@ -638,8 +662,8 @@ const listDirectory: CoderTool = {
         return ok(`${path} (${lines.length} entries)\n${lines.sort().join('\n')}`);
       }
       const entries = recursive
-        ? await walkDir(fs, abs, root)
-        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(root, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);
+        ? await walkDir(fs, abs, outputRoot)
+        : (await fs.readdir(abs, { withFileTypes: true })).map((e) => `${e.isDirectory() ? 'd' : 'f'} ${p.relative(outputRoot, p.resolve(abs, e.name)).replace(/\\/g, '/')}`);
       const lines = entries.sort();
       return ok(`${path} (${lines.length} entries)\n${lines.join('\n')}`);
     } catch (e) {
@@ -749,7 +773,7 @@ export const multiEdit: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path to the file to edit.' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root.' },
       edits: {
         type: 'array',
         description: 'Ordered list of find/replace operations to apply sequentially. All must succeed, otherwise the file is left untouched (atomic).',
@@ -777,8 +801,9 @@ export const multiEdit: CoderTool = {
     if (edits.length === 0) return err('edits array cannot be empty — use write_file to replace the whole file or edit_file for a single change.');
     if (edits.length > 50) return err(`edits array has ${edits.length} items, max 50 per call. Split into multiple calls.`);
 
-    const abs = resolveSafePath(path, root);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveToolPath(path, root, ctx, 'write');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
     const fs = fsPort(ctx);
 
     let content: string;
@@ -836,7 +861,7 @@ export const multiEdit: CoderTool = {
     const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
     if (failed.length === 0) {
       await fs.writeFile(abs, current);
-      overlayFor(ctx, projectId)?.mark(path);
+      markOverlay(ctx, projectId, path, resolved.external);
       emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
       const summary = outcomes
         .filter((o): o is Extract<EditOutcome, { ok: true }> => o.ok)

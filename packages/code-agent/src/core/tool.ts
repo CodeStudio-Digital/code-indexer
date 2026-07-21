@@ -284,6 +284,19 @@ export interface ToolContext {
    * unchanged for them.
    */
   roots?: ReadonlyArray<{ projectId: number; name: string; slug: string; rootPath: string }>;
+  /** Host directories explicitly authorized for this session. These are kept
+   * separate from linked projects: they are not indexed/config roots and are
+   * reachable only through native filesystem tools using absolute paths. */
+  externalRoots?: ReadonlyArray<{
+    id: number;
+    rootPath: string;
+    access: 'read' | 'write';
+  }>;
+  /** Persist and activate one user-approved external root during a live run. */
+  authorizeFilesystemRoot?: (
+    rootPath: string,
+    access: 'read' | 'write',
+  ) => Promise<{ rootPath: string; access: 'read' | 'write' }>;
   /**
    * Per-secondary-root session overlays keyed by projectId. `overlay` (below)
    * stays the PRIMARY's overlay; a write to a secondary root marks the touched

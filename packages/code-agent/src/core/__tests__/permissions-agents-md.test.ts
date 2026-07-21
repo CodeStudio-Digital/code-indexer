@@ -33,6 +33,19 @@ describe('permissionsSection', () => {
     expect(permissionsSection({ writableRoots: ['a', 'b'], approvalMode: 'ask' })).toContain('Writable roots: `a`, `b`');
   });
 
+  it('lists read-only external roots separately from writable roots', () => {
+    const out = permissionsSection({
+      writableRoots: ['D:/project', 'D:/editable'],
+      readableRoots: ['C:/reference'],
+      canRequestExternalRoots: true,
+      approvalMode: 'auto',
+    });
+    expect(out).toContain('Writable roots: `D:/project`, `D:/editable`');
+    expect(out).toContain('Additional read-only roots: `C:/reference`');
+    expect(out).toContain('use native filesystem tools for external roots');
+    expect(out).toContain('filesystem_access:{path,access}');
+  });
+
   it('is empty when no policy or no roots', () => {
     expect(permissionsSection(undefined)).toBe('');
     expect(permissionsSection({ writableRoots: [], approvalMode: 'auto' })).toBe('');

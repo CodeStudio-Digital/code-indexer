@@ -13,6 +13,7 @@ import * as tasks from './tasks.js';
 import * as goals from './goals.js';
 import * as sessionDrive from './session-drive.js';
 import * as chapters from './chapters.js';
+import * as filesystemRoots from './filesystem-roots.js';
 
 const require = createRequire(import.meta.url);
 
@@ -235,6 +236,7 @@ export function forkBeforeMessage(
       model: sourceSession.model,
     });
     if (sourceSession.group_id != null) state.setGroup(db, created.id, sourceSession.group_id);
+    filesystemRoots.copy(db, sourceSessionId, created.id);
     const idMap = copyRawMessages(db, created.id, sourceRows.slice(0, targetIdx));
     // `chapters.copy` only copies chapters whose start AND end ids are mapped.
     // Therefore a fork inside a chapter keeps the last complete predecessor,
@@ -389,6 +391,7 @@ export function duplicate(db: DB, sourceId: number): CoderSession {
       model: sourceSession.model,
     });
     if (sourceSession.group_id != null) state.setGroup(db, created.id, sourceSession.group_id);
+    filesystemRoots.copy(db, sourceId, created.id);
     // Inherit the Drive notes (project-scoped investigations are already shared).
     sessionDrive.copyMemory(db, sourceId, created.id);
     const idMap = copyRawMessages(db, created.id, sourceRows);

@@ -16,6 +16,7 @@ import { OutputCapPicker } from './OutputCapPicker.js';
 import { MicButton } from './MicButton.js';
 import { MicDevicePicker } from './MicDevicePicker.js';
 import type { OutputCapLevel } from './output-cap-levels.js';
+import { SessionFilesystemRootsControl } from './SessionFilesystemRootsControl.js';
 
 interface ComposerActionIconsProps {
   streaming: boolean;
@@ -174,6 +175,10 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
 
       {setOutputCapLevel && (
         <OutputCapPicker value={outputCapLevel ?? 'economic'} onChange={setOutputCapLevel} />
+      )}
+
+      {sessionId != null && (
+        <SessionFilesystemRootsControl sessionId={sessionId} streaming={streaming} />
       )}
 
       {setToolPermissionMode && (

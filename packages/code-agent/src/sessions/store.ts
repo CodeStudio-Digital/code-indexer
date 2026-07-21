@@ -40,6 +40,8 @@ import type {
   ExternalSessionSource,
   ImportExternalSessionResult,
   PersistExternalSessionInput,
+  SessionFilesystemAccess,
+  SessionFilesystemRoot,
 } from '@mcp/code-agent/sessions/types.js';
 
 import * as core from './store/sessions-core.js';
@@ -67,6 +69,7 @@ import * as subagentRecommendations from './store/subagent-recommendations.js';
 import * as chapters from './store/chapters.js';
 import * as compactionAttempts from './store/compaction-attempts.js';
 import * as sessionImports from './store/imports.js';
+import * as filesystemRoots from './store/filesystem-roots.js';
 import type {
   SemanticMutation,
   SemanticMutationFence,
@@ -130,6 +133,11 @@ export class SessionStore {
   getSessionProjects(sessionId: number): LinkedProject[] { return sessionProjects.listLinked(this.db, sessionId); }
   linkSessionProject(sessionId: number, projectId: number, opts: { label?: string | null; isPrimary?: boolean } = {}): void { sessionProjects.add(this.db, sessionId, projectId, opts); }
   unlinkSessionProject(sessionId: number, projectId: number): void { sessionProjects.remove(this.db, sessionId, projectId); }
+  listSessionFilesystemRoots(sessionId: number): SessionFilesystemRoot[] { return filesystemRoots.list(this.db, sessionId); }
+  upsertSessionFilesystemRoot(sessionId: number, rootPath: string, access: SessionFilesystemAccess): SessionFilesystemRoot {
+    return filesystemRoots.upsert(this.db, sessionId, rootPath, access);
+  }
+  removeSessionFilesystemRoot(sessionId: number, rootId: number): boolean { return filesystemRoots.remove(this.db, sessionId, rootId); }
   /** Count sessions referencing a project — refcount for synthetic global workspaces. */
   countSessionsForProject(projectId: number): number { return core.countSessionsForProject(this.db, projectId); }
   /** Canonical real-project links of a synthetic union (from any sibling session). */

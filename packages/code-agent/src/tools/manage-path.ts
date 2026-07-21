@@ -6,7 +6,7 @@ import {
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import { MANAGE_PATH_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
-import { pathFor, resolveSafe as resolveSafePath } from '@mcp/code-agent/tools/paths.js';
+import { pathFor, resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
 
 type Operation = 'mkdir' | 'move' | 'delete';
 type DeleteMode = 'trash' | 'permanent';
@@ -25,18 +25,20 @@ function hasTraversal(value: string): boolean {
   return value.split(/[\\/]+/).some((part) => part === '..');
 }
 
-function safeTarget(raw: unknown, ctx: ToolContext): { abs: string; rel: string } | { error: string } {
+function safeTarget(raw: unknown, ctx: ToolContext): {
+  abs: string;
+  rel: string;
+  display: string;
+  rootPath: string;
+  external: boolean;
+} | { error: string } {
   const input = cleanInput(raw);
   if (!input) return { error: 'Path is required' };
   if (hasTraversal(input)) return { error: `Path '${input}' uses traversal segments` };
 
-  const p = pathFor(ctx.cwd);
-  if (p.isAbsolute(input)) return { error: `Path '${input}' must be project-relative` };
-
-  const abs = resolveSafePath(input, ctx.cwd);
-  if (!abs) return { error: `Path '${input}' is outside project root` };
-
-  const rel = p.relative(ctx.cwd, abs).replace(/\\/g, '/');
+  const resolved = resolveAuthorizedPath(input, ctx.cwd, ctx.externalRoots, 'write');
+  if (!resolved.ok) return { error: resolved.reason };
+  const rel = resolved.relativePath;
   if (!rel || rel === '.') return { error: 'Refusing to operate on the project root' };
 
   const top = rel.split('/').filter(Boolean)[0]?.toLowerCase();
@@ -44,7 +46,13 @@ function safeTarget(raw: unknown, ctx: ToolContext): { abs: string; rel: string 
     return { error: `Refusing to operate on protected path '${top}'` };
   }
 
-  return { abs, rel };
+  return {
+    abs: resolved.abs,
+    rel,
+    display: resolved.external ? resolved.abs : rel,
+    rootPath: resolved.rootPath,
+    external: resolved.external,
+  };
 }
 
 async function exists(fs: IFilesystemPort, abs: string): Promise<boolean> {
@@ -61,13 +69,13 @@ async function isNonEmptyDirectory(fs: IFilesystemPort, abs: string): Promise<bo
   return entries.length > 0;
 }
 
-function trashPath(ctx: ToolContext, rel: string): { abs: string; rel: string } {
-  const p = pathFor(ctx.cwd);
+function trashPath(rootPath: string, rel: string): { abs: string; rel: string } {
+  const p = pathFor(rootPath);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parts = rel.split('/').filter(Boolean);
   const trashRel = ['.mcp-indexer', 'trash', `${stamp}-${Date.now()}`, ...parts].join('/');
   return {
-    abs: p.resolve(ctx.cwd, ...trashRel.split('/')),
+    abs: p.resolve(rootPath, ...trashRel.split('/')),
     rel: trashRel,
   };
 }
@@ -80,12 +88,12 @@ async function mkdir(args: Record<string, unknown>, ctx: ToolContext): Promise<T
   const alreadyExists = await exists(fs, target.abs);
   if (alreadyExists) {
     const st = await fs.stat(target.abs);
-    if (!st.isDirectory()) return err(`Path '${target.rel}' already exists and is not a directory`);
+    if (!st.isDirectory()) return err(`Path '${target.display}' already exists and is not a directory`);
   }
   await fs.mkdir(target.abs, { recursive: true });
-  ctx.overlay?.mark(target.rel);
+  if (!target.external) ctx.overlay?.mark(target.rel);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
-  return ok(`${alreadyExists ? 'Directory already exists' : 'Created directory'}: ${target.rel}`);
+  return ok(`${alreadyExists ? 'Directory already exists' : 'Created directory'}: ${target.display}`);
 }
 
 async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -93,24 +101,29 @@ async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<To
   if ('error' in from) return err(`from_path: ${from.error}`);
   const to = safeTarget(args.to_path, ctx);
   if ('error' in to) return err(`to_path: ${to.error}`);
+  if (from.rootPath.toLowerCase() !== to.rootPath.toLowerCase()) {
+    return err('Moves across project/external root boundaries are not allowed');
+  }
 
   const fs = fsPort(ctx);
-  if (!(await exists(fs, from.abs))) return err(`Source '${from.rel}' does not exist`);
-  if (await exists(fs, to.abs)) return err(`Destination '${to.rel}' already exists`);
+  if (!(await exists(fs, from.abs))) return err(`Source '${from.display}' does not exist`);
+  if (await exists(fs, to.abs)) return err(`Destination '${to.display}' already exists`);
 
   const fromStats = await fs.stat(from.abs);
   if (fromStats.isDirectory() && (to.rel === from.rel || to.rel.startsWith(`${from.rel}/`))) {
-    return err(`Refusing to move '${from.rel}' into itself`);
+    return err(`Refusing to move '${from.display}' into itself`);
   }
 
-  const p = pathFor(ctx.cwd);
+  const p = pathFor(to.rootPath);
   await fs.mkdir(p.dirname(to.abs), { recursive: true });
   await fs.rename(from.abs, to.abs);
-  ctx.overlay?.mark(from.rel);
-  ctx.overlay?.mark(to.rel);
+  if (!from.external) {
+    ctx.overlay?.mark(from.rel);
+    ctx.overlay?.mark(to.rel);
+  }
   emitRecentFileTouched({ absolutePath: from.abs, kind: 'edit' });
   emitRecentFileTouched({ absolutePath: to.abs, kind: 'edit' });
-  return ok(`Moved ${from.rel} -> ${to.rel}`);
+  return ok(`Moved ${from.display} -> ${to.display}`);
 }
 
 async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
@@ -118,7 +131,7 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
   if ('error' in target) return err(target.error);
 
   const fs = fsPort(ctx);
-  if (!(await exists(fs, target.abs))) return err(`Path '${target.rel}' does not exist`);
+  if (!(await exists(fs, target.abs))) return err(`Path '${target.display}' does not exist`);
 
   const mode = cleanInput(args.delete_mode) === 'permanent' ? 'permanent' : 'trash';
   const recursive = Boolean(args.recursive);
@@ -126,30 +139,30 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
   const st = await fs.stat(target.abs);
 
   if (st.isDirectory() && !recursive && (await isNonEmptyDirectory(fs, target.abs))) {
-    return err(`Directory '${target.rel}' is not empty. Set recursive=true and confirm 'DELETE ${target.rel}'.`);
+    return err(`Directory '${target.display}' is not empty. Set recursive=true and confirm 'DELETE ${target.display}'.`);
   }
 
   if (mode === 'permanent') {
-    const expected = `PERMANENT DELETE ${target.rel}`;
+    const expected = `PERMANENT DELETE ${target.display}`;
     if (confirm !== expected) return err(`Permanent delete requires confirm='${expected}'`);
     await fs.rm(target.abs, { recursive, force: false });
-    ctx.overlay?.mark(target.rel);
+    if (!target.external) ctx.overlay?.mark(target.rel);
     emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
-    return ok(`Deleted permanently: ${target.rel}`);
+    return ok(`Deleted permanently: ${target.display}`);
   }
 
   if (recursive) {
-    const expected = `DELETE ${target.rel}`;
+    const expected = `DELETE ${target.display}`;
     if (confirm !== expected) return err(`Recursive delete requires confirm='${expected}'`);
   }
 
-  const trash = trashPath(ctx, target.rel);
-  const p = pathFor(ctx.cwd);
+  const trash = trashPath(target.rootPath, target.rel);
+  const p = pathFor(target.rootPath);
   await fs.mkdir(p.dirname(trash.abs), { recursive: true });
   await fs.rename(target.abs, trash.abs);
-  ctx.overlay?.mark(target.rel);
+  if (!target.external) ctx.overlay?.mark(target.rel);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
-  return ok(`Moved ${target.rel} to trash: ${trash.rel}`);
+  return ok(`Moved ${target.display} to trash: ${trash.abs}`);
 }
 
 export const managePathTool: CoderTool = {
@@ -170,9 +183,9 @@ export const managePathTool: CoderTool = {
           "Which args each operation requires — 'mkdir': path; 'move': from_path + to_path; " +
           "'delete': path (+ recursive and confirm for non-empty dirs, delete_mode defaults to trash).",
       },
-      path: { type: 'string', description: 'Project-relative path for mkdir/delete' },
-      from_path: { type: 'string', description: 'Project-relative source path for move' },
-      to_path: { type: 'string', description: 'Project-relative destination path for move' },
+      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root, for mkdir/delete' },
+      from_path: { type: 'string', description: 'Project-relative or authorized writable external source path for move' },
+      to_path: { type: 'string', description: 'Project-relative or authorized writable external destination path for move (same root as source)' },
       recursive: { type: 'boolean', description: 'Required for non-empty directory deletes' },
       delete_mode: { type: 'string', enum: ['trash', 'permanent'], description: 'Defaults to trash' },
       confirm: { type: 'string', description: "Exact confirmation string for recursive/permanent deletes" },

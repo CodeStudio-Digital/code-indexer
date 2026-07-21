@@ -86,6 +86,18 @@ export const askUser: CoderTool = {
           'the answer returns the chosen values joined by ", ". Use for "select all that apply" questions ' +
           '(e.g. which screens the app needs, what data it stores, which login methods). Default false = pick one.',
       },
+      filesystem_access: {
+        type: 'object',
+        description:
+          'Optional exact external-folder grant requested from the user. Use only when the user asked to access that folder. ' +
+          'When set, options must be exactly authorize/deny and free-form/multi-select are disabled.',
+        properties: {
+          path: { type: 'string', description: 'Existing absolute directory path requested by the user.' },
+          access: { type: 'string', enum: ['read', 'write'], description: 'Requested access; prefer read unless edits are required.' },
+        },
+        required: ['path', 'access'],
+        additionalProperties: false,
+      },
     },
     required: ['question'],
     additionalProperties: false,
@@ -102,6 +114,24 @@ export const askUser: CoderTool = {
     }
 
     const optsRaw = Array.isArray(args.options) ? args.options : undefined;
+    const filesystemRaw = args.filesystem_access && typeof args.filesystem_access === 'object'
+      ? args.filesystem_access as { path?: unknown; access?: unknown }
+      : null;
+    const filesystemAccess = filesystemRaw
+      ? {
+          path: String(filesystemRaw.path ?? '').trim(),
+          access: filesystemRaw.access === 'write' ? 'write' as const : 'read' as const,
+        }
+      : null;
+    if (filesystemAccess) {
+      if (!filesystemAccess.path) return err('filesystem_access.path cannot be empty');
+      if (filesystemRaw?.access !== 'read' && filesystemRaw?.access !== 'write') {
+        return err("filesystem_access.access must be 'read' or 'write'");
+      }
+      if (!ctx.authorizeFilesystemRoot) {
+        return err('external filesystem access requests are unavailable in this runtime');
+      }
+    }
     if (optsRaw !== undefined) {
       if (optsRaw.length < 2 || optsRaw.length > 8) {
         return err(
@@ -123,15 +153,28 @@ export const askUser: CoderTool = {
         seen.add(o.value);
       }
     }
-    const allowFreeform = Boolean(args.allow_freeform);
+    if (filesystemAccess) {
+      const values = new Set(options?.map((option) => option.value));
+      if (options?.length !== 2 || !values.has('authorize') || !values.has('deny')) {
+        return err("filesystem access questions require exactly two option values: 'authorize' and 'deny'");
+      }
+      if (args.allow_freeform || args.multi_select) {
+        return err('filesystem access questions cannot allow free-form or multi-select answers');
+      }
+    }
+    const allowFreeform = filesystemAccess ? false : Boolean(args.allow_freeform);
     // multi_select is only meaningful with buttons; ignored for free-form-only.
     const multiSelect = Boolean(args.multi_select) && !!options && options.length > 0;
 
+    const displayedQuestion = filesystemAccess
+      ? `${question}\n\nRequested external directory (${filesystemAccess.access === 'write' ? 'read and write' : 'read-only'}):` +
+        `\n\n    ${filesystemAccess.path.replace(/[\r\n]+/g, ' ')}`
+      : question;
     const id = `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     runner.emit('question_posted', {
       type: 'question',
       id,
-      question,
+      question: displayedQuestion,
       options,
       allowFreeform,
       multiSelect,
@@ -151,6 +194,17 @@ export const askUser: CoderTool = {
     if (parsed.aborted) return err('Question aborted by user.');
     if (parsed.interrupted) {
       return err(formatInterruptedResult('ask_user', parsed));
+    }
+    if (filesystemAccess && parsed.answer === 'authorize') {
+      try {
+        const granted = await ctx.authorizeFilesystemRoot!(filesystemAccess.path, filesystemAccess.access);
+        return ok(
+          `User answered: authorize\nFilesystem root authorized for this session: ` +
+            `${granted.rootPath} (${granted.access}).`,
+        );
+      } catch (error) {
+        return err(`Could not authorize filesystem root: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return ok(formatAskUserResult(parsed.answer ?? answer));
   },

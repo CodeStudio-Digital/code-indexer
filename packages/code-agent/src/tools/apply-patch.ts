@@ -26,7 +26,7 @@
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveSafe as resolveSafePath, pathFor } from '@mcp/code-agent/tools/paths.js';
+import { resolveAuthorizedPath, pathFor } from '@mcp/code-agent/tools/paths.js';
 import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
@@ -297,9 +297,9 @@ export interface ApplyResult {
 }
 
 type PlannedOp =
-  | { kind: 'add'; abs: string; data: string; relPath: string }
-  | { kind: 'delete'; abs: string; relPath: string }
-  | { kind: 'write'; abs: string; data: string; relPath: string }
+  | { kind: 'add'; abs: string; data: string; relPath: string; rootPath: string; external: boolean }
+  | { kind: 'delete'; abs: string; relPath: string; rootPath: string; external: boolean }
+  | { kind: 'write'; abs: string; data: string; relPath: string; rootPath: string; external: boolean }
   | {
       kind: 'move';
       oldAbs: string;
@@ -307,6 +307,8 @@ type PlannedOp =
       data: string;
       oldRel: string;
       newRel: string;
+      rootPath: string;
+      external: boolean;
     };
 
 export async function applyParsedPatch(
@@ -326,33 +328,46 @@ export async function applyParsedPatch(
   // writes. Any `throw` here leaves the working tree untouched.
   for (const action of patch.actions) {
     if (action.kind === 'add') {
-      const abs = resolveSafePath(action.path, ctx.cwd);
-      if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
+      const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+      if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
       planned.push({
         kind: 'add',
-        abs,
+        abs: resolved.abs,
         data: action.lines.join('\n'),
         relPath: action.path,
+        rootPath: resolved.rootPath,
+        external: resolved.external,
       });
       continue;
     }
 
     if (action.kind === 'delete') {
-      const abs = resolveSafePath(action.path, ctx.cwd);
-      if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
-      planned.push({ kind: 'delete', abs, relPath: action.path });
+      const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+      if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
+      planned.push({
+        kind: 'delete',
+        abs: resolved.abs,
+        relPath: action.path,
+        rootPath: resolved.rootPath,
+        external: resolved.external,
+      });
       continue;
     }
 
     // update
-    const abs = resolveSafePath(action.path, ctx.cwd);
-    if (!abs) throw new Error(`apply_patch: path '${action.path}' outside project root`);
+    const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+    if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
+    const abs = resolved.abs;
     let newAbs: string | null = null;
+    let moveResolved: Extract<ReturnType<typeof resolveAuthorizedPath>, { ok: true }> | null = null;
     if (action.movePath) {
-      newAbs = resolveSafePath(action.movePath, ctx.cwd);
-      if (!newAbs) {
-        throw new Error(`apply_patch: move target '${action.movePath}' outside project root`);
+      const target = resolveAuthorizedPath(action.movePath, ctx.cwd, ctx.externalRoots, 'write');
+      if (!target.ok) throw new Error(`apply_patch: ${target.reason}`);
+      if (target.rootPath.toLowerCase() !== resolved.rootPath.toLowerCase()) {
+        throw new Error('apply_patch: moves across project/external root boundaries are not allowed');
       }
+      moveResolved = target;
+      newAbs = target.abs;
     }
 
     const buffered = inMemoryUpdates.get(abs);
@@ -390,9 +405,18 @@ export async function applyParsedPatch(
         data: finalContent,
         oldRel: action.path,
         newRel: action.movePath!,
+        rootPath: moveResolved!.rootPath,
+        external: moveResolved!.external,
       });
     } else {
-      planned.push({ kind: 'write', abs, data: finalContent, relPath: action.path });
+      planned.push({
+        kind: 'write',
+        abs,
+        data: finalContent,
+        relPath: action.path,
+        rootPath: resolved.rootPath,
+        external: resolved.external,
+      });
     }
   }
 
@@ -403,22 +427,22 @@ export async function applyParsedPatch(
   // human can decide whether to retry. Not crash-safe (no temp+rename);
   // tracked as a follow-up.
   const result: ApplyResult = { added: [], updated: [], deleted: [], moved: [] };
-  const path = pathFor(ctx.cwd);
   for (let i = 0; i < planned.length; i++) {
     const op = planned[i];
+    const path = pathFor(op.rootPath);
     try {
       if (op.kind === 'add') {
         await fs.mkdir(path.dirname(op.abs), { recursive: true });
         await fs.writeFile(op.abs, op.data);
-        ctx.overlay?.mark(op.relPath);
+        if (!op.external) ctx.overlay?.mark(op.relPath);
         result.added.push(op.relPath);
       } else if (op.kind === 'delete') {
         await fs.unlink(op.abs);
-        ctx.overlay?.mark(op.relPath);
+        if (!op.external) ctx.overlay?.mark(op.relPath);
         result.deleted.push(op.relPath);
       } else if (op.kind === 'write') {
         await fs.writeFile(op.abs, op.data);
-        ctx.overlay?.mark(op.relPath);
+        if (!op.external) ctx.overlay?.mark(op.relPath);
         result.updated.push(op.relPath);
       } else {
         // move: write new first, then unlink old. If write fails the
@@ -426,8 +450,10 @@ export async function applyParsedPatch(
         await fs.mkdir(path.dirname(op.newAbs), { recursive: true });
         await fs.writeFile(op.newAbs, op.data);
         await fs.unlink(op.oldAbs);
-        ctx.overlay?.mark(op.oldRel);
-        ctx.overlay?.mark(op.newRel);
+        if (!op.external) {
+          ctx.overlay?.mark(op.oldRel);
+          ctx.overlay?.mark(op.newRel);
+        }
         result.moved.push({ from: op.oldRel, to: op.newRel });
         result.updated.push(op.newRel);
       }

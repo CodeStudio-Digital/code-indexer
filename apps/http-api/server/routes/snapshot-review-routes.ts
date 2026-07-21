@@ -56,6 +56,10 @@ function projectRootResolver(deps: ServerDeps) {
     if (kind !== 'coder') return null;
     const session = deps.sessionStore.getSession(sessionId);
     if (!session) return null;
+    if (projectId != null && projectId < 0) {
+      return deps.sessionStore.listSessionFilesystemRoots(sessionId)
+        .find((root) => root.id === -projectId)?.root_path ?? null;
+    }
     // Global session: honor the baseline's project_id (linked secondary root),
     // falling back to the session's primary project.
     const project = deps.db.getProject(projectId ?? session.project_id);

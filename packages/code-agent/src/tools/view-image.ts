@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ImageBlock } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveSafe as resolveSafePath } from '@mcp/code-agent/tools/paths.js';
+import { resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const VIEW_IMAGE_DESC =
@@ -12,7 +12,7 @@ const VIEW_IMAGE_DESC =
   "USE: when the user asked about a screenshot, design asset, or test artifact stored in the project tree.\n" +
   "USE: to inspect a chart/figure your tools just generated.\n" +
   "DON'T: load the same image twice in a session — once it's in the thread you keep seeing it.\n" +
-  "DON'T: load images outside the project root. The path argument is project-relative and validated.\n" +
+  "DON'T: load images outside the project or explicitly authorized external roots. Paths are validated.\n" +
   'VISION FALLBACK: if your own model can\'t see images, set `describe` to say what you need ' +
   '(e.g. "describe the layout to recreate it" or "list visual bugs / misalignments") — a vision ' +
   'model translates the image to text for you. Ignored when you can already see images.';
@@ -37,7 +37,7 @@ export const viewImage: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path to a PNG/JPEG/WebP/GIF file.' },
+      path: { type: 'string', description: 'Project-relative path, or absolute image path under an authorized external root.' },
       describe: {
         type: 'string',
         description:
@@ -49,8 +49,9 @@ export const viewImage: CoderTool = {
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     const path = String(args.path ?? '');
-    const abs = resolveSafePath(path, ctx.cwd);
-    if (!abs) return err(`Path '${path}' is outside project root`);
+    const resolved = resolveAuthorizedPath(path, ctx.cwd, ctx.externalRoots, 'read');
+    if (!resolved.ok) return err(resolved.reason);
+    const abs = resolved.abs;
 
     const ext = extname(path).replace(/^\./, '').toLowerCase();
     const mediaType = IMAGE_EXT_TO_MEDIA[ext];

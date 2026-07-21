@@ -13,6 +13,18 @@ export type {
 /** Provider-independent orchestration mode persisted per conversation. */
 export type CoderExecutionMode = 'standard' | 'ultra';
 
+export type SessionFilesystemAccess = 'read' | 'write';
+
+/** A host directory explicitly authorized for one coder session. */
+export interface SessionFilesystemRoot {
+  id: number;
+  session_id: number;
+  root_path: string;
+  access: SessionFilesystemAccess;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CoderSession {
   id: number;
   /**
