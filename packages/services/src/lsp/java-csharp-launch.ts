@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { dirname, join } from 'node:path';
-import { getProjectIgnoreRules } from '@mcp/shared/utils/project-ignore.js';
+import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
 import { binaryAssetFor, JDTLS_LOMBOK_RELPATH, type LspDynamicSpawnContext, type LspSpawnCommand } from './server-registry.js';
 import { resolveCsharpWorkspace } from './csharp-workspace.js';
 
@@ -65,8 +65,7 @@ function omnisharpDiagnosticWorkers(): number {
 export function omnisharpSpawnSpec(ctx: LspDynamicSpawnContext): LspSpawnCommand {
   const runtime = requireRuntime(ctx);
   const bin = join(ctx.installDir, binaryAssetFor(ctx.def)!.binRelPath);
-  const unityRoot = getProjectIgnoreRules(ctx.projectRoot).scopes
-    .some((scope) => scope.path === '' && scope.kind === 'unity');
+  const unityRoot = isUnityProjectRoot(ctx.projectRoot);
   // On-demand load applies to EVERY solution, not only Unity: an eager
   // MSBuild design-time load of a large solution (10k+ files) keeps Roslyn
   // busy for minutes and every LSP request answers at its timeout, freezing

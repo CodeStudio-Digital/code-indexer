@@ -47,7 +47,7 @@ import {
 import { useSessionExecutionMode } from './useSessionExecutionMode.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
-import { MessageList } from './messages/MessageList.js';
+import { LiveMessageList } from './messages/LiveMessageList.js';
 import { mergeEarlierMessagePage, sessionDataForSelection } from './messages/session-message-data.js';
 import { StuckBanner } from './StuckBanner.js';
 import { ApprovalBanner } from './ApprovalBanner.js';
@@ -366,7 +366,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId, notificationContext);
   const {
     streaming,
-    currentTurn,
     doneReason,
     error,
     lastUsage,
@@ -420,13 +419,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, liveTurnDuplicatedInHistory, persistedToolUseIds } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, persistedToolUseIds } =
     useAgentChatState({
       selectedId,
       doneReason,
       tasksRefreshTick,
       sessionData: selectedSessionData,
-      currentTurn,
       provider,
       model,
       setProvider,
@@ -527,11 +525,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     };
   }, [doneReason, selectedId, refetchSession, refetchSessions]);
 
-  useEffect(() => {
-    if (liveTurnDuplicatedInHistory) {
-      clearCurrentTurn();
-    }
-  }, [clearCurrentTurn, liveTurnDuplicatedInHistory]);
   const persistedMessageCount = selectedSessionData?.messages.length ?? 0;
 
   // Bump the SessionStateSidebar refresh key whenever a turn ends — that's
@@ -548,47 +541,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     wasStreamingRef.current = streaming;
   }, [streaming]);
 
-  // Goal/tasks state lives in DB and the sidebar reads it via a separate
-  // /state-summary fetch. End-of-turn refresh isn't enough — a long turn that
-  // creates a goal and runs many tasks would leave the sidebar stale until it
-  // ends. So also bump the key whenever a goal/tasks-related tool finishes
-  // mid-stream. We track completion count and bump when it grows.
-  const goalToolDoneCountRef = useRef(0);
-  useEffect(() => {
-    if (!currentTurn) {
-      goalToolDoneCountRef.current = 0;
-      return;
-    }
-    const goalToolNames = new Set([
-      'create_goal',
-      'update_goal',
-      'get_goal',
-      'task_list',
-      'todo_write',
-      'update_todo',
-      'submit_tasks',
-      'list_tasks',
-      'cancel_tasks',
-      'delete_tasks',
-      'archive_task_list',
-      'execute_tasks',
-      'execute_task',
-      'task_complete',
-      'update_task',
-      'approve_subordinate_tasks',
-      'submit_tasks_to_master',
-    ]);
-    let count = 0;
-    for (const b of currentTurn.blocks) {
-      if (b.type !== 'tool') continue;
-      if (b.call.status !== 'done') continue;
-      if (goalToolNames.has(b.call.name)) count += 1;
-    }
-    if (count > goalToolDoneCountRef.current) {
-      goalToolDoneCountRef.current = count;
-      setStateRefreshKey((k) => k + 1);
-    }
-  }, [currentTurn]);
+  const handleGoalToolCompleted = useCallback(
+    () => setStateRefreshKey((key) => key + 1),
+    [],
+  );
 
   // File picks: paths selected in ProjectFilesSection that get injected as
   // `<file_refs>` into the next outgoing message. Lives here (not inside the
@@ -1675,14 +1631,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                     onOpenLog={() => setActiveRightPanelId('worker-log')}
                   />
                 )}
-                <MessageList
+                <LiveMessageList
+                  sessionId={selectedId}
                   sessionData={selectedSessionData}
-                  currentTurn={currentTurn}
                   streaming={streaming}
                   preflight={preflight}
                   doneReason={doneReason}
                   error={error}
-                  liveTurnDuplicatedInHistory={liveTurnDuplicatedInHistory}
                   persistedToolUseIds={persistedToolUseIds}
                   fallbackProviderId={provider}
                   tasksState={tasksState}
@@ -1690,6 +1645,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   onLoadEarlier={loadEarlierMessages}
                   snapshotActions={selectedId ? snapshotActions : null}
                   snapshotFiles={snapshotFiles}
+                  onClearCurrentTurn={clearCurrentTurn}
+                  onGoalToolCompleted={handleGoalToolCompleted}
                 />
               </div>
               <div className="relative">
@@ -1784,7 +1741,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 sessionId={selectedId}
                 session={sessionData?.session ?? null}
                 sessionData={sessionData ?? null}
-                currentTurn={currentTurn}
                 stats={stats}
                 projectId={(isGlobal ? activeProjectId : projectId) ?? null}
                 refreshKey={stateRefreshKey + sidebarRefreshTick}
@@ -1860,7 +1816,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           sessionId={selectedId}
           session={sessionData?.session ?? null}
           sessionData={sessionData ?? null}
-          currentTurn={currentTurn}
           stats={stats}
           projectId={(isGlobal ? activeProjectId : projectId) ?? null}
           refreshKey={stateRefreshKey + sidebarRefreshTick}

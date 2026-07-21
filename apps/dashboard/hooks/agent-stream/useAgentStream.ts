@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { AgentPreset, IdeContextInput } from '@mcp/api-bus';
 import { openStream } from './openStream.js';
 import type {
   AgentAttachment,
+  AssistantTurn,
   DecisionAnswers,
   SessionPatch,
   SessionState,
@@ -15,6 +16,39 @@ import { createAbortedSessionPatch } from './abort-state.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
 
 const ABORT_TERMINAL_EVENT_GRACE_MS = 2_000;
+
+const currentTurns = new Map<number, AssistantTurn | null>();
+const currentTurnListeners = new Map<number, Set<() => void>>();
+
+function publishCurrentTurn(sessionId: number, turn: AssistantTurn | null): void {
+  if ((currentTurns.get(sessionId) ?? null) === turn) return;
+  if (turn) currentTurns.set(sessionId, turn);
+  else currentTurns.delete(sessionId);
+  for (const listener of currentTurnListeners.get(sessionId) ?? []) listener();
+}
+
+function currentTurnSnapshot(sessionId: number | null): AssistantTurn | null {
+  return sessionId === null ? null : (currentTurns.get(sessionId) ?? null);
+}
+
+/** Subscribe only the narrow live-transcript surfaces to token/tool frames. */
+export function useAgentCurrentTurn(sessionId: number | null): AssistantTurn | null {
+  const subscribe = useCallback((listener: () => void) => {
+    if (sessionId === null) return () => {};
+    let listeners = currentTurnListeners.get(sessionId);
+    if (!listeners) {
+      listeners = new Set();
+      currentTurnListeners.set(sessionId, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) currentTurnListeners.delete(sessionId);
+    };
+  }, [sessionId]);
+  const getSnapshot = useCallback(() => currentTurnSnapshot(sessionId), [sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
 
 /**
  * Streams a coder session message via SSE (POST /api/coder/sessions/:id/messages).
@@ -30,6 +64,9 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
   // sessions never bleed into the currently-viewed session. Switching tabs
   // never interrupts an in-flight run; coming back shows it where it was.
   const [stateMap, setStateMap] = useState<Record<number, SessionState>>({});
+  // Authoritative synchronous mirror. Live-turn-only patches update this ref
+  // and the narrow external store without scheduling a render of the shell.
+  const stateMapRef = useRef<Record<number, SessionState>>({});
   const abortMap = useRef<Map<number, AbortController>>(new Map());
   const abortRequestMap = useRef<Map<number, Promise<void>>>(new Map());
   const abortFallbackTimerMap = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -58,17 +95,30 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
       map.clear();
       for (const timer of abortFallbackTimerMap.current.values()) clearTimeout(timer);
       abortFallbackTimerMap.current.clear();
+      for (const sid of Object.keys(stateMapRef.current)) publishCurrentTurn(Number(sid), null);
     };
   }, []);
 
   const updateSession = useCallback((sid: number, patch: SessionPatch) => {
     touchedRef.current.set(sid, Date.now());
-    setStateMap((prev) => {
-      const cur = prev[sid] ?? EMPTY_STATE;
-      const next = typeof patch === 'function' ? patch(cur) : patch;
-      const merged = { ...prev, [sid]: { ...cur, ...next } };
-      return pruneSessions(merged, sessionIdRef.current, touchedRef.current);
-    });
+    const previous = stateMapRef.current;
+    const current = previous[sid] ?? EMPTY_STATE;
+    const next = typeof patch === 'function' ? patch(current) : patch;
+    const merged = pruneSessions(
+      { ...previous, [sid]: { ...current, ...next } },
+      sessionIdRef.current,
+      touchedRef.current,
+    );
+    for (const previousId of Object.keys(previous)) {
+      if (!(previousId in merged)) publishCurrentTurn(Number(previousId), null);
+    }
+    stateMapRef.current = merged;
+    if (Object.prototype.hasOwnProperty.call(next, 'currentTurn')) {
+      publishCurrentTurn(sid, merged[sid]?.currentTurn ?? null);
+    }
+    // Token/tool flushes contain only currentTurn. Do not make every consumer
+    // of useAgentStream (especially AgentChat) reconcile for those frames.
+    if (Object.keys(next).some((key) => key !== 'currentTurn')) setStateMap(merged);
   }, []);
 
   const active: SessionState = sessionId !== null ? (stateMap[sessionId] ?? EMPTY_STATE) : EMPTY_STATE;
@@ -462,7 +512,6 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
 
   return {
     streaming: active.streaming,
-    currentTurn: active.currentTurn,
     doneReason: active.doneReason,
     error: active.error,
     lastUsage: active.lastUsage,

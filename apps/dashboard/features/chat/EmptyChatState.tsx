@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageSquareCode, PanelLeft, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -12,7 +12,7 @@ interface EmptyChatStateProps {
   onOpenSidebar?: () => void;
 }
 
-export function EmptyChatState({ onNew, projectId, projectName, onOpenSidebar }: EmptyChatStateProps) {
+export const EmptyChatState = memo(function EmptyChatState({ onNew, projectId, projectName, onOpenSidebar }: EmptyChatStateProps) {
   const { t } = useTranslation('chat');
   const suggestions = [t('empty.suggestion1'), t('empty.suggestion2'), t('empty.suggestion3'), t('empty.suggestion4')];
   useEffect(() => {
@@ -67,4 +67,4 @@ export function EmptyChatState({ onNew, projectId, projectName, onOpenSidebar }:
       </div>
     </div>
   );
-}
+});

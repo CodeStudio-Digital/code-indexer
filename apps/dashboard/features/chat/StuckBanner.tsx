@@ -15,7 +15,7 @@
  * The component uses a 1s `setInterval` to force re-render — cheap, and
  * only runs while streaming, so an idle session pays nothing.
  */
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { AlertCircle, ScrollText } from 'lucide-react';
 
 interface StuckBannerProps {
@@ -29,7 +29,7 @@ interface StuckBannerProps {
   onOpenLog?: () => void;
 }
 
-export function StuckBanner({
+export const StuckBanner = memo(function StuckBanner({
   streaming,
   lastEventAt,
   thresholdMs = 30_000,
@@ -72,4 +72,4 @@ export function StuckBanner({
       </div>
     </div>
   );
-}
+});

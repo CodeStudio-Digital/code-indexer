@@ -35,10 +35,10 @@ const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
 /** Render only the transcript tail once it grows past this many groups —
  * streaming or idle. Mounting every group of a large idle session on open
  * froze the renderer; capped groups stay reachable via "load earlier". */
-const RENDER_CAP_THRESHOLD = 80;
+const RENDER_CAP_THRESHOLD = 60;
 /** Tail size kept in the DOM while capped; also the local reveal step per
  * "load earlier" trigger before the backend is consulted. */
-const RENDER_CAP = 120;
+const RENDER_CAP = 60;
 
 /** Direct scroll fallback for environments where IntersectionObserver does
  * not re-fire after the conversation moves between retained workbench
@@ -47,7 +47,7 @@ export function shouldLoadEarlierAtScrollTop(scrollTop: number): boolean {
   return scrollTop <= LOAD_EARLIER_SCROLL_THRESHOLD;
 }
 
-interface MessageListProps {
+export interface MessageListProps {
   sessionData: SessionData | null;
   currentTurn: AssistantTurn | null;
   streaming: boolean;
@@ -617,7 +617,7 @@ const LiveTurn = React.memo(function LiveTurn({
   return null;
 });
 
-export function MessageList({
+export const MessageList = React.memo(function MessageList({
   sessionData,
   currentTurn,
   streaming,
@@ -813,4 +813,4 @@ export function MessageList({
       </SnapshotFilesProvider>
     </div>
   );
-}
+});

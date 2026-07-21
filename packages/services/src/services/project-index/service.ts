@@ -1,7 +1,7 @@
 import { isAbsolute, relative } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
-import { getProjectIgnoreRules } from '@mcp/shared/utils/project-ignore.js';
+import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
 import { FileWatcherService, type WatcherFileEvent } from '../watcher.js';
 import { GitMetaWatcher, type GitMetaEvent } from '../git-meta-watcher.js';
 import { KeyedMutex } from './project-mutex.js';
@@ -140,7 +140,7 @@ export class ProjectIndexService {
     const project = this.db.getProject(projectId);
     const largeProject = !!project && (
       (project.file_count ?? 0) >= LARGE_PROJECT_FILE_COUNT
-      || getProjectIgnoreRules(project.root_path).scopes.some((scope) => scope.kind === 'unity')
+      || isUnityProjectRoot(project.root_path)
     );
     let active = this.activations.get(projectId);
     if (!active) {

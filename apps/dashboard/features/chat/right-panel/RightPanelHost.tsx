@@ -23,6 +23,7 @@ import {
   Settings,
   Workflow,
 } from 'lucide-react';
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
 import { SessionStateSidebar } from '../SessionStateSidebar.js';
@@ -42,17 +43,16 @@ import type { RightPanelId } from './types.js';
 import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
 import type {
   ActiveProcess,
-  AssistantTurn,
   PipelineRuntimeState,
   TodoItem,
 } from '../../../hooks/agent-stream/types.js';
+import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 
 export interface RightPanelHostProps {
   activeId: RightPanelId;
   sessionId: number;
   session: CoderSession | null;
   sessionData: SessionData | null;
-  currentTurn: AssistantTurn | null;
   stats: CoderSessionStats | null;
   /** Null in a global session before a linked project is active. */
   projectId: number | null;
@@ -72,7 +72,7 @@ export interface RightPanelHostProps {
   onClose: () => void;
 }
 
-export function RightPanelHost(props: RightPanelHostProps) {
+export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHostProps) {
   const { t } = useTranslation(['chat']);
   const { activeId, sessionId, onClose } = props;
 
@@ -164,7 +164,7 @@ export function RightPanelHost(props: RightPanelHostProps) {
           onClose={onClose}
           bodyClassName="overflow-hidden"
         >
-          <SubagentsPanel sessionData={props.sessionData} currentTurn={props.currentTurn} />
+          <LiveSubagentsPanel sessionId={sessionId} sessionData={props.sessionData} />
         </PanelChrome>
       );
     case 'plans':
@@ -195,4 +195,15 @@ export function RightPanelHost(props: RightPanelHostProps) {
     default:
       return null;
   }
+});
+
+function LiveSubagentsPanel({
+  sessionId,
+  sessionData,
+}: {
+  sessionId: number;
+  sessionData: SessionData | null;
+}) {
+  const currentTurn = useAgentCurrentTurn(sessionId);
+  return <SubagentsPanel sessionData={sessionData} currentTurn={currentTurn} />;
 }

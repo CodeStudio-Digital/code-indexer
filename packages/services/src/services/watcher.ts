@@ -1,9 +1,15 @@
 import { watch, type FSWatcher } from 'chokidar';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { readdir } from 'node:fs/promises';
 import ignore from 'ignore';
 import { normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
-import { getProjectIgnoreRules, shouldIgnoreProjectPath } from '@mcp/shared/utils/project-ignore.js';
+import {
+  getProjectIgnoreRules,
+  getProjectIgnoreRulesAsync,
+  invalidateProjectDiscoveryCache,
+  shouldIgnoreProjectPath,
+  type ProjectIgnoreRules,
+} from '@mcp/shared/utils/project-ignore.js';
 
 export interface WatcherFileEvent {
   /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
@@ -100,6 +106,19 @@ const IGNORED_DIRS = new Set<string>([
   '.mcp-indexer',
 ]);
 
+const PROJECT_DISCOVERY_MARKERS = new Set([
+  'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle',
+  'settings.gradle.kts', 'gradlew', 'mvnw', '.classpath',
+  'global.json', 'directory.build.props', 'directory.build.targets',
+  'directory.packages.props', 'nuget.config', 'projectversion.txt',
+]);
+
+function isProjectDiscoveryMarker(filePath: string): boolean {
+  const name = basename(filePath).toLowerCase();
+  return PROJECT_DISCOVERY_MARKERS.has(name)
+    || ['.csproj', '.fsproj', '.vbproj', '.sln', '.slnx'].some((suffix) => name.endsWith(suffix));
+}
+
 /**
  * Build the chokidar `ignored` predicate for one watched root. A dir name is
  * matched only when it appears BELOW the root — scoped via `path.relative` so a
@@ -109,10 +128,14 @@ const IGNORED_DIRS = new Set<string>([
  * alloc) since chokidar calls this for every entry during the walk; handles
  * both win32 `\` and posix `/`.
  */
-export function makeIgnored(rootPath: string, extraPatterns: string[] = []): (p: string) => boolean {
+export function makeIgnored(
+  rootPath: string,
+  extraPatterns: string[] = [],
+  preparedProjectIgnore?: ProjectIgnoreRules,
+): (p: string) => boolean {
   const extra = normalizeIndexIgnorePatterns(extraPatterns);
   const ig = extra.length > 0 ? ignore().add(extra) : null;
-  const projectIgnore = getProjectIgnoreRules(rootPath);
+  const projectIgnore = preparedProjectIgnore ?? getProjectIgnoreRules(rootPath);
   return (p: string): boolean => {
     const rel = relative(rootPath, p).replace(/\\/g, '/');
     if (!rel || rel.startsWith('..')) return false; // the root itself / outside it
@@ -188,14 +211,6 @@ export class FileWatcherService {
   startWatching(projectId: number, options: WatcherOptions, events: WatcherEvents): void {
     if (this.isWatching(projectId)) return;
 
-    // `isIgnoredPath` is a FUNCTION (not a glob) so chokidar prunes heavy dirs
-    // (node_modules, .git, target, vendor, …) during its walk instead of
-    // descending + filtering events — the latter opened ~145 k native watchers.
-    // Caller-supplied project rules flow through the same function so ignored
-    // directories are pruned during the walk. The indexer's private working dir
-    // (`.mcp-indexer`, with its trash bin + `.tmp` scratch) is in IGNORED_DIRS.
-    const ignored = makeIgnored(options.rootPath, options.ignorePatterns ?? []);
-
     // `ready` means chokidar completed its initial walk. Structural indexing
     // waits for this edge so edits made during the full scan are observed and
     // drained before the baseline is published as ready. Created synchronously
@@ -210,16 +225,28 @@ export class FileWatcherService {
       this.resolveReady.delete(projectId);
     };
 
-    const maxFiles = options.maxWatchedFiles ?? 0;
-    if (maxFiles > 0) {
+    // Scope discovery used to synchronously recurse here before chokidar even
+    // armed. Prepare the predicate asynchronously and mark the project arming
+    // immediately so concurrent lifecycle calls cannot start a duplicate.
+    const token = {};
+    this.arming.set(projectId, token);
+    void getProjectIgnoreRulesAsync(options.rootPath).then((projectIgnore) => {
+      if (this.arming.get(projectId) !== token) return;
+      // `ignored` is a FUNCTION (not a glob) so chokidar prunes heavy dirs
+      // (node_modules, .git, target, vendor, …) during its walk.
+      const ignored = makeIgnored(options.rootPath, options.ignorePatterns ?? [], projectIgnore);
+      const maxFiles = options.maxWatchedFiles ?? 0;
+      if (maxFiles <= 0) {
+        this.arming.delete(projectId);
+        this.armFileWatcher(projectId, options, ignored, events, settleReady);
+        return;
+      }
       // Probe the tree size off the main thread before arming. A project bigger
       // than the budget (e.g. a Unity project whose `Assets/` holds tens of
       // thousands of imported asset files the user never edits) would make
       // chokidar open a handle per subdir and re-read whole directories on every
       // editor/tool touch — a sustained CPU drain. Skip live watching for it;
       // git-meta events + the structural reconcile keep it fresh.
-      const token = {};
-      this.arming.set(projectId, token);
       void countWatchedEntries(options.rootPath, ignored, maxFiles)
         .then((count) => {
           // Superseded by a stop/restart — the newer attempt (or stopWatching)
@@ -243,10 +270,11 @@ export class FileWatcherService {
           this.arming.delete(projectId);
           settleReady();
         });
-      return;
-    }
-
-    this.armFileWatcher(projectId, options, ignored, events, settleReady);
+    }).catch(() => {
+      if (this.arming.get(projectId) !== token) return;
+      this.arming.delete(projectId);
+      settleReady();
+    });
   }
 
   /** Create the chokidar watcher for a project that passed the budget probe. */
@@ -274,6 +302,9 @@ export class FileWatcherService {
     this.events.set(projectId, events);
 
     const handleChange = (kind: WatcherFileEvent['kind'], isDir = false) => (filePath: string) => {
+      if (isDir || isProjectDiscoveryMarker(filePath)) {
+        invalidateProjectDiscoveryCache(options.rootPath);
+      }
       const pending = this.pendingChanges.get(projectId)!;
       // Key carries the dir flag so a file and a dir at the same path (rare
       // rename races) don't clobber each other's semantics.

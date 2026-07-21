@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, FolderTree, Search, X } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection.js';
@@ -19,7 +19,7 @@ interface ProjectFilesSectionProps {
 
 type FolderState = 'none' | 'partial' | 'all';
 
-export function ProjectFilesSection({
+export const ProjectFilesSection = memo(function ProjectFilesSection({
   sessionId,
   projectId,
   selected,
@@ -29,14 +29,14 @@ export function ProjectFilesSection({
   const { t } = useTranslation('chat');
   const { root, expanded, toggleExpand, error, search, setSearch, searchState } =
     useProjectFiles(projectId);
-  const selectedSet = new Set(selected);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
 
-  const folderStateOf = (folderPath: string): FolderState => {
+  const folderStateOf = useCallback((folderPath: string): FolderState => {
     const prefix = `${folderPath}/`;
     return selected.some((p) => p.startsWith(prefix)) ? 'partial' : 'none';
-  };
+  }, [selected]);
 
-  const toggleFolder = async (folderPath: string, currentState: FolderState) => {
+  const toggleFolder = useCallback(async (folderPath: string, currentState: FolderState) => {
     if (currentState !== 'none') {
       const prefix = `${folderPath}/`;
       const toRemove = selected.filter((p) => p.startsWith(prefix));
@@ -53,7 +53,7 @@ export function ProjectFilesSection({
     } catch {
       /* ignore */
     }
-  };
+  }, [onSetMany, projectId, selected]);
 
   const headerExtra =
     selected.length > 0 ? (
@@ -119,9 +119,9 @@ export function ProjectFilesSection({
       </div>
     </CollapsibleSection>
   );
-}
+});
 
-function TreeView({
+const TreeView = memo(function TreeView({
   root,
   expanded,
   selectedSet,
@@ -166,9 +166,9 @@ function TreeView({
       ))}
     </ul>
   );
-}
+});
 
-function FileNode({
+const FileNode = memo(function FileNode({
   node,
   depth,
   expanded,
@@ -270,7 +270,7 @@ function FileNode({
       </label>
     </li>
   );
-}
+});
 
 function FolderCheckbox({ state, onClick }: { state: FolderState; onClick: () => void }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -289,7 +289,7 @@ function FolderCheckbox({ state, onClick }: { state: FolderState; onClick: () =>
   );
 }
 
-function SearchResults({
+const SearchResults = memo(function SearchResults({
   state,
   selectedSet,
   onToggleSelect,
@@ -361,4 +361,4 @@ function SearchResults({
       )}
     </>
   );
-}
+});

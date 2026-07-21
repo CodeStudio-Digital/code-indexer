@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AssistantTurn } from '../../hooks/useAgentStream.js';
 import type {
   CoderSessionStats,
   EnrichedProvider,
@@ -9,7 +8,7 @@ import type {
   SessionData,
 } from './types.js';
 import { PROVIDERS } from './constants.js';
-import { collectPersistedToolUseIds, isLiveTurnDuplicatedInHistory } from './utils.js';
+import { collectPersistedToolUseIds } from './utils.js';
 
 interface UseAgentChatStateArgs {
   selectedId: number | null;
@@ -18,7 +17,6 @@ interface UseAgentChatStateArgs {
    *  refetches the latest list/approval mid-run, not only on run end. */
   tasksRefreshTick: number;
   sessionData: SessionData | null;
-  currentTurn: AssistantTurn | null;
   setProvider: (p: string) => void;
   setModel: (m: string) => void;
   provider: string;
@@ -36,7 +34,6 @@ export function useAgentChatState({
   doneReason,
   tasksRefreshTick,
   sessionData,
-  currentTurn,
   setProvider,
   setModel,
   provider,
@@ -157,15 +154,6 @@ export function useAgentChatState({
     [sessionData],
   );
 
-  // Detect whether the current live turn was just persisted to the DB. When
-  // true, the message list hides the live AssistantBubble and editor rail clears
-  // currentTurn to avoid showing the same text/tool/gate sequence twice during
-  // the brief refetch window.
-  const liveTurnDuplicatedInHistory = useMemo(
-    () => isLiveTurnDuplicatedInHistory(currentTurn, sessionData?.messages ?? [], persistedToolUseIds),
-    [currentTurn, persistedToolUseIds, sessionData],
-  );
-
   // Stable identity (deps: providerOptions) so passing it to the memoized
   // <Composer> doesn't bust the memo on every parent render.
   const getModelsForProvider = useCallback(
@@ -180,7 +168,6 @@ export function useAgentChatState({
     getModelsForProvider,
     tasksState,
     stats,
-    liveTurnDuplicatedInHistory,
     persistedToolUseIds,
   };
 }

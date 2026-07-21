@@ -17,7 +17,11 @@ import type {
   DetectedRunners,
   RunnerManager,
 } from '@mcp/api-bus';
-import { scanDotnetProjects } from './dotnet-project-files.js';
+import {
+  scanDotnetProjects,
+  scanDotnetProjectsAsync,
+  type DotnetProjectScan,
+} from './dotnet-project-files.js';
 import { quoteShellArgument, type ShellFamily } from '../terminal/shell-quote.js';
 
 function readJson(path: string): Record<string, unknown> | null {
@@ -190,8 +194,7 @@ function detectJava(root: string, override: RunnerManager | undefined, shellFami
   return groups;
 }
 
-function detectDotnet(root: string, shellFamily: ShellFamily): DetectedGroup | null {
-  const found = scanDotnetProjects(root);
+function dotnetGroup(found: DotnetProjectScan, shellFamily: ShellFamily): DetectedGroup | null {
   // Unity generates root-level project/solution files for IDE integration.
   // They are neither stable dependency manifests nor valid `dotnet run`
   // targets. Keep a zero-runner C# marker so project-open LSP detection still
@@ -229,6 +232,14 @@ function detectDotnet(root: string, shellFamily: ShellFamily): DetectedGroup | n
   };
 }
 
+function detectDotnet(root: string, shellFamily: ShellFamily): DetectedGroup | null {
+  return dotnetGroup(scanDotnetProjects(root), shellFamily);
+}
+
+async function detectDotnetAsync(root: string, shellFamily: ShellFamily): Promise<DetectedGroup | null> {
+  return dotnetGroup(await scanDotnetProjectsAsync(root), shellFamily);
+}
+
 /** Detect all runnable commands for a project root. */
 export function detectRunners(root: string, opts?: DetectOptions): DetectedRunners {
   const groups: DetectedGroup[] = [];
@@ -241,6 +252,22 @@ export function detectRunners(root: string, opts?: DetectOptions): DetectedRunne
   if (py) groups.push(py);
   groups.push(...detectJava(root, opts?.javaManager, shellFamily));
   const dotnet = detectDotnet(root, shellFamily);
+  if (dotnet) groups.push(dotnet);
+  return { groups };
+}
+
+/** Async main-process entrypoint; only the bounded recursive detector yields. */
+export async function detectRunnersAsync(root: string, opts?: DetectOptions): Promise<DetectedRunners> {
+  const groups: DetectedGroup[] = [];
+  const shellFamily = opts?.shellFamily ?? defaultShellFamily();
+  const js = detectJs(root, opts?.nodeManager, shellFamily);
+  if (js) groups.push(js);
+  const php = detectPhp(root, shellFamily);
+  if (php) groups.push(php);
+  const py = detectPython(root, opts?.pythonManager);
+  if (py) groups.push(py);
+  groups.push(...detectJava(root, opts?.javaManager, shellFamily));
+  const dotnet = await detectDotnetAsync(root, shellFamily);
   if (dotnet) groups.push(dotnet);
   return { groups };
 }

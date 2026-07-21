@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { ApiError, type DetectedGroup, type FileRunTarget } from '@mcp/api-bus';
-import { csprojFilesInDir, scanDotnetProjects } from './dotnet-project-files.js';
+import {
+  csprojFilesInDir,
+  scanDotnetProjects,
+  scanDotnetProjectsAsync,
+} from './dotnet-project-files.js';
 import { quoteShellArgument, type ShellFamily } from '../terminal/shell-quote.js';
 
 function confined(root: string, file: string): string {
@@ -35,11 +39,16 @@ function localSourceCommand(
   };
 }
 
-function allProjects(root: string): string[] {
-  return scanDotnetProjects(root).projects.map((file) => join(root, ...file.split('/')));
+function allProjects(root: string, knownProjects?: readonly string[]): string[] {
+  const projects = knownProjects ?? scanDotnetProjects(root).projects;
+  return projects.map((file) => join(root, ...file.split('/')));
 }
 
-function csharpProject(root: string, source: string): { project?: string; reason?: string } {
+function csharpProject(
+  root: string,
+  source: string,
+  knownProjects?: readonly string[],
+): { project?: string; reason?: string } {
   let cursor = dirname(source);
   while (true) {
     const candidates = csprojFilesInDir(cursor);
@@ -50,7 +59,7 @@ function csharpProject(root: string, source: string): { project?: string; reason
     if (parent === cursor || !relative(root, parent) || relative(root, parent).startsWith('..')) break;
     cursor = parent;
   }
-  const candidates = allProjects(root);
+  const candidates = allProjects(root, knownProjects);
   if (candidates.length === 1) return { project: candidates[0] };
   if (candidates.length > 1) return { reason: 'Multiple .csproj files found; open a source beneath the intended project' };
   return {};
@@ -151,6 +160,7 @@ export function resolveFileRunTarget(
   groups: DetectedGroup[],
   shellFamily: ShellFamily = process.platform === 'win32' ? 'cmd' : 'posix',
   script?: string,
+  dotnetProjects?: readonly string[],
 ): FileRunTarget {
   const absolute = confined(root, file);
   const label = `Run ${basename(file)}`;
@@ -180,7 +190,7 @@ export function resolveFileRunTarget(
     }
   }
   if (file.toLowerCase().endsWith('.cs')) {
-    const target = csharpProject(root, absolute);
+    const target = csharpProject(root, absolute, dotnetProjects);
     if (target.reason) return { label, manager: 'dotnet', reason: target.reason };
     try {
       return target.project
@@ -212,4 +222,18 @@ export function resolveFileRunTarget(
   } catch (error) {
     return { label, manager: 'java', reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export async function resolveFileRunTargetAsync(
+  root: string,
+  file: string,
+  content: string | undefined,
+  groups: DetectedGroup[],
+  shellFamily: ShellFamily = process.platform === 'win32' ? 'cmd' : 'posix',
+  script?: string,
+): Promise<FileRunTarget> {
+  const projects = file.toLowerCase().endsWith('.cs')
+    ? (await scanDotnetProjectsAsync(root)).projects
+    : undefined;
+  return resolveFileRunTarget(root, file, content, groups, shellFamily, script, projects);
 }

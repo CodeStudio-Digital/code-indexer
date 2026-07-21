@@ -14,9 +14,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../../hooks/useApi.js';
-import { useAgentStream, type AgentAttachment } from '../../../hooks/useAgentStream.js';
+import {
+  useAgentCurrentTurn,
+  useAgentStream,
+  type AgentAttachment,
+} from '../../../hooks/useAgentStream.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
+import { isLiveTurnDuplicatedInHistory } from '../../chat/utils.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import {
   executionModeChangeLocked,
@@ -141,23 +146,31 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const stream = useAgentStream(selectedId, notificationContext);
   const {
-    streaming, currentTurn, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick, snapshotTick,
+    streaming, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick, snapshotTick,
     answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider, pendingApprovals,
   } = stream;
+  const currentTurn = useAgentCurrentTurn(selectedId);
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, liveTurnDuplicatedInHistory, persistedToolUseIds } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, persistedToolUseIds } =
     useAgentChatState({
       selectedId,
       doneReason,
       tasksRefreshTick,
       sessionData: selectedSessionData,
-      currentTurn,
       provider,
       model,
       setProvider,
       setModel,
     });
+  const liveTurnDuplicatedInHistory = useMemo(
+    () => isLiveTurnDuplicatedInHistory(
+      currentTurn,
+      selectedSessionData?.messages ?? [],
+      persistedToolUseIds,
+    ),
+    [currentTurn, persistedToolUseIds, selectedSessionData],
+  );
 
   const settings = useEditorSessionSettings(selectedId, selectedSessionData, {
     updateSessionData,

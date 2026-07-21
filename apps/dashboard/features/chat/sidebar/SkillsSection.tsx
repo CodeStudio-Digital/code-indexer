@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, Search, Sparkles, X } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection.js';
@@ -12,13 +12,16 @@ interface SkillsSectionProps {
   onToggleSelect: (skillId: string) => void;
 }
 
-export function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSectionProps) {
+export const SkillsSection = memo(function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSectionProps) {
   const { t } = useTranslation('chat');
   const { skills, loading, error, search, setSearch } = useProjectSkills(sessionId);
-  const selectedSet = new Set(selected);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
 
-  const grouped = groupSkillsByNamespace(
-    skills.map((s) => ({ ...s, source: s.source, author: s.author })),
+  const grouped = useMemo(
+    () => groupSkillsByNamespace(
+      skills.map((s) => ({ ...s, source: s.source, author: s.author })),
+    ),
+    [skills],
   );
 
   const headerExtra =
@@ -86,7 +89,7 @@ export function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSec
       </div>
     </CollapsibleSection>
   );
-}
+});
 
 /**
  * Collapsible subgroup inside the Skills section. Lighter visual treatment
@@ -95,7 +98,7 @@ export function SkillsSection({ sessionId, selected, onToggleSelect }: SkillsSec
  * localStorage. Force-opens whenever the parent search field is non-empty
  * so search matches are never hidden inside a collapsed group.
  */
-function SkillGroup({
+const SkillGroup = memo(function SkillGroup({
   sessionId,
   namespace,
   items,
@@ -130,10 +133,13 @@ function SkillGroup({
   }, [storageKey]);
 
   const isOpen = forceOpen || open;
-  const sortedItems = [...items].sort((a, b) => a.name.localeCompare(b.name));
-  const selectedInGroup = sortedItems.reduce(
-    (n, s) => (selectedSet.has(s.id) ? n + 1 : n),
-    0,
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => a.name.localeCompare(b.name)),
+    [items],
+  );
+  const selectedInGroup = useMemo(
+    () => sortedItems.reduce((n, skill) => (selectedSet.has(skill.id) ? n + 1 : n), 0),
+    [selectedSet, sortedItems],
   );
 
   return (
@@ -164,14 +170,14 @@ function SkillGroup({
               key={skill.id}
               skill={skill}
               selected={selectedSet.has(skill.id)}
-              onToggle={() => onToggleSelect(skill.id)}
+              onToggleSelect={onToggleSelect}
             />
           ))}
         </ul>
       )}
     </div>
   );
-}
+});
 
 function readOpen(key: string, fallback: boolean): boolean {
   try {
@@ -184,14 +190,14 @@ function readOpen(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
-function SkillRow({
+const SkillRow = memo(function SkillRow({
   skill,
   selected,
-  onToggle,
+  onToggleSelect,
 }: {
   skill: SessionSkill;
   selected: boolean;
-  onToggle: () => void;
+  onToggleSelect: (skillId: string) => void;
 }) {
   return (
     <li>
@@ -205,7 +211,7 @@ function SkillRow({
         <input
           type="checkbox"
           checked={selected}
-          onChange={onToggle}
+          onChange={() => onToggleSelect(skill.id)}
           className="h-3 w-3 shrink-0 mt-0.5"
         />
         <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground mt-0.5" />
@@ -234,4 +240,4 @@ function SkillRow({
       </label>
     </li>
   );
-}
+});

@@ -5,6 +5,7 @@
  * legitimate source directories in a mixed monorepo.
  */
 import { readdirSync, statSync } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { TREE_BLOCK_DIRS } from './fs-ignore.js';
 
@@ -124,6 +125,9 @@ const DISCOVERY_MAX_DEPTH = 6;
 const DISCOVERY_MAX_DIRS = 4_096;
 const CACHE_TTL_MS = 30_000;
 const cache = new Map<string, { expiresAt: number; rules: ProjectIgnoreRules }>();
+const asyncRulesInFlight = new Map<string, Promise<ProjectIgnoreRules>>();
+const discoveryVersions = new Map<string, number>();
+let globalDiscoveryVersion = 0;
 
 function normalizeRel(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
@@ -147,6 +151,49 @@ function isRegularFile(path: string): boolean {
     return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
   } catch {
     return false;
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Cheap root-only Unity probe for synchronous lifecycle/spawn contracts. */
+export function isUnityProjectRoot(rootPath: string): boolean {
+  return isDirectory(join(rootPath, 'Assets'))
+    && isRegularFile(join(rootPath, 'ProjectSettings', 'ProjectVersion.txt'));
+}
+
+async function isRegularFileAsync(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function addDetectedScopes(
+  scopes: ProjectIgnoreScope[],
+  relativePath: string,
+  files: readonly string[],
+  unity: boolean,
+): void {
+  if (unity && !alreadyCovered(scopes, relativePath, 'unity')) {
+    scopes.push({ path: relativePath, kind: 'unity' });
+  }
+  if (unity) return;
+  if (files.some((name) => JAVA_MARKERS.has(name)) && !alreadyCovered(scopes, relativePath, 'java')) {
+    scopes.push({ path: relativePath, kind: 'java' });
+  }
+  if (
+    files.some((name) => DOTNET_EXACT_MARKERS.has(name) || isFileMarker(name, DOTNET_MARKER_SUFFIXES))
+    && !alreadyCovered(scopes, relativePath, 'dotnet')
+  ) {
+    scopes.push({ path: relativePath, kind: 'dotnet' });
   }
 }
 
@@ -176,23 +223,11 @@ function discoverProjectScopes(rootPath: string): ProjectIgnoreScope[] {
     // Assets/ProjectSettings pair for a Unity workspace.
     const isUnity = dirs.has('assets') && dirs.has('projectsettings')
       && isRegularFile(join(current.abs, 'ProjectSettings', 'ProjectVersion.txt'));
+    addDetectedScopes(scopes, current.rel, files, isUnity);
     if (isUnity) {
-      if (!alreadyCovered(scopes, current.rel, 'unity')) {
-        scopes.push({ path: current.rel, kind: 'unity' });
-      }
       // A Unity scope already covers its generated descendants. Avoid walking
       // the very large Assets tree merely to rediscover generated .csproj files.
       continue;
-    }
-
-    if (files.some((name) => JAVA_MARKERS.has(name)) && !alreadyCovered(scopes, current.rel, 'java')) {
-      scopes.push({ path: current.rel, kind: 'java' });
-    }
-    if (
-      files.some((name) => DOTNET_EXACT_MARKERS.has(name) || isFileMarker(name, DOTNET_MARKER_SUFFIXES))
-      && !alreadyCovered(scopes, current.rel, 'dotnet')
-    ) {
-      scopes.push({ path: current.rel, kind: 'dotnet' });
     }
 
     if (current.depth >= DISCOVERY_MAX_DEPTH) continue;
@@ -204,6 +239,122 @@ function discoverProjectScopes(rootPath: string): ProjectIgnoreScope[] {
   }
 
   return scopes;
+}
+
+export interface ProjectTreeScanOptions {
+  maxDepth?: number;
+  maxDirectories?: number;
+  /** Explicit macrotask yield cadence in addition to async filesystem I/O. */
+  yieldEvery?: number;
+  /** Collect only files useful to the caller; paths use forward slashes. */
+  acceptFile?: (nameLower: string, relativePath: string) => boolean;
+}
+
+export interface ProjectTreeScanResult {
+  rules: ProjectIgnoreRules;
+  files: string[];
+  visitedDirectories: number;
+  truncated: boolean;
+}
+
+/**
+ * One-pass, bounded project-tree discovery for latency-sensitive main-process
+ * callers. It discovers Java/.NET/Unity scopes and collects requested files in
+ * the same async walk, pruning generated descendants as soon as their owning
+ * scope is known. Directory symlinks are deliberately not followed.
+ */
+export async function scanProjectTree(
+  rootPath: string,
+  options: ProjectTreeScanOptions = {},
+): Promise<ProjectTreeScanResult> {
+  const normalizedRoot = resolve(rootPath);
+  const discoveryVersion = getProjectDiscoveryCacheVersion(normalizedRoot);
+  const maxDepth = Math.max(0, options.maxDepth ?? DISCOVERY_MAX_DEPTH);
+  const maxDirectories = Math.max(1, options.maxDirectories ?? DISCOVERY_MAX_DIRS);
+  const yieldEvery = Math.max(1, options.yieldEvery ?? 32);
+  const scopes: ProjectIgnoreScope[] = [];
+  const files: string[] = [];
+  const queue: Array<{ abs: string; rel: string; depth: number }> = [
+    { abs: normalizedRoot, rel: '', depth: 0 },
+  ];
+  let queueIndex = 0;
+  const rules: ProjectIgnoreRules = { rootPath: normalizedRoot, scopes };
+  let visitedDirectories = 0;
+  let truncated = false;
+
+  while (queueIndex < queue.length) {
+    if (visitedDirectories >= maxDirectories) {
+      truncated = true;
+      break;
+    }
+    const current = queue[queueIndex++]!;
+    visitedDirectories++;
+    let entries;
+    try {
+      entries = await readdir(current.abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    const dirs = new Set(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name.toLowerCase()),
+    );
+    const names = entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase());
+    const unity = dirs.has('assets') && dirs.has('projectsettings')
+      && await isRegularFileAsync(join(current.abs, 'ProjectSettings', 'ProjectVersion.txt'));
+    addDetectedScopes(scopes, current.rel, names, unity);
+
+    if (!unity) {
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const relativePath = current.rel ? `${current.rel}/${entry.name}` : entry.name;
+        const lower = entry.name.toLowerCase();
+        if (shouldIgnoreProjectPath(rules, relativePath, false)) continue;
+        if (options.acceptFile?.(lower, relativePath)) files.push(relativePath);
+      }
+
+      if (current.depth < maxDepth) {
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+          const relativePath = current.rel ? `${current.rel}/${entry.name}` : entry.name;
+          if (shouldIgnoreProjectPath(rules, relativePath, true)) continue;
+          queue.push({
+            abs: join(current.abs, entry.name),
+            rel: relativePath,
+            depth: current.depth + 1,
+          });
+        }
+      } else if (entries.some((entry) => entry.isDirectory() && !entry.name.startsWith('.'))) {
+        truncated = true;
+      }
+    }
+
+    if (visitedDirectories % yieldEvery === 0) {
+      await new Promise<void>((resolveYield) => setImmediate(resolveYield));
+    }
+  }
+
+  if (getProjectDiscoveryCacheVersion(normalizedRoot) === discoveryVersion) {
+    cache.set(normalizedRoot, { expiresAt: Date.now() + CACHE_TTL_MS, rules });
+  }
+  return { rules, files, visitedDirectories, truncated };
+}
+
+/** Async scope-only discovery for main-process services such as the watcher. */
+export async function getProjectIgnoreRulesAsync(rootPath: string): Promise<ProjectIgnoreRules> {
+  const normalizedRoot = resolve(rootPath);
+  const now = Date.now();
+  const cached = cache.get(normalizedRoot);
+  if (cached && cached.expiresAt > now) return cached.rules;
+  const version = getProjectDiscoveryCacheVersion(normalizedRoot);
+  const pendingKey = `${normalizedRoot}\0${version}`;
+  const pending = asyncRulesInFlight.get(pendingKey);
+  if (pending) return pending;
+  const promise = scanProjectTree(normalizedRoot)
+    .then((result) => result.rules)
+    .finally(() => asyncRulesInFlight.delete(pendingKey));
+  asyncRulesInFlight.set(pendingKey, promise);
+  return promise;
 }
 
 /** Detect Java/.NET/Unity roots, including bounded nested monorepo scopes. */
@@ -221,8 +372,26 @@ export function getProjectIgnoreRules(rootPath: string): ProjectIgnoreRules {
 }
 
 export function clearProjectIgnoreRulesCache(rootPath?: string): void {
-  if (rootPath) cache.delete(resolve(rootPath));
-  else cache.clear();
+  invalidateProjectDiscoveryCache(rootPath);
+}
+
+/** Version observed by derivative caches such as runner manifest discovery. */
+export function getProjectDiscoveryCacheVersion(rootPath: string): string {
+  const normalizedRoot = resolve(rootPath);
+  return `${globalDiscoveryVersion}:${discoveryVersions.get(normalizedRoot) ?? 0}`;
+}
+
+/** Invalidate scope and derivative discovery caches after relevant file changes. */
+export function invalidateProjectDiscoveryCache(rootPath?: string): void {
+  if (rootPath) {
+    const normalizedRoot = resolve(rootPath);
+    cache.delete(normalizedRoot);
+    discoveryVersions.set(normalizedRoot, (discoveryVersions.get(normalizedRoot) ?? 0) + 1);
+    return;
+  }
+  cache.clear();
+  discoveryVersions.clear();
+  globalDiscoveryVersion++;
 }
 
 function matchesSimplePattern(name: string, pattern: string): boolean {

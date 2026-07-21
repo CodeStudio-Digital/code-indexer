@@ -27,7 +27,7 @@ import { globIterate } from 'glob';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ScannedFile, ScanResult, ScanStats } from '@mcp/shared/types.js';
 import { globPrunesForIndexIgnore, normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
-import { getProjectIgnoreRules, projectGlobPrunePatterns } from '@mcp/shared/utils/project-ignore.js';
+import { getProjectIgnoreRulesAsync, projectGlobPrunePatterns } from '@mcp/shared/utils/project-ignore.js';
 import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier } from '@mcp/indexer/indexer/mapper.js';
 import { buildScannerIgnore, GLOB_PRUNE_DIRS, type ScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
@@ -78,7 +78,7 @@ export class FileScanner {
       // Synthetic projects are scanned as an explicit list of real roots from
       // the DB. We never ask glob to follow symlinks, so nested/untrusted links
       // cannot escape the declared workspace.
-      const projectRules = getProjectIgnoreRules(source.rootPath);
+      const projectRules = await getProjectIgnoreRulesAsync(source.rootPath);
       const sourceIgnore: ScannerIgnore = buildScannerIgnore(
         source.rootPath,
         this.ignorePatterns,

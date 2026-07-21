@@ -1,4 +1,4 @@
-export { useAgentStream } from './useAgentStream.js';
+export { useAgentCurrentTurn, useAgentStream } from './useAgentStream.js';
 export type {
   ActiveProcess,
   ActiveProcessSource,

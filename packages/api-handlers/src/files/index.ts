@@ -20,7 +20,7 @@ import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.j
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
 import {
   clearProjectIgnoreRulesCache,
-  getProjectIgnoreRules,
+  getProjectIgnoreRulesAsync,
   shouldIgnoreProjectPath,
 } from '@mcp/shared/utils/project-ignore.js';
 import type { HandlerDeps } from '../types.js';
@@ -262,7 +262,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);
       const startRel = root === '.' ? '' : root;
-      const projectIgnore = getProjectIgnoreRules(project.root_path);
+      const projectIgnore = await getProjectIgnoreRulesAsync(project.root_path);
 
       // Fast path — the lazy explorer (maxDepth 1) is the hot caller. ONE
       // readdir; entry types come from the Dirents (the old walk re-statted

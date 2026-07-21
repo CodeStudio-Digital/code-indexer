@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
-import { getProjectIgnoreRules, projectIgnorePatterns } from '@mcp/shared/utils/project-ignore.js';
+import { getProjectIgnoreRulesAsync, projectIgnorePatterns } from '@mcp/shared/utils/project-ignore.js';
 
 export interface ProjectTreeEntry {
   name: string;
@@ -82,7 +82,7 @@ export async function loadIgnore(rootAbs: string): Promise<Ignore> {
 
   const ig = ignore();
   ig.add(ALWAYS_IGNORE);
-  ig.add(projectIgnorePatterns(getProjectIgnoreRules(rootAbs)));
+  ig.add(projectIgnorePatterns(await getProjectIgnoreRulesAsync(rootAbs)));
   if (gitContent) ig.add(gitContent);
   if (mcpContent) ig.add(mcpContent);
 

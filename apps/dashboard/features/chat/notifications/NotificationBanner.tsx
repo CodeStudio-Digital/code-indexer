@@ -6,6 +6,7 @@
  * Replaces the old always-on `ToolLoopBanner` — same container styling, but
  * now dismissable + auto-dismissing and fed by the session notification store.
  */
+import { memo } from 'react';
 import { NotificationRow } from './NotificationRow.js';
 import { useSessionNotifications } from './session-notifications-store.js';
 
@@ -13,7 +14,7 @@ interface NotificationBannerProps {
   sessionId: number;
 }
 
-export function NotificationBanner({ sessionId }: NotificationBannerProps) {
+export const NotificationBanner = memo(function NotificationBanner({ sessionId }: NotificationBannerProps) {
   const all = useSessionNotifications(sessionId);
   const active = all.filter((n) => !n.dismissed);
   if (active.length === 0) return null;
@@ -24,4 +25,4 @@ export function NotificationBanner({ sessionId }: NotificationBannerProps) {
       ))}
     </div>
   );
-}
+});

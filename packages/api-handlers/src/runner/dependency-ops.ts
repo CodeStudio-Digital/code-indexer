@@ -8,7 +8,7 @@ import { toWslMntPath } from '../runtime/wsl-paths.js';
 import { posixExportPrefix } from '../terminal/pty-manager.js';
 import { shSingleQuote } from '../terminal/shell-quote.js';
 import { addGradleDependency, addMavenDependency } from './dependency-editors.js';
-import { scanDotnetProjects } from './dotnet-project-files.js';
+import { scanDotnetProjectsAsync } from './dotnet-project-files.js';
 
 const execFileAsync = promisify(execFile);
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,100}$/;
@@ -38,7 +38,7 @@ async function addNuget(
   target: RuntimeTarget,
   env: RuntimeEnv,
 ): Promise<AddDependencyResult> {
-  const candidates = scanDotnetProjects(root).projects.map((file) => join(root, ...file.split('/')));
+  const candidates = (await scanDotnetProjectsAsync(root)).projects.map((file) => join(root, ...file.split('/')));
   const manifest = projectFile ? confined(root, projectFile) : candidates.length === 1 ? candidates[0] : null;
   if (!manifest || !existsSync(manifest) || !manifest.toLowerCase().endsWith('.csproj')) {
     throw new ApiError('conflict', 409, candidates.length > 1

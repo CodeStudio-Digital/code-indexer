@@ -2,8 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { detectRunners } from '../detect.js';
-import { scanDotnetProjects } from '../dotnet-project-files.js';
+import { invalidateProjectDiscoveryCache } from '@mcp/shared/utils/project-ignore.js';
+import { detectRunners, detectRunnersAsync } from '../detect.js';
+import {
+  clearDotnetProjectScanCache,
+  scanDotnetProjects,
+  scanDotnetProjectsAsync,
+} from '../dotnet-project-files.js';
 import { probeManagerStatus } from '../manager-status.js';
 
 const roots: string[] = [];
@@ -12,7 +17,11 @@ function root(): string {
   roots.push(dir);
   return dir;
 }
-afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  clearDotnetProjectScanCache();
+  invalidateProjectDiscoveryCache();
+  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('Java runner detection', () => {
   it('uses PowerShell-safe Windows wrapper commands', () => {
@@ -37,7 +46,7 @@ describe('Java runner detection', () => {
 });
 
 describe('.NET runner detection', () => {
-  it('recognizes Unity for C# LSP without scanning generated projects or offering dotnet Play targets', () => {
+  it('recognizes Unity for C# LSP without scanning generated projects or offering dotnet Play targets', async () => {
     const dir = root();
     mkdirSync(join(dir, 'Assets'));
     mkdirSync(join(dir, 'ProjectSettings'));
@@ -48,6 +57,7 @@ describe('.NET runner detection', () => {
     writeFileSync(join(dir, 'Library', 'PackageCache', 'generated', 'Generated.csproj'), '<Project/>');
 
     expect(scanDotnetProjects(dir)).toEqual({ projects: [], solutions: [], unityRoot: true });
+    await expect(scanDotnetProjectsAsync(dir)).resolves.toEqual({ projects: [], solutions: [], unityRoot: true });
     const group = detectRunners(dir, { shellFamily: 'powershell' }).groups.find((candidate) => candidate.manager === 'dotnet');
     expect(group).toEqual({
       manager: 'dotnet',
@@ -55,6 +65,34 @@ describe('.NET runner detection', () => {
       installNeeded: false,
       runners: [],
     });
+  });
+
+  it('yields during async discovery, shares concurrent work, and invalidates cached manifests', async () => {
+    const dir = root();
+    for (let index = 0; index < 48; index++) mkdirSync(join(dir, `scope-${index}`));
+    mkdirSync(join(dir, 'src', 'App'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'App', 'App.csproj'), '<Project/>');
+
+    let eventLoopYielded = false;
+    setImmediate(() => { eventLoopYielded = true; });
+    const [first, concurrent] = await Promise.all([
+      scanDotnetProjectsAsync(dir),
+      scanDotnetProjectsAsync(dir),
+    ]);
+    expect(eventLoopYielded).toBe(true);
+    expect(concurrent).toBe(first);
+    expect(first.projects).toEqual(['src/App/App.csproj']);
+
+    writeFileSync(join(dir, 'src', 'App', 'Worker.csproj'), '<Project/>');
+    expect((await scanDotnetProjectsAsync(dir)).projects).toEqual(['src/App/App.csproj']);
+    invalidateProjectDiscoveryCache(dir);
+    expect((await scanDotnetProjectsAsync(dir)).projects).toEqual([
+      'src/App/App.csproj',
+      'src/App/Worker.csproj',
+    ]);
+    const group = (await detectRunnersAsync(dir, { shellFamily: 'powershell' }))
+      .groups.find((candidate) => candidate.manager === 'dotnet');
+    expect(group?.runners.some((runner) => runner.command.includes('Worker.csproj'))).toBe(true);
   });
 
   it('offers restore commands for a project', () => {

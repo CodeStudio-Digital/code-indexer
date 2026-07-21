@@ -7,7 +7,7 @@
  * one-line quick actions. Replaces the StuckBanner while pending
  * (a paused gate is silence by design, not a stall).
  */
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, ShieldQuestion } from 'lucide-react';
 import type { PendingToolApproval } from '../../hooks/agent-stream/types.js';
@@ -18,7 +18,7 @@ interface ApprovalBannerProps {
   onRespond: (toolUseId: string, verdict: ToolApprovalVerdict) => Promise<void>;
 }
 
-export function ApprovalBanner({ approvals, onRespond }: ApprovalBannerProps) {
+export const ApprovalBanner = memo(function ApprovalBanner({ approvals, onRespond }: ApprovalBannerProps) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   if (approvals.length === 0) return null;
@@ -46,4 +46,4 @@ export function ApprovalBanner({ approvals, onRespond }: ApprovalBannerProps) {
       )}
     </div>
   );
-}
+});

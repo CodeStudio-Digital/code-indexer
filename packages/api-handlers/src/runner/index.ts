@@ -22,11 +22,11 @@ import { defaultShell, sharedPtyManager } from '../terminal/pty-manager.js';
 import { shellFamilyForExecutable } from '../terminal/shell-quote.js';
 import { resolveShellById, targetForShell } from '../terminal/shells.js';
 import { resolveProjectRuntimeEnv } from '../runtime/runtime-resolve.js';
-import { detectRunners, type DetectOptions } from './detect.js';
+import { detectRunnersAsync, type DetectOptions } from './detect.js';
 import { probeManagerStatus, probeWslManagerStatus } from './manager-status.js';
 import { searchPackages as searchPackageRegistry } from './package-search.js';
 import { addDependency } from './dependency-ops.js';
-import { resolveFileRunTarget } from './file-run-target.js';
+import { resolveFileRunTargetAsync } from './file-run-target.js';
 
 const VALID_NODE_MANAGERS: ReadonlySet<string> = new Set(['npm', 'yarn', 'pnpm', 'bun']);
 const VALID_PY_MANAGERS: ReadonlySet<string> = new Set(['pip', 'poetry']);
@@ -212,7 +212,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       // auto-detect, resolved for the run ENVIRONMENT (host or a WSL distro) so
       // the WSL list/commands honour the distro's chosen manager.
       const p = project(projectId);
-      return detectRunners(p.root_path, detectOptionsFor(p, effectiveTarget(p, target)));
+      return detectRunnersAsync(p.root_path, detectOptionsFor(p, effectiveTarget(p, target)));
     },
 
     async managerStatus({ projectId, manager, target }) {
@@ -254,8 +254,8 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
         if (rel.startsWith('..') || isAbsolute(rel)) throw new ApiError('invalid_input', 400, 'file escapes the project root');
         detectionRoot = dirname(absolute);
       }
-      const groups = detectRunners(detectionRoot, options).groups;
-      return resolveFileRunTarget(p.root_path, file, content, groups, options.shellFamily, script);
+      const groups = (await detectRunnersAsync(detectionRoot, options)).groups;
+      return resolveFileRunTargetAsync(p.root_path, file, content, groups, options.shellFamily, script);
     },
 
     async start(input) {
