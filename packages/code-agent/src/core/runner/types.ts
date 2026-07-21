@@ -356,6 +356,15 @@ export interface RunnerOptions {
   /** Telemetry-only store; unlike sessionStore it never mirrors child messages. */
   turnTelemetryStore?: Pick<import('@mcp/code-agent/sessions/store.js').SessionStore, 'recordTurnTelemetry'>;
   /**
+   * Perf W1 — async turn-telemetry writer (dbWriter worker). Wins over
+   * `turnTelemetryStore`/`sessionStore` when present: the per-turn INSERT
+   * leaves the coder thread and the id resolves as a promise (mirrored on
+   * `runner.lastTurnTelemetryIdPromise` for the host's tool-call stamping).
+   */
+  turnTelemetryAsync?: (
+    input: Parameters<import('@mcp/code-agent/sessions/store.js').SessionStore['recordTurnTelemetry']>[0],
+  ) => Promise<number | null>;
+  /**
    * SkillStore — resolves each `selectedSkillIds` entry and injects bodies
    * as `<active_skills>` each turn.
    */

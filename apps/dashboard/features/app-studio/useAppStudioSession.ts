@@ -32,9 +32,13 @@ export function useAppStudioSession(sessionId: number): {
     };
     const eventNames = [
       'plan.revised', 'plan.approval_requested', 'plan.approved',
-      'work.status', 'decision.requested', 'decision.resolved',
+      'work.status', 'decision.requested', 'decision.resolved', 'decision.coordination_failed',
+      'agents.specialist_dispatched', 'agents.unbound_claim_recovered',
+      'agents.run_without_evidence', 'agents.run_recovered_after_restart', 'agents.run_failed',
+      'agents.duplicate_run_cancelled',
       'database.changed', 'database.provisioned', 'deployment.publishing',
-      'deployment.live', 'deployment.failed', 'build.paused', 'build.resumed', 'build.cancelled',
+      'deployment.live', 'deployment.failed', 'team.config_updated',
+      'build.paused', 'build.resumed', 'build.cancelled', 'build.scheduler_resume_failed',
     ];
     eventNames.forEach((name) => events.addEventListener(name, changed));
     events.onerror = () => setError((current) => current ?? 'A conexão ao workflow será retomada automaticamente.');

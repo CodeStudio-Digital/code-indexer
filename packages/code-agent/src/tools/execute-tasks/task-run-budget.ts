@@ -6,17 +6,19 @@
  * gravado pelo submit_tasks but read by nobody. PR-E grows this file
  * with a real token/$ tracker + ask_user interactive gate.
  *
- * Defaults are unlimited (`0`) so progressing subagents run to natural
- * completion. Positive operator overrides remain available; liveness is
- * enforced separately by stall/provider/loop/cancellation guards.
+ * Defaults are HARD safety-net caps (a runaway investigate once burned 247
+ * tool calls / 47 min). Hitting a cap is benign: the run ends as a partial
+ * `tool_budget`/`time_budget` result with a salvage summary. Liveness is
+ * still enforced separately by stall/provider/loop/cancellation guards.
  *
- * Every limit is overridable per-kind via env:
+ * Resolution per axis: admin per-profile override (DB, via `override` param)
+ * > env > per-kind default; explicit `0` at any layer = unlimited. Env:
  *
  *   CODER_TASK_<KIND>_MAX_TOOLS / CODER_TASK_<KIND>_TIMEOUT_MS
  *   CODER_TASK_STALL_MS (shared across kinds — single threshold)
  *
  * The complexity multiplier (`small`=0.5x, `medium`=1x, `large`=2x) applies
- * only to positive overrides. Zero remains unlimited at every complexity.
+ * only to positive limits. Zero remains unlimited at every complexity.
  */
 import type { CoderTask, TaskKind } from '@mcp/code-agent/sessions/types.js';
 import type { TaskLimit } from './task-run-types.js';
@@ -25,9 +27,9 @@ import { taskKind } from './task-run-types.js';
 // ─── Per-kind defaults ──────────────────────────────────────────
 
 export const DEFAULT_LIMITS: Record<TaskKind, { maxToolCalls: number; timeoutMs: number }> = {
-  investigate: { maxToolCalls: 0, timeoutMs: 0 },
-  implement: { maxToolCalls: 0, timeoutMs: 0 },
-  verify: { maxToolCalls: 0, timeoutMs: 0 },
+  investigate: { maxToolCalls: 80, timeoutMs: 840_000 },
+  implement: { maxToolCalls: 150, timeoutMs: 1_800_000 },
+  verify: { maxToolCalls: 80, timeoutMs: 900_000 },
 };
 
 // ─── Complexity multipliers (Bug C) ─────────────────────────────
@@ -92,17 +94,24 @@ function envKeyForKind(kind: TaskKind, suffix: 'MAX_TOOLS' | 'TIMEOUT_MS'): stri
  * Compose the effective `TaskLimit` for a single task:
  *   1. start from per-kind defaults
  *   2. apply env overrides (per kind for tool count/timeout, shared for stall)
- *   3. apply complexity multiplier
+ *   3. replace with the admin per-profile override where set (DB; explicit 0
+ *      stays unlimited at every complexity)
+ *   4. apply complexity multiplier
  *
  * Returned shape is wire-compatible with `SubagentLimits` — passed
  * straight through to `runSubagent` / `runParallelAgents`.
  */
-export function resolveTaskLimit(task: CoderTask): TaskLimit {
+export function resolveTaskLimit(
+  task: CoderTask,
+  override?: { maxToolCalls: number | null; timeoutMs: number | null },
+): TaskLimit {
   const kind = taskKind(task);
   const defaults = DEFAULT_LIMITS[kind];
   const base: TaskLimit = {
-    maxToolCalls: readNonNegativeIntEnv(envKeyForKind(kind, 'MAX_TOOLS'), defaults.maxToolCalls),
-    timeoutMs: readNonNegativeIntEnv(envKeyForKind(kind, 'TIMEOUT_MS'), defaults.timeoutMs),
+    maxToolCalls: override?.maxToolCalls
+      ?? readNonNegativeIntEnv(envKeyForKind(kind, 'MAX_TOOLS'), defaults.maxToolCalls),
+    timeoutMs: override?.timeoutMs
+      ?? readNonNegativeIntEnv(envKeyForKind(kind, 'TIMEOUT_MS'), defaults.timeoutMs),
     stallMs: readPositiveIntEnv('CODER_TASK_STALL_MS', 120_000),
   };
   return applyComplexityToLimits(task.estimated_complexity, base);

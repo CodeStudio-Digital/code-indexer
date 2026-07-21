@@ -11,7 +11,7 @@ import { buildRailPin } from '../../state/pinned-tabs-describe.js';
 import { railPinId } from '../../state/pinned-tabs-types.js';
 import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
-import { LEFT_TOOL_TABS, WORKSPACE_SURFACES, type TabDef } from './tabs-config.js';
+import { PROJECT_RAIL_TABS, type TabDef } from './tabs-config.js';
 
 interface ProjectRailProps {
   projectId: number;
@@ -87,16 +87,10 @@ export function ProjectRail({
   return (
     <>
       <RailContainer side="left" aria-label={t('rail.projectTools')}>
-        {LEFT_TOOL_TABS.map((tab) => (
+        {PROJECT_RAIL_TABS.filter((tab) => tab.id !== 'preview' || previewEnabled).map((tab) => (
           <Fragment key={tab.id}>
             {tab.separatorBefore && <RailSeparator />}
-            {renderTool(tab)}
-          </Fragment>
-        ))}
-        {WORKSPACE_SURFACES.filter((tab) => tab.id !== 'preview' || previewEnabled).map((tab) => (
-          <Fragment key={tab.id}>
-            {tab.separatorBefore && <RailSeparator />}
-            {renderWorkspace(tab)}
+            {tab.kind === 'primary' ? renderWorkspace(tab) : renderTool(tab)}
           </Fragment>
         ))}
         {pluginTabs.length > 0 && <RailSeparator />}

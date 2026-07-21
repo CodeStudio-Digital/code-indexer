@@ -47,6 +47,11 @@ import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
+import {
+  enterBackgroundActivity,
+  exitBackgroundActivity,
+} from '../server/perf/freeze-log.js';
+import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -55,10 +60,10 @@ import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
  * `getCoderWorkerPool` runs (the singleton resolves lazily on the first
  * runFresh request, by which point the deps are ready).
  *
- * When set, each `ensureEntry()` call wires bridge handlers that route
- * `rag_search_docs` / `docs_deep_research` from the worker process BACK
- * to these main-thread singletons via MessageBridge RPC. Worker-side
- * shims live in `apps/http-api/workers/coder-worker.ts`.
+ * When set, each `ensureEntry()` call wires the short navigation reads and
+ * `docs_deep_research` back to these main-thread singletons via MessageBridge
+ * RPC. `rag_search_docs` itself stays worker-local so provider latency cannot
+ * block the Electron host. Worker-side shims live in coder-worker.ts.
  *
  * Both fields stay nullable so headless tests / detached runners can
  * spawn the pool without docs support — the worker shim degrades to
@@ -87,7 +92,7 @@ export interface CoderWorkerPoolOpts {
   workerFile: string;
   /** Extra execArgv (reserved). */
   workerExecArgv?: string[];
-  /** Old-generation heap ceiling for each coder isolate. Default 2048 MB. */
+  /** Old-generation heap ceiling for each coder isolate. Default 1024 MB. */
   workerMaxOldGenerationSizeMb?: number;
   /** Dev-mode TS entry the bootstrap dynamic-imports. */
   workerDevTsEntry?: string;
@@ -202,6 +207,14 @@ export interface RunFreshOpts {
    */
   resume?: boolean;
 }
+
+/**
+ * A per-session worker rarely needs more than a few hundred MB in steady
+ * state. Keep a full 1 GB escape hatch for unusually large contexts while
+ * preventing three concurrent sessions from each being allowed to expand to
+ * 2 GB before V8 applies pressure. Operators can still override this limit.
+ */
+export const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
 
 export class CoderWorkerPool {
   private readonly entries = new Map<number, PoolEntry>();
@@ -498,22 +511,27 @@ export class CoderWorkerPool {
   async evict(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
+    const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
     this.entries.delete(sessionId);
-    this.cancelPostRunEvict(entry);
-    // Session truly going away → close the preview window AND stop the dev
-    // server the preview started for it ("owned"). The user's own runner is
-    // never owned, so it stays up.
-    closePreviewSession(sessionId);
-    entry.detachBusMirror();
-    const aliveMs = Date.now() - entry.lastTouchedAt;
     try {
-      await entry.host.evict(5_000);
-      this.log('info', `[coder-pool] worker evicted session=${sessionId} (idle=${aliveMs}ms)`);
-    } catch (err) {
-      this.log(
-        'warn',
-        `[coder-pool] evict session=${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.cancelPostRunEvict(entry);
+      // Session truly going away → close the preview window AND stop the dev
+      // server the preview started for it ("owned"). The user's own runner is
+      // never owned, so it stays up.
+      closePreviewSession(sessionId);
+      entry.detachBusMirror();
+      const aliveMs = Date.now() - entry.lastTouchedAt;
+      try {
+        await entry.host.evict(5_000);
+        this.log('info', `[coder-pool] worker evicted session=${sessionId} (idle=${aliveMs}ms)`);
+      } catch (err) {
+        this.log(
+          'warn',
+          `[coder-pool] evict session=${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } finally {
+      exitBackgroundActivity(activityId);
     }
   }
 
@@ -559,7 +577,7 @@ export class CoderWorkerPool {
       },
       execArgv: this.opts.workerExecArgv,
       resourceLimits: {
-        maxOldGenerationSizeMb: this.opts.workerMaxOldGenerationSizeMb ?? 2_048,
+        maxOldGenerationSizeMb: this.opts.workerMaxOldGenerationSizeMb ?? DEFAULT_CODER_WORKER_HEAP_MB,
       },
       maxRestarts: 3,
       defaultRequestTimeoutMs: 120_000,
@@ -622,12 +640,17 @@ export class CoderWorkerPool {
       },
     });
     const startedAt = Date.now();
-    await host.start();
+    const activityId = enterBackgroundActivity(`coder-worker:spawn:${sessionId}`);
+    try {
+      await host.start();
+    } finally {
+      exitBackgroundActivity(activityId);
+    }
     const bootMs = Date.now() - startedAt;
     this.log(
       'info',
       `[coder-pool] worker spawned session=${sessionId} ` +
-        `(boot=${bootMs}ms, old-space=${this.opts.workerMaxOldGenerationSizeMb ?? 2_048}MB)`,
+        `(boot=${bootMs}ms, old-space=${this.opts.workerMaxOldGenerationSizeMb ?? DEFAULT_CODER_WORKER_HEAP_MB}MB)`,
     );
 
     // Mirror the worker's bus to a main-side bus so existing
@@ -650,33 +673,9 @@ export class CoderWorkerPool {
       // Keep false: status must reflect an ACK, never the desired spawn input.
     }
     // ─── Wire RPC bridges from worker → main ─────────────────────────
-    // Worker boot installs a `DocSearchBackend` shim that calls
-    // `bridge.request('docSearch', ...)`. The corresponding handler
-    // lives HERE — routes the request to the main-process singleton.
-    // Without this, `rag_search_docs` from inside the worker fails
-    // with "doc corpus backend is not wired into this process" — the
-    // singleton set via `setGlobalDocSearch` in server.ts lives in the
-    // main-thread module instance and worker_threads don't share module
-    // state.
-    //
-    // Same pattern for `docs_deep_research` via `DocsResearchBridge`.
-    //
-    // Handlers degrade gracefully when the deps box is empty (tests,
-    // headless runs) — they throw an error whose message matches the
-    // in-process "not configured" message so the worker shim can
-    // forward it verbatim.
-    const offDocSearch = bridge.handle('docSearch', async (payload) => {
-      const backend = this.opts.docDeps?.docSearch;
-      if (!backend) {
-        throw new Error(
-          'rag_search_docs is not configured: the doc corpus backend is not wired into this process. Ask the user to ensure the Documentação feature is enabled.',
-        );
-      }
-      return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
-    });
-    // rag_read_doc — same deps box; the verb is optional on older backends
-    // so the worker shim gets the same "not available" the in-process
-    // tool would emit.
+    // `rag_search_docs` runs in the worker. Only structural navigation and
+    // deep research cross this bridge; the navigation verbs are short SQLite
+    // reads and the methods remain optional for compatibility with old hosts.
     const offDocReadChunk = bridge.handle('docReadChunk', async (payload) => {
       const backend = this.opts.docDeps?.docSearch;
       if (!backend?.readChunk) {
@@ -702,15 +701,10 @@ export class CoderWorkerPool {
       }
       return backend.outline(payload as Parameters<NonNullable<DocSearchBackend['outline']>>[0]);
     });
-    const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
-      const researcher = this.opts.docDeps?.docsResearch;
-      if (!researcher) {
-        throw new Error(
-          'docs_deep_research is not configured: no DocsResearchBridge installed. Use rag_search_docs as a fallback.',
-        );
-      }
-      return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
-    });
+    const offDocsResearch = registerDocsResearchRpcHandlers(
+      bridge,
+      () => this.opts.docDeps?.docsResearch,
+    );
     // Preview DevTools — routes to the main-process PreviewWindowService
     // (set by the Electron main via setGlobalPreviewDevtools). Unset in
     // headless → the tool surfaces a friendly "unavailable" error.
@@ -874,7 +868,6 @@ export class CoderWorkerPool {
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
-        try { offDocSearch(); } catch { /* best-effort */ }
         try { offDocReadChunk(); } catch { /* best-effort */ }
         try { offDocReadSection(); } catch { /* best-effort */ }
         try { offDocOutline(); } catch { /* best-effort */ }

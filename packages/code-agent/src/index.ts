@@ -24,6 +24,10 @@ import { shouldEnableEphemeralSubagents } from '@mcp/code-agent/core/ephemeral-s
 import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
 import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
 import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
+import {
+  resolveSessionExecutionPolicy,
+  type SessionExecutionPolicy,
+} from '@mcp/code-agent/sessions/execution-mode.js';
 import { recordSessionEvent } from '@mcp/code-agent/sessions/store/events-recorder.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import {
@@ -89,6 +93,8 @@ import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import {
   createSubagentProviderResolver,
+  resolveSubagentExecutionEffort,
+  type ProfileLimitOverride,
   type SubagentTarget,
 } from '@mcp/code-agent/tools/subagent-provider.js';
 import {
@@ -192,7 +198,7 @@ import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
@@ -312,6 +318,83 @@ export function closeSharedCentral(): void {
   try { held.db.close(); } catch { /* best-effort */ }
 }
 
+type RunCoderExecutionSession = Pick<
+  CoderSession,
+  'id' | 'execution_mode_override' | 'reasoning_effort_override'
+>;
+
+type RunCoderExecutionStore = Pick<
+  SessionStore,
+  'setSessionExecutionMode' | 'setSessionReasoningEffort'
+>;
+
+export interface RunCoderExecutionResolution {
+  sessionExecutionMode: CoderExecutionMode;
+  storedReasoningEffort: string | null;
+  policy: SessionExecutionPolicy;
+}
+
+/**
+ * Persist the direct `runCoder` execution contract before resolving runtime
+ * policy. This keeps Ultra host-owned: the legacy `reasoningEffort=ultra`
+ * spelling upgrades the sticky execution mode, but is never written to the
+ * provider-effort column. An explicit execution mode always wins conflicts.
+ *
+ * Exported for focused contract tests; callers should normally use runCoder.
+ */
+export function resolveAndPersistRunCoderExecutionPolicy(
+  store: RunCoderExecutionStore,
+  session: RunCoderExecutionSession,
+  request: Pick<RunCoderOptions, 'executionMode' | 'reasoningEffort'>,
+): RunCoderExecutionResolution {
+  const explicitMode = request.executionMode;
+  const hasRequestedEffort = request.reasoningEffort != null;
+  const requestedEffort = request.reasoningEffort?.trim() || undefined;
+  const storedEffort = session.reasoning_effort_override?.trim() || undefined;
+  const requestedLegacyUltra = requestedEffort?.toLowerCase() === 'ultra';
+  const storedLegacyUltra = storedEffort?.toLowerCase() === 'ultra';
+
+  const sessionExecutionMode: CoderExecutionMode = explicitMode
+    ?? (requestedLegacyUltra || storedLegacyUltra
+      ? 'ultra'
+      : session.execution_mode_override ?? 'standard');
+
+  // An explicit mode (including `standard`) owns the mode decision. Persist
+  // direct requests even when the row already has that value, so every
+  // runCoder entry surface has one durable contract before policy resolution.
+  if (
+    explicitMode !== undefined
+    || requestedLegacyUltra
+    || storedLegacyUltra
+    || session.execution_mode_override !== sessionExecutionMode
+  ) {
+    store.setSessionExecutionMode(session.id, sessionExecutionMode);
+  }
+
+  // Repair legacy rows without ever sending the sentinel through the generic
+  // reasoning-effort setter. Native values remain untouched and can become
+  // active again if a later run explicitly returns to Standard mode.
+  if (storedLegacyUltra) {
+    store.setSessionReasoningEffort(session.id, null);
+  }
+
+  const selectedNativeEffort = hasRequestedEffort
+    ? (requestedLegacyUltra ? undefined : requestedEffort)
+    : (storedLegacyUltra ? undefined : storedEffort);
+  const policy = resolveSessionExecutionPolicy(
+    sessionExecutionMode,
+    selectedNativeEffort,
+  );
+
+  return {
+    sessionExecutionMode,
+    storedReasoningEffort: storedLegacyUltra
+      ? null
+      : session.reasoning_effort_override,
+    policy,
+  };
+}
+
 /**
  * Build a fully-wired runner for a coder session and start it.
  *
@@ -342,6 +425,20 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       agent: opts.agentSelectionId ?? opts.agent ?? null,
     });
   }
+
+  const executionResolution = resolveAndPersistRunCoderExecutionPolicy(
+    store,
+    session,
+    opts,
+  );
+  session = {
+    ...session,
+    execution_mode_override: executionResolution.sessionExecutionMode,
+    reasoning_effort_override: executionResolution.storedReasoningEffort,
+  };
+  const sessionExecutionMode = executionResolution.sessionExecutionMode;
+  const ultraExecutionEnabled = executionResolution.policy.ultraEnabled;
+  const effectiveReasoningEffort = executionResolution.policy.reasoningEffort;
 
   // Sticky agent: if the caller didn't specify one, fall back to the value
   // stored on the session. If they did and it differs, persist the new choice.
@@ -878,6 +975,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       | ((id?: string) => Promise<ChatProvider | undefined>)
       | undefined;
     let resolveEffortForProfile: ((id?: string) => string | undefined) | undefined;
+    let resolveLimitsForProfile: ((id?: string) => ProfileLimitOverride | undefined) | undefined;
     try {
       const ps = new ProviderStore(config.dbPath);
       const defaultTarget = ps.getSubagentTarget(session.provider);
@@ -886,9 +984,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // store) so the resolver never re-touches the DB after the runner build.
       const profileTargets = new Map<MicroAgentProfileId, SubagentTarget | null>();
       const profileEfforts = new Map<MicroAgentProfileId, string | null>();
+      const profileLimits = new Map<MicroAgentProfileId, ProfileLimitOverride | null>();
       for (const id of SUBAGENT_PROFILE_IDS) {
         profileTargets.set(id, ps.getSubagentProfileTarget(session.provider, id));
         profileEfforts.set(id, ps.getSubagentProfileEffort(session.provider, id));
+        profileLimits.set(id, ps.getSubagentProfileLimits(session.provider, id));
       }
       ps.close();
 
@@ -911,10 +1011,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         profileTargets,
         defaultEffort,
         profileEfforts,
+        profileLimits,
         createProvider: createCoderProvider,
       });
       resolveProviderForProfile = (id) => resolver.forProfile(id);
-      resolveEffortForProfile = (id) => resolver.effortFor(id);
+      resolveEffortForProfile = (id) => resolveSubagentExecutionEffort(
+        ultraExecutionEnabled,
+        resolver.effortFor(id),
+      );
+      resolveLimitsForProfile = (id) => resolver.limitsFor(id);
     } catch { /* non-fatal — falls back to parent provider */ }
 
     subagentDeps = {
@@ -924,6 +1029,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       subagentProvider,
       resolveProviderForProfile,
       resolveEffortForProfile,
+      resolveLimitsForProfile,
       toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
       externalToolTiers: runtimeToolTiers,
     };
@@ -1649,6 +1755,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       provider: session.provider,
       model: session.model,
       permissionMode: resolvedPermissionMode,
+      executionMode: sessionExecutionMode ?? undefined,
       reasoningEffort: session.reasoning_effort_override,
       planDepth: session.plan_depth_override,
       responseLanguage: session.response_language_override,
@@ -1755,6 +1862,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     // AGENTS.md project instructions (loaded above). '' when none → block omitted.
     agentsMd,
+    // Codex-faithful mode switch: Ultra permits useful, bounded proactive
+    // research; an explicit non-Ultra selection revokes that permission.
+    // The prompt builder fails closed when spawn_agent is unavailable.
+    multiAgentMode: ultraExecutionEnabled
+      ? 'proactive'
+      : sessionExecutionMode != null
+        ? 'explicit_request_only'
+        : undefined,
     availableTools,
   });
 
@@ -2113,9 +2228,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // `goal_verification` pipeline binding is set, else it reuses the parent
   // provider (still clean-context independent). Fail-open + bounded by the BT
   // (ctx.goalVerifyAttempts) — it can never block or loop the run. Off by
-  // default and skipped for company subordinates (the master gates those).
+  // default, enabled automatically by Ultra, and skipped for company
+  // subordinates (the master gates those).
   const verifyGoalCompletion =
-    process.env.CODER_GOAL_VERIFY === '1' && !opts.companyContext
+    (process.env.CODER_GOAL_VERIFY === '1' || ultraExecutionEnabled) && !opts.companyContext
       ? async (): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
           try {
             const state = store.getSessionStateData(session.id);
@@ -2143,7 +2259,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
                 sessionStore: store,
                 agentLoopV2: agentLoopV2EnvFlag,
               },
-              { goal: goalText, plan: state.activePlan?.text ?? null, diff: '', testSummary: null },
+              {
+                goal: goalText,
+                plan: state.activePlan?.text ?? null,
+                diff: '',
+                testSummary: null,
+                files: state.filesChanged,
+              },
+              { defaultMaxTurns: ultraExecutionEnabled ? 12 : 0 },
             );
             return { goalMet: result.goalMet, gaps: result.gaps };
           } catch {
@@ -2159,11 +2282,15 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // capabilities.ts) so the dashboard's context bar renders for legacy
   // sessions without forcing a re-discovery.
   let sessionContextWindow: number | null = null;
+  let sessionModelCanReason: boolean | null = null;
   try {
     const ps = new ProviderStore(config.dbPath);
-    const dbModel = ps.listModels(session.provider).find((m) => m.model_id === session.model);
+    const [sessionModelId, sessionModelMode = ''] = session.model.split('::');
+    const dbModel = ps.listModels(session.provider).find((m) =>
+      m.model_id === sessionModelId && (!sessionModelMode || m.mode === sessionModelMode));
     ps.close();
     sessionContextWindow = dbModel?.context_window ?? null;
+    sessionModelCanReason = dbModel?.can_reason ?? null;
   } catch {
     // Non-fatal — registry fallback below
   }
@@ -2210,7 +2337,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let compactionProvider: ChatProvider = provider;
   const compactionSummaryOptions: NonNullable<
     import('@mcp/code-agent/core/runner/types.js').RunnerOptions['compactionSummaryOptions']
-  > = {};
+  > = ultraExecutionEnabled
+    // Upstream Codex applies the Ultra->native-max boundary to compaction as
+    // well as ordinary turns. Keep the same default here; a deliberately
+    // configured compaction pipeline effort remains authoritative below.
+    ? { reasoningEffort: 'ultra' }
+    : {};
   try {
     const resolver = new PipelineProviderResolver(
       new PipelineProviderBindingsStore(store.getDb()),
@@ -2254,6 +2386,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     initialMessages,
     sessionId: session.id,
     sessionStore: store,
+    // Perf W1 — per-turn telemetry INSERT goes through the dbWriter worker
+    // (same per-session FIFO as persistAssistantTurn) instead of a second
+    // synchronous commit on the shared-central handle in the coder thread.
+    // flushPendingTurn awaits `runner.lastTurnTelemetryIdPromise` before
+    // stamping tool_calls, so the FK is preserved.
+    ...(dbWriter
+      ? { turnTelemetryAsync: (input: Parameters<typeof store.recordTurnTelemetry>[0]) => dbWriter.recordTurnTelemetry(input) }
+      : {}),
     skillStore,
     // self_review reminder signal — true when this session has active
     // (un-kept/un-reverted) snapshots worth validating. Drives the
@@ -2423,7 +2563,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
       ?? 'normal',
     specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
-    thinking: opts.thinking,
+    // Ultra turns on generic thinking only for models explicitly marked as
+    // reasoning-capable. Unknown metadata is not treated as permission to
+    // force a vendor-specific thinking flag; an explicit caller choice keeps
+    // its existing behaviour.
+    thinking: ultraExecutionEnabled && sessionModelCanReason === true
+      ? true
+      : opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
     modelSupportsVision: opts.modelSupportsVision,
     describeImages: opts.describeImages,
@@ -2467,10 +2613,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentId: effectiveAgentId,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
-    // Reasoning-effort override (orthogonal to thinking). Company callers pass
-    // the master/role config value via opts; single sessions fall back to the
-    // sticky `coder_sessions.reasoning_effort_override` column (migration 149).
-    reasoningEffort: opts.reasoningEffort ?? session.reasoning_effort_override ?? undefined,
+    // Reasoning-effort override (orthogonal to thinking). `ultra` remains an
+    // internal product marker here; the provider-factory wrapper maps it to
+    // the active model's highest supported native level or omits it entirely.
+    reasoningEffort: effectiveReasoningEffort,
     // Per-session tool-output cap LEVEL (migration 153; falls back to the legacy
     // migration-078 boolean → 'max'). Scales the per-block PUSH_TIME_CAP and the
     // MCP/code_exec/read_file caps so verbose tools (Unity, large reads, batched
@@ -2778,7 +2924,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (!pendingTurn) return flushChain;
     const turn = pendingTurn;
     pendingTurn = null;
+    // Captured synchronously so a later turn's telemetry can't cross-stamp
+    // this one. With the async writer (dbWriter) the id may still be in
+    // flight — the promise is awaited inside `persist` below.
     const telemetryId = runner.lastTurnTelemetryId;
+    const telemetryIdPromise = runner.lastTurnTelemetryIdPromise;
     const persist = async (): Promise<void> => {
     // If this turn was checkpointed while awaiting input (see `awaiting_input`),
     // wait for that write to settle and reuse its row id so we COMPLETE (not
@@ -2789,10 +2939,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
     // By now persistTurnTelemetry has run for this turn (runner emits
     // it before turn_start), so lastTurnTelemetryId points at the row we
-    // want to JOIN against. Stamp every tool call with it.
-    if (telemetryId != null) {
-      for (const tc of turn.toolCalls) tc.turn_telemetry_id = telemetryId;
-      for (const tc of turn.nestedToolCalls) tc.turn_telemetry_id = telemetryId;
+    // want to JOIN against — or, on the dbWriter path, its promise settles
+    // with the id. Stamp every tool call with it.
+    const resolvedTelemetryId = telemetryIdPromise != null
+      ? await telemetryIdPromise
+      : telemetryId;
+    if (resolvedTelemetryId != null) {
+      for (const tc of turn.toolCalls) tc.turn_telemetry_id = resolvedTelemetryId;
+      for (const tc of turn.nestedToolCalls) tc.turn_telemetry_id = resolvedTelemetryId;
     }
     const hasSubUsage = turn.subagentUsage.input_tokens > 0
       || turn.subagentUsage.output_tokens > 0;
@@ -2809,7 +2963,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     };
     try {
       if (dbWriter) {
-        await dbWriter.persistAssistantTurn(payload);
+        try {
+          await dbWriter.persistAssistantTurn(payload);
+        } catch (workerErr) {
+          // Incident 2026-07-20: a dbWriter worker that fails to spawn made
+          // EVERY turn vanish from the DB. A broken worker must degrade to
+          // the synchronous store write, never to data loss.
+          console.error(
+            `[coder] dbWriter persist failed for session ${session.id} — falling back to sync write:`,
+            workerErr,
+          );
+          store.persistAssistantTurn(payload);
+        }
       } else {
         store.persistAssistantTurn(payload);
       }
@@ -2868,9 +3033,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         tool_calls: [],
       };
       try {
-        cp.messageId = dbWriter
-          ? await dbWriter.persistAssistantTurn(payload)
-          : store.persistAssistantTurn(payload);
+        if (dbWriter) {
+          try {
+            cp.messageId = await dbWriter.persistAssistantTurn(payload);
+          } catch (workerErr) {
+            // Same degradation contract as flushPendingTurn: a broken worker
+            // falls back to the sync write instead of losing the checkpoint.
+            console.error(
+              `[coder] dbWriter checkpoint failed for session ${session.id} — falling back to sync write:`,
+              workerErr,
+            );
+            cp.messageId = store.persistAssistantTurn(payload);
+          }
+        } else {
+          cp.messageId = store.persistAssistantTurn(payload);
+        }
       } catch (err) {
         // Non-fatal: drop the checkpoint so the end-of-turn flush inserts fresh.
         turn.checkpoint = undefined;
@@ -3305,7 +3482,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
 // Re-export key types for consumers
 export { SessionStore } from '@mcp/code-agent/sessions/store.js';
-export type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+export type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
 export type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 /**
  * Backwards-compatible alias used by HTTP admin routes. Derived dynamically

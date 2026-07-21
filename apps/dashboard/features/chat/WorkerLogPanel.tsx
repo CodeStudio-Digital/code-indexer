@@ -1,11 +1,10 @@
 /**
  * Live worker-log inspector that runs side-by-side with the chat.
  *
- * Captures every SSE event delivered by the agent stream (text deltas,
- * tool calls, quality verdicts, provider swaps, route hits emitted as
- * `worker_log`, pool spawn/crash) into a chronological log so the user
- * can see exactly what the worker is doing — and, more importantly,
- * what it just stopped doing when a session looks stuck.
+ * Captures the diagnostic SSE timeline (tool/lifecycle boundaries, sampled
+ * progress, quality verdicts, provider swaps, route hits emitted as
+ * `worker_log`, pool spawn/crash). Raw text/thinking deltas are intentionally
+ * omitted because the persisted/rendered chat is their canonical copy.
  *
  * UX:
  *   - Auto-scroll toggle (default ON)
@@ -15,7 +14,7 @@
  *
  * The panel is dumb — it doesn't fetch anything. Entries come from the
  * dedicated `worker-log-store` (capped at 1000, coalesced) which only this
- * panel subscribes to, so the 50+/s event firehose never re-renders the
+ * panel subscribes to, so incoming event bursts never re-render the
  * chat. The list is virtualized so 1000 rows stay cheap. Memoized so a
  * store commit only re-renders the rows that changed.
  */

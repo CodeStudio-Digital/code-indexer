@@ -15,4 +15,5 @@ export * from './images.js';
 export * from './spec.js';
 export * from './runtime-adapter.js';
 export * from './stream-resilience.js';
+export * from './reasoning.js';
 export { providerSpecSchema, thirdPartyProviderSpecSchema } from './spec.schema.js';

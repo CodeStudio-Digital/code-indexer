@@ -243,10 +243,45 @@ export function modelsRouter(store: ProviderStore): Hono {
       model_id?: string | null;
       profile?: string | null;
       effort?: string | null;
+      max_tool_calls?: number | null;
+      timeout_ms?: number | null;
     }>();
     const profile = body.profile;
     if (profile != null && profile !== '' && !SUBAGENT_PROFILE_IDS.some((p) => p === profile)) {
       return c.json({ error: `unknown subagent profile: ${profile}` }, 400);
+    }
+    // Hard-cap update path — per-profile budgets (max tool calls / timeout).
+    // Deliberately before the provider/model path: budgets don't require an
+    // enabled coder target provider.
+    if ('max_tool_calls' in body || 'timeout_ms' in body) {
+      if (!profile) {
+        return c.json({ error: 'profile is required for subagent limit updates' }, 400);
+      }
+      const patch: { maxToolCalls?: number | null; timeoutMs?: number | null } = {};
+      if ('max_tool_calls' in body) {
+        const v = body.max_tool_calls ?? null;
+        if (v !== null && (!Number.isInteger(v) || v < 0 || v > 100_000)) {
+          return c.json(
+            { error: `max_tool_calls must be an integer between 0 and 100000 (got ${v})` },
+            400,
+          );
+        }
+        patch.maxToolCalls = v;
+      }
+      if ('timeout_ms' in body) {
+        const v = body.timeout_ms ?? null;
+        // 0 = explicit unlimited; positive values below 60s or above 24h are
+        // almost certainly fat-fingered units (seconds/minutes instead of ms).
+        if (v !== null && (!Number.isInteger(v) || v < 0 || (v > 0 && (v < 60_000 || v > 86_400_000)))) {
+          return c.json(
+            { error: `timeout_ms must be 0 (unlimited) or between 60000 and 86400000 (got ${v})` },
+            400,
+          );
+        }
+        patch.timeoutMs = v;
+      }
+      store.setSubagentProfileLimits(id, profile, patch);
+      return c.json({ ok: true });
     }
     // Effort update path — orthogonal to provider/model (reasoning-effort override).
     if ('effort' in body) {

@@ -13,6 +13,7 @@
  */
 import {
   Bell,
+  Bot,
   BookOpen,
   ChartNoAxesCombined,
   ClipboardList,
@@ -33,6 +34,7 @@ import { DiagramPanel } from './diagram/DiagramPanel.js';
 import { WorkerLogPanel } from '../WorkerLogPanel.js';
 import { NotificationsPanel } from '../notifications/NotificationsPanel.js';
 import { ConversationChaptersPanel } from '../messages/ConversationChapters.js';
+import { SubagentsPanel } from './SubagentsPanel.js';
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -40,6 +42,7 @@ import type { RightPanelId } from './types.js';
 import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
 import type {
   ActiveProcess,
+  AssistantTurn,
   PipelineRuntimeState,
   TodoItem,
 } from '../../../hooks/agent-stream/types.js';
@@ -49,6 +52,7 @@ export interface RightPanelHostProps {
   sessionId: number;
   session: CoderSession | null;
   sessionData: SessionData | null;
+  currentTurn: AssistantTurn | null;
   stats: CoderSessionStats | null;
   /** Null in a global session before a linked project is active. */
   projectId: number | null;
@@ -150,6 +154,17 @@ export function RightPanelHost(props: RightPanelHostProps) {
             session={props.session}
             stats={props.stats}
           />
+        </PanelChrome>
+      );
+    case 'subagents':
+      return (
+        <PanelChrome
+          title={t('chat:rightRail.subagents', 'Subagents')}
+          icon={Bot}
+          onClose={onClose}
+          bodyClassName="overflow-hidden"
+        >
+          <SubagentsPanel sessionData={props.sessionData} currentTurn={props.currentTurn} />
         </PanelChrome>
       );
     case 'plans':

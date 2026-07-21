@@ -12,7 +12,6 @@ import {
   GOOGLE_TOKEN_URL,
   GOOGLE_SCOPES,
 } from '@mcp/services/services/oauth/google.js';
-import { KIMI_CODE_CLIENT_ID, KIMI_CODE_OAUTH_HOST } from '@mcp/services/services/oauth/kimi-code.js';
 import { COPILOT_CLIENT_ID } from '@mcp/services/services/oauth/copilot.js';
 import {
   CLAUDE_CODE_CLIENT_ID,
@@ -60,14 +59,10 @@ describe('spec.auth parity — declarative descriptors == services/oauth source 
     expect(a.authorizeParams).toEqual({ access_type: 'offline', prompt: 'consent' });
   });
 
-  it('kimi-code (device-code; adaptive threshold omitted)', () => {
-    const a = kimiCodeSpec.auth!;
-    expect(a.clientId).toBe(KIMI_CODE_CLIENT_ID);
-    expect(a.deviceAuthUrl).toBe(`${KIMI_CODE_OAUTH_HOST}/api/oauth/device_authorization`);
-    expect(a.tokenUrl).toBe(`${KIMI_CODE_OAUTH_HOST}/api/oauth/token`);
-    expect(a.flavor).toBe('device-code');
-    expect(a.refreshThresholdSec).toBeUndefined(); // adaptive → hook-owned
-    expect(a.scopes).toBeUndefined();
+  it('kimi-code is API-key-only and exposes no OAuth descriptor', () => {
+    expect(kimiCodeSpec.credKind).toBe('api-key');
+    expect(kimiCodeSpec.auth).toBeUndefined();
+    expect(kimiCodeSpec.envVars).toEqual(['KIMI_CODE_API_KEY']);
   });
 
   it('copilot (pat-exchange)', () => {
@@ -89,8 +84,8 @@ describe('spec.auth parity — declarative descriptors == services/oauth source 
     expect(byScope.find((x) => x.whenScope === 'org:create_api_key')!.url).toBe(CLAUDE_CODE_CONSOLE_AUTHORIZE_URL);
   });
 
-  it('all 5 OAuth specs declare mode oauth + hooks keyed by kind; the 9 non-OAuth specs have no auth', () => {
-    const oauth = [chatgptSpec, googleOAuthSpec, kimiCodeSpec, copilotSpec, claudeCodeSpec];
+  it('all 4 OAuth specs declare mode oauth + hooks keyed by kind', () => {
+    const oauth = [chatgptSpec, googleOAuthSpec, copilotSpec, claudeCodeSpec];
     for (const s of oauth) {
       expect(s.credKind).toBe('oauth');
       expect(s.auth?.mode).toBe('oauth');

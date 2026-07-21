@@ -35,6 +35,10 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
     const a = prev.group.agents[i];
     const b = next.group.agents[i];
     if (
+      a.label !== b.label ||
+      a.task !== b.task ||
+      a.agentType !== b.agentType ||
+      a.reason !== b.reason ||
       a.status !== b.status ||
       a.toolCallCount !== b.toolCallCount ||
       a.provider !== b.provider ||
@@ -52,7 +56,8 @@ export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) =
       a.attempt !== b.attempt ||
       a.researchDepth !== b.researchDepth ||
       a.softToolTarget !== b.softToolTarget ||
-      a.softTimeTargetMs !== b.softTimeTargetMs
+      a.softTimeTargetMs !== b.softTimeTargetMs ||
+      a.maxToolCalls !== b.maxToolCalls
     )
       return false;
   }
@@ -65,6 +70,10 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
   const [openAgent, setOpenAgent] = useState<number | null>(null);
 
   const isRunning = group.status === 'running';
+  const hasFailure = group.agents.some((agent) => (
+    agent.status === 'error' || agent.status === 'timed_out' || agent.status === 'aborted'
+  ));
+  const hasPartial = group.agents.some((agent) => agent.status === 'partial');
   const completedCount = group.agents.filter((a) => a.status === 'completed').length;
   const totalToolCalls = group.agents.reduce((sum, a) => sum + a.toolCallCount, 0);
   const providerLabel = formatProviderLabel(group.provider, group.model);
@@ -85,11 +94,21 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
         <div
           className={cn(
             'h-5 w-5 rounded-md flex items-center justify-center shrink-0',
-            isRunning ? 'text-warning bg-warning/10' : 'text-success bg-success/10',
+            isRunning
+              ? 'text-warning bg-warning/10'
+              : hasFailure
+                ? 'text-destructive bg-destructive/10'
+                : hasPartial
+                  ? 'text-warning bg-warning/10'
+                  : 'text-success bg-success/10',
           )}
         >
           {isRunning ? (
             <Loader2 className="h-3 w-3 animate-spin" />
+          ) : hasFailure ? (
+            <X className="h-3 w-3" />
+          ) : hasPartial ? (
+            <AlertTriangle className="h-3 w-3" />
           ) : (
             <Check className="h-3 w-3" />
           )}
@@ -106,7 +125,9 @@ function AgentsGroupBlockInner({ group, resultSource }: AgentsGroupBlockProps) {
           </Badge>
         )}
         <Badge variant="outline" className="shrink-0 tabular-nums">
-          {t('agentGroup.toolCalls', { count: totalToolCalls })}
+          {group.agents.length === 1 && (group.agents[0].maxToolCalls ?? 0) > 0
+            ? t('agents.toolBudget', { count: totalToolCalls, max: group.agents[0].maxToolCalls })
+            : t('agentGroup.toolCalls', { count: totalToolCalls })}
         </Badge>
         {providerLabel && (
           <Badge
@@ -234,8 +255,25 @@ function AgentRow({ agent, onOpen }: AgentRowProps) {
             retry #{agent.attempt}
           </Badge>
         )}
-        <Badge variant="outline" className="shrink-0 tabular-nums text-[10px]">
-          {agent.toolCallCount} tool{agent.toolCallCount !== 1 ? 's' : ''}
+        <Badge
+          variant="outline"
+          className={cn(
+            'shrink-0 tabular-nums text-[10px]',
+            (agent.maxToolCalls ?? 0) > 0
+              && agent.toolCallCount >= Math.ceil((agent.maxToolCalls ?? 0) * 0.8)
+              && (agent.status === 'running' || agent.status === 'pending')
+              && 'border-warning/50 text-warning',
+          )}
+          title={(agent.maxToolCalls ?? 0) > 0
+            ? t('agents.hardBudget', {
+                tools: agent.maxToolCalls,
+                time: agent.deadlineMs != null ? formatMs(agent.deadlineMs) : t('agents.defaultTarget'),
+              })
+            : undefined}
+        >
+          {(agent.maxToolCalls ?? 0) > 0
+            ? t('agents.toolBudget', { count: agent.toolCallCount, max: agent.maxToolCalls })
+            : `${agent.toolCallCount} tool${agent.toolCallCount !== 1 ? 's' : ''}`}
         </Badge>
         {providerLabel && (
           <Badge

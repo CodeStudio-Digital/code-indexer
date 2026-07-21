@@ -1,8 +1,12 @@
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
+  attachReplayTrimEnabled,
+  buildAttachReplay,
   subscribe,
+  subscribeWithReplay,
   waitEnded,
+  type BufferedEvent,
   type CoderRunBus,
 } from '../coder-bus.js';
 import { attachHeartbeat } from './SSEHeartbeat.js';
@@ -12,6 +16,13 @@ export interface PumpBusToSSEOptions {
   since?: number;
   /** Whether to attach the periodic heartbeat. Defaults to `true`. */
   heartbeat?: boolean;
+  /**
+   * Perf W2 — trim the `since=-1` replay to cross-turn state + the live tail
+   * (see `buildAttachReplay`). Coder streams opt in; company streams keep the
+   * full replay (their event kinds are not covered by the coder trim list).
+   * Cursor reconnects (`since >= 0`) are never trimmed.
+   */
+  trimReplay?: boolean;
   /** Called in the finally block after the stream closes. */
   onDone?: () => void;
 }
@@ -49,6 +60,14 @@ export function pumpBusToSSE(
       });
     };
 
+    // Perf W2 — trimmed attach replay: the route opts in AND the env flag
+    // must be on (default OFF — see attachReplayTrimEnabled). Computed up
+    // front so the bus_info preamble reports the actual first replay seq.
+    const trimmedReplay: readonly BufferedEvent[] | null =
+      opts.trimReplay && attachReplayTrimEnabled() && since < 0
+        ? buildAttachReplay(bus)
+        : null;
+
     // Transport-level preamble: tells the client which bus instance this
     // connection serves, so it can pair (busId, seq) for dedup across
     // replays/zombie streams. Enqueued BEFORE subscribe so it precedes the
@@ -56,19 +75,27 @@ export function pumpBusToSSE(
     // reused id would corrupt the client's Last-Event-ID cursor. Never
     // publish()ed: it must not enter the buffer, consume a seq, or reach the
     // JSONL sink.
-    enqueueWrite({ event: 'bus_info', data: JSON.stringify({ bus_id: bus.busId }) });
+    enqueueWrite({
+      event: 'bus_info',
+      data: JSON.stringify({
+        bus_id: bus.busId,
+        first_replay_seq: trimmedReplay
+          ? (trimmedReplay[0]?.seq ?? bus.nextSeq)
+          : (bus.buffer[0]?.seq ?? bus.nextSeq),
+        dropped_replay_events: bus.droppedBufferEvents ?? 0,
+      }),
+    });
 
-    const unsubscribe = subscribe(
-      bus,
-      (ev) => {
-        enqueueWrite({
-          id: String(ev.seq),
-          event: ev.event,
-          data: JSON.stringify(ev.data),
-        });
-      },
-      since,
-    );
+    const onEvent = (ev: BufferedEvent): void => {
+      enqueueWrite({
+        id: String(ev.seq),
+        event: ev.event,
+        data: JSON.stringify(ev.data),
+      });
+    };
+    const unsubscribe = trimmedReplay
+      ? subscribeWithReplay(bus, onEvent, trimmedReplay)
+      : subscribe(bus, onEvent, since);
     try {
       await waitEnded(bus, ac.signal);
     } finally {

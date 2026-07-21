@@ -105,14 +105,26 @@ export function get(db: DB, id: number): CoderSession | null {
  * model is switched or a turn runs, so it represents actual recent use.
  */
 export function getLastUsedProviderModel(db: DB): LastUsedProviderModel | null {
-  const row = db.prepare(`
+  // Sargable shape (mig 246): the old `trim(provider) <> ''` predicate forced
+  // a full table scan + sort on every launch-dialog open. This form streams
+  // idx_coder_sessions_updated (updated_at DESC, id DESC) in output order and
+  // stops at the first complete row. Whitespace-only values — which trim()
+  // used to reject inside SQL — are filtered in JS instead; they don't occur
+  // in practice (provider/model come from the model picker), so the loop
+  // returns on the first row. Breaking out of for..of closes the iterator.
+  const rows = db.prepare(`
     SELECT provider, model
       FROM coder_sessions
-     WHERE trim(provider) <> '' AND trim(model) <> ''
+     WHERE provider IS NOT NULL AND provider <> ''
+       AND model IS NOT NULL AND model <> ''
      ORDER BY updated_at DESC, id DESC
-     LIMIT 1
-  `).get() as LastUsedProviderModel | undefined;
-  return row ?? null;
+  `).iterate() as IterableIterator<LastUsedProviderModel>;
+  for (const row of rows) {
+    if (row.provider.trim() !== '' && row.model.trim() !== '') {
+      return { provider: row.provider, model: row.model };
+    }
+  }
+  return null;
 }
 
 /**

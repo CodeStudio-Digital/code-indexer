@@ -3,7 +3,9 @@
  *
  *   POST /api/app-studio/apps   (JSON → SSE)
  *
- * Body: { name, app_slug?, provider, model }. Responde com o mesmo stream
+ * Body: { name, app_slug?, provider, model, execution_mode?, reasoning_effort? }.
+ * `execution_mode` is the provider-independent standard|ultra axis; legacy
+ * `reasoning_effort: "ultra"` is normalized by the handler. Responde com o mesmo stream
  * `start/phase/log/done/error` do New Project wizard (pumpScaffoldSSE
  * garante o flush do `done` antes de fechar); o `done` carrega
  * `{ project, app_session, master_session_id, company_session_id }`.

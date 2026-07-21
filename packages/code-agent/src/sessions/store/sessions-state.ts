@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type { Database as DB } from 'better-sqlite3';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
 import type { ToolOutputCapLevel } from '../../core/runner/output-caps.js';
 
 const require = createRequire(import.meta.url);
@@ -27,7 +27,27 @@ export function setTemperature(db: DB, id: number, temperature: number | null): 
  * value is also degraded gracefully by the provider at request time.
  */
 export function setReasoningEffort(db: DB, id: number, effort: string | null): void {
-  db.prepare("UPDATE coder_sessions SET reasoning_effort_override = ?, updated_at = datetime('now') WHERE id = ?").run(effort, id);
+  const normalized = typeof effort === 'string' ? effort.trim() || null : null;
+  if (normalized?.toLowerCase() === 'ultra') {
+    // Central compatibility boundary for non-HTTP callers (Company/App Studio
+    // scaffolds included): Ultra is an execution mode, never a wire effort.
+    db.prepare(`
+      UPDATE coder_sessions
+         SET execution_mode_override = 'ultra',
+             reasoning_effort_override = NULL,
+             updated_at = datetime('now')
+       WHERE id = ?
+    `).run(id);
+    return;
+  }
+  db.prepare("UPDATE coder_sessions SET reasoning_effort_override = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(normalized, id);
+}
+
+/** Persist the provider-independent execution mode (migration 241). */
+export function setExecutionMode(db: DB, id: number, mode: CoderExecutionMode): void {
+  db.prepare("UPDATE coder_sessions SET execution_mode_override = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(mode, id);
 }
 
 /** Persist the conversation's extended-thinking toggle. */

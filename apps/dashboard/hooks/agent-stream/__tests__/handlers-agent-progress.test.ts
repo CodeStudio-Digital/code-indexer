@@ -26,6 +26,52 @@ function group(blocks: StreamBlock[]): AgentsGroup {
 }
 
 describe('agent_progress handlers', () => {
+  it('reconstructs a live group when reattach missed agents_group_start', () => {
+    const { handlers, blocks, flush } = setup();
+
+    handlers.agent_progress(
+      {
+        groupId: 'grp_replayed',
+        toolUseId: 'tool_spawn_1',
+        agentIndex: 2,
+        label: 'Late heartbeat',
+        task: 'Inspect the stream',
+        background: true,
+        jobId: 'job-1',
+        event: 'heartbeat',
+        status: 'running',
+        provider: 'chatgpt',
+        model: 'gpt-5',
+        phase: 'provider_call',
+        toolCallCount: 42,
+        researchDepth: 'deep',
+        softToolTarget: 80,
+      },
+      'agent_progress',
+    );
+
+    expect(group(blocks)).toMatchObject({
+      groupId: 'grp_replayed',
+      toolUseId: 'tool_spawn_1',
+      status: 'running',
+      background: true,
+      jobId: 'job-1',
+      provider: 'chatgpt',
+      model: 'gpt-5',
+      agents: [{
+        index: 2,
+        label: 'Late heartbeat',
+        task: 'Inspect the stream',
+        status: 'running',
+        phase: 'provider_call',
+        toolCallCount: 42,
+        researchDepth: 'deep',
+        softToolTarget: 80,
+      }],
+    });
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
   it('replaces group and agent objects so memoized UI re-renders live progress', () => {
     const { handlers, blocks, flush } = setup();
     handlers.agents_group_start(
@@ -227,5 +273,25 @@ describe('agent_progress handlers', () => {
     );
     expect(group(blocks).background).toBe(true);
     expect(group(blocks).jobId).toBe('job-abc');
+  });
+
+  it('does not project execute_tasks internal task waves as a second agents group', () => {
+    const { handlers, blocks } = setup();
+    handlers.agents_group_start(
+      { groupId: 'tasks-wave-run-1-0', agents: [{ index: 0, label: 'Task one' }] },
+      'agents_group_start',
+    );
+    handlers.agent_progress(
+      {
+        groupId: 'tasks-wave-run-1-0',
+        agentIndex: 0,
+        label: 'Task one',
+        event: 'heartbeat',
+        status: 'running',
+      },
+      'agent_progress',
+    );
+
+    expect(blocks.some((block) => block.type === 'agents')).toBe(false);
   });
 });

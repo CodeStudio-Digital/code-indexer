@@ -426,14 +426,19 @@ export function compactHistoryForLLM(
   // pure function, deterministic). It retires stale repeated reads/searches
   // before the size-based compaction even sees them, so sessions grow
   // sublinearly. Disabled via CODER_ROLLING_REDUCER=0 for diagnostics.
-  // Retirements flush in tranches of CODER_REDUCER_FLUSH_CHARS so the
-  // in-place rewrites (which bust the provider prompt-cache from that point
-  // on) land as ONE batch instead of a per-turn trickle; 0 = legacy
-  // apply-immediately.
+  // DEFAULT: defer-all. In-place rewrites bust the provider prompt-cache
+  // from that point on, and telemetry showed a mid-run flush trading ~2k
+  // freed chars for a ~70k-token uncached re-prefill. So the per-turn view
+  // only DETECTS retirements; they are APPLIED durably by the Compacting
+  // node, the one pass that rewrites the prefix anyway. Env overrides:
+  // CODER_REDUCER_FLUSH_CHARS=0 restores legacy apply-immediately, a
+  // positive value restores the tranche behavior.
   let working = messages;
   if (process.env.CODER_ROLLING_REDUCER !== '0') {
     const flushRaw = Number.parseInt(process.env.CODER_REDUCER_FLUSH_CHARS ?? '', 10);
-    const flushThresholdChars = Number.isFinite(flushRaw) && flushRaw >= 0 ? flushRaw : 32768;
+    const flushThresholdChars = Number.isFinite(flushRaw) && flushRaw >= 0
+      ? flushRaw
+      : Number.POSITIVE_INFINITY;
     const rolled = applyRollingReduction(messages, { flushThresholdChars });
     onReducerStats?.({
       retired: rolled.reduced,
@@ -698,6 +703,15 @@ export class CoderRunner extends EventEmitter {
    * sessionStore is absent (subagents/tests) or the insert failed.
    */
   public lastTurnTelemetryId: number | null = null;
+
+  /**
+   * Perf W1 — pending id of the CURRENT turn's telemetry row when the
+   * async writer (dbWriter) handled the insert. `flushPendingTurn` captures
+   * this synchronously alongside `lastTurnTelemetryId` and awaits it before
+   * stamping tool_calls, so the FK survives the off-thread round-trip. Null
+   * on the synchronous path. Never rejects.
+   */
+  public lastTurnTelemetryIdPromise: Promise<number | null> | null = null;
 
   /**
    * Currently active tool tiers. When null, no tier filtering is applied
@@ -1858,9 +1872,10 @@ export class CoderRunner extends EventEmitter {
     responseMeta: ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
-  }): number | null {
-    const id = persistTurnTelemetryPure({
+  }): number | null | Promise<number | null> {
+    const persisted = persistTurnTelemetryPure({
       store: this.opts.turnTelemetryStore ?? this.sessionStore,
+      asyncStore: this.opts.turnTelemetryAsync,
       sessionId: this.sessionId ?? null,
       runId: this.runId,
       isSubagent: this.isSubagent,
@@ -1887,7 +1902,20 @@ export class CoderRunner extends EventEmitter {
       agentDecisionTelemetry: this.opts.agentDecisionTelemetry,
       actualAgent: this.opts.agentId ?? null,
     });
-    this.lastTurnTelemetryId = id;
+    // Sync path: id is final. Async path (dbWriter): stash the promise so
+    // `flushPendingTurn` can await the FK before stamping tool_calls; the
+    // mirror field updates as soon as the round-trip settles (never rejects
+    // — persistTurnTelemetryPure catches).
+    if (persisted && typeof persisted === 'object') {
+      this.lastTurnTelemetryId = null;
+      this.lastTurnTelemetryIdPromise = persisted.then((resolved) => {
+        this.lastTurnTelemetryId = resolved;
+        return resolved;
+      });
+    } else {
+      this.lastTurnTelemetryId = persisted;
+      this.lastTurnTelemetryIdPromise = null;
+    }
 
     // Tool-selection feedback observer — only needs the user's task
     // text + tool names. No-op when no observer is installed.
@@ -1910,7 +1938,7 @@ export class CoderRunner extends EventEmitter {
       // Observer failures must never break telemetry.
     }
 
-    return id;
+    return persisted;
   }
 
   /**

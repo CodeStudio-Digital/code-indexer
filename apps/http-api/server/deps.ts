@@ -1,5 +1,10 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
+import {
+  canResolveDbMaintenanceWorker,
+  startDbMaintenanceWorker,
+  stopDbMaintenanceWorker,
+} from '../sse/dbMaintenanceSingleton.js';
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { createProjectFeatureStoreResolver } from './project-feature-store.js';
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
@@ -641,7 +646,22 @@ export function createDeps(): ServerDeps {
   const managedGit = createGitHubAppManagedGitClient();
   // This is the ONE main-process handle: make it the WAL checkpoint owner so the
   // central -wal can't bloat under multi-agent worker write load (see db.ts).
-  const db = new CodeIndexDB(config.dbPath, { checkpointOwner: true });
+  // Perf W2 — the periodic PASSIVE checkpoint itself moves to the
+  // db-maintenance worker (off the main thread; also owns retention).
+  // MCP_DB_MAINTENANCE=0 keeps the legacy in-process timer.
+  const dbMaintenanceEnabled =
+    process.env.MCP_DB_MAINTENANCE !== '0' && canResolveDbMaintenanceWorker();
+  const db = new CodeIndexDB(config.dbPath, {
+    checkpointOwner: true,
+    externalCheckpointer: dbMaintenanceEnabled,
+  });
+  if (dbMaintenanceEnabled) {
+    startDbMaintenanceWorker(config.dbPath, {
+      // Restart budget exhausted → never leave the WAL without a checkpointer.
+      onPermanentCrash: () => db.enableInternalCheckpointer(),
+    });
+    registerShutdownTask('db-maintenance-worker', () => stopDbMaintenanceWorker());
+  }
   const costTracker = new CostTracker(db);
   const exportService = new ExportService(db);
   const webhookDispatcher = new WebhookDispatcher(db);

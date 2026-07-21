@@ -21,14 +21,63 @@ const PROFILES: Array<{ id: string; labelKey: string }> = [
 function readEntry(extra: Record<string, unknown> | undefined, id: string) {
   const profiles = extra?.subagent_profiles;
   const e = profiles && typeof profiles === 'object'
-    ? (profiles as Record<string, { provider_id?: string; model?: string; effort?: string }>)[id]
+    ? (profiles as Record<string, {
+        provider_id?: string;
+        model?: string;
+        effort?: string;
+        max_tool_calls?: number;
+        timeout_ms?: number;
+      }>)[id]
     : undefined;
   const s = (v: unknown) => (typeof v === 'string' && v ? v : null);
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
   return {
     providerId: s(e?.provider_id),
     modelId: s(e?.model),
     effort: s(e?.effort),
+    maxToolCalls: n(e?.max_tool_calls),
+    timeoutMs: n(e?.timeout_ms),
   };
+}
+
+/**
+ * Small numeric override input: empty = inherit (null), 0 = unlimited.
+ * Commits on blur/Enter; never coerces an empty string into 0.
+ */
+function LimitInput({ value, placeholder, ariaLabel, onCommit }: {
+  value: number | null;
+  placeholder: string;
+  ariaLabel: string;
+  onCommit: (value: number | null) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value == null ? '' : String(value));
+  const commit = () => {
+    if (draft == null) return;
+    const trimmed = draft.trim();
+    setDraft(null);
+    if (trimmed === '') {
+      if (value != null) onCommit(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    const next = Math.floor(parsed);
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      type="number"
+      min={0}
+      className="h-7 w-20 rounded border border-input bg-background px-2 text-xs"
+      value={shown}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+    />
+  );
 }
 
 interface SubagentProfilesPanelProps {
@@ -49,6 +98,11 @@ interface SubagentProfilesPanelProps {
     profileId: string,
     effort: string | null,
   ) => void;
+  onSetProfileLimits: (
+    providerId: string,
+    profileId: string,
+    patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+  ) => void;
 }
 
 export function SubagentProfilesPanel({
@@ -59,6 +113,7 @@ export function SubagentProfilesPanel({
   onLoadProviderModels,
   onSetProfileTarget,
   onSetProfileEffort,
+  onSetProfileLimits,
 }: SubagentProfilesPanelProps) {
   const { t } = useTranslation(['admin']);
   const [open, setOpen] = useState(false);
@@ -67,7 +122,7 @@ export function SubagentProfilesPanel({
   );
   const overrideCount = PROFILES.filter((prof) => {
     const cur = readEntry(p.extra, prof.id);
-    return cur.providerId || cur.modelId;
+    return cur.providerId || cur.modelId || cur.maxToolCalls != null || cur.timeoutMs != null;
   }).length;
 
   return (
@@ -87,6 +142,9 @@ export function SubagentProfilesPanel({
         <div className="mt-2 space-y-3">
           <p className="text-xs text-muted-foreground">
             {t('admin:provider.subagentProfiles.subtitle')}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t('admin:provider.subagentProfiles.limitHint')}
           </p>
           {PROFILES.map((prof) => {
             const cur = readEntry(p.extra, prof.id);
@@ -117,6 +175,26 @@ export function SubagentProfilesPanel({
                   modelAriaLabel={`${prof.id} subagent model`}
                   effortAriaLabel={`${prof.id} subagent effort`}
                 />
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {t('admin:provider.subagentProfiles.maxToolCalls')}
+                    <LimitInput
+                      value={cur.maxToolCalls}
+                      placeholder={t('admin:provider.subagentProfiles.limitAuto')}
+                      ariaLabel={`${prof.id} subagent max tool calls`}
+                      onCommit={(v) => onSetProfileLimits(p.id, prof.id, { maxToolCalls: v })}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {t('admin:provider.subagentProfiles.timeoutMinutes')}
+                    <LimitInput
+                      value={cur.timeoutMs == null ? null : Math.round(cur.timeoutMs / 60_000)}
+                      placeholder={t('admin:provider.subagentProfiles.limitAuto')}
+                      ariaLabel={`${prof.id} subagent timeout minutes`}
+                      onCommit={(v) => onSetProfileLimits(p.id, prof.id, { timeoutMs: v == null ? null : v * 60_000 })}
+                    />
+                  </label>
+                </div>
               </div>
             );
           })}

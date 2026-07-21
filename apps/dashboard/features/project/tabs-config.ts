@@ -64,6 +64,20 @@ export const WORKSPACE_SURFACES: TabDef[] = PRIMARY_SURFACES
   .map((surface, index) => ({ ...surface, separatorBefore: index === 0 }));
 
 /**
+ * Visual order of the built-in left activity rail. Session is the landing
+ * workspace, so it leads the project tools; the remaining dedicated
+ * workspaces stay in their own group after Files/Git/Databases.
+ */
+export const PROJECT_RAIL_TABS: TabDef[] = [
+  { ...WORKSPACE_SURFACES[0]!, separatorBefore: false },
+  ...LEFT_TOOL_TABS,
+  ...WORKSPACE_SURFACES.slice(1).map((surface, index) => ({
+    ...surface,
+    separatorBefore: index === 0,
+  })),
+];
+
+/**
  * Compatibility catalog consumed by pins and deep links. `editor` is omitted
  * from old rail pin affordances by their callers, but remains discoverable.
  */

@@ -34,6 +34,10 @@ export interface PerfSample {
     externalMB: number;
     arrayBuffersMB: number;
     nativeMB: number;
+    rssLessMainHeapMB?: number;
+    knownWorkerHeapUsedMB?: number;
+    knownWorkerHeapTotalMB?: number;
+    unattributedRssMB?: number;
     loopP50Ms: number;
     loopP99Ms: number;
     loopMaxMs: number;

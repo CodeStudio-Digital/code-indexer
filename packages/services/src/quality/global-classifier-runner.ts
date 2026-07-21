@@ -19,6 +19,7 @@ import type { QualityClassifierPipeline } from './quality-pipeline.js';
 import type { QualityClassificationStore } from '@mcp/store/quality-classification-store.js';
 import { randomUUID } from 'node:crypto';
 import type { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
+import { warnQualityPersistenceFailure } from './persistence-diagnostics.js';
 
 let globalPipeline: QualityClassifierPipeline | undefined;
 let enabled = false;
@@ -157,7 +158,8 @@ export function recordGlobalDeterministicQualitySignal(input: {
       evidence: input.evidence,
     });
     return assessmentId;
-  } catch {
+  } catch (error) {
+    warnQualityPersistenceFailure(`deterministic signal ${input.classifierName}`, error);
     return null;
   }
 }

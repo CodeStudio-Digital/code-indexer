@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeIgnored } from '../watcher.js';
+import { makeIgnored, countWatchedEntries } from '../watcher.js';
 
 /**
  * The chokidar `ignored` predicate must PRUNE heavy/generated/dependency dirs
@@ -72,6 +72,12 @@ describe('makeIgnored', () => {
         'Assets/Scripts/Player.cs', 'Assets/Main.unity', 'Packages/manifest.json',
         'ProjectSettings/TagManager.asset',
       ]) expect(unityIg(join(unityRoot, ...rel.split('/')))).toBe(false);
+
+      // The directory-monitor sync marker churns in every watched folder — prune
+      // it wherever it appears (Assets, ProjectSettings, …), never the real input.
+      for (const rel of [
+        'Assets/Art/~UnityDirMonSyncFile~9c1f2', 'ProjectSettings/~UnityDirMonSyncFile~ab',
+      ]) expect(unityIg(join(unityRoot, ...rel.split('/')))).toBe(true);
     } finally {
       rmSync(unityRoot, { recursive: true, force: true });
     }
@@ -84,6 +90,43 @@ describe('makeIgnored', () => {
       expect(ordinaryIg(join(ordinaryRoot, 'Library', 'domain', 'catalog.ts'))).toBe(false);
     } finally {
       rmSync(ordinaryRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The watch budget skips live per-file watching for pathologically large trees
+ * (Unity Asset-Store imports, vendored monorepos) so chokidar never opens a
+ * handle per subdir + re-reads whole directories on churn. The probe honors the
+ * ignore predicate and must short-circuit past the cap instead of walking fully.
+ */
+describe('countWatchedEntries', () => {
+  it('counts watched files + dirs and prunes ignored subtrees', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'watcher-count-'));
+    try {
+      mkdirSync(join(root, 'src', 'a'), { recursive: true });
+      mkdirSync(join(root, 'node_modules', 'dep'), { recursive: true });
+      writeFileSync(join(root, 'src', 'a', 'x.ts'), '');
+      writeFileSync(join(root, 'src', 'y.ts'), '');
+      writeFileSync(join(root, 'node_modules', 'dep', 'index.js'), ''); // pruned subtree
+      const ig = makeIgnored(root);
+      // watched: src/, src/a/, src/a/x.ts, src/y.ts = 4 (node_modules never descended).
+      expect(await countWatchedEntries(root, ig, 1000)).toBe(4);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('stops probing once the cap is exceeded (no full walk)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'watcher-count-cap-'));
+    try {
+      for (let i = 0; i < 50; i++) writeFileSync(join(root, `f${i}.ts`), '');
+      const ig = makeIgnored(root);
+      // Over-budget verdict is all the caller needs; the probe returns early.
+      expect(await countWatchedEntries(root, ig, 5)).toBeGreaterThan(5);
+      expect(await countWatchedEntries(root, ig, 5)).toBeLessThanOrEqual(6);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

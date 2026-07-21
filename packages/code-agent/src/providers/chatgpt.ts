@@ -25,6 +25,7 @@
 import OpenAI from 'openai';
 import { createHash, randomUUID } from 'node:crypto';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
+import { nativeReasoningLevel, nativeReasoningLevels, resolveReasoningEffort } from '@mcp/provider-sdk';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { renderTextDocument, safeDocumentFilename } from './document-utils.js';
@@ -137,8 +138,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
     this.model = opts.model;
     this.sessionId = randomUUID();
     this.reasoningCapability = {
-      supported: opts.reasoning?.supportedLevels ?? null,
-      default: opts.reasoning?.defaultLevel ?? null,
+      supported: opts.reasoning?.supportedLevels
+        ? nativeReasoningLevels(opts.reasoning.supportedLevels)
+        : null,
+      default: nativeReasoningLevel(opts.reasoning?.defaultLevel),
     };
     this.applyPatchToolType = opts.applyPatchToolType ?? null;
     this.imageGenerationEnabled = opts.imageGenerationEnabled ?? false;
@@ -174,8 +177,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
     defaultLevel?: string | null;
   }): void {
     this.reasoningCapability = {
-      supported: input.supportedLevels ?? null,
-      default: input.defaultLevel ?? null,
+      supported: input.supportedLevels
+        ? nativeReasoningLevels(input.supportedLevels)
+        : null,
+      default: nativeReasoningLevel(input.defaultLevel),
     };
   }
 
@@ -192,10 +197,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
       ? ['high', 'medium', 'low', 'minimal']
       : ['minimal', 'low', 'medium', 'high'];
     if (!supported || supported.length === 0) {
-      // No capability info — send the desired top pick anyway. Models that
-      // don't support `reasoning.effort` will reject; we accept that risk
-      // because the unset default path stays available via thinking=undefined.
-      return desired[0] ?? null;
+      // Unknown/no discrete capability: omit instead of guessing. This is
+      // essential for non-reasoning models and providers whose catalogs do not
+      // expose an effort enum.
+      return null;
     }
     return desired.find((level) => supported.includes(level)) ?? null;
   }
@@ -210,10 +215,14 @@ export class ChatGPTCodexProvider implements ChatProvider {
   private resolveReasoningEffort(req: ChatRequest): string | null {
     const explicit = req.reasoningEffort;
     if (explicit) {
-      const supported = this.reasoningCapability.supported;
-      if (!supported || supported.length === 0 || supported.includes(explicit)) {
-        return explicit;
-      }
+      const resolution = resolveReasoningEffort({
+        requestedEffort: explicit,
+        capability: { supportedLevels: this.reasoningCapability.supported },
+      });
+      // Ultra with an unknown catalog intentionally stays omitted; an invalid
+      // native explicit value may still fall back to the thinking-derived
+      // control for backward compatibility.
+      if (explicit.toLowerCase() === 'ultra' || resolution.effort) return resolution.effort;
     }
     return this.pickReasoningEffort(req.thinking);
   }
@@ -343,6 +352,15 @@ export class ChatGPTCodexProvider implements ChatProvider {
       { call_id: string; name: string; argsAcc: string; emittedStart: boolean }
     >();
 
+    // The Responses API emits each reasoning-summary section as a distinct
+    // `...part.added` item, but the text deltas themselves do not necessarily
+    // contain whitespace at that boundary. Preserve the provider's deltas and
+    // add a paragraph separator only when two non-empty parts would otherwise
+    // be glued together (for example `**First****Second**`).
+    let sawReasoningText = false;
+    let pendingReasoningPartBoundary = false;
+    let reasoningEndsWithNewline = false;
+
     for await (const evt of stream) {
       const type = evt.type as string | undefined;
       if (!type) continue;
@@ -364,14 +382,28 @@ export class ChatGPTCodexProvider implements ChatProvider {
         type === 'response.reasoning_summary_text.delta'
       ) {
         const delta = evt.delta as string | undefined;
-        if (delta) yield { type: 'thinking_delta', text: delta };
+        if (delta) {
+          if (
+            pendingReasoningPartBoundary
+            && sawReasoningText
+            && !reasoningEndsWithNewline
+            && !/^[\r\n]/.test(delta)
+          ) {
+            yield { type: 'thinking_delta', text: '\n\n' };
+          }
+          pendingReasoningPartBoundary = false;
+          yield { type: 'thinking_delta', text: delta };
+          sawReasoningText = true;
+          reasoningEndsWithNewline = /[\r\n]$/.test(delta);
+        }
         continue;
       }
-      // Boundary markers — useful telemetry but no payload to emit.
+      // Boundary markers carry no text, but they delimit summary paragraphs.
       if (
         type === 'response.reasoning_summary_part.added' ||
         type === 'response.reasoning_part.added'
       ) {
+        if (sawReasoningText) pendingReasoningPartBoundary = true;
         continue;
       }
 

@@ -105,6 +105,64 @@ function loadOverride(): Record<string, ModelCapability> {
   return cachedOverride;
 }
 
+/**
+ * Some integration layers qualify a model with its provider (`zai.glm-5`).
+ * Capability storage and family rules use the wire model id (`glm-5`). Keep
+ * the exact key first so an explicit qualified override still wins, then try
+ * the safely de-qualified alias for known provider namespaces only.
+ */
+const CAPABILITY_PROVIDER_QUALIFIERS = new Set([
+  'anthropic',
+  'azure',
+  'bedrock',
+  'chatgpt',
+  'copilot',
+  'deepseek',
+  'fugu',
+  'gemini',
+  'google',
+  'kimi',
+  'kimi-code',
+  'mistral',
+  'moonshot',
+  'openai',
+  'openrouter',
+  'zai',
+]);
+
+const QUALIFIED_GLM_MODEL = /(?:^|[./])((?:glm-(?:4|5)|glm[45])[^/]*)$/i;
+
+function capabilityModelKeys(model: string): string[] {
+  const exact = model.trim();
+  if (!exact) return [''];
+  const keys = [exact];
+  const dot = exact.indexOf('.');
+  if (dot > 0 && dot < exact.length - 1) {
+    const qualifier = exact.slice(0, dot).toLowerCase();
+    if (CAPABILITY_PROVIDER_QUALIFIERS.has(qualifier)) {
+      keys.push(exact.slice(dot + 1));
+    }
+  }
+  // Hosted catalogs also namespace GLM ids with paths, for example
+  // `z-ai/glm-5` (OpenRouter) and `@cf/zai-org/glm-5.2` (Cloudflare).
+  // The family alias is lookup-only; the original wire id remains untouched.
+  const glmAlias = exact.match(QUALIFIED_GLM_MODEL)?.[1];
+  if (glmAlias && !keys.includes(glmAlias)) keys.push(glmAlias);
+  return keys;
+}
+
+function findCapabilityValue<K extends keyof ModelCapability>(
+  layer: Readonly<Record<string, Partial<ModelCapability> | undefined>>,
+  model: string,
+  field: K,
+): ModelCapability[K] | undefined {
+  for (const key of capabilityModelKeys(model)) {
+    const value = layer[key]?.[field];
+    if (value != null) return value as ModelCapability[K];
+  }
+  return undefined;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -131,12 +189,16 @@ const MAX_TOOLS_PREFIX_FALLBACKS: Array<[string, number]> = [
  */
 export function getModelMaxTools(model: string): number {
   const override = loadOverride();
-  if (override[model]?.maxTools != null) return override[model].maxTools;
-  if (dbLayer[model]?.maxTools != null) return dbLayer[model].maxTools!;
-  const reg = MODEL_REGISTRY[model]?.maxTools;
+  const overrideValue = findCapabilityValue(override, model, 'maxTools');
+  if (overrideValue != null) return overrideValue;
+  const dbValue = findCapabilityValue(dbLayer, model, 'maxTools');
+  if (dbValue != null) return dbValue;
+  const reg = findCapabilityValue(MODEL_REGISTRY, model, 'maxTools');
   if (reg != null) return reg;
-  for (const [prefix, cap] of MAX_TOOLS_PREFIX_FALLBACKS) {
-    if (model.startsWith(prefix)) return cap;
+  for (const key of capabilityModelKeys(model)) {
+    for (const [prefix, cap] of MAX_TOOLS_PREFIX_FALLBACKS) {
+      if (key.startsWith(prefix)) return cap;
+    }
   }
   return 200;
 }
@@ -148,8 +210,10 @@ export function getModelMaxTools(model: string): number {
  */
 export function getModelContextWindow(model: string): number | null {
   const override = loadOverride();
-  if (override[model]?.contextWindow != null) return override[model].contextWindow!;
-  if (dbLayer[model]?.contextWindow != null) return dbLayer[model].contextWindow!;
+  const overrideValue = findCapabilityValue(override, model, 'contextWindow');
+  if (overrideValue != null) return overrideValue;
+  const dbValue = findCapabilityValue(dbLayer, model, 'contextWindow');
+  if (dbValue != null) return dbValue;
   return getRegistryContextWindow(model);
 }
 
@@ -160,9 +224,11 @@ export function getModelContextWindow(model: string): number | null {
  */
 export function getMaxOutputTokens(model: string): number {
   const override = loadOverride();
-  if (override[model]?.maxOutputTokens != null) return override[model].maxOutputTokens!;
-  if (dbLayer[model]?.maxOutputTokens != null) return dbLayer[model].maxOutputTokens!;
-  const reg = MODEL_REGISTRY[model]?.maxOutputTokens;
+  const overrideValue = findCapabilityValue(override, model, 'maxOutputTokens');
+  if (overrideValue != null) return overrideValue;
+  const dbValue = findCapabilityValue(dbLayer, model, 'maxOutputTokens');
+  if (dbValue != null) return dbValue;
+  const reg = findCapabilityValue(MODEL_REGISTRY, model, 'maxOutputTokens');
   if (reg != null) return reg;
   return FALLBACK_MAX_OUTPUT_TOKENS;
 }
@@ -242,7 +308,8 @@ export function getEffectiveContextWindow(model: string): EffectiveContextWindow
 
 export function getModelCapabilityNote(model: string): string | undefined {
   const override = loadOverride();
-  return (override[model] ?? MODEL_REGISTRY[model])?.note;
+  return findCapabilityValue(override, model, 'note') ??
+    findCapabilityValue(MODEL_REGISTRY, model, 'note');
 }
 
 /**
@@ -321,12 +388,14 @@ function oneMillionSuffixWindow(model: string): number | null {
 
 export function getRegistryContextWindow(model: string): number | null {
   if (!model) return null;
-  const direct = MODEL_REGISTRY[model]?.contextWindow;
+  const direct = findCapabilityValue(MODEL_REGISTRY, model, 'contextWindow');
   if (direct != null) return direct;
-  const oneM = oneMillionSuffixWindow(model);
-  if (oneM != null) return oneM;
-  for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
-    if (model.startsWith(prefix)) return cw;
+  for (const key of capabilityModelKeys(model)) {
+    const oneM = oneMillionSuffixWindow(key);
+    if (oneM != null) return oneM;
+    for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
+      if (key.startsWith(prefix)) return cw;
+    }
   }
   return null;
 }
@@ -359,17 +428,21 @@ export function resolveContextWindowWithSource(model: string): ResolvedContextWi
   if (!model) {
     return { window: FALLBACK_CONTEXT_WINDOW, source: 'fallback', via: 'hardcoded:empty-model-id' };
   }
-  const direct = MODEL_REGISTRY[model]?.contextWindow;
-  if (direct != null) {
-    return { window: direct, source: 'registry-exact', via: `registry:${model}` };
+  for (const key of capabilityModelKeys(model)) {
+    const direct = MODEL_REGISTRY[key]?.contextWindow;
+    if (direct != null) {
+      return { window: direct, source: 'registry-exact', via: `registry:${key}` };
+    }
   }
-  const oneM = oneMillionSuffixWindow(model);
-  if (oneM != null) {
-    return { window: oneM, source: 'registry-prefix', via: 'suffix:[1m]' };
-  }
-  for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
-    if (model.startsWith(prefix)) {
-      return { window: cw, source: 'registry-prefix', via: `prefix:${prefix}` };
+  for (const key of capabilityModelKeys(model)) {
+    const oneM = oneMillionSuffixWindow(key);
+    if (oneM != null) {
+      return { window: oneM, source: 'registry-prefix', via: 'suffix:[1m]' };
+    }
+    for (const [prefix, cw] of CONTEXT_WINDOW_PREFIX_FALLBACKS) {
+      if (key.startsWith(prefix)) {
+        return { window: cw, source: 'registry-prefix', via: `prefix:${prefix}` };
+      }
     }
   }
   const inferred = inferContextWindow(model);
@@ -408,7 +481,8 @@ export interface InferredContextWindow {
  */
 export function inferContextWindow(model: string): InferredContextWindow | null {
   if (!model) return null;
-  const m = model.toLowerCase();
+  const keys = capabilityModelKeys(model);
+  const m = keys[keys.length - 1]!.toLowerCase();
 
   // Anthropic family — Claude 4.x and Opus/Sonnet/Haiku variants all 200K.
   if (m.includes('claude') || m.startsWith('anthropic')) {
@@ -492,7 +566,8 @@ export function modelSupportsVision(opts: {
     return opts.inputModalities.includes('image');
   }
   const kind = (opts.providerKind ?? '').toLowerCase();
-  const m = (opts.modelId ?? '').toLowerCase();
+  const modelKeys = capabilityModelKeys(opts.modelId ?? '');
+  const m = modelKeys[modelKeys.length - 1]!.toLowerCase();
 
   // Known TEXT-ONLY families (no image input).
   if (kind === 'zai' || m.startsWith('glm')) return false;

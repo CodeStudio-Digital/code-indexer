@@ -1,4 +1,12 @@
-import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
+import {
+  parseRuntimeModelRef,
+  selectRuntimeModelMetadata,
+  type ProviderRuntimeModelMetadata,
+  type ProviderSpec,
+  type ResolvedCreds,
+  type ProviderDefinition,
+  type CreateCoderOpts,
+} from '@mcp/provider-sdk';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
 import { getStore } from '@mcp/services/providers/shared/store.js';
 import {
@@ -24,12 +32,13 @@ const CLAUDE_CODE_VALID_EFFORTS: readonly ClaudeCodeEffort[] = ['low', 'medium',
 function readClaudeCodeEffortForModel(
   providerId: string | undefined,
   modelAlias: string,
+  providerModels?: readonly ProviderRuntimeModelMetadata[],
 ): ClaudeCodeEffort | 'auto' | null | undefined {
-  if (!providerId) return undefined;
+  if (!providerId && !providerModels) return undefined;
   try {
     const store = getStore();
-    if (!store) return undefined;
-    const row = store.listModels(providerId).find((m) => m.model_id === modelAlias);
+    const models = providerModels ?? (store && providerId ? store.listModels(providerId) : undefined);
+    const row = selectRuntimeModelMetadata(models, modelAlias);
     const stored = row?.default_reasoning_level;
     if (!stored) return undefined;
     if (stored === 'auto') return 'auto';
@@ -82,10 +91,12 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const accountInfo = claudeCodeAccountInfo(creds);
       const providerId = opts?.providerId;
-      const initial = resolveClaudeCodeModel(model ?? 'default', accountInfo, {
+      const selectedModel = model ?? 'default';
+      const wireModel = parseRuntimeModelRef(selectedModel).id;
+      const initial = resolveClaudeCodeModel(wireModel, accountInfo, {
         includeOAuth: !!creds.authToken,
         thinking: true,
-        effort: readClaudeCodeEffortForModel(providerId, model ?? 'default'),
+        effort: readClaudeCodeEffortForModel(providerId, selectedModel, opts?.providerModels),
       });
       return new AnthropicChatProvider({
         name: 'claude-code',
@@ -98,17 +109,21 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
         defaultTemperature: 1,
         systemPrefixBlocks: creds.authToken ? getClaudeCodeSystemPrefixBlocks() : undefined,
         fetch: creds.fetch,
-        model: model ?? 'default',
+        model: wireModel,
         dangerouslyAllowBrowser: true,
         useBetaMessages: true,
         streamViaCreate: true,
         maxRetries: 0,
         resolveModel: (selectedModel, req) => {
-          const resolved = resolveClaudeCodeModel(selectedModel, accountInfo, {
+          const nativeEffort = CLAUDE_CODE_VALID_EFFORTS.includes(req.reasoningEffort as ClaudeCodeEffort)
+            ? req.reasoningEffort as ClaudeCodeEffort
+            : undefined;
+          const resolved = resolveClaudeCodeModel(parseRuntimeModelRef(selectedModel).id, accountInfo, {
             includeOAuth: !!creds.authToken,
             thinking: true,
             hasTools: (req.tools?.length ?? 0) > 0,
-            effort: readClaudeCodeEffortForModel(providerId, selectedModel),
+            effort: nativeEffort
+              ?? readClaudeCodeEffortForModel(providerId, selectedModel, opts?.providerModels),
           });
           return {
             apiModel: resolved.apiModel,

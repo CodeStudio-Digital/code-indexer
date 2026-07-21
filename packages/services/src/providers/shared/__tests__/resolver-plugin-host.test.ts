@@ -7,7 +7,6 @@ const oauth = vi.hoisted(() => ({
   resolveCopilotCreds: vi.fn(),
   resolveChatGPTCreds: vi.fn(),
   resolveGoogleOAuthCreds: vi.fn(),
-  resolveKimiCodeCreds: vi.fn(),
   runOAuthRefresh: vi.fn(),
 }));
 

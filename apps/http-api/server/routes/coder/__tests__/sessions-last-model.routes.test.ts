@@ -4,6 +4,14 @@ import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
+vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
+  getCoderWorkerPool: () => ({
+    abort: vi.fn(),
+    isRunning: () => false,
+    getBus: () => null,
+  }),
+}));
+
 function setup(lastProviderEnabled = true) {
   const createSession = vi.fn((input: Record<string, unknown>) => ({
     id: 41,
@@ -14,6 +22,8 @@ function setup(lastProviderEnabled = true) {
     createSession,
     getSession: (id: number) => id === 41 ? createSession.mock.results.at(-1)?.value : null,
     listRecentSessionsGlobal: () => [],
+    setSessionExecutionMode: vi.fn(),
+    setSessionReasoningEffort: vi.fn(),
   };
   const providerStore = {
     getProvider: (id: string) => id === 'zai' ? { id, enabled: lastProviderEnabled ? 1 : 0 } : { id, enabled: 1 },

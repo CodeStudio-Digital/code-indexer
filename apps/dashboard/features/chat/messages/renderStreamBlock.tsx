@@ -19,13 +19,13 @@ import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.
 
 export function renderStreamBlock(block: StreamBlock, key: number, handlers: PromptHandlers) {
   if (block.type === 'thinking') {
-    return <LiveThinkingBlock key={`th-${key}`} text={block.text} />;
+    return <LiveThinkingBlock key={`th-${block.id ?? key}`} text={block.text} />;
   }
   if (block.type === 'activity') {
     return <ActivityLineBlock key={`act-${block.id}`} activity={block} />;
   }
   if (block.type === 'text') {
-    return <LiveTextBlock key={`t-${key}`} text={block.text} />;
+    return <LiveTextBlock key={`t-${block.id ?? key}`} text={block.text} />;
   }
   if (block.type === 'tool') {
     if (isGoalTool(block.call.name)) {

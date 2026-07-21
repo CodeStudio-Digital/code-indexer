@@ -254,6 +254,15 @@ export interface PromptContext {
    */
   agentsMd?: string;
   /**
+   * Session-level multi-agent policy. `proactive` is the product's Ultra
+   * execution mode; `explicit_request_only` revokes a previously-active
+   * proactive policy. The block is session-fixed and therefore belongs above
+   * the dynamic cache boundary. When `spawn_agent` is unavailable, proactive
+   * delegation is reduced to the explicit-request policy instead of
+   * advertising a capability the runner cannot provide.
+   */
+  multiAgentMode?: 'proactive' | 'explicit_request_only';
+  /**
    * Final registry membership after role/specialist filtering. When supplied,
    * the composer advertises only capabilities the session can actually call.
    * Omitted by lightweight tests/legacy callers to preserve the full generic
@@ -405,6 +414,37 @@ Profiles: \`investigator\` (read-only), \`implementer\` (scoped writes; pass \`f
 For investigator/reviewer work, set \`research_depth\`: \`quick\` for an initial answer, \`standard\` by default, \`deep\` for end-to-end tracing, and \`exhaustive\` only when the user explicitly requests complete coverage. Add concrete \`completion_criteria\` when possible. After all children return, synthesize immediately; run another broad validation sweep only for a named unresolved criterion.
 
 `;
+}
+
+/**
+ * Codex-faithful multi-agent mode switch. This is deliberately prompt-driven:
+ * Ultra authorizes bounded proactive research when useful, but never turns
+ * every request into mandatory fan-out and never bypasses write approvals.
+ */
+function multiAgentModeSection(
+  mode: PromptContext['multiAgentMode'],
+  available?: ReadonlySet<string>,
+): string {
+  if (!mode) return '';
+
+  if (mode !== 'proactive' || !toolAvailable(available, 'spawn_agent')) {
+    return `
+
+# Multi-agent mode (explicit request only)
+Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
+  }
+
+  return `
+
+# Multi-agent mode (Ultra)
+Proactive delegation is active. Spawn sub-agents without an explicit request when parallel work materially improves speed or quality. A later multi-agent mode instruction replaces this policy.
+- Delegation is not a quota. Keep simple, tightly-coupled, or sequential work here; do not fan out merely because Ultra is active.
+- Apply strongest compatible reasoning to root and children. Models without discrete effort use their fixed/boolean capability or omit the wire field.
+- At most 3 proactive children; use only read-only \`investigator\` or \`reviewer\`. \`verifier\` has shell and requires an explicit request or the controlled internal verifier.
+- Delegation is one level deep; children cannot spawn further sub-agents.
+- Never proactively spawn \`implementer\` or \`full\`. Keep writes in root, or use \`task_list({gate:'approve'})\` then \`execute_tasks\` after normal approval.
+- Mutations retain ordinary permission, sandbox, and human-approval gates; Ultra grants no write bypass.
+- Wait and synthesize. Repeat a broad sweep only for a named unresolved criterion.`;
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */
@@ -596,6 +636,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
     ctx.unsupervised && ctx.outputStyle === 'learning' ? 'proactive' : ctx.outputStyle;
   const outputStyleBlock = outputStyleSection(effectiveStyle);
   const autonomousBlock = autonomousSection(ctx.unsupervised);
+  const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools);
   // Permissions/sandbox policy + AGENTS.md project instructions. Both
   // session-fixed → cache-stable, above the boundary. Collapse to '' when not
   // supplied so prompts that omit them stay byte-identical to before.
@@ -648,7 +689,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${multiAgentModeBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**

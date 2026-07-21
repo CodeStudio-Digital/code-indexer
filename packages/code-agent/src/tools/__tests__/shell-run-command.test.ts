@@ -126,6 +126,24 @@ describe('run_command — outcomes and format', () => {
     ]);
   });
 
+  it('gives Unity batch tests the slow-tool budget instead of a generic five-minute hint', async () => {
+    let receivedTimeoutMs = 0;
+    const shell = {
+      exec: async (_command: string, options: { timeoutMs: number }) => {
+        receivedTimeoutMs = options.timeoutMs;
+        return { stdout: 'unity-finished', stderr: '', exitCode: 0, timedOut: false };
+      },
+    } as unknown as IShellPort;
+    const unityCtx = { ...ctx, ports: { shell } } as ToolContext;
+    const command = '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.5f2\\Editor\\Unity.exe" -batchmode -projectPath D:\\project -runTests';
+
+    const res = await runCommand.handler({ command, timeout_ms: 300_000 }, unityCtx);
+
+    expect(res.isError).toBeFalsy();
+    expect(receivedTimeoutMs).toBe(30 * 60_000);
+    expect(runCommand.resolveTimeoutMs?.({ command, timeout_ms: 300_000 })).toBe(30 * 60_000 + 5_000);
+  });
+
   it('composes adapter truncation with the local oversized-materialization guard', async () => {
     const put = vi.fn(() => 'must-not-be-used');
     const shell = {

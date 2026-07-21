@@ -1,11 +1,7 @@
 import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
 import { openaiAuthHeaders, CHATGPT_CODEX_BASE_URL } from '@mcp/services/services/oauth/openai.js';
 import { fetchClaudeCodeModels } from '@mcp/services/services/oauth/claude-code.js';
-import {
-  fetchKimiCodeModels,
-  refreshIfExpired as refreshKimiCodeToken,
-} from '@mcp/services/services/oauth/kimi-code.js';
-import { getStore } from '@mcp/services/providers/shared/store.js';
+import { fetchKimiCodeModels } from '@mcp/services/services/kimi-code.js';
 import { requestFetchHeaders } from './request.js';
 
 type TestConnection = NonNullable<ProviderDefinition['testConnection']>;
@@ -93,19 +89,12 @@ export function buildTestConnection(spec: ProviderSpec): TestConnection | undefi
       };
 
     case 'sdk:kimi-code':
-      // kimi-code: on a 401 with a clock-fresh token, force a refresh + retry
-      // once.
       return async ({ creds, config }) => {
-        const headers = creds.extraHeaders;
-        const baseURL = creds.baseURL ?? config.base_url;
-        try {
-          await fetchKimiCodeModels({ baseURL, apiKey: creds.apiKey, headers });
-        } catch (e) {
-          if (!/HTTP 401/.test((e as Error).message)) throw e;
-          const store = getStore();
-          const fresh = store ? await refreshKimiCodeToken(store, config.id, { force: true }) : null;
-          await fetchKimiCodeModels({ baseURL, apiKey: fresh ?? creds.apiKey, headers });
-        }
+        await fetchKimiCodeModels({
+          baseURL: creds.baseURL ?? config.base_url,
+          apiKey: creds.apiKey,
+          headers: creds.extraHeaders,
+        });
       };
 
     default:

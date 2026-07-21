@@ -810,7 +810,7 @@ export function renderAssistantBlock(
   // The tool is named `spawn_agent` (singular); it dispatches 1 or N agents.
   // (`spawn_agents` kept for any legacy persisted data.)
   if (b.name === 'spawn_agent' || b.name === 'spawn_agents') {
-    const group = parsePersistedAgentsGroup(b.input, result);
+    const group = parsePersistedAgentsGroup(b.input, result, b.id);
     if (group) {
       return (
         <AgentsGroupBlock

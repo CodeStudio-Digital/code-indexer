@@ -19,11 +19,10 @@ function readThinkingMode(value: unknown, fallback: KimiThinkingMode): KimiThink
 }
 
 /**
- * Kimi Code wire (kimi-code, OAuth credentials resolved upstream). Lift of the
+ * Kimi Code wire (kimi-code, API-key credentials resolved upstream). Lift of the
  * hand-written coder adapter with the base-URL fallback and the
  * default model read from the spec, and the per-request thinking mode read from
- * `creds.extra` per `spec.wireOpts.thinkingMode`. The OAuth flow itself is added
- * separately — here creds arrive already resolved.
+ * `creds.extra` per `spec.wireOpts.thinkingMode`.
  */
 export function buildKimi(spec: ProviderSpec): WireParts {
   const thinkingOpts = spec.wireOpts?.thinkingMode;

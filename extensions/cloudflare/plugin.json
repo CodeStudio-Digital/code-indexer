@@ -1,6 +1,6 @@
 {
   "name": "cloudflare",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Manage Cloudflare from your project — deploy Workers/Pages/OpenNext and operate D1, KV, R2, Queues, DNS, Vectorize and more",
   "author": { "name": "mcp" },
   "apps": ".app.json",

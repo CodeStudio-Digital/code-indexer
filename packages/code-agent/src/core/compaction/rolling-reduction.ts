@@ -50,6 +50,12 @@ export interface RollingReductionOpts {
    * provider prompt-cache prefix survives; each flush is ONE deep bust
    * instead of a trickle of small ones (one per turn was observed busting
    * ~90k cached tokens to free ~2k chars).
+   *
+   * `Infinity` = defer-all: candidates are detected and reported as pending
+   * but NEVER applied by this pass. Used by the per-turn view so the only
+   * place retirements ever land is the durable compaction pass — the one
+   * moment the prefix cache is already being rewritten (telemetry: a mid-run
+   * flush re-prefilled ~70k uncached tokens to free ~2k chars).
    */
   flushThresholdChars?: number;
 }
@@ -232,7 +238,10 @@ export function applyRollingReduction(
   );
   const total = candidates.reduce((s, c) => s + c.freedChars, 0);
   let applyCount = candidates.length;
-  if (flushThreshold > 0) {
+  if (flushThreshold > 0 && !Number.isFinite(flushThreshold)) {
+    // Defer-all: pure detection pass, byte-identical output.
+    applyCount = 0;
+  } else if (flushThreshold > 0) {
     const completed = Math.floor(total / flushThreshold) * flushThreshold;
     let cum = 0;
     applyCount = 0;

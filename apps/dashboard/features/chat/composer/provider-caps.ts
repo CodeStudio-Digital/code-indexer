@@ -1,4 +1,5 @@
 import type { ProviderOption } from '../types.js';
+import { selectedProviderModel } from '../execution-mode-state.js';
 
 /**
  * Resolve whether a provider supports extended thinking. The capability flag
@@ -45,13 +46,16 @@ export function resolveReasoningLevels(
   providerOptions: ProviderOption[],
   model?: string | null,
 ): string[] {
-  if (!providerId || !model) return [];
-  const option = providerOptions.find((p) => p.id === providerId);
-  if (!option) return [];
-  const [bare, mode] = model.split('::');
-  const match =
-    option.models.find(
-      (m) => m.id === bare && ((mode ?? '') === '' || (m.mode ?? '') === mode),
-    ) ?? option.models.find((m) => m.id === bare);
-  return match?.supported_reasoning_levels ?? [];
+  const match = selectedProviderModel(providerId, providerOptions, model);
+  // `ultra` is a product execution profile, never a provider-native effort.
+  // Filter defensively so stale persisted catalogs cannot put it back into the
+  // wire-effort selector before the next model refresh/migration.
+  const seen = new Set<string>();
+  return (match?.supported_reasoning_levels ?? []).flatMap((raw) => {
+    const level = raw.trim();
+    const key = level.toLowerCase();
+    if (!level || key === 'ultra' || seen.has(key)) return [];
+    seen.add(key);
+    return [level];
+  });
 }

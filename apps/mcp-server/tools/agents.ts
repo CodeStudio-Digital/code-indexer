@@ -1,5 +1,9 @@
 import { defineTool, mcpAccess, type McpTool, type McpToolOutput } from '../tool.js';
 import { getMcpAgentRunManager } from '../agent-run-manager.js';
+import {
+  MCP_AGENT_EXECUTION_MODES,
+  parseMcpAgentExecutionMode,
+} from '../agent-run-contract.js';
 
 function output(value: unknown, text?: string): McpToolOutput {
   const structuredContent = value && typeof value === 'object'
@@ -24,7 +28,8 @@ const start_agent_run = defineTool({
   ...mcpAccess('write'),
   description:
     'Start a CodeStudio agent asynchronously and return a persistent run_id immediately. ' +
-    'Use get_agent_run/get_agent_result to poll it. Connection profiles restrict projects, agents, concurrency and runtime.',
+    'Use get_agent_run/get_agent_result to poll it. execution_mode selects the provider-independent host orchestration profile; ' +
+    'reasoning_effort remains a native provider control. Connection profiles restrict projects, agents, concurrency and runtime.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -34,7 +39,16 @@ const start_agent_run = defineTool({
       provider: { type: 'string' },
       model: { type: 'string' },
       title: { type: 'string' },
-      reasoning_effort: { type: 'string' },
+      execution_mode: {
+        type: 'string',
+        enum: MCP_AGENT_EXECUTION_MODES,
+        default: 'standard',
+        description: 'Host execution profile. Ultra never becomes a provider reasoning-effort value.',
+      },
+      reasoning_effort: {
+        type: 'string',
+        description: 'Optional native provider reasoning effort. Legacy value "ultra" is accepted and converted to execution_mode=ultra.',
+      },
     },
     required: ['project_name', 'task', 'agent_id', 'provider', 'model'],
   },
@@ -46,6 +60,7 @@ const start_agent_run = defineTool({
       provider: String(args.provider ?? ''),
       model: String(args.model ?? ''),
       title: typeof args.title === 'string' ? args.title : undefined,
+      executionMode: parseMcpAgentExecutionMode(args.execution_mode),
       reasoningEffort: typeof args.reasoning_effort === 'string' ? args.reasoning_effort : undefined,
     }, authCtx);
     return output(run, `Agent run ${run.id} started (CodeStudio session ${run.sessionId}).`);

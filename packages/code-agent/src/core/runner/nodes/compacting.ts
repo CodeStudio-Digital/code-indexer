@@ -25,6 +25,8 @@ import { recoveryCap } from '../recovery-config.js';
 import { compactWithLLM, truncateHeadMechanically } from '../compaction/llm-compactor.js';
 import { computeProtectTokens, resolveRecedeTailRatio } from '../compaction/threshold.js';
 import { spillOversizedToolResults } from '../compaction/spill-oversized.js';
+import { takePrecomputedCompaction } from '../compaction/precompute.js';
+import { applyRollingReduction } from '@mcp/code-agent/core/compaction/rolling-reduction.js';
 
 export interface CompactingNodeOptions {
   /**
@@ -120,7 +122,22 @@ export class CompactingNode implements BehaviorNode {
       liveState = undefined;
     }
 
-    const result = await compactWithLLM({
+    // Perf W1 — consume the background-precomputed summary when its head
+    // still matches the live history (see `compaction/precompute.ts`).
+    // Milestones use a different protect budget than the precompute assumed,
+    // so they always take the inline path and drop any pending slot.
+    let precomputed = null;
+    if (isMilestone) {
+      ctx.summaryPrecompute = null;
+    } else if (!this.nodeOpts.summarizeOverride) {
+      precomputed = await takePrecomputedCompaction(ctx);
+      if (precomputed) {
+        console.log(
+          `[coder] compaction consumed precomputed summary (head=${precomputed.collapsedFrom} messages)`,
+        );
+      }
+    }
+    const result = precomputed ?? await compactWithLLM({
       messages: ctx.messages,
       protectTokens,
       maxTailTokens: effectiveMaxTailTokens,
@@ -164,6 +181,7 @@ export class CompactingNode implements BehaviorNode {
             });
         if (fallback && fallback.collapsedFrom > 0) {
           ctx.messages.splice(0, ctx.messages.length, ...fallback.messages);
+          flushRollingReductionDurable(ctx);
           ctx.consecutiveNoopCompactions = 0;
           ctx.recovery.set('compact-failure', 0);
           ctx.injectionState.recentCompactionAt = ctx.turn;
@@ -254,6 +272,7 @@ export class CompactingNode implements BehaviorNode {
       // resetting the no-op streak and starve the pre-emit irreducible bypass.
       if (spill.spilled > 0 && spill.freedChars > 0) {
         ctx.messages.splice(0, ctx.messages.length, ...spill.messages);
+        flushRollingReductionDurable(ctx);
         // A real reduction freed space — clear the no-op streak and the
         // compact-failure breaker, same as the summarizer path below.
         ctx.consecutiveNoopCompactions = 0;
@@ -338,6 +357,7 @@ export class CompactingNode implements BehaviorNode {
     // Preserve the shared backing array passed by CoderRunner. Reassignment
     // would leave host observers holding the pre-compaction transcript.
     ctx.messages.splice(0, ctx.messages.length, ...result.messages);
+    flushRollingReductionDurable(ctx);
     // A real compaction freed space — clear the no-op streak.
     ctx.consecutiveNoopCompactions = 0;
     // Reset the compact-failure counter on a clean run — the circuit
@@ -376,6 +396,25 @@ export class CompactingNode implements BehaviorNode {
       collapsedFrom: result.collapsedFrom,
       collapsedTo: result.collapsedTo,
     });
+  }
+}
+
+/**
+ * Perf W1 — durable rolling-reduction flush. The per-turn view now DEFERS
+ * every retirement (cache contract in `core/runner.ts`): the only place they
+ * land is here, right after a compaction rewrote the prefix anyway. Runs on
+ * the post-compaction array (the head is the synthetic summary, so this is
+ * effectively tail-local) and preserves the shared backing array.
+ */
+function flushRollingReductionDurable(ctx: RunContext): void {
+  if (process.env.CODER_ROLLING_REDUCER === '0') return;
+  const rolled = applyRollingReduction(ctx.messages, { flushThresholdChars: 0 });
+  if (rolled.reduced > 0) {
+    ctx.messages.splice(0, ctx.messages.length, ...rolled.messages);
+    console.log(
+      `[coder] durable reducer flush retired ${rolled.reduced} stale tool_result(s) ` +
+        `(~${rolled.freedChars} chars) at compaction`,
+    );
   }
 }
 

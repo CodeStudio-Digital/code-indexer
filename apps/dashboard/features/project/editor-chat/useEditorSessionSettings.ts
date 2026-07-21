@@ -9,21 +9,40 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiPatch } from '../../../hooks/useApi.js';
 import type { SessionData } from '../../chat/types.js';
 import { levelFromSession, type OutputCapLevel } from '../../chat/composer/output-cap-levels.js';
+import { useSessionExecutionMode } from '../../chat/useSessionExecutionMode.js';
 
-export function useEditorSessionSettings(selectedId: number | null, sessionData: SessionData | null) {
+interface EditorSessionSettingsOptions {
+  updateSessionData: (fn: (previous: SessionData) => SessionData) => void;
+  runnerBusy: boolean;
+  refetchSession: () => void;
+}
+
+export function useEditorSessionSettings(
+  selectedId: number | null,
+  sessionData: SessionData | null,
+  options: EditorSessionSettingsOptions,
+) {
   // Describe-images is a per-send flag (not persisted), matching AgentChat.
   const [describeImages, setDescribeImages] = useState(false);
   const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
+  const executionModeState = useSessionExecutionMode({
+    selectedId,
+    sessionData,
+    updateSessionData: options.updateSessionData,
+    runnerBusy: options.runnerBusy,
+    refetchSession: options.refetchSession,
+  });
 
   // Hydrate the persisted toggles from the session row.
   useEffect(() => {
     const s = sessionData?.session;
+    if (!s || s.id !== selectedId) return;
     setOutputCapLevel(levelFromSession(s));
-    setToolPermissionMode(s?.tool_permission_mode ?? 'auto');
-  }, [sessionData?.session]);
+    setToolPermissionMode(s.tool_permission_mode ?? 'auto');
+  }, [selectedId, sessionData?.session]);
 
   // Fallback lives behind its own endpoint.
   useEffect(() => {
@@ -79,5 +98,6 @@ export function useEditorSessionSettings(selectedId: number | null, sessionData:
     fallbackProvider,
     fallbackModel,
     onFallbackChange: changeFallback,
+    ...executionModeState,
   };
 }

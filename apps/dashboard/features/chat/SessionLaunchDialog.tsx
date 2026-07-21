@@ -1,5 +1,5 @@
 import type { AgentPreset } from '@mcp/api-bus';
-import { Gauge, Repeat, Thermometer } from 'lucide-react';
+import { Gauge, Repeat, Sparkles, Thermometer } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
@@ -15,13 +15,15 @@ import { Input } from '../../components/ui/input.js';
 import { Switch } from '../../components/ui/switch.js';
 import { AgentPicker } from './composer/AgentPicker.js';
 import { providerSupportsThinking, resolveReasoningLevels } from './composer/provider-caps.js';
-import type { EnrichedProviderModel, ProviderOption } from './types.js';
+import { modelCanReason, ultraManagesThinking } from './execution-mode-state.js';
+import type { EnrichedProviderModel, ExecutionMode, ProviderOption } from './types.js';
 
 export interface SessionLaunchConfig {
   title: string;
   agent: AgentPreset;
   provider: string;
   model: string;
+  executionMode: ExecutionMode;
   reasoningEffort: string | null;
   thinking: boolean;
   maxTurns: number | null;
@@ -70,6 +72,10 @@ export function SessionLaunchDialog({
   );
   const reasoningLevels = resolveReasoningLevels(value.provider, providerOptions, value.model);
   const supportsThinking = providerSupportsThinking(value.provider, providerOptions, value.model);
+  const ultraControlsThinking = ultraManagesThinking(
+    value.executionMode,
+    modelCanReason(value.provider, providerOptions, value.model),
+  );
   const patch = (next: Partial<SessionLaunchConfig>) => onChange({ ...value, ...next });
 
   const changeProvider = (provider: string) => {
@@ -179,6 +185,38 @@ export function SessionLaunchDialog({
             </div>
           </div>
 
+          <div
+            className={`rounded-lg border p-3 transition-colors ${
+              value.executionMode === 'ultra'
+                ? 'border-violet-500/50 bg-violet-500/10'
+                : 'border-border bg-muted/20'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 rounded-md p-1.5 ${
+                value.executionMode === 'ultra'
+                  ? 'bg-violet-500/15 text-violet-600 dark:text-violet-300'
+                  : 'bg-muted text-muted-foreground'
+              }`}>
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <label htmlFor="session-launch-ultra" className="text-sm font-medium">
+                  {t('chat:ultra.title')}
+                </label>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {t('chat:ultra.description')}
+                </p>
+              </div>
+              <Switch
+                id="session-launch-ultra"
+                checked={value.executionMode === 'ultra'}
+                onCheckedChange={(checked) => patch({ executionMode: checked ? 'ultra' : 'standard' })}
+                aria-label={t('chat:ultra.title')}
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label htmlFor="session-launch-turns" className="text-xs font-medium text-muted-foreground">
@@ -241,7 +279,7 @@ export function SessionLaunchDialog({
                   id="session-launch-effort"
                   className="h-9 flex-1 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
                   value={value.reasoningEffort ?? ''}
-                  disabled={reasoningLevels.length === 0}
+                  disabled={reasoningLevels.length === 0 || value.executionMode === 'ultra'}
                   onChange={(event) => patch({ reasoningEffort: event.target.value || null })}
                 >
                   <option value="">{t('chat:sessionLaunch.automatic')}</option>
@@ -255,11 +293,15 @@ export function SessionLaunchDialog({
               </span>
               <div className="h-9 rounded-md border px-3 flex items-center justify-between gap-3">
                 <span className="text-sm text-muted-foreground">
-                  {supportsThinking ? t('chat:sessionLaunch.thinkingHint') : t('chat:sessionLaunch.unavailable')}
+                  {ultraControlsThinking
+                    ? t('chat:ultra.thinkingManagedShort', { defaultValue: 'Managed by Ultra; Standard preference preserved' })
+                    : supportsThinking
+                      ? t('chat:sessionLaunch.thinkingHint')
+                      : t('chat:sessionLaunch.unavailable')}
                 </span>
                 <Switch
-                  checked={supportsThinking && value.thinking}
-                  disabled={!supportsThinking}
+                  checked={ultraControlsThinking || (supportsThinking && value.thinking)}
+                  disabled={!supportsThinking || ultraControlsThinking}
                   onCheckedChange={(thinking) => patch({ thinking })}
                   aria-label={t('chat:sessionLaunch.thinking')}
                 />

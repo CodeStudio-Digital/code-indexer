@@ -13,10 +13,30 @@
  * The bridge methods are private on CoderRunner; we invoke them off the
  * prototype with a minimal fake `this` (the same surface the methods read).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { CoderRunner } from '../runner.js';
 import { buildRichRefusal } from '../compaction/refusal.js';
+
+/**
+ * Refusal is reachable only under `CODER_DEDUP_POLICY=legacy`. The default
+ * hybrid policy never refuses a stable read across turns (see the header of
+ * runner/guards/tuple-hash-dedup.ts), so the ledger-honesty invariants below
+ * — which are about the WORDING and BOOKKEEPING of a refusal — must pin the
+ * legacy policy to have a refusal to inspect at all. `describe('pre-read
+ * guard under the default hybrid policy')` covers the default path.
+ */
+function useLegacyDedupPolicy(): void {
+  let prev: string | undefined;
+  beforeEach(() => {
+    prev = process.env.CODER_DEDUP_POLICY;
+    process.env.CODER_DEDUP_POLICY = 'legacy';
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.CODER_DEDUP_POLICY;
+    else process.env.CODER_DEDUP_POLICY = prev;
+  });
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const proto = CoderRunner.prototype as any;
@@ -67,6 +87,8 @@ const ledger = (r: FakeRunner): Array<{ turn: number; useId: string }> =>
   [...r.recentReadKeys.values()].flat();
 
 describe('failed reads are dropped from the pre-read ledger', () => {
+  useLegacyDedupPolicy();
+
   it('a FAILED read does not count toward the re-read threshold', () => {
     const r = fakeRunner();
     expect(enforce(r, 'use1', 1)).toBeNull(); // optimistically ledgered
@@ -90,6 +112,8 @@ describe('failed reads are dropped from the pre-read ledger', () => {
 });
 
 describe('refused attempts do not compound in the ledger', () => {
+  useLegacyDedupPolicy();
+
   it('back-to-back refusals keep reporting the SAME prior-read count', () => {
     const r = fakeRunner([toolResultMsg('use1')]);
     expect(enforce(r, 'use1', 1)).toBeNull();
@@ -105,6 +129,8 @@ describe('refused attempts do not compound in the ledger', () => {
 });
 
 describe('refusal wording is honest about what is still in context', () => {
+  useLegacyDedupPolicy();
+
   it('claims "in your context" only when the prior tool_result is present', () => {
     const r = fakeRunner([toolResultMsg('use1')]);
     enforce(r, 'use1', 1);
@@ -130,6 +156,25 @@ describe('refusal wording is honest about what is still in context', () => {
       if (prev === undefined) delete process.env.CODER_READ_DUP_THRESHOLD;
       else process.env.CODER_READ_DUP_THRESHOLD = prev;
     }
+  });
+});
+
+describe('pre-read guard under the default hybrid policy', () => {
+  // Guards the flip made when the dedup policy defaulted to hybrid: a stable
+  // read is never refused just because it appeared in a prior turn. Only the
+  // legacy rollback path still refuses.
+  it('never refuses a repeated read, even past the threshold', () => {
+    const r = fakeRunner([toolResultMsg('use1')]);
+    expect(enforce(r, 'use1', 1)).toBeNull();
+    expect(enforce(r, 'use2', 2)).toBeNull(); // legacy would refuse here
+    expect(enforce(r, 'use3', 3)).toBeNull();
+  });
+
+  it('keeps the allowed attempts in the ledger (the real results post-process)', () => {
+    const r = fakeRunner([toolResultMsg('use1')]);
+    enforce(r, 'use1', 1);
+    enforce(r, 'use2', 2);
+    expect(ledger(r).map((e) => e.useId)).toEqual(['use1', 'use2']);
   });
 });
 

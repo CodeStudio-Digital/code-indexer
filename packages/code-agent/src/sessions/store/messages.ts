@@ -450,14 +450,25 @@ export function loadTail(db: DB, id: number, tail: number): SessionWithMessages 
   if (!session) return null;
   const boundary = session.summary_boundary_id ?? 0;
 
+  // Cutoff via idx_coder_messages_session_role (mig 246). The persisted role
+  // set is CLOSED — 'user' | 'assistant' | 'tool' (append/persistAssistantTurn
+  // take runner-emitted roles and every import parser normalizes onto the same
+  // three; see CoderMessageRow['role']) — so `role != 'tool'` is exactly
+  // `role IN ('user','assistant')`. The UNION ALL exploits that: one COVERING
+  // index branch per role, stream-merged in id DESC order and stopped after
+  // OFFSET+1 ids. The old `role != 'tool'` predicate had to probe the table
+  // row of every trailing message (tool rows included) just to read its role.
   const cutoff = db
     .prepare(`
       SELECT id FROM coder_messages
-       WHERE session_id = ? AND id > ? AND role != 'tool'
+       WHERE session_id = ? AND id > ? AND role = 'user'
+      UNION ALL
+      SELECT id FROM coder_messages
+       WHERE session_id = ? AND id > ? AND role = 'assistant'
        ORDER BY id DESC
        LIMIT 1 OFFSET ?
     `)
-    .get(id, boundary, Math.max(0, tail - 1)) as { id: number } | undefined;
+    .get(id, boundary, id, boundary, Math.max(0, tail - 1)) as { id: number } | undefined;
 
   let rows: CoderMessageRow[];
   if (cutoff) {
@@ -497,14 +508,23 @@ export function loadBefore(
   db: DB, sessionId: number, beforeId: number, limit: number, includeArchived = false,
 ): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
   const boundary = includeArchived ? 0 : getBoundary(db, sessionId);
+  // Same covering-index cutoff strategy as loadTail (mig 246) — see the
+  // closed-role-set rationale there.
   const cutoff = db
     .prepare(`
       SELECT id FROM coder_messages
-       WHERE session_id = ? AND id < ? AND id > ? AND role != 'tool'
+       WHERE session_id = ? AND id < ? AND id > ? AND role = 'user'
+      UNION ALL
+      SELECT id FROM coder_messages
+       WHERE session_id = ? AND id < ? AND id > ? AND role = 'assistant'
        ORDER BY id DESC
        LIMIT 1 OFFSET ?
     `)
-    .get(sessionId, beforeId, boundary, Math.max(0, limit - 1)) as { id: number } | undefined;
+    .get(
+      sessionId, beforeId, boundary,
+      sessionId, beforeId, boundary,
+      Math.max(0, limit - 1),
+    ) as { id: number } | undefined;
 
   let rows: CoderMessageRow[];
   if (cutoff) {
@@ -537,6 +557,10 @@ export function maxMessageId(db: DB, sessionId: number): number {
  * the dashboard cannot always recover the round id from the returned rows.
  * Keep this lookup independent of the visibility boundary: an archived user
  * message can still own the visible assistant tail that follows it.
+ *
+ * The (session_id, role, id) shape matches idx_coder_messages_session_role
+ * (mig 246) as-is — the planner seeks (session_id, 'user', <beforeId) and only
+ * probes user rows for the residual is_meta check.
  */
 export function previousUserMessageId(db: DB, sessionId: number, beforeId: number): number | null {
   const row = db.prepare(`
@@ -605,6 +629,9 @@ export function setCompactionBoundary(
  * as review-context intent (session-intent.ts). Deliberately ignores the
  * summary boundary: rows persist after "summarize & clear", and the original
  * intent is exactly the kind of thing the boundary hides.
+ *
+ * (session_id, role='user') seeks idx_coder_messages_session_role (mig 246)
+ * directly — first index entry, no scan past tool/assistant rows.
  */
 export function getFirstUserText(db: DB, sessionId: number): string | null {
   const row = db

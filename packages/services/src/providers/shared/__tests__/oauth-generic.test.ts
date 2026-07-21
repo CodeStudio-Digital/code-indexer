@@ -32,7 +32,6 @@ describe('runOAuthRefresh — data-driven dispatch by spec.auth.hooks', () => {
     await expect(runOAuthRefresh(def({ hooks: 'chatgpt' }), cfg)).rejects.toThrow(/ChatGPT requires/);
     await expect(runOAuthRefresh(def({ hooks: 'google-oauth' }), cfg)).rejects.toThrow(/Google OAuth requires/);
     await expect(runOAuthRefresh(def({ hooks: 'claude-code' }), cfg)).rejects.toThrow(/Claude Code requires/);
-    await expect(runOAuthRefresh(def({ hooks: 'kimi-code' }), cfg)).rejects.toThrow(/Kimi Code requires/);
   });
 
   it('a hookless provider falls through to the generic RFC path', async () => {

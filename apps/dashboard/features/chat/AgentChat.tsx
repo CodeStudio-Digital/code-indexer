@@ -37,9 +37,18 @@ import { levelFromSession, type OutputCapLevel } from './composer/output-cap-lev
 import { useMessageQueue, type QueueDeliver, type QueueMode } from './composer/useMessageQueue.js';
 import { QueuedMessages } from './composer/QueuedMessages.js';
 import { providerSupportsThinking, resolveReasoningLevels } from './composer/provider-caps.js';
+import {
+  DEFAULT_NEW_EXECUTION_MODE,
+  executionModeChangeLocked,
+  hydratedReasoningEffort,
+  modelCanReason,
+  ultraManagesThinking,
+} from './execution-mode-state.js';
+import { useSessionExecutionMode } from './useSessionExecutionMode.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { MessageList } from './messages/MessageList.js';
+import { mergeEarlierMessagePage, sessionDataForSelection } from './messages/session-message-data.js';
 import { StuckBanner } from './StuckBanner.js';
 import { ApprovalBanner } from './ApprovalBanner.js';
 import { NotificationBanner } from './notifications/NotificationBanner.js';
@@ -281,13 +290,26 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=40&detail=preview` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
+  const selectedSessionData = useMemo(
+    () => sessionDataForSelection(sessionData, selectedId),
+    [selectedId, sessionData],
+  );
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const sessionDataRef = useRef(selectedSessionData);
+  sessionDataRef.current = selectedSessionData;
+  const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
+  useEffect(() => () => {
+    for (const controller of messagePageAbortControllersRef.current) controller.abort();
+    messagePageAbortControllersRef.current.clear();
+  }, [selectedId]);
 
   // Composer gate: block sending while the session's project is ACTIVELY indexing
   // (the freshly-created global union's first pass). Once `structural_ready` the
   // agent can search/symbol, so we only block the two in-progress phases — never
   // 'none' (which would deadlock the composer if auto-index is off). Inert for a
   // normal already-indexed project (phase ready) and guarded on selectedId.
-  const projectIndexId = sessionData?.session.project_id ?? 0;
+  const projectIndexId = selectedSessionData?.session.project_id ?? 0;
   // Boolean selector: re-renders this heavy tree only when the busy flag flips,
   // NOT on every progress frame. The live progress text lives in the isolated
   // <IndexingOverlay> leaf so the per-frame stream can't drive a full re-render.
@@ -313,7 +335,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const notificationContext = useMemo<NotificationSourceContext | undefined>(() => {
     if (!selectedId) return undefined;
     const sessionTitle =
-      sessionData?.session.title
+      selectedSessionData?.session.title
       ?? sessions?.find((session) => session.id === selectedId)?.title
       ?? (isGlobal ? 'Global session' : projectName ?? `Project ${projectId}`);
 
@@ -338,7 +360,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         label: sessionTitle,
       },
     };
-  }, [isGlobal, projectId, projectName, selectedId, sessionData?.session.title, sessions]);
+  }, [isGlobal, projectId, projectName, selectedId, selectedSessionData?.session.title, sessions]);
 
   const stream = useAgentStream(selectedId, notificationContext);
   const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId, notificationContext);
@@ -372,6 +394,27 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     switchProvider,
   } = stream;
 
+  const runnerLocksExecutionMode = executionModeChangeLocked(
+    streaming,
+    selectedSessionData?.session.status,
+    selectedSessionData?.session.id,
+    selectedId,
+  );
+  const {
+    executionMode,
+    setExecutionMode: handleExecutionModeChange,
+    executionModePending,
+    executionModeLocked,
+    awaitPendingExecutionMode,
+    adoptExecutionMode,
+  } = useSessionExecutionMode({
+    selectedId,
+    sessionData: selectedSessionData,
+    updateSessionData,
+    runnerBusy: runnerLocksExecutionMode,
+    refetchSession,
+  });
+
   const unreadNotifications = useUnreadNotificationCount(selectedId ?? 0);
 
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
@@ -382,7 +425,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       selectedId,
       doneReason,
       tasksRefreshTick,
-      sessionData: sessionData ?? null,
+      sessionData: selectedSessionData,
       currentTurn,
       provider,
       model,
@@ -489,7 +532,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       clearCurrentTurn();
     }
   }, [clearCurrentTurn, liveTurnDuplicatedInHistory]);
-  const persistedMessageCount = sessionData?.messages.length ?? 0;
+  const persistedMessageCount = selectedSessionData?.messages.length ?? 0;
 
   // Bump the SessionStateSidebar refresh key whenever a turn ends — that's
   // the cheapest place to catch goal / tasks state mutations without
@@ -596,6 +639,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       const selectedReasoningEffort = config.useLastModel
         ? null
         : (config.reasoningEffort === undefined ? reasoningEffort : config.reasoningEffort);
+      const selectedExecutionMode = config.useLastModel
+        ? 'standard'
+        : (config.executionMode === undefined ? executionMode : config.executionMode);
       const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
       const selectedMaxTurns = config.useLastModel
         ? null
@@ -612,6 +658,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         use_last_model: config.useLastModel === true,
         agent: selectedAgent,
         reasoning_effort: selectedReasoningEffort || null,
+        execution_mode: selectedExecutionMode,
         thinking_enabled: selectedThinking,
       });
       if (selectedTemperature !== null) {
@@ -621,6 +668,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       setModel(created.model);
       setAgent(selectedAgent);
       setReasoningEffort(selectedReasoningEffort);
+      adoptExecutionMode(selectedExecutionMode);
       setThinking(selectedThinking);
       setMaxTurns(selectedMaxTurns);
       setSessionTemperature(selectedTemperature);
@@ -632,7 +680,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     } finally {
       creatingSessionRef.current = false;
     }
-  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, thinking, maxTurns, sessionTemperature, refetchSessions]);
+  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, thinking, maxTurns, sessionTemperature, refetchSessions]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -643,7 +691,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       provider,
       model: model || PROVIDERS.find((p) => p.id === provider)?.defaultModel,
       agent,
+      // A global workspace spans projects and must never inherit the mode of
+      // whichever conversation happened to be selected before opening it.
+      execution_mode: DEFAULT_NEW_EXECUTION_MODE,
     });
+    adoptExecutionMode(DEFAULT_NEW_EXECUTION_MODE);
     if (!opts.title) pendingAutoTitle.current.add(created.id);
     refetchSessions();
     setSelectedId(created.id);
@@ -675,6 +727,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     // Block sending while the project is still indexing — covers BOTH the click
     // path and the Cmd/Ctrl+Enter keyboard path (the overlay only blocks mouse).
     if (indexing) return;
+    // The mode is baked into runner construction. Never let the send race the
+    // preceding PATCH (including sends initiated outside the visible composer).
+    await awaitPendingExecutionMode();
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Builder studio: prepend the selected-element block(s) and drain any
@@ -699,7 +754,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           });
       }
     }, { attachments: allAtts, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
-  }, [selectedId, indexing, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
+  }, [selectedId, indexing, awaitPendingExecutionMode, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:
@@ -718,10 +773,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       );
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
+    await awaitPendingExecutionMode();
     await sendMessage(text, async () => { refetchSession(); }, {
       maxTurns, thinking, describeImages, selectedSkillIds: skillIds, interject,
     });
-  }, [selectedId, sendMessage, refetchSession, maxTurns, thinking, describeImages]);
+  }, [selectedId, awaitPendingExecutionMode, sendMessage, refetchSession, maxTurns, thinking, describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
     if (!selectedId) return;
@@ -754,10 +810,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (!message.trim() || !selectedId) return;
     setSnapshotsOpen(false);
     const reviewAgent = agent === 'explore' || agent === 'plan' ? 'build' : agent;
+    await awaitPendingExecutionMode();
     await sendMessage(message, async () => {
       refetchSession();
     }, { agent: reviewAgent, maxTurns, thinking, describeImages });
-  }, [selectedId, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
+  }, [selectedId, awaitPendingExecutionMode, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -785,36 +842,38 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    * Returns the number of message rows fetched (0 = nothing more to load).
    */
   const loadEarlierMessages = useCallback(async (beforeId: number | undefined, limit = 40, includeArchived = false): Promise<number> => {
-    if (!selectedId) return 0;
+    const requestedSessionId = selectedId;
+    if (!requestedSessionId) return 0;
+    const controller = new AbortController();
+    messagePageAbortControllersRef.current.add(controller);
     try {
       const qs = new URLSearchParams({ limit: String(limit) });
       qs.set('detail', 'preview');
       if (beforeId != null) qs.set('before_id', String(beforeId));
       if (includeArchived) qs.set('include_archived', '1');
-      const res = await fetch(`/api/coder/sessions/${selectedId}/messages?${qs}`);
+      const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?${qs}`, {
+        signal: controller.signal,
+      });
       if (!res.ok) return 0;
       const page = (await res.json()) as MessagePage;
       if (!page.message_rows.length) return 0;
-      updateSessionData((prev) => ({
-        ...prev,
-        messages: [...page.messages, ...prev.messages],
-        message_rows: [...page.message_rows, ...prev.message_rows],
-        preceding_user_message_id: page.preceding_user_message_id,
-        tool_results: [...(page.tool_results ?? []), ...(prev.tool_results ?? [])],
-      }));
-      return page.message_rows.length;
-    } catch {
+      if (selectedIdRef.current !== requestedSessionId) return 0;
+      const current = sessionDataRef.current;
+      if (!current || current.session.id !== requestedSessionId) return 0;
+      const preview = mergeEarlierMessagePage(current, page, requestedSessionId);
+      if (preview.addedRows === 0) return 0;
+      updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
+      return preview.addedRows;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return 0;
       return 0;
+    } finally {
+      messagePageAbortControllersRef.current.delete(controller);
     }
   }, [selectedId, updateSessionData]);
 
-  // Mirror sessionData into a ref so handleSwitchProvider can read its current
-  // value in the guard WITHOUT listing `sessionData` (which changes on every
-  // refetch) as a dep — that would re-create the callback constantly and defeat
-  // the <Composer> memo. `streaming` stays a real dep (it's also a Composer prop,
-  // so a flip re-renders the composer regardless).
-  const sessionDataRef = useRef(sessionData);
-  sessionDataRef.current = sessionData;
+  // Read the matching session through a ref so this callback stays stable while
+  // refetches replace the payload.
   const handleSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
     setProvider(newProvider);
     setModel(newModel);
@@ -852,13 +911,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Reasoning-effort override (migration 150). Same read pattern as temperature —
   // the column flows through the full session payload. Orthogonal to thinking.
   useEffect(() => {
-    if (!sessionData?.session) {
+    if (!selectedId) {
       setReasoningEffort(null);
       return;
     }
-    const e = sessionData.session.reasoning_effort_override;
-    setReasoningEffort(typeof e === 'string' && e.length > 0 ? e : null);
-  }, [sessionData?.session]);
+    const effort = hydratedReasoningEffort(sessionData?.session, selectedId);
+    if (effort !== undefined) setReasoningEffort(effort);
+  }, [selectedId, sessionData?.session]);
 
   // Extended thinking (migration 226). Hydrate only after the payload for the
   // currently selected conversation arrives; useApi intentionally retains the
@@ -1363,6 +1422,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     () => resolveReasoningLevels(provider, providerOptions, model),
     [provider, providerOptions, model],
   );
+  const ultraControlsThinking = useMemo(
+    () => ultraManagesThinking(executionMode, modelCanReason(provider, providerOptions, model)),
+    [executionMode, provider, providerOptions, model],
+  );
   const queuedStrip = useMemo(
     () => <QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />,
     [queue.items, queue.promote, queue.remove],
@@ -1613,7 +1676,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   />
                 )}
                 <MessageList
-                  sessionData={sessionData ?? null}
+                  sessionData={selectedSessionData}
                   currentTurn={currentTurn}
                   streaming={streaming}
                   preflight={preflight}
@@ -1657,6 +1720,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 thinking={thinking}
                 setThinking={handleThinkingChange}
                 supportsThinking={providerSupportsThinking(provider, providerOptions, model)}
+                ultraControlsThinking={ultraControlsThinking}
                 describeImages={describeImages}
                 setDescribeImages={setDescribeImages}
                 fallbackProvider={fallbackProvider}
@@ -1667,6 +1731,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 reasoningEffort={reasoningEffort}
                 setReasoningEffort={handleReasoningEffortChange}
                 reasoningLevels={reasoningLevels}
+                executionMode={executionMode}
+                setExecutionMode={handleExecutionModeChange}
+                executionModePending={executionModePending}
+                executionModeLocked={executionModeLocked}
+                sendBlocked={executionModePending}
                 planDepth={planDepth}
                 setPlanDepth={handlePlanDepthChange}
                 responseLanguage={responseLanguage}
@@ -1715,6 +1784,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 sessionId={selectedId}
                 session={sessionData?.session ?? null}
                 sessionData={sessionData ?? null}
+                currentTurn={currentTurn}
                 stats={stats}
                 projectId={(isGlobal ? activeProjectId : projectId) ?? null}
                 refreshKey={stateRefreshKey + sidebarRefreshTick}
@@ -1790,6 +1860,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           sessionId={selectedId}
           session={sessionData?.session ?? null}
           sessionData={sessionData ?? null}
+          currentTurn={currentTurn}
           stats={stats}
           projectId={(isGlobal ? activeProjectId : projectId) ?? null}
           refreshKey={stateRefreshKey + sidebarRefreshTick}

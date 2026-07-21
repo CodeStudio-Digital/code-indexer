@@ -61,6 +61,9 @@ export type EventHandler = (data: Record<string, unknown>, eventName: string) =>
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
   const providerProcessIds = new Set<string>();
+  let contentBlockSequence = 0;
+  const nextContentBlockId = (kind: 'text' | 'thinking') =>
+    `${kind}:${sid}:${Date.now().toString(36)}:${++contentBlockSequence}`;
   const upsertProcess = (patch: ActiveProcessPatch) => {
     updateSession(sid, (state) => ({
       activeProcesses: upsertActiveProcess(state.activeProcesses, patch),
@@ -68,7 +71,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   };
   const patchProcess = (
     id: string,
-    patch: Partial<Pick<ActiveProcessPatch, 'status' | 'phase' | 'note' | 'elapsedMs'>>,
+    patch: Partial<Pick<ActiveProcessPatch, 'status' | 'phase' | 'note' | 'elapsedMs' | 'idleMs'>>,
   ) => {
     updateSession(sid, (state) => ({
       activeProcesses: state.activeProcesses.map((process) => process.id === id
@@ -89,17 +92,40 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     removeProcesses((process) => ids.has(process.id));
   };
 
+  // A plan card is pushed into the live buffer AFTER its turn's
+  // message_complete (the `plan` event fires at tool dispatch), so the
+  // per-turn clear never reaches it and it stays pinned at the TOP of the
+  // live container while the post-approval turn streams underneath — reads
+  // as "the model is thinking below its own plan". The runner only resumes
+  // after the plan is resolved, so the first streamed content of the next
+  // turn is proof of resolution: sweep the card and refetch history, where
+  // the persisted row now renders the collapsed resolved card
+  // (MessageView `submit_plan` branch handles pending AND resolved states).
+  const sweepResolvedPlanCards = (): void => {
+    let swept = false;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'plan') {
+        blocks.splice(i, 1);
+        swept = true;
+      }
+    }
+    if (!swept) return;
+    rebuildToolIndex(blocks, toolIndex);
+    onMessageComplete?.();
+  };
+
   return {
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
+      sweepResolvedPlanCards();
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       clearProviderProcesses();
       const last = blocks[blocks.length - 1];
       if (last && last.type === 'text') {
         last.text += t;
       } else {
-        blocks.push({ type: 'text', text: t });
+        blocks.push({ type: 'text', text: t, id: nextContentBlockId('text') });
       }
       flush();
     },
@@ -107,19 +133,31 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     thinking: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
+      sweepResolvedPlanCards();
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       clearProviderProcesses();
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === 'thinking') {
-        last.text += t;
+      // Activity heartbeats and live agent telemetry are presentation-only;
+      // they do not start a new semantic response. Search backward across that
+      // trailing telemetry so one provider reasoning part remains one card.
+      let thinkingIndex = blocks.length - 1;
+      while (
+        thinkingIndex >= 0
+        && (blocks[thinkingIndex].type === 'activity' || blocks[thinkingIndex].type === 'agents')
+      ) {
+        thinkingIndex--;
+      }
+      const prior = blocks[thinkingIndex];
+      if (prior && prior.type === 'thinking') {
+        prior.text += t;
       } else {
-        blocks.push({ type: 'thinking', text: t });
+        blocks.push({ type: 'thinking', text: t, id: nextContentBlockId('thinking') });
       }
       flush();
     },
 
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
+      sweepResolvedPlanCards();
       if (clearProviderActivities(blocks) || removeActivity(blocks, `tool:${d.id}`)) {
         rebuildToolIndex(blocks, toolIndex);
       }
@@ -274,7 +312,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
      * landing after a `tool_call_result` cleared the block's transient state.
      */
     tool_progress: (data) => {
-      const d = data as { id: string; name: string; elapsedMs: number; note?: string };
+      const d = data as {
+        id: string;
+        name: string;
+        elapsedMs: number;
+        note?: string;
+        kind?: 'heartbeat' | 'progress';
+        idleMs?: number;
+      };
       const idx = toolIndex.get(d.id);
       if (idx === undefined) {
         if (isSubagentToolProgress(d)) return;
@@ -292,10 +337,12 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       block.call = {
         ...block.call,
         elapsedMs: d.elapsedMs,
+        ...(d.idleMs !== undefined ? { idleMs: d.idleMs } : {}),
         ...(d.note !== undefined ? { progressNote: d.note } : {}),
       };
       patchProcess(`tool:${d.id}`, {
         elapsedMs: d.elapsedMs,
+        ...(d.idleMs !== undefined ? { idleMs: d.idleMs } : {}),
         ...(d.note !== undefined ? { note: d.note } : {}),
       });
       flush();
@@ -590,6 +637,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     agents_group_start: (data) => {
       const d = data as {
         groupId: string;
+        toolUseId?: string;
         provider?: string;
         model?: string;
         background?: boolean;
@@ -606,8 +654,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           researchDepth?: ResearchDepth;
           softToolTarget?: number;
           softTimeTargetMs?: number;
+          maxToolCalls?: number;
+          hardTimeoutMs?: number;
         }>;
       };
+      // execute_tasks already has TaskExecutionBlock as its canonical rich
+      // representation. Its internal task-wave agents are implementation
+      // telemetry and must not create a second card or panel entry.
+      if (isTaskWaveGroup(d.groupId)) return;
       // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
       // still-running background job MERGES into the existing block (rows flip
       // back to running) instead of pushing a duplicate. `message_complete`
@@ -617,6 +671,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const priorByIndex = new Map(prior?.agents.map((a) => [a.index, a]) ?? []);
       const group: AgentsGroup = {
         groupId: d.groupId,
+        toolUseId: d.toolUseId ?? prior?.toolUseId,
         status: 'running',
         provider: d.provider ?? prior?.provider,
         model: d.model ?? prior?.model,
@@ -640,6 +695,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             researchDepth: a.researchDepth ?? was?.researchDepth,
             softToolTarget: a.softToolTarget ?? was?.softToolTarget,
             softTimeTargetMs: a.softTimeTargetMs ?? was?.softTimeTargetMs,
+            maxToolCalls: (a.maxToolCalls != null && a.maxToolCalls > 0 ? a.maxToolCalls : undefined)
+              ?? was?.maxToolCalls,
+            deadlineMs: was?.deadlineMs
+              ?? (a.hardTimeoutMs != null && a.hardTimeoutMs > 0 ? a.hardTimeoutMs : undefined),
           };
         }),
       };
@@ -694,13 +753,13 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           });
         }
       }
-      if (applyAgentProgress(blocks, d)) flush();
+      if (!isTaskWaveGroup(d.groupId) && applyAgentProgress(blocks, d)) flush();
     },
 
     agents_group_end: (data) => {
       const d = data as { groupId: string; totalUsage?: Usage; jobId?: string; status?: string; agentCount?: number; successCount?: number };
       removeProcesses((process) => process.source === 'agent' && process.groupId === d.groupId);
-      if (applyAgentsGroupEnd(blocks, d)) flush();
+      if (!isTaskWaveGroup(d.groupId) && applyAgentsGroupEnd(blocks, d)) flush();
     },
 
     auto_continue: (data) => {
@@ -933,6 +992,7 @@ function processPatchFromActivity(
     ...(patch.phase !== undefined ? { phase: patch.phase } : {}),
     ...(patch.note !== undefined ? { note: patch.note } : {}),
     ...(patch.elapsedMs !== undefined ? { elapsedMs: patch.elapsedMs } : {}),
+    ...(patch.idleMs !== undefined ? { idleMs: patch.idleMs } : {}),
     ...(patch.parentOpId !== undefined ? { parentId: patch.parentOpId } : {}),
   };
 }

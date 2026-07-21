@@ -321,7 +321,9 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // projeto nunca pinta um frame com as abas/arquivo do projeto anterior (alinha
   // activeProjectId no store antes do browser desenhar). Mata o flash de 1 frame.
   useLayoutEffect(() => {
+    useWorkspaceLayout.getState().activateProject(projectId);
     setProject(projectId);
+    return () => useWorkspaceLayout.getState().deactivateProject(projectId);
   }, [projectId, setProject]);
 
   // Title-bar switcher feeds: report this window's active project to the main

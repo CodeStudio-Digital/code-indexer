@@ -91,6 +91,7 @@ describe('chatgpt-models discovery', () => {
       context_window: 256000,
       source: 'live',
       default_enabled: true,
+      can_reason: true,
       default_reasoning_level: 'high',
       supported_reasoning_levels: ['low', 'high'],
       apply_patch_tool_type: 'freeform',
@@ -111,6 +112,25 @@ describe('chatgpt-models discovery', () => {
     const b = await discoverChatgptModels(chatgptSpec, CFG, '"prev"');
 
     expect(b).toEqual({ models: [], etag: '"prev"', notModified: true });
+  });
+
+  it('never exposes the virtual Ultra profile as a native reasoning value', async () => {
+    mockFetch200({
+      models: [{
+        slug: 'gpt-ultra-stale-catalog',
+        default_reasoning_level: 'ultra',
+        supported_reasoning_levels: ['high', 'max', 'ultra'],
+        visibility: 'list',
+        supported_in_api: true,
+      }],
+    }, null);
+
+    const result = await discoverChatgptModels(chatgptSpec, CFG, null);
+    expect(result.models[0]).toMatchObject({
+      can_reason: true,
+      default_reasoning_level: null,
+      supported_reasoning_levels: ['high', 'max'],
+    });
   });
 
   it('!ok (HTTP 500) falls back to seed models', async () => {

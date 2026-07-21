@@ -143,6 +143,16 @@ describe('CoderWorkerPool', () => {
     expect(mockWorker.state.hosts).toHaveLength(1);
   });
 
+  it('bounds each coder isolate to the memory-safe default heap ceiling', async () => {
+    const p = createPool();
+    await p.runFresh(70, { userMessage: 'first' });
+
+    const opts = mockWorker.state.hosts[0].opts as {
+      resourceLimits?: { maxOldGenerationSizeMb?: number };
+    };
+    expect(opts.resourceLimits?.maxOldGenerationSizeMb).toBe(1_024);
+  });
+
   it('ignores late events and terminal signals from an old runId', async () => {
     const p = createPool();
 

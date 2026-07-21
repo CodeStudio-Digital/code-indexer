@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   createSubagentProviderResolver,
+  resolveSubagentExecutionEffort,
+  type ProfileLimitOverride,
   type SubagentTarget,
 } from '@mcp/code-agent/tools/subagent-provider.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
@@ -107,5 +109,50 @@ describe('createSubagentProviderResolver', () => {
       createProvider: async (id, model) => fakeProvider(id, model),
     });
     expect(resolver.effortFor('implement')).toBeUndefined();
+  });
+
+  it('lets Ultra dominate per-profile effort while Standard preserves it', () => {
+    expect(resolveSubagentExecutionEffort(true, 'low')).toBe('ultra');
+    expect(resolveSubagentExecutionEffort(true, undefined)).toBe('ultra');
+    expect(resolveSubagentExecutionEffort(false, 'low')).toBe('low');
+    expect(resolveSubagentExecutionEffort(false, undefined)).toBeUndefined();
+  });
+
+  it('resolves per-profile hard-cap overrides with no default layer', () => {
+    const resolver = createSubagentProviderResolver({
+      sessionProvider: 'openai',
+      sessionModel: 'gpt',
+      defaultTarget: null,
+      profileTargets: new Map(),
+      defaultEffort: null,
+      profileEfforts: new Map(),
+      profileLimits: new Map<MicroAgentProfileId, ProfileLimitOverride | null>([
+        ['explore', { maxToolCalls: 40, timeoutMs: null }],
+        ['implement', { maxToolCalls: 0, timeoutMs: 600_000 }],
+        ['verify', { maxToolCalls: null, timeoutMs: null }], // all-null → no override
+        ['review', null],
+      ]),
+      createProvider: async (id, model) => fakeProvider(id, model),
+    });
+    expect(resolver.limitsFor('explore')).toEqual({ maxToolCalls: 40, timeoutMs: null });
+    // Explicit 0 survives — it means "unlimited", not "unset".
+    expect(resolver.limitsFor('implement')).toEqual({ maxToolCalls: 0, timeoutMs: 600_000 });
+    expect(resolver.limitsFor('verify')).toBeUndefined();
+    expect(resolver.limitsFor('review')).toBeUndefined();
+    expect(resolver.limitsFor('full')).toBeUndefined();     // map miss
+    expect(resolver.limitsFor(undefined)).toBeUndefined();  // no profile → no override
+  });
+
+  it('returns no limits override when the map is absent (legacy wiring)', () => {
+    const resolver = createSubagentProviderResolver({
+      sessionProvider: 'openai',
+      sessionModel: 'gpt',
+      defaultTarget: null,
+      profileTargets: new Map(),
+      defaultEffort: null,
+      profileEfforts: new Map(),
+      createProvider: async (id, model) => fakeProvider(id, model),
+    });
+    expect(resolver.limitsFor('explore')).toBeUndefined();
   });
 });

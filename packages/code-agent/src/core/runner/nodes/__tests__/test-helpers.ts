@@ -98,6 +98,9 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     lastStrategyNudgeTurnByKey: new Map(),
     goalVerifyAttempts: 0,
     estimateCalibration: null,
+    // Perf W1 — precompute/memo slots start empty like production context.
+    summaryPrecompute: null,
+    toolsMemo: null,
     runId: 'test-run',
     aborted: false,
     transition: null,

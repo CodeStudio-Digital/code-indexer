@@ -44,7 +44,7 @@ function append(record) {
   }
 }
 
-function recentHandlers() {
+function recentActivities() {
   return Array.from(handlers.values()).slice(-5).reverse();
 }
 
@@ -57,7 +57,7 @@ const timer = setInterval(() => {
   }
   if (lastReport && nowMono - lastReport < workerData.repeatMs) return;
   lastReport = nowMono;
-  const suspects = recentHandlers();
+  const suspects = recentActivities();
   const suspect = suspects[0];
   const at = Date.now();
   append({
@@ -71,8 +71,10 @@ const timer = setInterval(() => {
       wallLateMs: Math.round(lateMs),
       windowMs: Math.round(lateMs),
       detail: suspect
-        ? 'Worker watchdog: main heartbeat stopped; latest in-flight handler persisted before the block'
-        : 'Worker watchdog: main heartbeat stopped; no in-flight HTTP/IPC handler was known',
+        ? suspect.kind === 'background'
+          ? 'Worker watchdog: main heartbeat stopped; latest background activity persisted before the block'
+          : 'Worker watchdog: main heartbeat stopped; latest in-flight handler persisted before the block'
+        : 'Worker watchdog: main heartbeat stopped; no in-flight handler or background activity was known',
       suspects,
       detectedBy: 'worker-thread',
     },
@@ -86,7 +88,11 @@ parentPort.on('message', (message) => {
     return;
   }
   if (message.type === 'enter') {
-    handlers.set(message.id, { channel: message.channel, startedAt: message.at });
+    handlers.set(message.id, {
+      channel: message.channel,
+      startedAt: message.at,
+      kind: message.kind === 'background' ? 'background' : 'handler',
+    });
     return;
   }
   if (message.type === 'exit') {
@@ -112,6 +118,8 @@ export interface OffloopWatchdogOptions {
   pollMs?: number;
   repeatMs?: number;
 }
+
+export type OffloopActivityKind = 'handler' | 'background';
 
 let watchdog: Worker | null = null;
 let warned = false;
@@ -162,10 +170,24 @@ export function heartbeatOffloopWatchdog(): void {
 }
 
 export function enterOffloopHandler(id: number, channel: string, at: number): void {
-  post({ type: 'enter', id, channel, at });
+  enterOffloopActivity(id, channel, at, 'handler');
 }
 
 export function exitOffloopHandler(id: number): void {
+  exitOffloopActivity(id);
+}
+
+/** Register non-request work so catastrophic hangs retain a useful suspect. */
+export function enterOffloopActivity(
+  id: number,
+  label: string,
+  at: number,
+  kind: OffloopActivityKind = 'background',
+): void {
+  post({ type: 'enter', id, channel: label, at, kind });
+}
+
+export function exitOffloopActivity(id: number): void {
   post({ type: 'exit', id });
 }
 

@@ -173,7 +173,19 @@ export class OpenAIChatProvider implements ChatProvider {
     // to reject `top_p` paired with `temperature` — we only send temperature
     // in this MVP, so that conflict can't occur.
     const isReasoningModel = /^(o[134]([\-.].*)?$|gpt-5.*reason)/i.test(this.model);
-    const temperature = isReasoningModel ? undefined : req.inference?.temperature;
+    // Legacy Kimi Code rows can still resolve through the generic OpenAI wire
+    // (`provider_configs.id='kimi-code', kind='openai'`). K3 rejects every
+    // temperature except 1, so enforce the invariant here as well as in the
+    // dedicated Kimi adapter. This is deliberately keyed to the exact model id.
+    const isKimiK3 = /^k3$/i.test(this.model);
+    const temperature = isKimiK3
+      ? 1
+      : isReasoningModel ? undefined : req.inference?.temperature;
+
+    const kimiK3Extras: Record<string, unknown> = {};
+    if (isKimiK3 && req.reasoningEffort) {
+      kimiK3Extras.reasoning_effort = req.reasoningEffort;
+    }
 
     let stream;
     try {
@@ -191,6 +203,7 @@ export class OpenAIChatProvider implements ChatProvider {
         ...deepseekExtras,
         ...openrouterExtras,
         ...fuguExtras,
+        ...kimiK3Extras,
         ...cacheKeyExtras,
       };
       // Declarative body shaping (custom providers only). Re-assert the

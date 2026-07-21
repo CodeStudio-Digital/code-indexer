@@ -10,6 +10,9 @@ export type {
   PersistExternalSessionInput,
 } from './import/types.js';
 
+/** Provider-independent orchestration mode persisted per conversation. */
+export type CoderExecutionMode = 'standard' | 'ultra';
+
 export interface CoderSession {
   id: number;
   /**
@@ -96,6 +99,12 @@ export interface CoderSession {
    * models exposing `supported_reasoning_levels`.
    */
   reasoning_effort_override: string | null;
+  /**
+   * Universal orchestration mode (migration 241). `ultra` is implemented by
+   * the agent runtime and must never be forwarded as a provider reasoning
+   * effort, so it also works for models with no native effort parameter.
+   */
+  execution_mode_override: CoderExecutionMode;
   /**
    * Sticky extended-thinking toggle for this conversation (migration 226).
    * The dashboard persists every manual change and hydrates it when the

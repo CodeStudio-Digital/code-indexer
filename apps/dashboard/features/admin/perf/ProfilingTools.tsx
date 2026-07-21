@@ -26,7 +26,7 @@ interface SlowCallRow {
 
 interface FreezeRow {
   at: number;
-  source: 'handler' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
   durationMs: number;
   culprit: string;
 }
@@ -61,7 +61,7 @@ export function ProfilingTools() {
       const r = await fetch(`${apiBaseUrl()}/api/admin/perf/freezes`);
       if (r.ok) {
         const body = (await r.json()) as {
-          events: Array<{ source: 'handler' | 'event-loop' | 'starved' | 'offloop'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
+          events: Array<{ source: 'handler' | 'background' | 'event-loop' | 'starved' | 'offloop'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
         };
         mainRows = body.events.map((e) => ({
           at: e.at,

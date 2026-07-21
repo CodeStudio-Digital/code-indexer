@@ -13,6 +13,7 @@ import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
 import type { QueueMode } from './useMessageQueue.js';
 import type { AgentPreset } from '@mcp/api-bus';
+import type { ExecutionMode } from '../types.js';
 
 type AgentId = AgentPreset;
 
@@ -34,6 +35,8 @@ interface ComposerToolbarProps {
   reasoningEffort?: string | null;
   setReasoningEffort?: (v: string | null) => void;
   reasoningLevels?: string[];
+  executionMode?: ExecutionMode;
+  sendBlocked?: boolean;
   planDepth?: string | null;
   setPlanDepth?: (v: string | null) => void;
   /** Currently-selected pipeline id, or null when not in pipeline mode. */
@@ -55,6 +58,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   reasoningEffort,
   setReasoningEffort,
   reasoningLevels,
+  executionMode = 'standard',
+  sendBlocked,
   planDepth,
   setPlanDepth,
   selectedPipelineId,
@@ -78,6 +83,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
             aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
             className="h-7 rounded border bg-background px-1.5 text-xs"
             value={reasoningEffort ?? ''}
+            disabled={executionMode === 'ultra'}
             onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
           >
             <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
@@ -121,11 +127,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
             </Button>
           </>
         ) : selectedPipelineId != null ? (
-          <Button onClick={onSend} disabled={!hasInput} size="sm" variant="default">
+          <Button onClick={onSend} disabled={!hasInput || sendBlocked} size="sm" variant="default">
             <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
           </Button>
         ) : (
-          <Button onClick={onSend} disabled={!hasInput} size="sm">
+          <Button onClick={onSend} disabled={!hasInput || sendBlocked} size="sm">
             <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}
           </Button>
         )}

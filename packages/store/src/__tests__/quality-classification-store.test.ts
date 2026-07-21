@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { CodeIndexDB } from '../db.js';
 import { QualityClassificationStore } from '../quality-classification-store.js';
 
@@ -104,6 +105,65 @@ describe('clearAll', () => {
     expect(deleted).toBe(2);
     expect(h.store.findRecentBySession(1)).toEqual([]);
     expect(h.store.findRecentBySession(2)).toEqual([]);
+  });
+});
+
+describe('migration 234 compatibility', () => {
+  it('keeps inserts and overview available when provider_requests is missing', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE quality_classifications (
+        id INTEGER PRIMARY KEY,
+        session_id INTEGER,
+        company_session_id INTEGER,
+        agent_run_id INTEGER,
+        coder_run_id TEXT,
+        parent_run_id TEXT,
+        is_subagent INTEGER NOT NULL DEFAULT 0,
+        subagent_profile TEXT,
+        message_id TEXT,
+        assessment_id TEXT,
+        round_message_id INTEGER,
+        scope TEXT NOT NULL DEFAULT 'legacy_turn',
+        source TEXT NOT NULL DEFAULT 'legacy_llm',
+        action_taken TEXT NOT NULL DEFAULT 'none',
+        evidence_json TEXT,
+        classifier_name TEXT NOT NULL,
+        verdict TEXT NOT NULL,
+        system_error INTEGER NOT NULL DEFAULT 0,
+        confidence REAL,
+        reason TEXT,
+        provider_id TEXT,
+        model_id TEXT,
+        latency_ms REAL,
+        cost_usd REAL,
+        tokens_in INTEGER,
+        tokens_out INTEGER,
+        raw_response_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    const store = new QualityClassificationStore(db);
+
+    expect(() => store.insert({
+      assessment_id: 'assessment-1',
+      round_message_id: 41,
+      scope: 'run_final',
+      source: 'terminal_llm',
+      classifier_name: 'delivery_overall',
+      verdict: 'ok',
+      tokens_in: 12,
+      tokens_out: 3,
+      provider_requests: 1,
+    })).not.toThrow();
+    expect(store.overview()).toMatchObject({
+      completedTasks: 1,
+      assessments: 1,
+      llmRequests: 0,
+      tokensIn: 12,
+      tokensOut: 3,
+    });
+    db.close();
   });
 });
 

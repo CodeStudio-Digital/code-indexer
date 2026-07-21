@@ -59,9 +59,14 @@ export class KimiCodeChatProvider implements ChatProvider {
     };
 
     const effectiveThinking = resolveEffectiveThinking(this.model, req.thinking, this.thinkingMode);
-    const temperature = shouldOmitKimiTemperature(this.model, effectiveThinking)
-      ? undefined
-      : req.inference?.temperature;
+    // K3 is calibrated for temperature=1 and must not inherit a sticky
+    // user/session override. Keep this at the wire boundary so every caller
+    // (individual chat, Company roles, subagents, and summaries) agrees.
+    const temperature = isKimiK3Model(this.model)
+      ? 1
+      : shouldOmitKimiTemperature(this.model, effectiveThinking)
+        ? undefined
+        : req.inference?.temperature;
     if (typeof temperature === 'number') params.temperature = temperature;
 
     const thinking = kimiThinkingConfig(this.model, effectiveThinking);
@@ -322,6 +327,15 @@ function normalizeSchema(value: unknown): unknown {
   const input = value as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(input)) {
+    if (key === 'properties' && child && typeof child === 'object' && !Array.isArray(child)) {
+      out[key] = Object.fromEntries(
+        Object.entries(child as Record<string, unknown>).map(([propertyName, propertySchema]) => [
+          propertyName,
+          normalizeKimiPropertySchema(propertySchema),
+        ]),
+      );
+      continue;
+    }
     out[key] = normalizeSchema(child);
   }
 
@@ -339,6 +353,36 @@ function normalizeSchema(value: unknown): unknown {
 
   return out;
 }
+
+function normalizeKimiPropertySchema(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return normalizeSchema(value) as Record<string, unknown>;
+  }
+
+  // Some dynamically discovered/MCP tools use the common shorthand
+  // `properties: { name: "string" }`. It is understandable to permissive
+  // consumers, but Kimi validates its Moonshot-flavored schema strictly and
+  // requires every property value to be a schema object.
+  if (typeof value === 'string' && JSON_SCHEMA_TYPES.has(value)) {
+    return { type: value };
+  }
+
+  // Boolean schemas and other invalid shorthand are valid in newer JSON
+  // Schema dialects but are not accepted by the Kimi tool endpoint. An empty
+  // schema preserves their permissive meaning without sending an invalid
+  // property shape.
+  return {};
+}
+
+const JSON_SCHEMA_TYPES = new Set([
+  'array',
+  'boolean',
+  'integer',
+  'null',
+  'number',
+  'object',
+  'string',
+]);
 
 function inferScalarType(value: unknown): string {
   switch (typeof value) {

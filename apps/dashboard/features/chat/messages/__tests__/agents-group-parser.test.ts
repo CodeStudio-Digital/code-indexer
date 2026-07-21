@@ -99,4 +99,109 @@ describe('parsePersistedAgentsGroup', () => {
     expect(group?.agents[1].reason).toBe('error');
     expect(group?.agents[1].status).toBe('error');
   });
+
+  it('reads the max_tools hard cap from parallel meta and the single header', () => {
+    const parallel = parsePersistedAgentsGroup(
+      { agents: [{ label: 'auth', task: 'trace auth', profile: 'explore' }] },
+      {
+        content: [
+          '[parallel agents: 1 agents, provider=chatgpt model=gpt-5.4-mini, input=100 output=10 cache_hit=0]',
+          '',
+          '### Agent 1: auth',
+          '[type=explore reason=tool_budget tools=161 input=100 output=10 attempt=2 max_tools=160]',
+          'partial findings',
+        ].join('\n'),
+        isError: false,
+      },
+    );
+    expect(parallel?.agents[0]).toMatchObject({
+      maxToolCalls: 160,
+      attempt: 2,
+      status: 'partial',
+      toolCallCount: 161,
+    });
+
+    const single = parsePersistedAgentsGroup(
+      { agents: [{ label: 'solo', task: 'inspect', profile: 'explore' }] },
+      {
+        content:
+          '[subagent provider=chatgpt model=gpt-5.4-mini type=explore reason=completed ' +
+          'input=100 output=10 cache_hit=0 spawn=ab12cd34 max_tools=80]\n\nreport text',
+        isError: false,
+      },
+    );
+    expect(single?.agents[0].maxToolCalls).toBe(80);
+    expect(single?.groupId).toBe('ab12cd34');
+
+    // Legacy rows without the token still parse, with no denominator.
+    const legacy = parsePersistedAgentsGroup(
+      { agents: [{ label: 'auth', task: 'trace auth', profile: 'explore' }] },
+      {
+        content: [
+          '[parallel agents: 1 agents, provider=chatgpt model=gpt-5.4-mini, input=100 output=10 cache_hit=0]',
+          '',
+          '### Agent 1: auth',
+          '[type=explore reason=completed tools=5 input=100 output=10]',
+          'ok',
+        ].join('\n'),
+        isError: false,
+      },
+    );
+    expect(legacy?.agents[0].maxToolCalls).toBeUndefined();
+    expect(legacy?.agents[0].toolCallCount).toBe(5);
+  });
+
+  it('treats a background start receipt as running with stable job/group identity', () => {
+    const input = {
+      background: true,
+      agents: [{ label: 'Scout', task: 'Inspect the renderer', profile: 'explore' }],
+    };
+    const result = {
+      content: '[spawn_agent background] job=job-abcd group=group-1234 agents=1 (Scout) started.\nResults are NOT available yet.',
+      isError: false,
+    };
+
+    const first = parsePersistedAgentsGroup(input, result, 'tool-spawn-1');
+    const second = parsePersistedAgentsGroup(input, result, 'tool-spawn-1');
+
+    expect(first).toMatchObject({
+      groupId: 'group-1234',
+      toolUseId: 'tool-spawn-1',
+      jobId: 'job-abcd',
+      background: true,
+      status: 'running',
+      agents: [{ status: 'pending' }],
+    });
+    expect(second?.groupId).toBe(first?.groupId);
+  });
+
+  it('uses a deterministic fallback instead of wall-clock identity', () => {
+    const input = { agents: [{ label: 'Scout', task: 'Inspect' }] };
+    const first = parsePersistedAgentsGroup(input, undefined);
+    const second = parsePersistedAgentsGroup(input, undefined);
+    expect(second?.groupId).toBe(first?.groupId);
+  });
+
+  it('preserves partial and failed terminal outcomes from persisted reports', () => {
+    const input = { agents: [{ label: 'Budget' }, { label: 'Failure' }] };
+    const result = {
+      content: [
+        '[parallel agents: 2 agents, group=outcomes, provider=chatgpt model=gpt-5, input=10 output=2 cache_hit=0]',
+        '',
+        '### Agent 1: Budget',
+        '[type=explore reason=time_budget tools=3 input=5 output=1]',
+        'partial findings',
+        '',
+        '---',
+        '',
+        '### Agent 2: Failure',
+        '[type=explore reason=aborted tools=1 input=5 output=1]',
+        'stopped',
+      ].join('\n'),
+      isError: false,
+    };
+
+    const group = parsePersistedAgentsGroup(input, result, 'spawn-outcomes');
+    expect(group?.agents.map((agent) => agent.status)).toEqual(['partial', 'aborted']);
+  });
 });

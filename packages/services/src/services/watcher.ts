@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'chokidar';
-import { relative } from 'node:path';
+import { join, relative } from 'node:path';
+import { readdir } from 'node:fs/promises';
 import ignore from 'ignore';
 import { normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { getProjectIgnoreRules, shouldIgnoreProjectPath } from '@mcp/shared/utils/project-ignore.js';
@@ -21,6 +22,11 @@ export interface WatcherOptions {
   rootPath: string;
   debounce: number;
   ignorePatterns?: string[];
+  /**
+   * Skip live watching when the watchable tree exceeds this many entries (see
+   * {@link countWatchedEntries}). 0/undefined disables the guard.
+   */
+  maxWatchedFiles?: number;
 }
 
 /**
@@ -124,6 +130,44 @@ export function makeIgnored(rootPath: string, extraPatterns: string[] = []): (p:
   };
 }
 
+/**
+ * Bounded count of the entries chokidar would watch under `rootPath`, honoring
+ * `isIgnored` so pruned subtrees (node_modules, Unity's Library, …) never
+ * descend. Every file inside a watched directory is counted because chokidar
+ * re-enumerates the whole directory on each change within it — that enumeration,
+ * not just the emitted event, is the cost the budget guards against. Returns as
+ * soon as the count passes `cap`, so an oversized tree costs ~`cap` stats rather
+ * than a full walk. Uses async fs so the main thread stays free during the probe.
+ */
+export async function countWatchedEntries(
+  rootPath: string,
+  isIgnored: (absPath: string) => boolean,
+  cap: number,
+): Promise<number> {
+  let count = 0;
+  const stack: string[] = [rootPath];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable dir (perms/race) — skip, don't abort the probe
+    }
+    for (const entry of entries) {
+      const child = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (isIgnored(child)) continue; // pruned: no handle, no descent
+        if (++count > cap) return count;
+        stack.push(child);
+      } else if (++count > cap) {
+        return count;
+      }
+    }
+  }
+  return count;
+}
+
 export class FileWatcherService {
   private watchers = new Map<number, FSWatcher>();
   private ready = new Map<number, Promise<void>>();
@@ -131,9 +175,18 @@ export class FileWatcherService {
   private events = new Map<number, WatcherEvents>();
   private pendingChanges = new Map<number, Map<string, { kind: WatcherFileEvent['kind']; isDir: boolean }>>();
   private debounceTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  /**
+   * Projects whose budget probe is in flight, keyed to a per-attempt token so a
+   * probe that a stop/restart superseded (e.g. an ignore-pattern change) bails
+   * instead of arming with stale rules. Membership counts as "watching" so the
+   * caller doesn't re-arm.
+   */
+  private arming = new Map<number, object>();
+  /** Projects skipped because their tree exceeded the budget — no chokidar handle exists. */
+  private skipped = new Set<number>();
 
   startWatching(projectId: number, options: WatcherOptions, events: WatcherEvents): void {
-    if (this.watchers.has(projectId)) return;
+    if (this.isWatching(projectId)) return;
 
     // `isIgnoredPath` is a FUNCTION (not a glob) so chokidar prunes heavy dirs
     // (node_modules, .git, target, vendor, …) during its walk instead of
@@ -143,6 +196,67 @@ export class FileWatcherService {
     // (`.mcp-indexer`, with its trash bin + `.tmp` scratch) is in IGNORED_DIRS.
     const ignored = makeIgnored(options.rootPath, options.ignorePatterns ?? []);
 
+    // `ready` means chokidar completed its initial walk. Structural indexing
+    // waits for this edge so edits made during the full scan are observed and
+    // drained before the baseline is published as ready. Created synchronously
+    // so `waitUntilReady` observes it even while the async budget probe runs; an
+    // early error / skip resolves it so lifecycle callers never wait forever —
+    // the structural reconciliation is the authoritative fallback either way.
+    this.ready.set(projectId, new Promise<void>((resolve) => {
+      this.resolveReady.set(projectId, resolve);
+    }));
+    const settleReady = () => {
+      this.resolveReady.get(projectId)?.();
+      this.resolveReady.delete(projectId);
+    };
+
+    const maxFiles = options.maxWatchedFiles ?? 0;
+    if (maxFiles > 0) {
+      // Probe the tree size off the main thread before arming. A project bigger
+      // than the budget (e.g. a Unity project whose `Assets/` holds tens of
+      // thousands of imported asset files the user never edits) would make
+      // chokidar open a handle per subdir and re-read whole directories on every
+      // editor/tool touch — a sustained CPU drain. Skip live watching for it;
+      // git-meta events + the structural reconcile keep it fresh.
+      const token = {};
+      this.arming.set(projectId, token);
+      void countWatchedEntries(options.rootPath, ignored, maxFiles)
+        .then((count) => {
+          // Superseded by a stop/restart — the newer attempt (or stopWatching)
+          // owns the ready promise, so bail without arming or settling.
+          if (this.arming.get(projectId) !== token) return;
+          this.arming.delete(projectId);
+          if (count > maxFiles) {
+            this.skipped.add(projectId);
+            console.warn(
+              `[watcher] project ${projectId} exceeds the ${maxFiles}-entry watch budget ` +
+              `(${options.rootPath}); skipping live file-watching — git-meta events + ` +
+              `structural reconcile remain authoritative for freshness.`,
+            );
+            settleReady();
+            return;
+          }
+          this.armFileWatcher(projectId, options, ignored, events, settleReady);
+        })
+        .catch(() => {
+          if (this.arming.get(projectId) !== token) return;
+          this.arming.delete(projectId);
+          settleReady();
+        });
+      return;
+    }
+
+    this.armFileWatcher(projectId, options, ignored, events, settleReady);
+  }
+
+  /** Create the chokidar watcher for a project that passed the budget probe. */
+  private armFileWatcher(
+    projectId: number,
+    options: WatcherOptions,
+    ignored: (p: string) => boolean,
+    events: WatcherEvents,
+    settleReady: () => void,
+  ): void {
     const watcher = watch(options.rootPath, {
       persistent: true,
       ignoreInitial: true,
@@ -153,19 +267,6 @@ export class FileWatcherService {
       },
     });
 
-    const ready = new Promise<void>((resolve) => {
-      this.resolveReady.set(projectId, resolve);
-    });
-    this.ready.set(projectId, ready);
-    const settleReady = () => {
-      this.resolveReady.get(projectId)?.();
-      this.resolveReady.delete(projectId);
-    };
-    // `ready` means chokidar completed its initial walk. Structural indexing
-    // waits for this edge so edits made during the full scan are observed and
-    // drained before the baseline is published as ready. An early watcher
-    // error must not leave lifecycle callers waiting forever; the structural
-    // reconciliation remains the authoritative fallback in that case.
     watcher.once('ready', settleReady);
     watcher.on('error', settleReady);
 
@@ -220,6 +321,11 @@ export class FileWatcherService {
   }
 
   async stopWatching(projectId: number): Promise<void> {
+    // Cancel an in-flight budget probe (its `.then` bails when arming is gone)
+    // and clear a prior skip so a later arm re-probes (the tree may have shrunk).
+    this.arming.delete(projectId);
+    this.skipped.delete(projectId);
+
     const watcher = this.watchers.get(projectId);
     if (watcher) {
       await watcher.close();
@@ -241,12 +347,14 @@ export class FileWatcherService {
   }
 
   async stopAll(): Promise<void> {
-    const ids = Array.from(this.watchers.keys());
-    await Promise.all(ids.map(id => this.stopWatching(id)));
+    const ids = new Set([...this.watchers.keys(), ...this.arming.keys(), ...this.skipped]);
+    await Promise.all(Array.from(ids, (id) => this.stopWatching(id)));
   }
 
   isWatching(projectId: number): boolean {
-    return this.watchers.has(projectId);
+    // `arming`/`skipped` count as "watching" so the lifecycle doesn't re-arm a
+    // project whose probe is still running or that was intentionally skipped.
+    return this.watchers.has(projectId) || this.arming.has(projectId) || this.skipped.has(projectId);
   }
 
   listWatching(): number[] {

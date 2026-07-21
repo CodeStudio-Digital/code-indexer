@@ -1,10 +1,10 @@
 /**
  * Dedicated store for the per-session worker event log, deliberately kept
- * OUT of `SessionState`/`useAgentStream`. The SSE stream emits 50+ events/s;
- * routing those through the session state re-rendered the whole `AgentChat`
+ * OUT of `SessionState`/`useAgentStream`. The SSE stream can emit large bursts;
+ * routing diagnostic entries through session state re-rendered the whole `AgentChat`
  * tree on every event — even with the Worker Log panel closed. Here only the
  * panel (when mounted) subscribes, and commits are coalesced per animation
- * frame, so ingestion costs ~nothing when nobody is watching.
+ * frame, so ingestion remains bounded when nobody is watching.
  *
  * Writer side (openStream) calls `pushWorkerLog`; the buffer is drained into
  * the zustand store at most once per frame. The throttle lives on the writer,

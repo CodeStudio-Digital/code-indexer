@@ -31,6 +31,9 @@ export interface RenderableAgentResult {
   collected?: SubagentCollected;
   /** Rendered as ` attempt=N` only when >= 2 (resume results). */
   attempt?: number;
+  /** Hard tool-call cap in effect for the run. Rendered as ` max_tools=M` only
+   *  when > 0, so unlimited runs keep producing the exact legacy bytes. */
+  maxToolCalls?: number;
   /** 0-based original roster index for the "### Agent N" heading. Defaults to
    *  the array position — resume passes the ORIGINAL index so a partial
    *  relaunch doesn't renumber (which would let the model target wrong). */
@@ -48,12 +51,14 @@ export function renderSingleHeader(
   reason: string,
   usage: ChatUsage,
   spawnId?: string,
+  maxToolCalls?: number,
 ): string {
   const cached = usage.cache_read_input_tokens ?? 0;
   const spawnTok = spawnId ? ` spawn=${spawnId}` : '';
+  const maxTok = maxToolCalls && maxToolCalls > 0 ? ` max_tools=${maxToolCalls}` : '';
   return (
     `[subagent provider=${info.provider} model=${info.model} type=${type} ` +
-    `reason=${reason} input=${usage.input_tokens} output=${usage.output_tokens} cache_hit=${cached}${spawnTok}]\n\n`
+    `reason=${reason} input=${usage.input_tokens} output=${usage.output_tokens} cache_hit=${cached}${spawnTok}${maxTok}]\n\n`
   );
 }
 
@@ -78,9 +83,10 @@ export function renderParallelHeader(
 
 export function renderAgentSection(index: number, r: RenderableAgentResult): string {
   const attemptTok = r.attempt != null && r.attempt >= 2 ? ` attempt=${r.attempt}` : '';
+  const maxTok = r.maxToolCalls && r.maxToolCalls > 0 ? ` max_tools=${r.maxToolCalls}` : '';
   const meta =
     `[type=${r.type} reason=${r.reason} ` +
-    `tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}${attemptTok}]`;
+    `tools=${r.toolCallCount} input=${r.usage.input_tokens} output=${r.usage.output_tokens}${attemptTok}${maxTok}]`;
   const text = r.finalText || '(no summary produced)';
   const trail = renderTrail(r.collected);
   const n = (r.displayIndex ?? index) + 1;

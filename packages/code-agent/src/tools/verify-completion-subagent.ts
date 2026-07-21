@@ -53,6 +53,13 @@ export interface VerifyInput {
   diff: string;
   /** Optional one-line test outcome (e.g. "vitest: 124/124 passing"). */
   testSummary?: string | null;
+  /** Files attributed to this session in a shared/dirty worktree. */
+  files?: readonly string[] | null;
+}
+
+export interface VerifyRunOptions {
+  /** Bounded default used when CODER_GOAL_VERIFY_MAX_TURNS is unset. */
+  defaultMaxTurns?: number;
 }
 
 export interface VerifyGap {
@@ -89,6 +96,11 @@ export function buildVerifyInitialMessage(input: VerifyInput): string {
           : input.diff
       }\n\`\`\``
     : '# Diff\n(not provided — run `git_diff` yourself to see the pending changes, then read the affected files to verify them.)';
+  const scopedFiles = (input.files ?? []).map((file) => file.trim()).filter(Boolean);
+  const scopeBlock = scopedFiles.length > 0
+    ? `# Session-owned file scope\n${scopedFiles.map((file) => `- \`${file}\``).join('\n')}\n\n` +
+      'This worktree may contain unrelated concurrent changes. Scope `git_diff` and your verdict to these files; inspect another file only when it is a direct dependency needed to verify the goal.'
+    : '# Session-owned file scope\n(not recorded — be alert for unrelated changes in a shared worktree.)';
 
   return `# Goal
 ${input.goal.trim()}
@@ -99,9 +111,20 @@ ${plan}
 # Test summary
 ${tests}
 
+${scopeBlock}
+
 ${diffBlock}
 
 Verify whether the goal is met per the rules in your system prompt, reading files as needed, then emit your final \`<verdict>\` JSON block.`;
+}
+
+export function resolveVerifyMaxTurns(
+  configured: string | undefined,
+  defaultMaxTurns = 0,
+): number {
+  if (configured == null || configured.trim() === '') return Math.max(0, defaultMaxTurns);
+  const parsed = Number(configured);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : Math.max(0, defaultMaxTurns);
 }
 
 /**
@@ -134,6 +157,7 @@ export function parseVerdictBlock(text: string): { goalMet: boolean; gaps: Verif
 export async function runVerifyCompletionSubagent(
   parent: SubagentParent,
   input: VerifyInput,
+  options: VerifyRunOptions = {},
 ): Promise<VerifyResult> {
   const initialMessages: AgentMessage[] = [
     { role: 'user', content: [{ type: 'text', text: buildVerifyInitialMessage(input) }] },
@@ -160,7 +184,10 @@ export async function runVerifyCompletionSubagent(
     systemPrompt: VERIFY_SYSTEM_PROMPT,
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,
-    maxTurns: Number(process.env.CODER_GOAL_VERIFY_MAX_TURNS ?? 0),
+    maxTurns: resolveVerifyMaxTurns(
+      process.env.CODER_GOAL_VERIFY_MAX_TURNS,
+      options.defaultMaxTurns,
+    ),
   });
 
   const parsed = parseVerdictBlock(result.finalText);

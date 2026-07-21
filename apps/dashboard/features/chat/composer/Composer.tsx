@@ -4,7 +4,7 @@ import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
-import type { AgentAttachment, EnrichedProviderModel, ProviderOption } from '../types.js';
+import type { AgentAttachment, EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { filesToAttachments } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
@@ -100,6 +100,17 @@ interface ComposerProps {
   setReasoningEffort?: (v: string | null) => void;
   /** Discrete effort levels the selected model supports. Empty → hide selector. */
   reasoningLevels?: string[];
+  /** Product-level execution profile. Ultra is resolved locally per model. */
+  executionMode?: ExecutionMode;
+  setExecutionMode?: (v: ExecutionMode) => void;
+  /** True while the execution-mode PATCH is being acknowledged. */
+  executionModePending?: boolean;
+  /** Ultra cannot change while a runner is active/suspended or a write is pending. */
+  executionModeLocked?: boolean;
+  /** Ultra owns the effective reasoning flag for the selected model. */
+  ultraControlsThinking?: boolean;
+  /** Keep composing possible, but gate every visible/keyboard send path. */
+  sendBlocked?: boolean;
   /**
    * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
    * 'complex'. `null` → 'normal'. The selector is rendered only when the
@@ -278,7 +289,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     const hasInput = input.trim().length > 0 || attachments.length > 0;
 
     const handleSend = useCallback(async () => {
-      if (!input.trim() && attachments.length === 0) return;
+      if (props.sendBlocked || (!input.trim() && attachments.length === 0)) return;
 
       // Admin send-gate (friction-only). Real safety is the runner's
       // confirmBeforeIrreversible — this is just a heads-up on first send.
@@ -351,7 +362,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, confirm, clearDraft, t]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, props.sendBlocked, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
@@ -578,7 +589,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
                 e.preventDefault();
                 if (streaming) {
                   if (props.queueable && hasInput) handleQueue('next-turn');
-                } else {
+                } else if (!props.sendBlocked) {
                   handleSend();
                 }
                 return;
@@ -615,6 +626,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               reasoningEffort={props.reasoningEffort ?? null}
               setReasoningEffort={props.setReasoningEffort}
               reasoningLevels={props.reasoningLevels ?? []}
+              executionMode={props.executionMode ?? 'standard'}
+              setExecutionMode={props.setExecutionMode}
+              executionModePending={props.executionModePending}
+              executionModeLocked={props.executionModeLocked}
               planDepth={props.planDepth ?? null}
               setPlanDepth={props.setPlanDepth}
               outputCapLevel={props.outputCapLevel ?? 'economic'}
@@ -629,11 +644,13 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               thinking={props.thinking}
               setThinking={props.setThinking}
               supportsThinking={props.supportsThinking}
+              ultraControlsThinking={props.ultraControlsThinking}
               describeImages={props.describeImages}
               setDescribeImages={props.setDescribeImages}
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
               queueable={!!props.queueable}
+              sendBlocked={props.sendBlocked}
               onQueueSend={handleQueue}
               onTranscript={appendTranscript}
             />
@@ -653,6 +670,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               handleFiles={handleFiles}
               thinking={props.thinking}
               setThinking={props.setThinking}
+              thinkingManaged={props.ultraControlsThinking}
               describeImages={props.describeImages}
               setDescribeImages={props.setDescribeImages}
               outputCapLevel={props.outputCapLevel ?? 'economic'}
@@ -680,6 +698,11 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
                   t('composer.selectModel', { defaultValue: 'Select a model' }),
                 )}
               </span>
+              {props.executionMode === 'ultra' && (
+                <span className="ml-1.5 shrink-0 font-medium text-violet-600 dark:text-violet-300">
+                  {t('ultra.badge', { defaultValue: 'Ultra' })}
+                </span>
+              )}
             </button>
             {/* Mic + device picker live AFTER the model name. */}
             <MicButton onTranscript={appendTranscript} disabled={streaming} />
@@ -697,6 +720,8 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             reasoningEffort={props.reasoningEffort ?? null}
             setReasoningEffort={props.setReasoningEffort}
             reasoningLevels={props.reasoningLevels ?? []}
+            executionMode={props.executionMode ?? 'standard'}
+            sendBlocked={props.sendBlocked}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
             selectedPipelineId={props.selectedPipelineId ?? null}
@@ -723,6 +748,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             reasoningEffort={props.reasoningEffort ?? null}
             setReasoningEffort={props.setReasoningEffort}
             reasoningLevels={props.reasoningLevels ?? []}
+            executionMode={props.executionMode ?? 'standard'}
+            setExecutionMode={props.setExecutionMode}
+            executionModePending={props.executionModePending}
+            executionModeLocked={props.executionModeLocked}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
             responseLanguage={props.responseLanguage ?? null}

@@ -23,6 +23,8 @@ export interface ToolCallEvent {
    *  the worker's per-tool heartbeat (or `ctx.reportProgress`) fires.
    *  Cleared on `tool_call_result`. */
   elapsedMs?: number;
+  /** Time since substantive output/progress; transport heartbeats do not reset it. */
+  idleMs?: number;
   /** Optional substantive progress note emitted by cooperative tools via
    *  `ctx.reportProgress` (e.g. "fetched 3/10 docs"). Trimmed to ~200
    *  chars on the runner side. */
@@ -237,10 +239,15 @@ export interface ParallelAgent {
   researchDepth?: ResearchDepth;
   softToolTarget?: number;
   softTimeTargetMs?: number;
+  /** Hard tool-call cap resolved at dispatch — badge denominator ("247/160").
+   *  Absent/0 = unlimited (no denominator shown). */
+  maxToolCalls?: number;
 }
 
 export interface AgentsGroup {
   groupId: string;
+  /** Canonical parent tool_use id. Shared with persisted spawn_agent history. */
+  toolUseId?: string;
   agents: ParallelAgent[];
   provider?: string;
   model?: string;
@@ -274,6 +281,8 @@ export interface ActiveProcess {
   phase?: string;
   note?: string;
   elapsedMs?: number;
+  /** Time since substantive output/progress; transport heartbeats do not reset it. */
+  idleMs?: number;
   parentId?: string;
   groupId?: string;
   /** Fire-and-forget work survives per-turn `message_complete` boundaries. */
@@ -302,8 +311,8 @@ export interface StreamActivityBlock {
 }
 
 export type StreamBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string }
+  | { type: 'text'; text: string; id?: string }
+  | { type: 'thinking'; text: string; id?: string }
   | StreamActivityBlock
   | { type: 'tool'; call: ToolCallEvent }
   | { type: 'plan'; plan: PlanPrompt }

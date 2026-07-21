@@ -116,4 +116,24 @@ describe('ToolCallLedger', () => {
     await second;
     expect(secondAcquired).toBe(true);
   });
+
+  it('cancels a queued unsafe reservation without breaking FIFO release', async () => {
+    const ledger = new ToolCallLedger();
+    const releaseFirst = await ledger.reserveUnsafe();
+    const controller = new AbortController();
+    const queued = ledger.reserveUnsafe(controller.signal);
+    controller.abort(new Error('deadline'));
+    await expect(queued).rejects.toThrow('deadline');
+
+    let thirdAcquired = false;
+    const third = ledger.reserveUnsafe().then((release) => {
+      thirdAcquired = true;
+      release();
+    });
+    await Promise.resolve();
+    expect(thirdAcquired).toBe(false);
+    releaseFirst();
+    await third;
+    expect(thirdAcquired).toBe(true);
+  });
 });

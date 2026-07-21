@@ -1,9 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_PROJECT_NAVIGATION,
   DEFAULT_WORKSPACE_LAYOUT,
   migrateWorkspaceLayoutV2,
   normalizeWorkspaceLayout,
+  normalizeProjectNavigation,
+  projectNavigationStorageKey,
+  useWorkspaceLayout,
 } from '../workspace-layout.js';
+
+function installStorage(): Map<string, string> {
+  const values = new Map<string, string>();
+  (globalThis as unknown as { window: unknown }).window = {
+    localStorage: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+    },
+  };
+  return values;
+}
 
 describe('workspace layout v3', () => {
   it('opens an IDE-first layout for a new user', () => {
@@ -91,5 +107,38 @@ describe('workspace layout v3', () => {
       primarySurface: 'sessions',
       activeRight: 'chat',
     });
+  });
+});
+
+describe('project-scoped rail navigation', () => {
+  beforeEach(() => installStorage());
+  afterEach(() => {
+    useWorkspaceLayout.getState().deactivateProject(101);
+    useWorkspaceLayout.getState().deactivateProject(202);
+    delete (globalThis as unknown as { window?: unknown }).window;
+  });
+
+  it('uses Session when a project has no remembered navigation', () => {
+    expect(normalizeProjectNavigation(null)).toEqual(DEFAULT_PROJECT_NAVIGATION);
+    useWorkspaceLayout.getState().activateProject(101);
+    expect(useWorkspaceLayout.getState()).toMatchObject({
+      activeLeft: 'files',
+      primarySurface: 'sessions',
+    });
+  });
+
+  it('restores each project independently', () => {
+    const layout = useWorkspaceLayout.getState();
+    layout.activateProject(101);
+    layout.setPrimarySurface('editor');
+    layout.setActiveLeft('git');
+
+    layout.activateProject(202);
+    expect(useWorkspaceLayout.getState()).toMatchObject(DEFAULT_PROJECT_NAVIGATION);
+    useWorkspaceLayout.getState().setPrimarySurface('api');
+
+    useWorkspaceLayout.getState().activateProject(101);
+    expect(useWorkspaceLayout.getState()).toMatchObject({ activeLeft: 'git', primarySurface: 'editor' });
+    expect(window.localStorage.getItem(projectNavigationStorageKey(202))).toContain('"primarySurface":"api"');
   });
 });

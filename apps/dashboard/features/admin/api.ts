@@ -163,6 +163,26 @@ export async function setSubagentEffort(
   }
 }
 
+/** Per-profile hard caps. Only the keys present in `patch` are sent (null clears). */
+export async function setSubagentLimits(
+  providerId: string,
+  profile: string,
+  patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+): Promise<void> {
+  const body: Record<string, unknown> = { profile };
+  if ('maxToolCalls' in patch) body.max_tool_calls = patch.maxToolCalls;
+  if ('timeoutMs' in patch) body.timeout_ms = patch.timeoutMs;
+  const r = await fetch(`/api/admin/providers/${providerId}/subagent-model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
 export async function setModelReasoningLevel(
   providerId: string,
   modelId: string,
@@ -201,6 +221,26 @@ export async function setModelContextWindow(
     const err = (await r.json().catch(() => ({ error: r.statusText }))) as { error?: string };
     throw new Error(err.error ?? `HTTP ${r.status}`);
   }
+}
+
+export async function connectKimiCodeApiToken(
+  providerId: string,
+  apiToken: string,
+): Promise<{ provider_id: string; model_count: number }> {
+  const r = await fetch(`/api/admin/providers/${encodeURIComponent(providerId)}/connect-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_token: apiToken }),
+  });
+  const body = (await r.json().catch(() => ({}))) as {
+    provider_id?: string;
+    model_count?: number;
+    error?: string;
+  };
+  if (!r.ok || !body.provider_id) {
+    throw new Error(body.error ?? `HTTP ${r.status}`);
+  }
+  return { provider_id: body.provider_id, model_count: body.model_count ?? 0 };
 }
 
 export async function setModelMaxOutputTokens(

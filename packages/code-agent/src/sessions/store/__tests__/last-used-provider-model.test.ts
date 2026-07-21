@@ -38,4 +38,27 @@ describe('getLastUsedProviderModel', () => {
 
     expect(getLastUsedProviderModel(db!)).toEqual({ provider: 'zai', model: 'glm-5.2' });
   });
+
+  it('skips whitespace-only rows (legacy trim() semantics, now enforced in JS)', () => {
+    // The mig-246 sargable rewrite dropped trim() from the SQL predicate so the
+    // scan can ride idx_coder_sessions_updated; whitespace-only values must
+    // still be rejected — by the JS loop over the streamed rows.
+    db!.prepare('INSERT INTO coder_sessions (provider, model, updated_at) VALUES (?, ?, ?)')
+      .run('zai', 'glm-5.2', '2026-07-14 12:00:00');
+    db!.prepare('INSERT INTO coder_sessions (provider, model, updated_at) VALUES (?, ?, ?)')
+      .run('   ', 'ghost-model', '2026-07-14 13:00:00');
+    db!.prepare('INSERT INTO coder_sessions (provider, model, updated_at) VALUES (?, ?, ?)')
+      .run('ghost-provider', ' \t ', '2026-07-14 14:00:00');
+
+    expect(getLastUsedProviderModel(db!)).toEqual({ provider: 'zai', model: 'glm-5.2' });
+  });
+
+  it('returns null when no complete row exists', () => {
+    db!.prepare('INSERT INTO coder_sessions (provider, model, updated_at) VALUES (?, ?, ?)')
+      .run('', '', '2026-07-14 12:00:00');
+    db!.prepare('INSERT INTO coder_sessions (provider, model, updated_at) VALUES (?, ?, ?)')
+      .run('  ', 'model', '2026-07-14 13:00:00');
+
+    expect(getLastUsedProviderModel(db!)).toBeNull();
+  });
 });

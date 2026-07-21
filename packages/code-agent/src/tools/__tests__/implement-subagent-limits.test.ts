@@ -73,7 +73,7 @@ function finishingProvider(toolCallsBeforeDone: number): ChatProvider {
         return;
       }
       yield { type: 'tool_call_start', id: `tu_${call}`, name: 'mock_tool' };
-      yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: {} };
+      yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: { call } };
       yield { type: 'done', stop_reason: 'tool_use' };
     },
   };
@@ -137,6 +137,7 @@ describe('runSubagent limits', () => {
 
   afterEach(() => {
     delete process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS;
+    delete process.env.CODER_SUBAGENT_SAME_OPERATION_MAX;
   });
 
   it('reports tool_budget (not error) when the tool-call cap is reached', async () => {
@@ -186,6 +187,25 @@ describe('runSubagent limits', () => {
     expect(result.finalText).not.toContain('task tool limit reached');
   });
 
+  it('stops an unlimited subagent that repeats one stable operation without progress', async () => {
+    process.env.CODER_SUBAGENT_SAME_OPERATION_MAX = '3';
+    const progress: string[] = [];
+    const result = await runSubagent(parent(toolCallingProvider()), {
+      systemPrompt: 'You are a test subagent.',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'repeat forever' }] }],
+      maxTurns: 0,
+      limits: { maxToolCalls: 0, timeoutMs: 0, stallMs: 5_000 },
+      onProgress: (event) => {
+        if (event.note) progress.push(event.note);
+      },
+    });
+
+    expect(result.reason).toBe('error');
+    expect(result.failureDetail).toContain('subagent_convergence_watchdog');
+    expect(progress.some((note) => note.includes('made no progress 3 consecutive times'))).toBe(true);
+  });
+
   it('nudges synthesis after a soft target without cutting the run or marking it partial', async () => {
     const systemPrompts: string[] = [];
     let call = 0;
@@ -231,6 +251,107 @@ describe('runSubagent limits', () => {
     expect(systemPrompts[0]).not.toContain('SYNTHESIS CHECKPOINT');
     expect(systemPrompts[1]).toContain('SYNTHESIS CHECKPOINT');
     expect(phases).toContain('synthesis_nudge');
+  });
+
+  it('injects the hard-budget warning once at 80% of the tool cap and still completes', async () => {
+    const systemPrompts: string[] = [];
+    let call = 0;
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        systemPrompts.push(request.system);
+        call++;
+        if (call > 4) {
+          yield { type: 'text_delta', text: 'final findings' };
+          yield { type: 'done', stop_reason: 'end_turn' };
+          return;
+        }
+        yield { type: 'tool_call_start', id: `tu_${call}`, name: 'mock_tool' };
+        yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: { call } };
+        yield { type: 'done', stop_reason: 'tool_use' };
+      },
+    };
+    const phases: string[] = [];
+    const result = await runSubagent(parent(provider), {
+      systemPrompt: 'You are a test subagent.',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'inspect' }] }],
+      maxTurns: 0,
+      // 80% of 5 = ceil(4) → the warning lands on the turn AFTER the 4th call.
+      limits: { maxToolCalls: 5, timeoutMs: 0, stallMs: 5_000 },
+      onProgress: (progress) => {
+        if (progress.phase) phases.push(progress.phase);
+      },
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(result.finalText).toContain('final findings');
+    const warned = systemPrompts.map((p) => p.includes('HARD BUDGET WARNING'));
+    expect(warned.slice(0, 4)).toEqual([false, false, false, false]);
+    expect(warned[4]).toBe(true);
+    expect(phases).toContain('budget_nudge');
+  });
+
+  it('cuts a warned run at the cap as tool_budget (nudge does not replace the guard)', async () => {
+    const systemPrompts: string[] = [];
+    let call = 0;
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        systemPrompts.push(request.system);
+        call++;
+        yield { type: 'tool_call_start', id: `tu_${call}`, name: 'mock_tool' };
+        yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: { call } };
+        yield { type: 'done', stop_reason: 'tool_use' };
+      },
+    };
+    const result = await runSubagent(parent(provider), {
+      systemPrompt: 'You are a test subagent.',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'never stop' }] }],
+      maxTurns: 0,
+      limits: { maxToolCalls: 5, timeoutMs: 0, stallMs: 5_000 },
+    });
+
+    expect(result.reason).toBe('tool_budget');
+    expect(result.finalText).toContain('task tool limit reached');
+    expect(systemPrompts.filter((p) => p.includes('HARD BUDGET WARNING'))).toHaveLength(1);
+  });
+
+  it('never injects the hard-budget warning when both caps are 0', async () => {
+    const systemPrompts: string[] = [];
+    let call = 0;
+    const provider: ChatProvider = {
+      name: 'mock',
+      model: 'mock-model',
+      setModel() {},
+      async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+        systemPrompts.push(request.system);
+        call++;
+        if (call > 4) {
+          yield { type: 'text_delta', text: 'done' };
+          yield { type: 'done', stop_reason: 'end_turn' };
+          return;
+        }
+        yield { type: 'tool_call_start', id: `tu_${call}`, name: 'mock_tool' };
+        yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: { call } };
+        yield { type: 'done', stop_reason: 'tool_use' };
+      },
+    };
+    const result = await runSubagent(parent(provider), {
+      systemPrompt: 'You are a test subagent.',
+      allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'explore' }] }],
+      maxTurns: 0,
+      limits: { maxToolCalls: 0, timeoutMs: 0, stallMs: 5_000 },
+    });
+
+    expect(result.reason).toBe('completed');
+    expect(systemPrompts.every((p) => !p.includes('HARD BUDGET WARNING'))).toBe(true);
   });
 
   it('runs past 100 turns when turn/tool/time caps are zero', async () => {

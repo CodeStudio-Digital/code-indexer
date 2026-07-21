@@ -5,7 +5,7 @@
  * and View snapshot (open the full panel). Derived from persisted tool calls, so
  * it stays put on scrollback.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, FileEdit, Loader2, RotateCcw, ScanSearch } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
@@ -41,31 +41,46 @@ export function TurnFilesSummary({
   const [reviews, setReviews] = useState<RoundSnapshotReviewFinding[]>([]);
   const [roundLoaded, setRoundLoaded] = useState(false);
   const [roundError, setRoundError] = useState<string | null>(null);
+  const loadRequestIdRef = useRef(0);
 
-  const loadRound = useCallback(async () => {
+  const loadRound = useCallback(async (signal?: AbortSignal) => {
+    const requestId = ++loadRequestIdRef.current;
     if (!actions || actions.scope !== 'coder' || roundMessageId == null) {
       setRoundFiles([]);
       setReviews([]);
+      setRoundError(null);
       setRoundLoaded(true);
       return;
     }
     try {
-      const result = await fetchRoundSnapshotList(actions.scope, actions.sessionId, roundMessageId);
+      const result = await fetchRoundSnapshotList(
+        actions.scope,
+        actions.sessionId,
+        roundMessageId,
+        signal,
+      );
+      if (signal?.aborted || requestId !== loadRequestIdRef.current) return;
       setRoundFiles(result.files);
       setReviews(result.reviews);
       setRoundError(null);
     } catch (error) {
+      if (signal?.aborted || requestId !== loadRequestIdRef.current) return;
       setRoundFiles([]);
       setReviews([]);
       setRoundError(error instanceof Error ? error.message : String(error));
     } finally {
-      setRoundLoaded(true);
+      if (!signal?.aborted && requestId === loadRequestIdRef.current) setRoundLoaded(true);
     }
   }, [actions, roundMessageId]);
 
   useEffect(() => {
+    const controller = new AbortController();
     setRoundLoaded(false);
-    void loadRound();
+    void loadRound(controller.signal);
+    return () => {
+      controller.abort();
+      loadRequestIdRef.current += 1;
+    };
   }, [loadRound]);
 
   const { added, removed, globalBaselineIds } = useMemo(() => {

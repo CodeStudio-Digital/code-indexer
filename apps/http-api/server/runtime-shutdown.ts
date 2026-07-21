@@ -167,7 +167,7 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
 
     // The sampler, watchdog and IPC producers above have stopped. Seal the
     // journal only now so a clean marker can never race with a final event.
-    stopPersistentPerfDiagnostics(resources.reason ?? 'runtime-shutdown');
+    await stopPersistentPerfDiagnostics(resources.reason ?? 'runtime-shutdown');
 
     setCoderWorkerMcpPool(null);
     setCoderWorkerDocDeps(null);

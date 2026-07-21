@@ -11,13 +11,14 @@
  * immediately to the next turn.
  */
 import { useTranslation } from 'react-i18next';
-import { BookOpen, Gauge, Languages, Layers, Repeat, Thermometer } from 'lucide-react';
+import { BookOpen, Gauge, Languages, Layers, Repeat, Sparkles, Thermometer } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
+import { Switch } from '../../../components/ui/switch.js';
 import { FallbackPicker } from '../../../components/FallbackPicker.js';
 import { PROVIDERS } from '../constants.js';
-import type { EnrichedProviderModel, ProviderOption } from '../types.js';
+import type { EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import type { AgentPreset } from '@mcp/api-bus';
 
@@ -37,6 +38,11 @@ export function modelSettingsLabel(
   const providerLabel = providerOptions.find((p) => p.id === provider)?.label ?? provider;
   const modelLabel = model.includes('::') ? model.split('::')[0] : model;
   return `${providerLabel} · ${modelLabel}`;
+}
+
+export function fixedTemperatureForModel(model: string): number | null {
+  const modelId = model.includes('::') ? model.split('::')[0] : model;
+  return modelId.trim().toLowerCase() === 'k3' ? 1 : null;
 }
 
 interface ModelSettingsDialogProps {
@@ -61,6 +67,10 @@ interface ModelSettingsDialogProps {
   reasoningEffort?: string | null;
   setReasoningEffort?: (v: string | null) => void;
   reasoningLevels?: string[];
+  executionMode?: ExecutionMode;
+  setExecutionMode?: (v: ExecutionMode) => void;
+  executionModePending?: boolean;
+  executionModeLocked?: boolean;
   planDepth?: string | null;
   setPlanDepth?: (v: string | null) => void;
   /** Per-session response language (migration 177). null/'' → auto (user's language). */
@@ -95,6 +105,10 @@ export function ModelSettingsDialog({
   reasoningEffort,
   setReasoningEffort,
   reasoningLevels,
+  executionMode = 'standard',
+  setExecutionMode,
+  executionModePending = false,
+  executionModeLocked = false,
   planDepth,
   setPlanDepth,
   responseLanguage,
@@ -107,6 +121,7 @@ export function ModelSettingsDialog({
   getModelsForProvider,
 }: ModelSettingsDialogProps) {
   const { t } = useTranslation(['chat', 'common']);
+  const fixedTemperature = fixedTemperatureForModel(model);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -158,6 +173,50 @@ export function ModelSettingsDialog({
               />
             )}
           </div>
+          {setExecutionMode && (
+            <div
+              className={`rounded-lg border p-3 transition-colors ${
+                executionMode === 'ultra'
+                  ? 'border-violet-500/50 bg-violet-500/10'
+                  : 'border-border bg-muted/20'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`mt-0.5 rounded-md p-1.5 ${
+                  executionMode === 'ultra'
+                    ? 'bg-violet-500/15 text-violet-600 dark:text-violet-300'
+                    : 'bg-muted text-muted-foreground'
+                }`}>
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="model-settings-ultra" className="text-sm font-medium">
+                    {t('chat:ultra.title', { defaultValue: 'Ultra mode' })}
+                  </label>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    {t('chat:ultra.description', {
+                      defaultValue: 'Uses the strongest compatible reasoning and proactively delegates useful read-only research and review.',
+                    })}
+                  </p>
+                  {executionModeLocked && (
+                    <p className="mt-1 text-[11px] leading-relaxed text-amber-600 dark:text-amber-300">
+                      {executionModePending
+                        ? t('chat:ultra.saving', { defaultValue: 'Saving this mode before the next send…' })
+                        : t('chat:ultra.lockedDuringRun', { defaultValue: 'Change Ultra after the current run or approval finishes.' })}
+                    </p>
+                  )}
+                </div>
+                <Switch
+                  id="model-settings-ultra"
+                  checked={executionMode === 'ultra'}
+                  disabled={executionModeLocked}
+                  onCheckedChange={(checked) => setExecutionMode(checked ? 'ultra' : 'standard')}
+                  aria-label={t('chat:ultra.title', { defaultValue: 'Ultra mode' })}
+                  aria-busy={executionModePending}
+                />
+              </div>
+            </div>
+          )}
           <div className="flex gap-3">
             <div className="flex-1 space-y-1.5">
               <label className="text-xs text-muted-foreground">{t('chat:toolbar.maxTurns')}</label>
@@ -186,7 +245,8 @@ export function ModelSettingsDialog({
                   min={0}
                   max={1}
                   step={0.05}
-                  value={temperature ?? ''}
+                  value={fixedTemperature ?? temperature ?? ''}
+                  disabled={fixedTemperature !== null}
                   onChange={(e) => {
                     const v = e.target.value;
                     if (v === '') { setTemperature(null); return; }
@@ -209,6 +269,7 @@ export function ModelSettingsDialog({
                   aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
                   className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
                   value={reasoningEffort ?? ''}
+                  disabled={executionMode === 'ultra'}
                   onChange={(e) => setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
                 >
                   <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>

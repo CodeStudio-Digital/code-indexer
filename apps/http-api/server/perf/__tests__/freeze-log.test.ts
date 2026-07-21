@@ -26,6 +26,15 @@ describe('attributeStall', () => {
     expect(r).toEqual({ source: 'handler', channel: 'api:projects:get' });
   });
 
+  it('busy loop with a registered background activity → background', () => {
+    const r = attributeStall(300, 520, 550, NOW, {
+      channel: 'coder-worker:spawn:42',
+      at: NOW - 280,
+      kind: 'background',
+    }, null);
+    expect(r).toEqual({ source: 'background', channel: 'coder-worker:spawn:42' });
+  });
+
   it('busy loop but the in-flight channel is the observer (perf panel) → not blamed → event-loop', () => {
     const r = attributeStall(300, 520, 550, NOW, { channel: 'mcp:GET /api/admin/perf/current', at: NOW - 280 }, null);
     expect(r).toEqual({ source: 'event-loop' });
@@ -34,6 +43,16 @@ describe('attributeStall', () => {
   it('busy loop, nothing in-flight, but a heavy non-observer handler just exited → handler via lastExit', () => {
     const r = attributeStall(300, 520, 550, NOW, undefined, { channel: 'api:files:read', at: NOW - 100, durationMs: 310 });
     expect(r).toEqual({ source: 'handler', channel: 'api:files:read' });
+  });
+
+  it('attributes a just-finished background activity on the post-block tick', () => {
+    const r = attributeStall(300, 520, 550, NOW, undefined, {
+      channel: 'coder-worker:evict:42',
+      at: NOW - 100,
+      durationMs: 310,
+      kind: 'background',
+    });
+    expect(r).toEqual({ source: 'background', channel: 'coder-worker:evict:42' });
   });
 
   it('busy loop, in-flight handler entered far earlier (parked in await) → not the blocker → event-loop', () => {

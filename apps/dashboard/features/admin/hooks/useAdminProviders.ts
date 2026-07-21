@@ -16,6 +16,7 @@ import {
   backfillContextWindows as backfillContextWindowsApi,
   setSubagentTarget as setSubagentTargetApi,
   setSubagentEffort as setSubagentEffortApi,
+  setSubagentLimits as setSubagentLimitsApi,
   testProvider,
   toggleModelEnabled,
 } from '../api.js';
@@ -267,6 +268,23 @@ export function useAdminProviders() {
     }
   };
 
+  const setSubagentLimits = async (
+    providerId: string,
+    profile: string,
+    patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+  ) => {
+    try {
+      await setSubagentLimitsApi(providerId, profile, patch);
+      await load();
+    } catch (e) {
+      await notify({
+        title: 'Subagent settings update failed',
+        description: (e as Error).message,
+        variant: 'destructive',
+      });
+    }
+  };
+
   const setFallback = async (providerId: string, fallbackProviderId: string | null) => {
     try {
       await setFallbackProviderApi(providerId, fallbackProviderId);
@@ -304,6 +322,7 @@ export function useAdminProviders() {
     backfillContextWindows,
     setSubagentTarget,
     setSubagentEffort,
+    setSubagentLimits,
     setFallback,
   };
 }

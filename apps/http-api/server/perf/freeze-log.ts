@@ -23,7 +23,9 @@
 import { performance } from 'node:perf_hooks';
 import { currentPersistentPerfRun, recordPersistentFreeze } from './persistent-diagnostics.js';
 import {
+  enterOffloopActivity,
   enterOffloopHandler,
+  exitOffloopActivity,
   exitOffloopHandler,
   heartbeatOffloopWatchdog,
   startOffloopWatchdog,
@@ -32,7 +34,7 @@ import {
 
 export interface FreezeEvent {
   at: number;
-  source: 'handler' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
   /** IPC channel (handler) or script URL (renderer); absent for GC/starved. */
   channel?: string;
   durationMs: number;
@@ -105,13 +107,13 @@ export function resetFreezes(): void {
 // their own awaits, which don't block).
 
 let nextId = 1;
-interface InFlightEntry { channel: string; at: number; }
+interface InFlightEntry { channel: string; at: number; kind: 'handler' | 'background'; }
 const inFlight = new Map<number, InFlightEntry>();
 
 export function enterInFlight(channel: string): number {
   const id = nextId++;
   const at = Date.now();
-  inFlight.set(id, { channel, at });
+  inFlight.set(id, { channel, at, kind: 'handler' });
   enterOffloopHandler(id, channel, at);
   return id;
 }
@@ -119,6 +121,29 @@ export function enterInFlight(channel: string): number {
 export function exitInFlight(id: number): void {
   inFlight.delete(id);
   exitOffloopHandler(id);
+}
+
+/**
+ * Register main-process work that is not an HTTP/IPC handler (for example a
+ * worker spawn or eviction). The returned token must be released in `finally`.
+ */
+export function enterBackgroundActivity(label: string): number {
+  const id = nextId++;
+  const at = Date.now();
+  inFlight.set(id, { channel: label, at, kind: 'background' });
+  enterOffloopActivity(id, label, at, 'background');
+  return id;
+}
+
+export function exitBackgroundActivity(id: number): void {
+  const entry = inFlight.get(id);
+  inFlight.delete(id);
+  exitOffloopActivity(id);
+  if (!entry || entry.kind !== 'background') return;
+  const durationMs = Date.now() - entry.at;
+  if (durationMs >= FREEZE_THRESHOLD_MS * 0.5) {
+    lastExit = { channel: entry.channel, at: Date.now(), durationMs, kind: 'background' };
+  }
 }
 
 /** The most-recently-entered still-active handler (insertion-ordered Map). */
@@ -132,18 +157,23 @@ function currentInFlight(): InFlightEntry | undefined {
 // fires (the timer is queued behind the handler), so `currentInFlight()` is
 // already null by then. Remember the last heavy exit so the watchdog can still
 // pin the freeze on it when its duration + recency match the stall.
-let lastExit: { channel: string; at: number; durationMs: number } | null = null;
+let lastExit: {
+  channel: string;
+  at: number;
+  durationMs: number;
+  kind: 'handler' | 'background';
+} | null = null;
 
 export function noteExit(channel: string, durationMs: number): void {
   if (durationMs >= FREEZE_THRESHOLD_MS * 0.5) {
-    lastExit = { channel, at: Date.now(), durationMs };
+    lastExit = { channel, at: Date.now(), durationMs, kind: 'handler' };
   }
 }
 
 // ─── Attribution (pure, unit-tested) ─────────────────────────────────────
 
 interface StallAttribution {
-  source: 'handler' | 'event-loop' | 'starved';
+  source: 'handler' | 'background' | 'event-loop' | 'starved';
   channel?: string;
 }
 
@@ -159,8 +189,13 @@ export function attributeStall(
   activeMs: number,
   windowMs: number,
   now: number,
-  inFlight: { channel: string; at: number } | undefined,
-  lastExit: { channel: string; at: number; durationMs: number } | null,
+  inFlight: { channel: string; at: number; kind?: 'handler' | 'background' } | undefined,
+  lastExit: {
+    channel: string;
+    at: number;
+    durationMs: number;
+    kind?: 'handler' | 'background';
+  } | null,
 ): StallAttribution {
   // Loop mostly IDLE across the window → an await window or an OS deschedule
   // under CPU contention, NOT a main-thread sync block. Don't pin a handler.
@@ -169,19 +204,20 @@ export function attributeStall(
   // lifetime ≈ this stall (ran sync the whole window); else a heavy handler
   // that just returned. NEVER the observer (perf panel's own routes).
   if (inFlight && !isObserverChannel(inFlight.channel) && now - inFlight.at <= monoLate + WATCHDOG_INTERVAL_MS) {
-    return { source: 'handler', channel: inFlight.channel };
+    return { source: inFlight.kind === 'background' ? 'background' : 'handler', channel: inFlight.channel };
   }
   if (
     lastExit && !isObserverChannel(lastExit.channel) &&
     now - lastExit.at <= WATCHDOG_INTERVAL_MS + 100 &&
     Math.abs(lastExit.durationMs - monoLate) <= monoLate * 0.5
   ) {
-    return { source: 'handler', channel: lastExit.channel };
+    return { source: lastExit.kind === 'background' ? 'background' : 'handler', channel: lastExit.channel };
   }
   return { source: 'event-loop' };
 }
 
 function detailFor(source: StallAttribution['source']): string | undefined {
+  if (source === 'background') return 'Main loop was busy during a registered background activity';
   if (source === 'event-loop') return 'GC / sync non-IPC turn (main loop was busy)';
   if (source === 'starved') {
     return 'Node/libuv tick delayed while mostly idle — native Electron/Chromium work, OS contention/deschedule, or suspend; no JS handler attributed';

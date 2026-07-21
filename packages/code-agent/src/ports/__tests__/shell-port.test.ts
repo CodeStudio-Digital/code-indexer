@@ -99,4 +99,27 @@ describe('bounded shell output', () => {
     expect(result.stdoutTruncation!.inputBytes).toBeGreaterThan(result.stdoutTruncation!.outputBytes);
     expect(result.stderrTruncation!.inputBytes).toBeGreaterThan(result.stderrTruncation!.outputBytes);
   });
+
+  it('kills descendant processes when a command times out', async () => {
+    const adapter = new LocalShellAdapter();
+    const descendantScript = 'setInterval(() => {}, 1000)';
+    const parentScript = [
+      `const { spawn } = require('node:child_process');`,
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' });`,
+      `process.stdout.write(String(child.pid));`,
+      `setInterval(() => {}, 1000);`,
+    ].join('');
+
+    const result = await adapter.spawn(process.execPath, ['-e', parentScript], {
+      cwd: process.cwd(),
+      timeoutMs: 500,
+      maxOutputBytes: 1_024,
+    });
+    const descendantPid = Number(result.stdout.trim());
+
+    expect(result.timedOut).toBe(true);
+    expect(descendantPid).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(() => process.kill(descendantPid, 0)).toThrow();
+  });
 });

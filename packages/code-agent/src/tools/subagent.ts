@@ -110,6 +110,15 @@ export interface SubagentDeps {
    * `effortForProfile()` helper over reading this directly.
    */
   resolveEffortForProfile?: (profileId?: string) => string | undefined;
+  /**
+   * When set, resolves the admin per-profile hard-cap override (max tool
+   * calls / wall-clock timeout). `undefined` means no override — env vars and
+   * depth-derived defaults decide. Prefer the `limitsOverrideForProfile()`
+   * helper over reading this directly.
+   */
+  resolveLimitsForProfile?: (
+    profileId?: string,
+  ) => import('@mcp/code-agent/tools/subagent-provider.js').ProfileLimitOverride | undefined;
   /** Per-turn smart reducer inherited by ephemeral child runners. */
   toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   /** Runtime/plugin tier placement inherited by ephemeral child runners. */

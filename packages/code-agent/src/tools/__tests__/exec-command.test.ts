@@ -233,10 +233,16 @@ describe('exec_command + write_stdin', () => {
       toolOutputStore: { put },
     } as unknown as ToolContext;
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 500, max_output_tokens: 1000 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 5000, max_output_tokens: 1000 },
       storeCtx,
     );
     const sid = extractSessionId(r1.content);
+    // The script emits a 6-char `ready\n` banner at startup. Whether it drains
+    // inside r1's yield window is a wall-clock race with node's spawn, and on a
+    // loaded machine it loses — the banner then sits in `pending` and r2 drains
+    // it AHEAD of the echo, shifting every count below by exactly 6. Derive the
+    // expected input from what r1 actually observed instead of racing it.
+    const bannerPending = r1.content.includes('ready') ? '' : 'ready\n';
     const big =
       `HEAD-${'🙂'.repeat(400)}` +
       `MIDDLE-SENTINEL${'B'.repeat(1_500)}` +
@@ -260,7 +266,8 @@ describe('exec_command + write_stdin', () => {
     expect(marker).not.toBeNull();
     const omitted = Number(marker![1]);
     const retained = body.replace(marker![0], '');
-    expect(omitted).toBe(`echo:${big}`.length - retained.length);
+    const totalPending = `${bannerPending}echo:${big}`.length;
+    expect(omitted).toBe(totalPending - retained.length);
     expect(r2.content).toContain(`output_omitted_chars=${omitted}`);
     expect(body.length).toBeLessThanOrEqual(1_000);
     expect(r2.sourceTruncations).toEqual([
@@ -271,7 +278,7 @@ describe('exec_command + write_stdin', () => {
         outputSize: body.length,
       }),
     ]);
-    expect(r2.sourceTruncations![0]!.inputSize).toBe(`echo:${big}`.length);
+    expect(r2.sourceTruncations![0]!.inputSize).toBe(totalPending);
     expect(r2.sourceTruncations![0]!.outputId).toBeUndefined();
     expect(put).not.toHaveBeenCalled();
   });

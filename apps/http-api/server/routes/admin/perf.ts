@@ -28,6 +28,7 @@ import {
   readPersistentPerfRun,
   recordPersistentRendererFreezes,
   type PersistedRendererFreeze,
+  type PersistedRendererFreezeReport,
 } from '../../perf/persistent-diagnostics.js';
 import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
@@ -53,6 +54,18 @@ function cleanRendererFreeze(value: unknown): PersistedRendererFreeze | null {
   const name = typeof row.name === 'string' ? row.name.slice(0, 2_000) : '';
   if (!name) return null;
   const script = typeof row.script === 'string' ? row.script.slice(0, 4_000) : undefined;
+  const blockingDurationMs = typeof row.blockingDurationMs === 'number'
+    && Number.isFinite(row.blockingDurationMs)
+    && row.blockingDurationMs >= 0
+    && row.blockingDurationMs <= 600_000
+    ? Math.round(row.blockingDurationMs * 10) / 10
+    : undefined;
+  const forcedStyleAndLayoutDurationMs = typeof row.forcedStyleAndLayoutDurationMs === 'number'
+    && Number.isFinite(row.forcedStyleAndLayoutDurationMs)
+    && row.forcedStyleAndLayoutDurationMs >= 0
+    && row.forcedStyleAndLayoutDurationMs <= 600_000
+    ? Math.round(row.forcedStyleAndLayoutDurationMs * 10) / 10
+    : undefined;
   return {
     id: row.id,
     at: Math.round(row.at),
@@ -60,6 +73,42 @@ function cleanRendererFreeze(value: unknown): PersistedRendererFreeze | null {
     name,
     script,
     kind: row.kind,
+    blockingDurationMs,
+    forcedStyleAndLayoutDurationMs,
+  };
+}
+
+function cleanRendererFreezeReport(value: unknown): PersistedRendererFreezeReport | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.sessionId !== 'string' || row.sessionId.length < 1 || row.sessionId.length > 240) return undefined;
+  const numberInRange = (entry: unknown, max = Number.MAX_SAFE_INTEGER): entry is number =>
+    typeof entry === 'number' && Number.isFinite(entry) && entry >= 0 && entry <= max;
+  if (!numberInRange(row.createdAt) || row.createdAt <= 0) return undefined;
+  if (!numberInRange(row.count, 10_000_000) || !numberInRange(row.dropped, 10_000_000)) return undefined;
+  if (row.dropped > row.count) return undefined;
+  if (!numberInRange(row.totalDurationMs) || !numberInRange(row.maxDurationMs, 600_000)) return undefined;
+  if (!numberInRange(row.loafCount, 10_000_000) || !numberInRange(row.longtaskCount, 10_000_000)) return undefined;
+  if (!numberInRange(row.blockingDurationTotalMs) || !numberInRange(row.forcedStyleAndLayoutDurationTotalMs)) {
+    return undefined;
+  }
+  const firstAt = row.firstAt === null ? null : numberInRange(row.firstAt) ? row.firstAt : undefined;
+  const lastAt = row.lastAt === null ? null : numberInRange(row.lastAt) ? row.lastAt : undefined;
+  if (firstAt === undefined || lastAt === undefined) return undefined;
+  return {
+    sessionId: row.sessionId,
+    createdAt: Math.round(row.createdAt),
+    count: Math.floor(row.count),
+    dropped: Math.floor(row.dropped),
+    totalDurationMs: Math.round(row.totalDurationMs * 10) / 10,
+    maxDurationMs: Math.round(row.maxDurationMs * 10) / 10,
+    loafCount: Math.floor(row.loafCount),
+    longtaskCount: Math.floor(row.longtaskCount),
+    blockingDurationTotalMs: Math.round(row.blockingDurationTotalMs * 10) / 10,
+    forcedStyleAndLayoutDurationTotalMs:
+      Math.round(row.forcedStyleAndLayoutDurationTotalMs * 10) / 10,
+    firstAt: firstAt == null ? null : Math.round(firstAt),
+    lastAt: lastAt == null ? null : Math.round(lastAt),
   };
 }
 
@@ -90,8 +139,8 @@ export function mountPerfRoutes(app: Hono): void {
 
   // Crash-resilient per-run journal. The current run and the latest seven
   // runs are retained beside the configured app database.
-  app.get('/api/admin/perf/runs', (c) =>
-    c.json({ currentRunId: currentPersistentPerfRun()?.id ?? null, runs: listPersistentPerfRuns() }));
+  app.get('/api/admin/perf/runs', async (c) =>
+    c.json({ currentRunId: currentPersistentPerfRun()?.id ?? null, runs: await listPersistentPerfRuns() }));
 
   app.get('/api/admin/perf/runs/:runId', async (c) => {
     const detail = await readPersistentPerfRun(c.req.param('runId'));
@@ -102,8 +151,8 @@ export function mountPerfRoutes(app: Hono): void {
   // before this request succeeds, the next renderer launch retries them; the
   // journal resolves their original run from the event timestamp.
   app.post('/api/admin/perf/renderer-freezes', rendererFreezeBodyLimit, async (c) => {
-    const body: { events?: unknown[]; runId?: unknown } = await c.req
-      .json<{ events?: unknown[]; runId?: unknown }>()
+    const body: { events?: unknown[]; runId?: unknown; report?: unknown } = await c.req
+      .json<{ events?: unknown[]; runId?: unknown; report?: unknown }>()
       .catch(() => ({}));
     const rows = Array.isArray(body.events) ? body.events.slice(0, 50) : [];
     const requestedRunId = typeof body.runId === 'string' ? body.runId : undefined;
@@ -113,7 +162,14 @@ export function mountPerfRoutes(app: Hono): void {
       if (!row) continue;
       cleaned.push(row);
     }
-    const persisted = recordPersistentRendererFreezes(cleaned, requestedRunId);
+    const candidateReport = cleanRendererFreezeReport(body.report);
+    const report = candidateReport && cleaned.some((event) =>
+      event.id.startsWith(`rv1:${candidateReport.sessionId}:`))
+      ? candidateReport
+      : undefined;
+    // Only acknowledge rows after the async journal writer has persisted them;
+    // the renderer keeps unacknowledged rows in its local outbox for retry.
+    const persisted = await recordPersistentRendererFreezes(cleaned, requestedRunId, report);
     return c.json({ ok: true, accepted: persisted, persisted, currentRunId: currentPersistentPerfRun()?.id ?? null });
   });
 

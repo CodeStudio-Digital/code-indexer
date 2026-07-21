@@ -18,11 +18,81 @@ import { modelPathFor, parseModelPath } from './editor-models-path.js';
 type Monaco = typeof MonacoNs;
 
 const MAX_INACTIVE_MODELS = 20;
+/** Full-buffer mirrors are a persistence fallback; Monaco remains authoritative while live. */
+export const EDITOR_CONTENT_MIRROR_DELAY_MS = 400;
 
 let monacoRef: Monaco | null = null;
 let activeEditor: MonacoNs.editor.IStandaloneCodeEditor | null = null;
 let storeSubscribed = false;
 const externalContentPatches = new WeakSet<MonacoNs.editor.ITextModel>();
+const pendingContentMirrors = new WeakMap<MonacoNs.editor.ITextModel, {
+  timer: ReturnType<typeof setTimeout>;
+  projectId: number;
+  path: string;
+}>();
+
+function modelIdentity(model: MonacoNs.editor.ITextModel): { projectId: number; path: string; dirty: boolean } | null {
+  const parsed = parseModelPath(model.uri.path);
+  const state = useWorkspaceStore.getState();
+  // Bare model URIs are the runtime rollback mode. The workspace holds a
+  // single project's tabs, so its active project is the safe fallback.
+  const projectId = parsed.projectId ?? state.activeProjectId;
+  if (projectId === null) return null;
+  const tab = state.openFiles.find((candidate) =>
+    (candidate.kind === undefined || candidate.kind === 'file')
+    && candidate.projectId === projectId
+    && candidate.path === parsed.relPath);
+  if (!tab || (tab.kind && tab.kind !== 'file')) return null;
+  return { projectId, path: parsed.relPath, dirty: tab.dirty };
+}
+
+function mirrorModelContent(
+  model: MonacoNs.editor.ITextModel,
+  identity: { projectId: number; path: string },
+): void {
+  try {
+    if (model.isDisposed()) return;
+    useWorkspaceStore.getState().syncEditorContent(identity.projectId, identity.path, model.getValue());
+  } catch {
+    // Model/editor disposal can race the trailing debounce during navigation.
+  }
+}
+
+function discardEditorContentMirror(model: MonacoNs.editor.ITextModel): void {
+  const pending = pendingContentMirrors.get(model);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingContentMirrors.delete(model);
+}
+
+/**
+ * Record a real Monaco edit without calling `getValue()` on the hot keystroke
+ * path. Dirty metadata updates immediately; the full store fallback catches up
+ * once typing pauses.
+ */
+export function recordEditorContentChange(model: MonacoNs.editor.ITextModel): void {
+  if (isApplyingExternalContent(model)) return;
+  const identity = modelIdentity(model);
+  if (!identity) return;
+  if (!identity.dirty) useWorkspaceStore.getState().markEditorDirty(identity.projectId, identity.path);
+
+  discardEditorContentMirror(model);
+  const timer = setTimeout(() => {
+    pendingContentMirrors.delete(model);
+    mirrorModelContent(model, identity);
+  }, EDITOR_CONTENT_MIRROR_DELAY_MS);
+  pendingContentMirrors.set(model, { timer, projectId: identity.projectId, path: identity.path });
+}
+
+/** Commit a pending fallback mirror before an editor/model is released. */
+export function flushEditorContentMirror(model: MonacoNs.editor.ITextModel | null): void {
+  if (!model) return;
+  const pending = pendingContentMirrors.get(model);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingContentMirrors.delete(model);
+  mirrorModelContent(model, pending);
+}
 
 /** The mounted editor instance (commands: go-to-line, format, …). */
 export function setActiveEditor(editor: MonacoNs.editor.IStandaloneCodeEditor | null): void {
@@ -76,7 +146,11 @@ export function initEditorModels(monaco: Monaco): void {
     for (const key of prev) {
       if (now.has(key)) continue;
       // Tab closed — free the model (undo stack included) + view state.
-      modelByUriKey(key)?.dispose();
+      const model = modelByUriKey(key);
+      if (model) {
+        discardEditorContentMirror(model);
+        model.dispose();
+      }
       viewStates.delete(key);
       mru = mru.filter((p) => p !== key);
     }
@@ -116,7 +190,12 @@ export function touchModel(activeKey: string): void {
     }
     // Keep the view state — re-opening restores cursor/scroll even though
     // the undo stack is gone (the price of bounded memory).
-    model?.dispose();
+    if (model) {
+      // The store mirror may still be trailing the last edit. Commit it before
+      // disposing the authoritative model so save/reopen fallbacks stay safe.
+      flushEditorContentMirror(model);
+      model.dispose();
+    }
   }
   mru = survivors;
 }
@@ -144,6 +223,8 @@ export function isApplyingExternalContent(model: MonacoNs.editor.ITextModel | nu
 export function applyExternalContent(projectId: number, path: string, content: string, lastModified: string | null): void {
   const model = modelFor(projectId, path);
   if (model && model.getValue() !== content) {
+    // An explicit disk reload supersedes any trailing user-edit mirror.
+    discardEditorContentMirror(model);
     externalContentPatches.add(model);
     try {
       model.pushEditOperations(

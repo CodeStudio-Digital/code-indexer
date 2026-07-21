@@ -44,6 +44,7 @@ import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-a
 import { resolveToolMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
+import { asAbortSignal } from '../../abort-signal.js';
 
 /**
  * Per-invocation timeout is delegated to `resolveToolTimeoutMs` (the
@@ -211,7 +212,13 @@ export interface DispatchArgs {
    * parallel batches). Skipped when the tool is `interactive: true` or
    * `timeoutMs: Infinity` — the runner is correctly idle there.
    */
-  onToolProgress?: (id: string, name: string, elapsedMs: number, note?: string) => void;
+  onToolProgress?: (
+    id: string,
+    name: string,
+    elapsedMs: number,
+    note?: string,
+    kind?: 'heartbeat' | 'progress',
+  ) => void;
   /** Heartbeat interval in ms. Default 10 000 (10s). */
   toolProgressIntervalMs?: number;
   /**
@@ -633,7 +640,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     if (!heartbeatSuppressed) {
       const intervalMs = args.toolProgressIntervalMs ?? 10_000;
       heartbeatTimer = setInterval(() => {
-        args.onToolProgress!(tu.id, tu.name, Date.now() - t0);
+        args.onToolProgress!(tu.id, tu.name, Date.now() - t0, undefined, 'heartbeat');
       }, intervalMs);
     }
 
@@ -642,9 +649,12 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // return Infinity (interactive/explicit only) — map that to 0
     // ("no timeout"), because `withAbortAndTimeout` treats ms<=0 as a no-op
     // whereas passing Infinity to setTimeout would fire almost immediately.
-    const resolvedTimeout = tool ? resolveToolTimeoutMs(tool) : NORMAL_TIMEOUT_MS;
+    const resolvedTimeout = tool ? resolveToolTimeoutMs(tool, tu.input) : NORMAL_TIMEOUT_MS;
     const toolTimeoutMs = (interactive || !Number.isFinite(resolvedTimeout)) ? 0 : resolvedTimeout;
-    const parentSignal = interactive ? undefined : args.toolContext.signal;
+    // ToolContext is a runtime boundary: worker structured cloning can turn an
+    // AbortSignal into a truthy plain object. Ignore malformed values instead
+    // of throwing before the invocation's guarded try/catch.
+    const parentSignal = interactive ? undefined : asAbortSignal(args.toolContext.signal);
     const invocationAbort = interactive ? undefined : new AbortController();
     // Supervisor recovery — expose this call's controller so a stuck-tool
     // watcher can abort THIS invocation by tool_use_id. Interactive tools opt
@@ -675,7 +685,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           const trimmed = typeof note === 'string'
             ? (note.length > 200 ? note.slice(0, 200) + '...' : note)
             : '';
-          args.onToolProgress?.(tu.id, tu.name, Date.now() - t0, trimmed);
+          args.onToolProgress?.(tu.id, tu.name, Date.now() - t0, trimmed, 'progress');
+        },
+        reportHeartbeat: (note?: string) => {
+          const trimmed = typeof note === 'string'
+            ? (note.length > 200 ? note.slice(0, 200) + '...' : note)
+            : undefined;
+          args.onToolProgress?.(tu.id, tu.name, Date.now() - t0, trimmed, 'heartbeat');
         },
       };
       // A4 — global tool timeout, resolved above via `resolveToolTimeoutMs`
@@ -683,8 +699,18 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       // 5 min). Abort signal applies in ALL cases except interactive tools
       // (which have their own pause/resume mechanism via provideUserInput).
       if (resolvedMetadata && (resolvedMetadata.mutates || !resolvedMetadata.parallelSafe)) {
-        releaseUnsafe = await args.toolContext.toolCallLedger?.reserveUnsafe();
+        const reservation = args.toolContext.toolCallLedger?.reserveUnsafe(callContext.signal);
+        if (reservation) {
+          releaseUnsafe = await withAbortAndTimeout(reservation, {
+            signal: callContext.signal,
+            ms: toolTimeoutMs,
+            label: `tool-lane:${tu.name}`,
+          });
+        }
       }
+      const remainingToolTimeoutMs = toolTimeoutMs > 0
+        ? Math.max(1, toolTimeoutMs - (Date.now() - t0))
+        : 0;
       const rawInvocation = args.registry.invoke(tu.name, tu.input, callContext);
       if (releaseUnsafe) {
         releaseOwnedByInvocation = true;
@@ -694,7 +720,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         rawInvocation,
         {
           signal: callContext.signal,
-          ms: toolTimeoutMs,
+          ms: remainingToolTimeoutMs,
           label: `tool:${tu.name}`,
         },
       );

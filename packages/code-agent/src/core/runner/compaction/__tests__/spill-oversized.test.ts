@@ -51,7 +51,11 @@ describe('spillOversizedToolResults', () => {
     const block = res.messages[1].content[0] as { content: string };
     expect(block.content.length).toBeLessThan(big.length);
     expect(block.content).toContain('[truncated');
-    expect(block.content).toContain('get_tool_output("oid-1")');
+    // The marker names the side-file id and the exact-recovery tool; the
+    // shared builder in pure-helpers.ts emits them as `output_id=<id>` +
+    // `exact fallback: get_tool_output` rather than a literal call snippet.
+    expect(block.content).toContain('output_id=oid-1');
+    expect(block.content).toContain('get_tool_output');
   });
 
   it('leaves small tool_results and non-tool messages untouched', () => {

@@ -64,18 +64,50 @@ export class ToolCallLedger {
    * The caller hands the returned release callback to the RAW invocation,
    * so a timeout cannot unlock the lane while a non-cancellable write runs.
    */
-  async reserveUnsafe(): Promise<() => void> {
+  async reserveUnsafe(signal?: AbortSignal): Promise<() => void> {
+    const abortError = (): Error => {
+      const reason = signal?.reason;
+      return reason instanceof Error ? reason : new Error('unsafe tool lane acquisition aborted');
+    };
+    if (signal?.aborted) throw abortError();
+
     const prior = this.unsafeLane;
     let release!: () => void;
     const reservation = new Promise<void>((resolve) => { release = resolve; });
     this.unsafeLane = prior.then(() => reservation, () => reservation);
-    await prior;
     let released = false;
-    return () => {
+    const releaseOnce = (): void => {
       if (released) return;
       released = true;
       release();
     };
+
+    if (signal) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => {
+            signal.removeEventListener('abort', onAbort);
+            reject(abortError());
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          void prior.then(resolve, resolve).finally(() => {
+            signal.removeEventListener('abort', onAbort);
+          });
+        });
+      } catch (error) {
+        // Keep FIFO ordering intact: once the prior owner releases, this
+        // cancelled reservation immediately releases itself for the next one.
+        void prior.then(releaseOnce, releaseOnce);
+        throw error;
+      }
+      if (signal.aborted) {
+        releaseOnce();
+        throw abortError();
+      }
+    } else {
+      await prior;
+    }
+    return releaseOnce;
   }
 
   get lastSeq(): number { return this.seq; }

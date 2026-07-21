@@ -244,6 +244,10 @@ interface WorkspaceState {
   reorderTab: (paneId: string, fromPath: string, beforePath: string | null) => void;
   /** Move a tab between panes — insert before `beforePath` (null = append). Collapses an emptied source. */
   moveTabToPane: (fromPaneId: string, toPaneId: string, path: string, beforePath: string | null) => void;
+  /** Mark a live Monaco buffer dirty without copying its full text into React state. */
+  markEditorDirty: (projectId: number, path: string) => void;
+  /** Refresh the debounced Monaco mirror without changing the current dirty state. */
+  syncEditorContent: (projectId: number, path: string, content: string) => void;
   setContent: (projectId: number, path: string, content: string) => void;
   markClean: (projectId: number, path: string, lastModified: string) => void;
   /** External (disk) content landed on a NON-dirty tab — replace without dirtying. */
@@ -819,6 +823,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         activePaneId = panes[0].id;
       }
       return { panes, splitDir, activePaneId, activeFilePath: focusedActivePath(panes, activePaneId) };
+    }),
+
+  markEditorDirty: (projectId, path) =>
+    set((s) => {
+      const needsUpdate = s.openFiles.some((f) =>
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId }) && !f.dirty);
+      if (!needsUpdate) return s;
+      return {
+        openFiles: s.openFiles.map((f) =>
+          (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
+            ? { ...f, dirty: true }
+            : f),
+      };
+    }),
+
+  syncEditorContent: (projectId, path, content) =>
+    set((s) => {
+      const needsUpdate = s.openFiles.some((f) =>
+        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId }) && f.content !== content);
+      if (!needsUpdate) return s;
+      return {
+        openFiles: s.openFiles.map((f) =>
+          (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
+            ? { ...f, content }
+            : f),
+      };
     }),
 
   setContent: (projectId, path, content) =>

@@ -157,8 +157,7 @@ function getCurrentTurnThinkingText(turn: AssistantTurn | null): string {
 // represented by persisted history (text/thinking plus any persisted tool ids),
 // so the live buffer can be hidden/cleared instead of duplicating the final turn.
 
-/** The persisted tool_use id a live block corresponds to, if any.
- *  Live-only visualizations (text/thinking/activity/task_run/agents) return undefined. */
+/** The persisted tool_use id a live block corresponds to, if any. */
 export function liveBlockPersistedId(b: StreamBlock): string | undefined {
   switch (b.type) {
     case 'tasks':
@@ -173,6 +172,8 @@ export function liveBlockPersistedId(b: StreamBlock): string | undefined {
       return b.decision.id;
     case 'tool':
       return b.call.id;
+    case 'agents':
+      return b.group.toolUseId;
     default:
       return undefined;
   }
@@ -380,8 +381,34 @@ export function visibleLiveBlocks(
   persistedIds: Set<string>,
   persistedInteractivePromptSignatures: Set<string> = new Set(),
 ): StreamBlock[] {
-  if (persistedIds.size === 0 && persistedInteractivePromptSignatures.size === 0) return blocks;
+  const hasTaskRun = blocks.some((block) => block.type === 'task_run');
+  const liveAgentToolUseIds = new Set(
+    blocks.flatMap((block) => (
+      block.type === 'agents' && block.group.toolUseId ? [block.group.toolUseId] : []
+    )),
+  );
+  const hasPresentationOverlap = hasTaskRun || liveAgentToolUseIds.size > 0
+    || blocks.some((block) => block.type === 'agents' && block.group.groupId.startsWith('tasks-wave-'));
+  if (
+    persistedIds.size === 0
+    && persistedInteractivePromptSignatures.size === 0
+    && !hasPresentationOverlap
+  ) return blocks;
   return blocks.filter((b) => {
+    if (b.type === 'agents') {
+      // Task waves are already represented by TaskExecutionBlock. For genuine
+      // subagents, the rich live card is canonical while it exists, even if
+      // the parent tool_use has already checkpointed into history.
+      return !b.group.groupId.startsWith('tasks-wave-');
+    }
+    if (
+      b.type === 'tool'
+      && (
+        (hasTaskRun && b.call.name === 'execute_tasks')
+        || (liveAgentToolUseIds.has(b.call.id)
+          && ['spawn_agent', 'spawn_agents', 'resume_agent'].includes(b.call.name))
+      )
+    ) return false;
     const id = liveBlockPersistedId(b);
     if (id && persistedIds.has(id)) return false;
     const signature = liveBlockPersistedSignature(b);
@@ -407,6 +434,10 @@ export function isLiveTurnDuplicatedInHistory(
   let checkedThinking = false;
 
   for (const block of turn.blocks) {
+    // A rich live agents card remains canonical while present. The persisted
+    // spawn tool_use may already exist, but hiding the whole turn here would
+    // make both copies disappear because PersistedMessages suppresses its card.
+    if (block.type === 'agents') return false;
     if (block.type === 'text') {
       if (!checkedText) {
         if (!liveText || persistedText !== liveText) return false;
@@ -430,8 +461,8 @@ export function isLiveTurnDuplicatedInHistory(
       return false;
     }
 
-    // activity/task_run/agents are live-only visualizations; keep them visible
-    // unless a future persisted identity can prove they are duplicates too.
+    // activity/task_run are live-only visualizations; keep them visible unless
+    // a future persisted identity can prove they are duplicates too.
     return false;
   }
 
@@ -528,4 +559,105 @@ export function groupMessages(
   }
   flushPending();
   return groups;
+}
+
+/**
+ * A model can make many provider/tool cycles before the user speaks again.
+ * Persist those cycles independently, but present them as one assistant turn
+ * with one header. Apply this only after the fine-grained render cap so a very
+ * large turn cannot bypass the DOM budget.
+ */
+export function mergeConsecutiveAssistantGroups(groups: VisualGroup[]): VisualGroup[] {
+  const merged: VisualGroup[] = [];
+  for (const group of groups) {
+    const previous = merged[merged.length - 1];
+    if (group.kind === 'assistant' && previous?.kind === 'assistant') {
+      merged[merged.length - 1] = {
+        kind: 'assistant',
+        messages: [...previous.messages, ...group.messages],
+        messageIds: [...previous.messageIds, ...group.messageIds],
+        usages: [...previous.usages, ...group.usages],
+        hasText: previous.hasText || group.hasText,
+      };
+    } else {
+      merged.push(group);
+    }
+  }
+  return merged;
+}
+
+/** True when the live buffer continues the already-persisted assistant run. */
+export function liveTurnContinuesPersistedAssistant(messages: PersistedMessage[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'tool') continue;
+    // Runner plumbing/meta input does not represent a new visible user turn.
+    if (message.role === 'user' && (message.isMeta || isToolImagePlumbing(message))) continue;
+    return message.role === 'assistant';
+  }
+  return false;
+}
+
+export interface LiveAgentIdentity {
+  toolUseId?: string;
+  groupId: string;
+}
+
+/**
+ * Prefer a rich live AgentsGroupBlock over the checkpointed spawn_agent card
+ * for the same execution. The persisted card returns naturally as soon as the
+ * live group leaves currentTurn; no history is deleted or mutated.
+ */
+export function suppressPersistedAgentDuplicates(
+  groups: VisualGroup[],
+  liveIdentities: LiveAgentIdentity[],
+  resultsById: ReadonlyMap<string, { content?: string }>,
+): VisualGroup[] {
+  if (liveIdentities.length === 0) return groups;
+
+  const liveToolIds = new Set(liveIdentities.flatMap((identity) => identity.toolUseId ? [identity.toolUseId] : []));
+  const liveGroupIds = new Set(liveIdentities.map((identity) => identity.groupId));
+  const shouldSuppress = (block: PersistedMessage['content'][number]): boolean => {
+    if (
+      block.type !== 'tool_use'
+      || (block.name !== 'spawn_agent' && block.name !== 'spawn_agents')
+    ) return false;
+    if (block.id && liveToolIds.has(block.id)) return true;
+    const resultText = block.id ? resultsById.get(block.id)?.content ?? '' : '';
+    const groupId = persistedAgentGroupId(resultText);
+    return Boolean(groupId && liveGroupIds.has(groupId));
+  };
+
+  const reconciled: VisualGroup[] = [];
+  for (const group of groups) {
+    if (group.kind === 'user') {
+      reconciled.push(group);
+      continue;
+    }
+    const messages: PersistedMessage[] = [];
+    const messageIds: (number | undefined)[] = [];
+    const usages: (MessageRow | undefined)[] = [];
+    group.messages.forEach((message, index) => {
+      const content = message.content.filter((block) => !shouldSuppress(block));
+      if (content.length === 0) return;
+      messages.push(content.length === message.content.length ? message : { ...message, content });
+      messageIds.push(group.messageIds[index]);
+      usages.push(group.usages[index]);
+    });
+    if (messages.length === 0) continue;
+    reconciled.push({
+      kind: 'assistant',
+      messages,
+      messageIds,
+      usages,
+      hasText: messages.some(messageHasText),
+    });
+  }
+  return reconciled;
+}
+
+function persistedAgentGroupId(content: string): string | undefined {
+  return content.match(/^\[spawn_agent background\][^\n]*\bgroup=(\S+)/m)?.[1]
+    ?? content.match(/\[parallel agents:[^\]]*\bgroup=([^,\s\]]+)/)?.[1]
+    ?? content.match(/\[subagent [^\]]*\bspawn=([^\s\]]+)/)?.[1];
 }

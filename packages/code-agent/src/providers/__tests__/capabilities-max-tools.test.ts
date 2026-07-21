@@ -39,6 +39,9 @@ describe('getModelMaxTools — static registry (GLM aggressive caps)', () => {
   });
   it('glm-5.x → 96', () => {
     expect(getModelMaxTools('glm-5.1')).toBe(96);
+    expect(getModelMaxTools('zai.glm-5')).toBe(96);
+    expect(getModelMaxTools('z-ai/glm-5')).toBe(96);
+    expect(getModelMaxTools('@cf/zai-org/glm-5.2')).toBe(96);
   });
   it('strong models keep large catalogs', () => {
     expect(getModelMaxTools('claude-opus-4-7')).toBe(200);
@@ -91,6 +94,7 @@ describe('getMaxOutputTokens — DB layer (per-model output cap)', () => {
       default_max_tokens: 24_000,
     }]);
     expect(getMaxOutputTokens('glm-5.1')).toBe(24_000);
+    expect(getMaxOutputTokens('zai.glm-5.1')).toBe(24_000);
   });
 
   it('clearing the DB layer restores the registry value', () => {
@@ -101,5 +105,6 @@ describe('getMaxOutputTokens — DB layer (per-model output cap)', () => {
     }]);
     mergeDBCapabilities([]);
     expect(getMaxOutputTokens('glm-5.1')).toBe(16_000);
+    expect(getMaxOutputTokens('zai.glm-5.1')).toBe(16_000);
   });
 });

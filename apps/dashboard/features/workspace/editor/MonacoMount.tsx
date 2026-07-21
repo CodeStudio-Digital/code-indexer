@@ -10,7 +10,8 @@
  * Monaco's own registry handles 80+ languages out of the box.
  *
  * Editor wiring:
- *   - onChange pushes content into the workspace store, flagging dirty
+ *   - Monaco change events mark dirty immediately; a trailing debounce mirrors
+ *     the full buffer into the workspace store for persistence fallbacks
  *   - Tab switches re-create the model (Monaco keeps undo history per
  *     model — the editor instance is reused, the model swaps)
  *   (Save is dispatched via the keymap command registry — see 'file.save'.)
@@ -26,14 +27,15 @@ import {
   languageIdForDocument as inferLanguage,
   languageIdForPath,
 } from '@mcp/shared/utils/language-id.js';
-import { useWorkspaceStore, type OpenFile } from '../../../state/workspace.js';
+import type { OpenFile } from '../../../state/workspace.js';
 import { useUiDensity } from '../../../state/ui-density.js';
 import { useEditorTheme, resolveThemeId } from '../../../state/editor-theme.js';
 import { registerLspProviders } from './lspProvider.js';
 import {
   getActiveEditor,
+  flushEditorContentMirror,
   initEditorModels,
-  isApplyingExternalContent,
+  recordEditorContentChange,
   restoreViewStateFor,
   saveViewStateFor,
   setActiveEditor,
@@ -123,7 +125,6 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   // file.path REAL, não da chave prefixada.
   const modelKey = modelPathFor(file.projectId, file.path);
   const currentPathRef = useRef(modelKey);
-  const setContent = useWorkspaceStore((s) => s.setContent);
   const editorFontPx = useUiDensity((s) => s.metrics.editorFontPx);
   const { settings: editorSettings } = useEffectiveEditorSettings(file.projectId, file.path);
   // Editor + monaco exposed as state (not just refs) so conflict UI can
@@ -185,9 +186,24 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         scheduleEditorRefresh();
       };
       activateModel();
-      const modelActivation = editor.onDidChangeModel(activateModel);
+      const modelActivation = editor.onDidChangeModel((event) => {
+        // A fast tab switch must not strand the trailing fallback mirror for
+        // the model that just became inactive.
+        if (event.oldModelUrl) flushEditorContentMirror(monaco.editor.getModel(event.oldModelUrl));
+        activateModel();
+      });
+      // Deliberately avoid @monaco-editor/react's `onChange`: it calls
+      // model.getValue() for every edit, materializing the complete buffer on
+      // the hot keystroke path. Monaco events carry deltas; dirty metadata is
+      // immediate and editor-models performs one trailing full-value mirror.
+      const modelContentChange = editor.onDidChangeModelContent(() => {
+        const model = editor.getModel();
+        if (model) recordEditorContentChange(model);
+      });
       editor.onDidDispose(() => {
+        flushEditorContentMirror(editor.getModel());
         modelActivation.dispose();
+        modelContentChange.dispose();
         if (renderFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
           cancelAnimationFrame(renderFrameRef.current);
           renderFrameRef.current = null;
@@ -296,18 +312,6 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
     return () => clearTimeout(t);
   }, [file.path, file.content]);
 
-  const handleChange = useCallback(
-    (value: string | undefined) => {
-      // Monaco emits undefined when the model is being swapped out; ignore
-      // those — only real edits should flag dirty. The MODEL is the source
-      // of truth; the store mirror exists for dirty-tracking + persistence.
-      if (value === undefined || !contentReady) return;
-      if (isApplyingExternalContent(editorRef.current?.getModel() ?? null)) return;
-      setContent(file.projectId, file.path, value);
-    },
-    [contentReady, file.projectId, file.path, setContent],
-  );
-
   // Ctrl+S lives in the command registry now ('file.save', allowInInputs)
   // — dispatched by the global keymap dispatcher, preset-rebindable.
 
@@ -337,10 +341,9 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
   }, [isActivePane, language, monacoInstance, modelKey, scheduleEditorRefresh, themeId]);
 
   // Stable options reference: @monaco-editor/react re-applies editor.updateOptions
-  // whenever this object's identity changes, and MonacoMount re-renders on every
-  // keystroke (setContent). Memoizing on the only dynamic value (font size) means
-  // updateOptions fires on density change, not per keystroke — and with a split
-  // that's two editors saved from the per-keystroke churn. (Theme is a separate prop.)
+  // whenever this object's identity changes. Memoizing on editor settings means
+  // metadata/theme transitions do not re-apply the full option set. (Theme is a
+  // separate prop.)
   const editorOptions = useMemo<MonacoNs.editor.IStandaloneEditorConstructionOptions>(
     () => ({
       // ResizeObserver-driven relayout. Load-bearing for tab keep-alive
@@ -468,7 +471,6 @@ export function MonacoMount({ file, onFocusPane, isActivePane = true }: MonacoMo
         language={language}
         theme={themeId}
         onMount={handleMount}
-        onChange={handleChange}
         options={editorOptions}
       />
       {contentLoading && (

@@ -76,13 +76,23 @@ function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?:
   const plan = parseAppPlan(revision?.plan_json ?? null);
   const fitness = json<AppFitnessReport | null>(revision?.fitness_json, null);
   const work = deps.appStudioStore.listWorkItems(id);
+  const currentWork = work.filter((item) => (
+    item.plan_revision_id === revision?.id && !['cancelled', 'stale'].includes(item.status)
+  ));
+  const workRuns = deps.appStudioStore.listWorkItemRuns(id, { limit: 250 });
+  const workRunsByItem = new Map<string, typeof workRuns>();
+  for (const run of workRuns) {
+    const attempts = workRunsByItem.get(run.work_item_id) ?? [];
+    if (attempts.length < 3) attempts.push(run);
+    workRunsByItem.set(run.work_item_id, attempts);
+  }
   const decisions = deps.appStudioStore.listDecisions(id);
   const deployment = deps.appStudioStore.getLatestDeployment(id);
   const team = getAppTeamSession(deps, id);
   const evidenceCurrent = (() => {
-    if (!project?.root_path || !fitness || work.length === 0 || !work.every((item) => item.status === 'done')) return false;
+    if (!project?.root_path || !fitness || currentWork.length === 0 || !currentWork.every((item) => item.status === 'done')) return false;
     const workspace = appWorkspaceFingerprint(project.root_path);
-    return work.every((item) => json<Array<{ plan_fingerprint?: string; workspace_fingerprint?: string }>>(item.evidence_json, [])
+    return currentWork.every((item) => json<Array<{ plan_fingerprint?: string; workspace_fingerprint?: string }>>(item.evidence_json, [])
       .some((record) => record.plan_fingerprint === fitness.plan_fingerprint && record.workspace_fingerprint === workspace));
   })();
   return {
@@ -92,7 +102,7 @@ function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?:
     stage: deriveStage({
       approved: revision?.status === 'approved',
       fitness,
-      work,
+      work: currentWork,
       openDecisions: decisions.filter((item) => item.status === 'open').length,
       live: deployment?.status === 'live' && deployment.health_ok === 1,
       evidenceCurrent,
@@ -112,7 +122,17 @@ function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?:
       created_at: item.created_at,
       approved_at: item.approved_at,
     })),
-    work_items: work.map(workView),
+    work_items: work.map((item) => {
+      const attempts = workRunsByItem.get(item.id) ?? [];
+      return {
+        ...workView(item),
+        latest_attempt: attempts[0] ?? null,
+        active_attempt: attempts.find((attempt) => (
+          ['claimed', 'running', 'waiting', 'paused'].includes(attempt.status)
+        )) ?? null,
+        attempts,
+      };
+    }),
     decisions: decisions.map(({ options_json, blocked_work_item_ids_json, ...decision }) => ({
       ...decision,
       options: json<unknown[]>(options_json, []),
@@ -240,7 +260,42 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           deps.appStudioStore.upsertWorkItems(workFromPlan(id, approved.id, plan));
         }
         deps.appStudioStore.refreshReadyWorkItems(id);
-        return c.json(appState(deps, id, { includeRecentEvents: true }));
+        const schedulerWarning = 'Plan approved, but the App scheduler could not be resumed.';
+        let schedulerResumed = false;
+        let warning: string | undefined;
+        if (session.company_session_id) {
+          try {
+            await getOrSpawnCompanyOrchestrator(session.company_session_id);
+            schedulerResumed = true;
+          } catch (error) {
+            warning = schedulerWarning;
+            try {
+              deps.appStudioStore.appendEvent(
+                id,
+                'build.scheduler_resume_failed',
+                'app',
+                String(id),
+                JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+              );
+            } catch { /* Approval remains authoritative. */ }
+          }
+        } else {
+          warning = schedulerWarning;
+          try {
+            deps.appStudioStore.appendEvent(
+              id,
+              'build.scheduler_resume_failed',
+              'app',
+              String(id),
+              JSON.stringify({ error: 'App team unavailable' }),
+            );
+          } catch { /* Approval remains authoritative. */ }
+        }
+        return c.json({
+          ...appState(deps, id, { includeRecentEvents: true }),
+          scheduler_resumed: schedulerResumed,
+          ...(warning ? { warning } : {}),
+        });
       } catch (error) {
         return c.json({ error: (error as Error).message }, 409);
       }
@@ -268,7 +323,40 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       if (typeof body.decision_id !== 'number' || typeof body.answer !== 'string' || !body.answer.trim()) {
         return c.json({ error: 'decision_id and answer are required.' }, 400);
       }
-      return c.json({ decision: deps.appStudioStore.resolveDecision(id, body.decision_id, body.answer.trim()) });
+      const decision = deps.appStudioStore.resolveDecision(id, body.decision_id, body.answer.trim());
+      const coordinationWarning = 'Decision saved, but App coordination could not be resumed.';
+      if (!session.company_session_id) {
+        try {
+          deps.appStudioStore.appendEvent(
+            id,
+            'decision.coordination_failed',
+            'decision',
+            String(decision.id),
+            JSON.stringify({ error: 'App team unavailable' }),
+          );
+        } catch { /* The durable decision remains authoritative. */ }
+        return c.json({ decision, coordination_resumed: false, warning: coordinationWarning });
+      }
+      try {
+        const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
+        await orchestrator.sendMessageToMaster(
+          `[App Studio] Decisão respondida. Pergunta: ${decision.question}\n` +
+          `Resposta: ${decision.answer ?? body.answer.trim()}\n` +
+          'Atualize o plano e os cards afetados conforme a resposta. Não despache trabalho; o scheduler é o único dispatcher automático.',
+        );
+        return c.json({ decision, coordination_resumed: true });
+      } catch (error) {
+        try {
+          deps.appStudioStore.appendEvent(
+            id,
+            'decision.coordination_failed',
+            'decision',
+            String(decision.id),
+            JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+          );
+        } catch { /* The durable decision remains authoritative. */ }
+        return c.json({ decision, coordination_resumed: false, warning: coordinationWarning });
+      }
     }
     if (body.action === 'run_checks') {
       const revision = deps.appStudioStore.getLatestPlanRevision(id);
@@ -286,8 +374,21 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
     if (body.action === 'resume') {
       if (!session.company_session_id) return c.json({ error: 'The App team is unavailable.' }, 409);
       const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
-      await orchestrator.sendMessageToMaster('[App Studio] Retome a construção pelos cards prontos da revisão aprovada.');
-      deps.appStudioStore.appendEvent(id, 'build.resumed', 'app', String(id));
+      const revision = deps.appStudioStore.getLatestPlanRevision(id);
+      const hasOpenDecision = deps.appStudioStore.listDecisions(id).some((decision) => decision.status === 'open');
+      const needsMasterCoordination = revision?.status !== 'approved' || hasOpenDecision;
+      if (needsMasterCoordination) {
+        await orchestrator.sendMessageToMaster(
+          '[App Studio] Retome a coordenação do plano e das decisões abertas. O scheduler cuida do despacho automático.',
+        );
+      }
+      deps.appStudioStore.appendEvent(
+        id,
+        'build.resumed',
+        'app',
+        String(id),
+        JSON.stringify({ mode: needsMasterCoordination ? 'master_coordination' : 'scheduler' }),
+      );
       return c.json({ ok: true });
     }
     if (body.action === 'cancel') {

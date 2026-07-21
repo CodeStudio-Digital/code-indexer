@@ -4,6 +4,7 @@ import type DatabaseConstructor from 'better-sqlite3';
 import type { DbWriteReq, DbWriteRes, DbWriterWorkerData, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
 import { classifyToolRefusal } from '@mcp/code-agent/sessions/store/tool-refusal.js';
 import { classifyToolError } from '@mcp/code-agent/sessions/store/tool-error-class.js';
+import { record as recordTurnTelemetry } from '@mcp/code-agent/sessions/store/telemetry-record.js';
 
 if (!parentPort) {
   throw new Error('dbWriter worker: must run inside worker_threads');
@@ -15,6 +16,8 @@ const { dbPath } = workerData as DbWriterWorkerData;
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
 
 const insertMsg = db.prepare(`
@@ -180,6 +183,15 @@ parentPort.on('message', (msg: InboundEnvelope) => {
       case 'persistAssistantTurn': {
         const messageId = persistAssistantTurnTx(req.payload) as number;
         result = { kind: 'persistAssistantTurn', messageId };
+        break;
+      }
+      case 'turn-telemetry': {
+        // Canonical INSERT (incl. the project_id subselect) lives in
+        // telemetry-record.ts — delegate instead of hand-mirroring so the SQL
+        // cannot drift. `record` swallows failures and returns null: telemetry
+        // must never break a turn.
+        const telemetryId = recordTurnTelemetry(db, req.payload);
+        result = { kind: 'turn-telemetry', telemetryId };
         break;
       }
       default: {

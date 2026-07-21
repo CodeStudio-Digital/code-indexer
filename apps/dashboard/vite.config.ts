@@ -1,8 +1,8 @@
-import { defineConfig } from 'vite';
+import { defineConfig, normalizePath, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 const repoRoot = resolve(__dirname, '../..');
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as { version: string };
@@ -30,8 +30,42 @@ function pkgAliases(name: string, dir: string) {
   ];
 }
 
+/**
+ * Workspace packages use NodeNext-style `.js` specifiers in their TypeScript
+ * sources so the emitted files run directly in Node. Vite resolves those
+ * specifiers inside the dashboard root, but an aliased package lives outside
+ * that root and otherwise becomes a literal `/@fs/.../*.js` request. In dev
+ * those files only exist as `.ts`/`.tsx`, so lazy routes fail with a misleading
+ * "Failed to fetch dynamically imported module" error.
+ */
+function workspaceTypeScriptSpecifiers(): Plugin {
+  const workspacePrefix = `${normalizePath(repoRoot)}/`;
+
+  return {
+    name: 'workspace-typescript-specifiers',
+    enforce: 'pre',
+    resolveId(source, importer) {
+      if (!importer || !source.startsWith('.') || !source.endsWith('.js')) return null;
+
+      const importerPath = importer
+        .replace(/^\/@fs\//, '')
+        .split('?', 1)[0];
+      const normalizedImporter = normalizePath(importerPath);
+      if (!normalizedImporter.startsWith(workspacePrefix) || normalizedImporter.includes('/node_modules/')) return null;
+
+      const emittedJsPath = resolve(dirname(importerPath), source);
+      const sourceBase = emittedJsPath.slice(0, -'.js'.length);
+      for (const extension of ['.ts', '.tsx']) {
+        const candidate = `${sourceBase}${extension}`;
+        if (existsSync(candidate)) return candidate;
+      }
+      return null;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [tailwindcss(), react()],
+  plugins: [workspaceTypeScriptSpecifiers(), tailwindcss(), react()],
   root: __dirname,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

@@ -1,8 +1,14 @@
 import { createPool, resolveWorkerSpec, type Pool } from '@mcp/indexer/workers/pool.js';
-import type { DbWriteReq, DbWriteRes, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
+import type { DbWriteReq, DbWriteRes, PersistAssistantTurnPayload, RecordTurnTelemetryInput } from '@mcp/indexer/workers/dbWriter/protocol.js';
 
 export interface DbWriter {
   persistAssistantTurn(payload: PersistAssistantTurnPayload): Promise<number>;
+  /**
+   * Async mirror of SessionStore.recordTurnTelemetry. Resolves with the
+   * coder_turn_telemetry rowid (used to stamp turn_telemetry_id on the turn's
+   * tool calls), or null when the insert failed (telemetry is best-effort).
+   */
+  recordTurnTelemetry(payload: RecordTurnTelemetryInput): Promise<number | null>;
   drainSession(sessionId: number): Promise<void>;
   drainAll(): Promise<void>;
   close(): Promise<void>;
@@ -43,6 +49,24 @@ const createWorkerDbWriter = (dbPath: string): DbWriter => {
       // Swallow rejection in the stored chain so a single failure does not
       // poison subsequent persists for the same session. Caller still sees
       // the rejection on the returned `next` promise.
+      sessionChains.set(sessionId, next.catch(() => undefined));
+      return next;
+    },
+
+    recordTurnTelemetry(payload) {
+      const dispatch = (): Promise<number | null> =>
+        pool.dispatch({ kind: 'turn-telemetry', payload }).then((res) => {
+          if (res.kind !== 'turn-telemetry') {
+            throw new Error(`unexpected dbWriter response: ${res.kind}`);
+          }
+          return res.telemetryId;
+        });
+      // session_id is nullable in the telemetry schema; only sessioned writes
+      // join the FIFO chain (so drainSession/drainAll await them too).
+      const sessionId = payload.session_id;
+      if (sessionId == null) return dispatch();
+      const prior = sessionChains.get(sessionId) ?? Promise.resolve();
+      const next = prior.then(dispatch);
       sessionChains.set(sessionId, next.catch(() => undefined));
       return next;
     },
@@ -92,4 +116,11 @@ export const closeDbWriter = async (): Promise<void> => {
   await w.close();
 };
 
+// OPT-IN (MCP_DB_WORKER=1). Was briefly flipped to opt-out (perf W1) and
+// REVERTED after a live incident (2026-07-20): the worker failed to spawn in
+// the Electron runtime (alias imports inside a worker_thread), every dispatch
+// rejected, and assistant turns were silently dropped from the DB. Do not
+// flip this default again without (a) the sync fallback at the call sites in
+// code-agent/src/index.ts staying intact and (b) a live Electron E2E showing
+// rows landing in coder_messages/coder_tool_calls.
 export const isDbWriterEnabled = (): boolean => process.env.MCP_DB_WORKER === '1';

@@ -70,15 +70,23 @@
         "work.status": "Work updated",
         "decision.requested": "Decision requested",
         "decision.resolved": "Decision answered",
+        "decision.coordination_failed": "Decision saved; coordination pending",
         "agents.specialist_dispatched": "Specialist dispatched",
+        "agents.unbound_claim_recovered": "Work claim recovered",
+        "agents.run_without_evidence": "Run finished without evidence",
+        "agents.run_recovered_after_restart": "Run recovered after restart",
+        "agents.run_failed": "Agent run failed",
+        "agents.duplicate_run_cancelled": "Duplicate run reconciled",
         "database.changed": "Data updated",
         "database.provisioned": "Database provisioned",
+        "team.config_updated": "Team configuration updated",
         "deployment.publishing": "Publishing started",
         "deployment.live": "App published",
         "deployment.failed": "Publishing failed",
         "build.paused": "Build paused",
         "build.resumed": "Build resumed",
-        "build.cancelled": "Build cancelled"
+        "build.cancelled": "Build cancelled",
+        "build.scheduler_resume_failed": "Plan approved; scheduler resume failed"
       }
     },
     "sessions": {

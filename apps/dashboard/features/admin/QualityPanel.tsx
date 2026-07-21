@@ -33,6 +33,12 @@ const VERDICT_COLOR: Record<QualityVerdict, string> = {
   error: 'bg-slate-500',
 };
 
+type QualityLoadSection = 'status' | 'overview' | 'delivery' | 'runtime' | 'legacy';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function QualityPanel() {
   const { t } = useTranslation(['telemetry', 'common']);
   const confirm = useConfirm();
@@ -42,7 +48,9 @@ export function QualityPanel() {
   const [deliveryRows, setDeliveryRows] = useState<QualityRow[]>([]);
   const [runtimeRows, setRuntimeRows] = useState<QualityRow[]>([]);
   const [legacyRows, setLegacyRows] = useState<QualityRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [failedSections, setFailedSections] = useState<Set<QualityLoadSection>>(new Set());
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,22 +65,36 @@ export function QualityPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [nextStatus, nextOverview, delivery, runtime, legacy] = await Promise.all([
+      const [nextStatus, nextOverview, delivery, runtime, legacy] = await Promise.allSettled([
         fetchQualityEnabled(),
         fetchQualityOverview(),
         fetchQualityScopedRows('delivery', { limit: 200 }),
         fetchQualityScopedRows('runtime', { limit: 100 }),
         fetchQualityScopedRows('legacy', { limit: 50 }),
-      ]);
-      setStatus(nextStatus);
-      setOverview(nextOverview);
-      setDeliveryRows(delivery.rows);
-      setRuntimeRows(runtime.rows);
-      setLegacyRows(legacy.rows);
-    } catch (e) {
-      setError((e as Error).message);
+      ] as const);
+      const failed = new Set<QualityLoadSection>();
+      const errors: string[] = [];
+      const reject = (section: QualityLoadSection, reason: unknown) => {
+        failed.add(section);
+        errors.push(errorMessage(reason));
+      };
+
+      if (nextStatus.status === 'fulfilled') setStatus(nextStatus.value);
+      else { setStatus(null); reject('status', nextStatus.reason); }
+      if (nextOverview.status === 'fulfilled') setOverview(nextOverview.value);
+      else { setOverview(null); reject('overview', nextOverview.reason); }
+      if (delivery.status === 'fulfilled') setDeliveryRows(delivery.value.rows);
+      else { setDeliveryRows([]); reject('delivery', delivery.reason); }
+      if (runtime.status === 'fulfilled') setRuntimeRows(runtime.value.rows);
+      else { setRuntimeRows([]); reject('runtime', runtime.reason); }
+      if (legacy.status === 'fulfilled') setLegacyRows(legacy.value.rows);
+      else { setLegacyRows([]); reject('legacy', legacy.reason); }
+
+      setFailedSections(failed);
+      setError(errors.length > 0 ? errors.join(' · ') : null);
     } finally {
       setLoading(false);
+      setLoaded(true);
     }
   }
 
@@ -152,7 +174,11 @@ export function QualityPanel() {
         <div className="flex items-center gap-2 rounded border px-2.5 py-1">
           <Switch checked={status?.enabled === true} disabled={!status || toggling} onCheckedChange={(value) => void toggle(value)} />
           <span className="text-xs text-muted-foreground">
-            {status?.enabled ? t('telemetry:quality.actions.enabled') : t('telemetry:quality.actions.disabled')}
+            {status == null
+              ? t(loaded ? 'telemetry:quality.actions.unavailable' : 'telemetry:quality.actions.loading')
+              : status.enabled
+                ? t('telemetry:quality.actions.enabled')
+                : t('telemetry:quality.actions.disabled')}
           </span>
         </div>
         {status && (
@@ -173,13 +199,13 @@ export function QualityPanel() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">{t('telemetry:quality.coverage.title')}</CardTitle></CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label={t('telemetry:quality.coverage.completed')} value={overview?.completedTasks ?? 0} />
-          <Metric label={t('telemetry:quality.coverage.assessments')} value={overview?.assessments ?? 0} />
-          <Metric label={t('telemetry:quality.coverage.requests')} value={overview?.llmRequests ?? 0} />
-          <Metric label={t('telemetry:quality.coverage.tokens')} value={(overview?.tokensIn ?? 0) + (overview?.tokensOut ?? 0)} />
-          <Metric label={t('telemetry:quality.coverage.latency')} value={`${Math.round(overview?.averageLatencyMs ?? 0)}ms`} />
-          <Metric label={t('telemetry:quality.coverage.infrastructure')} value={overview?.infrastructureFailures ?? 0} />
-          <Metric label={t('telemetry:quality.coverage.incidents')} value={overview?.runtimeIncidents ?? 0} />
+          <Metric label={t('telemetry:quality.coverage.completed')} value={overview?.completedTasks ?? (loaded ? '—' : '…')} />
+          <Metric label={t('telemetry:quality.coverage.assessments')} value={overview?.assessments ?? (loaded ? '—' : '…')} />
+          <Metric label={t('telemetry:quality.coverage.requests')} value={overview?.llmRequests ?? (loaded ? '—' : '…')} />
+          <Metric label={t('telemetry:quality.coverage.tokens')} value={overview ? overview.tokensIn + overview.tokensOut : loaded ? '—' : '…'} />
+          <Metric label={t('telemetry:quality.coverage.latency')} value={overview ? `${Math.round(overview.averageLatencyMs)}ms` : loaded ? '—' : '…'} />
+          <Metric label={t('telemetry:quality.coverage.infrastructure')} value={overview?.infrastructureFailures ?? (loaded ? '—' : '…')} />
+          <Metric label={t('telemetry:quality.coverage.incidents')} value={overview?.runtimeIncidents ?? (loaded ? '—' : '…')} />
         </CardContent>
       </Card>
 
@@ -188,6 +214,8 @@ export function QualityPanel() {
         empty={t('telemetry:quality.infrastructure.empty')}
         rows={infrastructureRows}
         verdictLabel={verdictLabel}
+        loading={!loaded}
+        unavailable={failedSections.has('delivery') ? t('telemetry:quality.sectionUnavailable') : undefined}
       />
 
       <Card>
@@ -205,12 +233,16 @@ export function QualityPanel() {
                     return width > 0 ? <div key={verdict} className={VERDICT_COLOR[verdict]} style={{ width: `${width}%` }} title={`${verdictLabel[verdict]}: ${counts[verdict]}`} /> : null;
                   })}
                 </div>
-                <span className="w-10 text-right font-mono">{total}</span>
+                <span className="w-10 text-right font-mono">{failedSections.has('delivery') ? '—' : total}</span>
               </div>
             );
           })}
           <div className="max-h-80 space-y-2 overflow-y-auto border-t pt-2">
-            {assessments.length === 0 ? <div className="text-xs italic text-muted-foreground">{t('telemetry:quality.delivery.empty')}</div> : assessments.map(([id, rows]) => (
+            {!loaded
+              ? <div className="text-xs italic text-muted-foreground">{t('telemetry:quality.loading')}</div>
+              : failedSections.has('delivery')
+                ? <div className="text-xs text-red-500">{t('telemetry:quality.sectionUnavailable')}</div>
+                : assessments.length === 0 ? <div className="text-xs italic text-muted-foreground">{t('telemetry:quality.delivery.empty')}</div> : assessments.map(([id, rows]) => (
               <div key={id} className="rounded border p-2 text-xs">
                 <div className="mb-1 flex gap-2 text-muted-foreground">
                   <span>{rows[0]?.created_at}</span><span>{t('telemetry:quality.delivery.round')} {rows[0]?.round_message_id ?? '—'}</span><span className="ml-auto font-mono">{id.slice(0, 8)}</span>
@@ -228,8 +260,8 @@ export function QualityPanel() {
         </CardContent>
       </Card>
 
-      <RowsCard title={t('telemetry:quality.runtime.title')} empty={t('telemetry:quality.runtime.empty')} rows={runtimeRows} verdictLabel={verdictLabel} />
-      <RowsCard title={t('telemetry:quality.legacy.title')} empty={t('telemetry:quality.legacy.empty')} rows={legacyRows} verdictLabel={verdictLabel} />
+      <RowsCard title={t('telemetry:quality.runtime.title')} empty={t('telemetry:quality.runtime.empty')} rows={runtimeRows} verdictLabel={verdictLabel} loading={!loaded} unavailable={failedSections.has('runtime') ? t('telemetry:quality.sectionUnavailable') : undefined} />
+      <RowsCard title={t('telemetry:quality.legacy.title')} empty={t('telemetry:quality.legacy.empty')} rows={legacyRows} verdictLabel={verdictLabel} loading={!loaded} unavailable={failedSections.has('legacy') ? t('telemetry:quality.sectionUnavailable') : undefined} />
     </div>
   );
 }
@@ -238,17 +270,23 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   return <div><div className="text-xs text-muted-foreground">{label}</div><div className="text-2xl font-semibold">{value}</div></div>;
 }
 
-function RowsCard({ title, empty, rows, verdictLabel }: {
+function RowsCard({ title, empty, rows, verdictLabel, loading, unavailable }: {
   title: string;
   empty: string;
   rows: QualityRow[];
   verdictLabel: Record<QualityVerdict, string>;
+  loading?: boolean;
+  unavailable?: string;
 }) {
   return (
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-base">{title}</CardTitle></CardHeader>
       <CardContent className="max-h-72 space-y-1 overflow-y-auto">
-        {rows.length === 0 ? <div className="text-xs italic text-muted-foreground">{empty}</div> : rows.map((row) => {
+        {unavailable
+          ? <div className="text-xs text-red-500">{unavailable}</div>
+          : loading
+            ? <div className="text-xs italic text-muted-foreground">…</div>
+            : rows.length === 0 ? <div className="text-xs italic text-muted-foreground">{empty}</div> : rows.map((row) => {
           const evidence = formatEvidence(row.evidence_json);
           return (
             <div key={row.id} className="flex items-center gap-2 border-b py-1 text-xs last:border-0">

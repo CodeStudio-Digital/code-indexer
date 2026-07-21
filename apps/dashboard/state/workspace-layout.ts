@@ -1,10 +1,12 @@
 /**
  * Persistent workbench layout state.
  *
- * Visibility/selection lives here; panel dimensions are persisted by
- * react-resizable-panels using project-scoped autoSaveIds. Keeping a single
- * owner for sizes avoids the old v2 split-brain state, where pixel fields were
- * written to localStorage but never consumed by the rendered shell.
+ * Visibility/selection lives here; primary/left-rail navigation is remembered
+ * per project, while shared panel preferences keep their global fallback.
+ * Panel dimensions are persisted by react-resizable-panels using
+ * project-scoped autoSaveIds. Keeping a single owner for sizes avoids the old
+ * v2 split-brain state, where pixel fields were written to localStorage but
+ * never consumed by the rendered shell.
  */
 
 import { create } from 'zustand';
@@ -23,6 +25,11 @@ export interface PersistedWorkspaceLayout {
   previewVisible: boolean;
 }
 
+export interface PersistedProjectNavigation {
+  activeLeft: LeftToolId | null;
+  primarySurface: PrimarySurfaceId;
+}
+
 interface LegacyWorkspaceLayoutV2 extends Partial<PersistedWorkspaceLayout> {
   leftSize?: number;
   rightSize?: number;
@@ -30,6 +37,8 @@ interface LegacyWorkspaceLayoutV2 extends Partial<PersistedWorkspaceLayout> {
 }
 
 interface WorkspaceLayoutState extends PersistedWorkspaceLayout {
+  activateProject: (projectId: number) => void;
+  deactivateProject: (projectId: number) => void;
   toggleLeft: (id: LeftToolId) => void;
   toggleRight: (id: RightToolId) => void;
   toggleBottom: (id: BottomToolId) => void;
@@ -44,6 +53,7 @@ interface WorkspaceLayoutState extends PersistedWorkspaceLayout {
 
 export const WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v3';
 export const LEGACY_WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v2';
+export const PROJECT_NAVIGATION_STORAGE_PREFIX = 'mcp-ide:project-navigation-v1:';
 
 export const DEFAULT_WORKSPACE_LAYOUT: PersistedWorkspaceLayout = {
   activeLeft: 'files',
@@ -51,6 +61,11 @@ export const DEFAULT_WORKSPACE_LAYOUT: PersistedWorkspaceLayout = {
   activeBottom: null,
   primarySurface: 'editor',
   previewVisible: true,
+};
+
+export const DEFAULT_PROJECT_NAVIGATION: PersistedProjectNavigation = {
+  activeLeft: 'files',
+  primarySurface: 'sessions',
 };
 
 /** Pure migration used by both the store and focused tests. */
@@ -103,6 +118,34 @@ function safeParse(raw: string | null): LegacyWorkspaceLayoutV2 | null {
   }
 }
 
+export function normalizeProjectNavigation(
+  value: Partial<PersistedProjectNavigation> | null | undefined,
+): PersistedProjectNavigation {
+  if (!value) return { ...DEFAULT_PROJECT_NAVIGATION };
+  const normalized = normalizeWorkspaceLayout({
+    activeLeft: value.activeLeft === undefined ? DEFAULT_PROJECT_NAVIGATION.activeLeft : value.activeLeft,
+    primarySurface: value.primarySurface || DEFAULT_PROJECT_NAVIGATION.primarySurface,
+  });
+  return {
+    activeLeft: normalized.activeLeft,
+    primarySurface: normalized.primarySurface,
+  };
+}
+
+export function projectNavigationStorageKey(projectId: number): string {
+  return `${PROJECT_NAVIGATION_STORAGE_PREFIX}${projectId}`;
+}
+
+function loadProjectNavigation(projectId: number): PersistedProjectNavigation | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = safeParse(window.localStorage.getItem(projectNavigationStorageKey(projectId)));
+    return stored ? normalizeProjectNavigation(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
 function loadPersisted(): PersistedWorkspaceLayout {
   if (typeof window === 'undefined') return { ...DEFAULT_WORKSPACE_LAYOUT };
   const current = safeParse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY));
@@ -128,6 +171,21 @@ function persist(patch: Partial<PersistedWorkspaceLayout>): void {
   }
 }
 
+function persistProjectNavigation(projectId: number, patch: Partial<PersistedProjectNavigation>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = loadProjectNavigation(projectId) ?? DEFAULT_PROJECT_NAVIGATION;
+    window.localStorage.setItem(
+      projectNavigationStorageKey(projectId),
+      JSON.stringify(normalizeProjectNavigation({ ...current, ...patch })),
+    );
+  } catch {
+    // localStorage full/disabled: keep the live Zustand state working.
+  }
+}
+
+let activeProjectId: number | null = null;
+
 function toggleKey<K extends 'activeLeft' | 'activeRight' | 'activeBottom'>(
   key: K,
   id: string,
@@ -136,6 +194,9 @@ function toggleKey<K extends 'activeLeft' | 'activeRight' | 'activeBottom'>(
   set((state) => {
     const next = state[key] === id ? null : id;
     persist({ [key]: next });
+    if (key === 'activeLeft' && activeProjectId !== null) {
+      persistProjectNavigation(activeProjectId, { activeLeft: next });
+    }
     return { [key]: next } as Partial<WorkspaceLayoutState>;
   });
 }
@@ -144,6 +205,16 @@ export const useWorkspaceLayout = create<WorkspaceLayoutState>((set) => {
   const initial = loadPersisted();
   return {
     ...initial,
+    activateProject: (projectId) => {
+      activeProjectId = projectId;
+      const navigation = loadProjectNavigation(projectId) ?? DEFAULT_PROJECT_NAVIGATION;
+      persist(navigation);
+      persistProjectNavigation(projectId, navigation);
+      set(navigation);
+    },
+    deactivateProject: (projectId) => {
+      if (activeProjectId === projectId) activeProjectId = null;
+    },
     toggleLeft: (id) => toggleKey('activeLeft', id, set),
     toggleRight: (id) => toggleKey('activeRight', id, set),
     toggleBottom: (id) => toggleKey('activeBottom', id, set),
@@ -164,6 +235,7 @@ export const useWorkspaceLayout = create<WorkspaceLayoutState>((set) => {
     },
     setActiveLeft: (activeLeft) => {
       persist({ activeLeft });
+      if (activeProjectId !== null) persistProjectNavigation(activeProjectId, { activeLeft });
       set({ activeLeft });
     },
     setActiveRight: (activeRight) => {
@@ -176,6 +248,7 @@ export const useWorkspaceLayout = create<WorkspaceLayoutState>((set) => {
     },
     setPrimarySurface: (primarySurface) => {
       persist({ primarySurface });
+      if (activeProjectId !== null) persistProjectNavigation(activeProjectId, { primarySurface });
       set({ primarySurface });
     },
   };

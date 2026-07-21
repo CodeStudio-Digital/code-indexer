@@ -118,7 +118,8 @@ import { buildWorkerMemoryShims } from './memory-shims.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
-import { resolveDocSearchTimeoutMs } from './doc-search-timeout.js';
+import { buildWorkerDocSearch } from './worker-doc-search.js';
+import { requestDocsResearchOverBridge } from './docs-research-rpc.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { installWorkerQualityWiring } from './quality-wiring.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
@@ -182,29 +183,23 @@ const bridge = new MessageBridge({
   },
 });
 
-// ─── Doc-corpus shim: route to the main process via RPC ──────────────
+// ─── Doc-corpus shim ────────────────────────────────────────────────
 // `worker_threads` don't share module state, so the `setGlobalDocSearch`
 // + `setGlobalDocsResearcher` singletons populated in server.ts on the
 // main thread are NULL here. Without this shim, `rag_search_docs` from a
 // subordinate runner inside THIS worker errors with "doc corpus backend
-// is not wired into this process". We install a thin proxy that forwards
-// every `search` / `runResearch` call back to the main thread via
-// `bridge.request`; the corresponding handlers live in
-// `apps/http-api/sse/WorkerOrchestratorPool.ts`. The actual
-// `DocHybridSearch` + `DocsResearchBridge` instances live ONCE in the
-// main process — zero duplication. Mirrors the coder-worker wiring.
+// is not wired into this process". Search stays in this worker's own WAL
+// connection so a slow semantic provider cannot block Electron's event
+// loop. Navigation reads and deep research retain their existing host RPCs.
 //
 // `docs_deep_research` additionally needs a per-runner
 // `installDocsDeepResearch(runner)` call (it's not a always-registered
 // bootstrap tool like `rag_search_docs`) — wired in the company runner
 // paths (MasterLifecycle.wireAllForRunner + subordinate spawn).
+const workerSearchDocStore = new DocStore(dbConn.handle);
+const workerDocSearch = buildWorkerDocSearch(workerSearchDocStore);
 const docSearchShim: DocSearchBackend = {
-  search: async (input) =>
-    bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
-      'docSearch',
-      input,
-      { timeoutMs: resolveDocSearchTimeoutMs() },
-    ),
+  search: workerDocSearch.search,
   // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
   readChunk: async (input) =>
     bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
@@ -263,7 +258,7 @@ setGlobalVisionDescriber(visionShim);
 
 const docsResearcherShim = {
   runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>
-    bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
+    requestDocsResearchOverBridge(bridge, input),
 } as unknown as DocsResearchBridge;
 setGlobalDocsResearcher(docsResearcherShim);
 

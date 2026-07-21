@@ -2,16 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
 import { McpAgentRunStore, type McpAgentRun } from '@mcp/store/mcp-agent-run-store.js';
 import type { ToolContext } from './context.js';
+import {
+  buildMcpAgentSessionCreatePayload,
+  type StartMcpAgentRunInput,
+} from './agent-run-contract.js';
 
-export interface StartMcpAgentRunInput {
-  projectName: string;
-  task: string;
-  agentId: string;
-  provider: string;
-  model: string;
-  title?: string;
-  reasoningEffort?: string;
-}
+export type { StartMcpAgentRunInput } from './agent-run-contract.js';
 
 function baseUrl(ctx: ToolContext): string {
   return `http://127.0.0.1:${ctx.config.dashboard.port}`;
@@ -100,14 +96,7 @@ export class McpAgentRunManager {
     try {
       const session = await jsonRequest<{ id: number }>(this.ctx, '/api/coder/sessions', {
         method: 'POST',
-        body: JSON.stringify({
-          project_id: project.id,
-          title: (input.title?.trim() || `MCP: ${input.task.slice(0, 80)}`).slice(0, 160),
-          provider: input.provider,
-          model: input.model,
-          agent: input.agentId,
-          ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
-        }),
+        body: JSON.stringify(buildMcpAgentSessionCreatePayload(input, project.id)),
       });
       const run = this.store.update(runId, { sessionId: session.id, status: 'running' })!;
       void this.execute(runId, session.id, input.task, profile?.maxRuntimeMs ?? 1_800_000);

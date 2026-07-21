@@ -84,6 +84,7 @@ export async function relaunchResumedAgents(
   guidance: string | undefined,
 ): Promise<{ text: string; usage: ChatUsage; stillFailed: number }> {
   const sessionId = group.sessionId;
+  const toolUseId = ctx.currentToolUseId;
   const profiles = targets.map(profileFor);
   const targetIdx = new Set(targets.map((t) => t.agentIndex));
   // Per-target provider resolved from each retained agent's profile (memoized).
@@ -98,6 +99,7 @@ export async function relaunchResumedAgents(
 
   ctx.runner?.emit('agents_group_start', {
     groupId: group.spawnId,
+    toolUseId,
     provider: info.provider,
     model: info.model,
     resumed: true,
@@ -112,6 +114,8 @@ export async function relaunchResumedAgents(
         researchDepth: a.researchPolicy?.depth,
         softToolTarget: a.researchPolicy?.softToolTarget,
         softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
+        maxToolCalls: a.limits.maxToolCalls,
+        hardTimeoutMs: a.limits.timeoutMs,
         status: targetIdx.has(a.agentIndex) ? 'pending' : reasonToStatus(a.reason),
         attempt: targetIdx.has(a.agentIndex) ? a.attempt + 1 : a.attempt,
       };
@@ -141,6 +145,8 @@ export async function relaunchResumedAgents(
       const pinfo = agentInfos[progress.agentIndex] ?? info;
       ctx.runner?.emit('agent_progress', {
         groupId: group.spawnId,
+        toolUseId,
+        task: original?.task,
         provider: pinfo.provider,
         model: pinfo.model,
         ...progress,
@@ -188,6 +194,7 @@ export async function relaunchResumedAgents(
       finalText: r.finalText,
       collected: r.collected,
       attempt,
+      maxToolCalls: state.limits.maxToolCalls,
       // Number by ORIGINAL roster index so a partial relaunch doesn't renumber
       // (else the model's next resume_agent({agents:[N]}) targets the wrong one).
       displayIndex: state.agentIndex,

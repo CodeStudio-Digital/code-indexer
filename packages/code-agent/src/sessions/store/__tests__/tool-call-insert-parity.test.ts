@@ -56,3 +56,23 @@ describe('coder_tool_calls INSERT parity (store vs dbWriter mirror)', () => {
     expect(reference).toContain('delivered');
   });
 });
+
+describe('coder_turn_telemetry INSERT (dbWriter delegates, never mirrors)', () => {
+  const telemetryUrl = new URL('../telemetry-record.ts', import.meta.url);
+
+  it('the worker calls telemetry-record.ts instead of hand-copying the SQL', () => {
+    // Unlike persistAssistantTurn (embedded in SessionStore, so the worker
+    // must mirror it by hand), `record(db, input)` is a free function — the
+    // worker reuses it, which keeps the insert (incl. the project_id
+    // subselect) drift-proof by construction. Fail if someone inlines a copy.
+    const workerSrc = readFileSync(fileURLToPath(workerUrl), 'utf8');
+    expect(workerSrc).not.toMatch(/INSERT INTO coder_turn_telemetry/);
+    expect(workerSrc).toMatch(/sessions\/store\/telemetry-record\.js/);
+  });
+
+  it('the canonical insert still derives project_id via the sessions subselect', () => {
+    const telemetrySrc = readFileSync(fileURLToPath(telemetryUrl), 'utf8');
+    expect(telemetrySrc).toMatch(/INSERT INTO coder_turn_telemetry/);
+    expect(telemetrySrc).toMatch(/SELECT s\.project_id FROM coder_sessions s WHERE s\.id = \?/);
+  });
+});

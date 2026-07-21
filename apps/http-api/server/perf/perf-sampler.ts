@@ -45,8 +45,19 @@ export interface PerfSample {
     heapLimitMB: number;
     externalMB: number;
     arrayBuffersMB: number;
-    /** rss − heapTotal: native allocations (ONNX weights, SQLite, buffers). */
+    /**
+     * Legacy wire field: RSS minus only the main isolate's allocated V8 heap.
+     * It also contains worker heaps, code, stacks and allocator overhead, so it
+     * must not be presented as purely native memory.
+     */
     nativeMB: number;
+    /** Explicit name for the legacy `nativeMB` calculation. */
+    rssLessMainHeapMB?: number;
+    /** Best-effort sums from worker `memStats()` responses available this tick. */
+    knownWorkerHeapUsedMB?: number;
+    knownWorkerHeapTotalMB?: number;
+    /** RSS remainder after the main heap and known worker heaps are subtracted. */
+    unattributedRssMB?: number;
     loopP50Ms: number;
     loopP99Ms: number;
     loopMaxMs: number;
@@ -84,6 +95,7 @@ export interface PerfSamplerSources {
 const RING_SIZE = 240;
 const INTERVAL_MS = 15_000;
 const mb = (n: number): number => Math.round((n / (1024 * 1024)) * 10) / 10;
+const roundMB = (n: number): number => Math.round(n * 10) / 10;
 const nsToMs = (n: number): number => Math.round(n / 1e5) / 10;
 
 export class PerfSampler {
@@ -156,6 +168,20 @@ export class PerfSampler {
       getMemoryLedger().snapshot(),
     ]);
 
+    const knownWorkerStats = [
+      ...company.map((row) => row.stats),
+      ...coder.map((row) => row.stats),
+      indexer,
+    ].filter((stats): stats is WorkerMemStats => stats != null);
+    const knownWorkerHeapUsedMB = roundMB(
+      knownWorkerStats.reduce((total, stats) => total + stats.heapUsedMB, 0),
+    );
+    const knownWorkerHeapTotalMB = roundMB(
+      knownWorkerStats.reduce((total, stats) => total + stats.heapTotalMB, 0),
+    );
+    const rssLessMainHeapMB = Math.max(0, mb(mem.rss - heap.total_heap_size));
+    const unattributedRssMB = Math.max(0, roundMB(rssLessMainHeapMB - knownWorkerHeapTotalMB));
+
     const sample: PerfSample = {
       at: Date.now(),
       main: {
@@ -167,7 +193,11 @@ export class PerfSampler {
         heapLimitMB: mb(heap.heap_size_limit),
         externalMB: mb(mem.external),
         arrayBuffersMB: mb(mem.arrayBuffers),
-        nativeMB: Math.max(0, mb(mem.rss - heap.total_heap_size)),
+        nativeMB: rssLessMainHeapMB,
+        rssLessMainHeapMB,
+        knownWorkerHeapUsedMB,
+        knownWorkerHeapTotalMB,
+        unattributedRssMB,
         loopP50Ms: nsToMs(this.loop.percentile(50)),
         loopP99Ms: nsToMs(this.loop.percentile(99)),
         loopMaxMs: nsToMs(this.loop.max),

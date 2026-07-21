@@ -12,11 +12,35 @@ import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
 const DEFAULT_TIMEOUT_MS = 120_000;
 // Ceiling for a one-shot command. One-shot shell work (builds, installs,
 // test suites) should finish well under this; for anything longer use a
-// persistent `exec_command` session or a background terminal. Mirrored onto
-// the tool's `timeoutMs` (runner backstop) so both layers agree at 10 min.
+// persistent `exec_command` session or a background terminal. Unity Editor
+// batch jobs are the deliberate exception below: importing/compiling a project
+// and then running tests can legitimately exceed this ceiling.
 const MAX_TIMEOUT_MS = 10 * 60_000;
+const UNITY_BATCH_TIMEOUT_MS = 30 * 60_000;
+// Let the shell adapter own the user-facing timeout and cleanup first. The
+// runner backstop fires only if the handler fails to settle after that cleanup.
+const RUNNER_TIMEOUT_GRACE_MS = 5_000;
 const MAX_OUTPUT_BYTES = 100_000;
 const MAX_STDIN_BYTES = 100_000;
+
+function isUnityBatchCommand(command: unknown): boolean {
+  if (typeof command !== 'string') return false;
+  const launchesUnityEditor = /(?:^|[\\/"'\s])unity(?:\.exe)?(?=$|["'\s])/i.test(command);
+  const hasBatchFlag = /(?:^|\s)-(?:batchmode|runtests|executemethod|projectpath)(?=$|\s)/i.test(command);
+  return launchesUnityEditor && hasBatchFlag;
+}
+
+function resolveHandlerTimeoutMs(args: Record<string, unknown>): number {
+  const requested = typeof args.timeout_ms === 'number' && args.timeout_ms > 0
+    ? args.timeout_ms
+    : DEFAULT_TIMEOUT_MS;
+  // A caller-provided five-minute timeout is commonly generated for all shell
+  // commands. Treating that generic hint as authoritative killed valid Unity
+  // test/import jobs. The 30-minute value is only a ceiling: a finished Unity
+  // process still returns immediately.
+  if (isUnityBatchCommand(args.command)) return UNITY_BATCH_TIMEOUT_MS;
+  return Math.min(MAX_TIMEOUT_MS, requested);
+}
 
 /**
  * Resolve the shell port for a tool invocation. Falls back to the
@@ -137,11 +161,11 @@ const runCommandTool: CoderTool = {
   // Command results are snapshots of mutable workspace/process state. They
   // must never be reused solely because command/cwd match a prior invocation.
   repeatPolicy: 'volatile',
-  // Runner backstop: a one-shot command is capped at 10 min (previously it
-  // inherited the 30-min SLOW tier). The handler also clamps `timeout_ms` to
-  // the same ceiling, so the shell port's clean SIGKILL fires before this
-  // hard abort ever does.
-  timeoutMs: MAX_TIMEOUT_MS,
+  // Runner backstop includes a small cleanup grace after the handler's own
+  // timeout. `resolveTimeoutMs` also makes a requested 120s timeout cover lane
+  // acquisition instead of silently inheriting the static 10-minute ceiling.
+  timeoutMs: MAX_TIMEOUT_MS + RUNNER_TIMEOUT_GRACE_MS,
+  resolveTimeoutMs: (args) => resolveHandlerTimeoutMs(args) + RUNNER_TIMEOUT_GRACE_MS,
   parameters: {
     type: 'object',
     properties: {
@@ -153,7 +177,10 @@ const runCommandTool: CoderTool = {
           `no \`| head\`/\`grep\`, use \`findstr\`/\`type\`).`,
       },
       cwd: { type: 'string', description: 'Optional subdirectory relative to project root' },
-      timeout_ms: { type: 'number', description: 'Timeout in ms (default 120000, max 600000 / 10 min).' },
+      timeout_ms: {
+        type: 'number',
+        description: 'Timeout in ms (default 120000, max 600000 / 10 min). Unity Editor batch/test commands automatically receive a 30-minute ceiling.',
+      },
       stdin: {
         type: 'string',
         description:
@@ -206,10 +233,7 @@ const runCommandTool: CoderTool = {
       stdin = args.stdin;
     }
 
-    const timeout = Math.min(
-      MAX_TIMEOUT_MS,
-      typeof args.timeout_ms === 'number' && args.timeout_ms > 0 ? args.timeout_ms : DEFAULT_TIMEOUT_MS,
-    );
+    const timeout = resolveHandlerTimeoutMs(args);
     const result = await shellPort(ctx).exec(command, {
       cwd,
       timeoutMs: timeout,

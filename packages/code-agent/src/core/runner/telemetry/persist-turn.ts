@@ -35,6 +35,16 @@ import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
 export interface PersistTurnTelemetryArgs {
   /** Session store handle; persistence is skipped when omitted. */
   store: Pick<SessionStore, 'recordTurnTelemetry'> | undefined;
+  /**
+   * Perf W1 — optional async writer (dbWriter worker). When present it wins
+   * over `store`: the INSERT happens off the coder thread and the id comes
+   * back as a promise. Callers that need the id for same-turn stamping await
+   * it (see `flushPendingTurn` in `index.ts`); the row is queued on the same
+   * per-session FIFO as `persistAssistantTurn`, so ordering holds.
+   */
+  asyncStore?: (
+    input: Parameters<SessionStore['recordTurnTelemetry']>[0],
+  ) => Promise<number | null>;
   /** Persistent coder_sessions row id; null for subagents/tests. */
   sessionId: number | null;
   /** Fresh per-run uuid for cross-table correlation. */
@@ -86,14 +96,17 @@ export interface PersistTurnTelemetryArgs {
 
 /**
  * Insert one row into `coder_turn_telemetry` and return its id (or null
- * when persistence is unavailable / failed).
+ * when persistence is unavailable / failed). With `asyncStore` wired the
+ * insert runs off-thread and the id resolves later (promise return).
  *
- * Best-effort: the function NEVER throws. Telemetry must not break a
- * real turn. Failures inside `store.recordTurnTelemetry` are caught by
- * the store itself (see the `try` in `telemetry-record.ts`).
+ * Best-effort: the function NEVER throws / never rejects. Telemetry must
+ * not break a real turn. Failures inside `store.recordTurnTelemetry` are
+ * caught by the store itself (see the `try` in `telemetry-record.ts`).
  */
-export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | null {
-  if (!args.store) return null;
+export function persistTurnTelemetry(
+  args: PersistTurnTelemetryArgs,
+): number | null | Promise<number | null> {
+  if (!args.store && !args.asyncStore) return null;
 
   // ── largest_tool_result_chars ──
   // Surfaces tools that routinely produce huge outputs (good candidates
@@ -146,7 +159,7 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
     : (args.responseMeta ?? null);
 
   try {
-    return args.store.recordTurnTelemetry({
+    const record: Parameters<NonNullable<PersistTurnTelemetryArgs['store']>['recordTurnTelemetry']>[0] = {
       session_id: args.sessionId,
       run_id: args.runId,
       turn: args.turn,
@@ -179,7 +192,21 @@ export function persistTurnTelemetry(args: PersistTurnTelemetryArgs): number | n
       reducer_pending_chars: args.reducerStats?.pendingChars ?? null,
       estimated_cost_usd: cost > 0 ? cost : null,
       response_meta: responseMeta,
-    });
+    };
+    if (args.asyncStore) {
+      const syncStore = args.store;
+      const syncFallback = (): number | null => {
+        // Degradation contract (incident 2026-07-20): a broken dbWriter
+        // worker must fall back to the synchronous insert, never drop rows.
+        if (!syncStore) return null;
+        try { return syncStore.recordTurnTelemetry(record); } catch { return null; }
+      };
+      return args.asyncStore(record).then(
+        (id) => (id != null ? id : syncFallback()),
+        () => syncFallback(),
+      );
+    }
+    return args.store!.recordTurnTelemetry(record);
   } catch {
     return null;
   }

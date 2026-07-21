@@ -6,7 +6,8 @@
  */
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { bootstrapTestI18n } from '../../../i18n/test-bootstrap.js';
 import {
   collectLatestPersistedInteractivePromptSignatures,
   collectPersistedToolUseIds,
@@ -89,6 +90,15 @@ const toolBlock = (id: string): StreamBlock =>
 const textBlock = (text: string): StreamBlock => ({ type: 'text', text });
 const taskRunBlock = (runId: string): StreamBlock =>
   ({ type: 'task_run', run: { runId } }) as unknown as StreamBlock;
+const agentsBlock = (groupId: string, toolUseId?: string): StreamBlock => ({
+  type: 'agents',
+  group: {
+    groupId,
+    toolUseId,
+    status: 'running',
+    agents: [{ index: 0, label: 'Scout', status: 'running', toolCallCount: 1 }],
+  },
+});
 
 const assistantToolUse = (...ids: string[]): PersistedMessage => ({
   role: 'assistant',
@@ -149,6 +159,7 @@ describe('liveBlockPersistedId', () => {
     expect(liveBlockPersistedId(planBlock('p1'))).toBe('p1');
     expect(liveBlockPersistedId(decisionBlock('d1'))).toBe('d1');
     expect(liveBlockPersistedId(toolBlock('c1'))).toBe('c1');
+    expect(liveBlockPersistedId(agentsBlock('g1', 'spawn-1'))).toBe('spawn-1');
   });
 
   it('returns undefined for live-only visualizations (no persisted identity)', () => {
@@ -222,6 +233,26 @@ describe('visibleLiveBlocks', () => {
     const blocks = [tasksBlock('t1'), planBlock('p1')];
     expect(visibleLiveBlocks(blocks, new Set())).toBe(blocks);
   });
+
+  it('prefers the rich live agents card over its generic spawn wrapper and persisted id', () => {
+    const live = agentsBlock('g1', 'spawn-1');
+    const wrapper = ({
+      type: 'tool',
+      call: { id: 'spawn-1', name: 'spawn_agent', status: 'running' },
+    }) as StreamBlock;
+
+    expect(visibleLiveBlocks([wrapper, live], new Set(['spawn-1']))).toEqual([live]);
+  });
+
+  it('shows execute_tasks only through its rich task run representation', () => {
+    const wrapper = ({
+      type: 'tool',
+      call: { id: 'execute-1', name: 'execute_tasks', status: 'running' },
+    }) as StreamBlock;
+    const run = taskRunBlock('run-1');
+
+    expect(visibleLiveBlocks([wrapper, run], new Set())).toEqual([run]);
+  });
 });
 
 describe('isLiveTurnDuplicatedInHistory', () => {
@@ -282,6 +313,15 @@ describe('isLiveTurnDuplicatedInHistory', () => {
       ),
     ).toBe(false);
   });
+
+  it('keeps a rich live agents turn canonical after its spawn tool_use checkpoints', () => {
+    expect(
+      isLiveTurnDuplicatedInHistory(
+        { blocks: [agentsBlock('group-1', 'spawn-1')] },
+        [assistantToolUse('spawn-1')],
+      ),
+    ).toBe(false);
+  });
 });
 
 const decisionQ1: DecisionQuestion = {
@@ -314,6 +354,8 @@ function renderDecision(decision: DecisionPrompt): string {
 }
 
 describe('DecisionGateView wizard', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('treats a custom answer as a complete answer when freeform is allowed', () => {
     expect(decisionQuestionHasAnswer(decisionQ1, {}, { architecture: 'Hand-roll a hybrid' }, true)).toBe(true);
     expect(decisionQuestionHasAnswer(decisionQ1, {}, { architecture: 'Hand-roll a hybrid' }, false)).toBe(false);

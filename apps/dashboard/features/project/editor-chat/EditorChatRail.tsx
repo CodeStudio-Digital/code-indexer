@@ -81,12 +81,13 @@ export function EditorChatRail({
       agent: agent ?? s.agent,
       provider: s.provider,
       model,
+      executionMode: s.executionMode,
       reasoningEffort: s.reasoningEffort,
       thinking: s.thinking,
       maxTurns: s.maxTurns,
       temperature: s.temperature,
     };
-  }, [s.agent, s.getModelsForProvider, s.maxTurns, s.model, s.provider, s.reasoningEffort, s.temperature, s.thinking]);
+  }, [s.agent, s.executionMode, s.getModelsForProvider, s.maxTurns, s.model, s.provider, s.reasoningEffort, s.temperature, s.thinking]);
 
   useEffect(() => {
     const onExternalPrompt = (event: Event) => {
@@ -330,6 +331,7 @@ export function EditorChatRail({
           thinking={s.thinking}
           setThinking={s.setThinking}
           supportsThinking={s.supportsThinking}
+          ultraControlsThinking={s.ultraControlsThinking}
           describeImages={s.describeImages}
           setDescribeImages={s.setDescribeImages}
           outputCapLevel={s.outputCapLevel}
@@ -344,6 +346,11 @@ export function EditorChatRail({
           reasoningEffort={s.reasoningEffort}
           setReasoningEffort={s.setReasoningEffort}
           reasoningLevels={s.reasoningLevels}
+          executionMode={s.executionMode}
+          setExecutionMode={s.setExecutionMode}
+          executionModePending={s.executionModePending}
+          executionModeLocked={s.executionModeLocked}
+          sendBlocked={s.executionModePending}
           planDepth={s.planDepth}
           setPlanDepth={s.setPlanDepth}
           getModelsForProvider={s.getModelsForProvider}

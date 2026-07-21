@@ -1,7 +1,7 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 
 /**
- * Declarative spec for the Kimi Code (OAuth) built-in. The inline
+ * Declarative spec for the API-key-only Kimi Code built-in. The inline
  * `readKimiCodeThinkingMode` logic is represented as `wireOpts.thinkingMode`
  * data the engine interprets.
  *
@@ -9,7 +9,7 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
  * ids are inlined here so the plugin carries its own declarative metadata.
  */
 
-const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1';
+export const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1';
 
 const KIMI_CODE_SEED_MODEL_IDS = [
   'k3',
@@ -22,10 +22,10 @@ const KIMI_CODE_SEED_MODEL_IDS = [
 
 export const kimiCodeSpec: ProviderSpec = {
   kind: 'kimi-code',
-  displayName: 'Kimi Code (OAuth)',
+  displayName: 'Kimi Code',
   visual: { icon: 'Bot', fg: 'text-cyan-500', bg: 'bg-cyan-500/15' },
-  credKind: 'oauth',
-  envVars: [],
+  credKind: 'api-key',
+  envVars: ['KIMI_CODE_API_KEY'],
   defaultBaseURL: KIMI_CODE_BASE_URL,
   defaultModel: 'kimi-k2.6',
   defaultModels: KIMI_CODE_SEED_MODEL_IDS,
@@ -37,10 +37,8 @@ export const kimiCodeSpec: ProviderSpec = {
     'kimi-k2-thinking-turbo': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2-turbo-preview': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
-  // Wins the cross-provider duplicate-id collision with moonshot (default 0) for
-  // the shared `kimi-k2-turbo-preview` / `kimi-k2-thinking-turbo` ids: kimi-code
-  // is the $0 OAuth plan, moonshot is metered. Deterministic once BOTH are
-  // plugins (load order no longer fixes the winner).
+  // Wins the cross-provider duplicate-id collision with moonshot (default 0)
+  // for the shared coding-model ids. Deterministic once BOTH are plugins.
   pricingPriority: -10,
   capabilities: {
     supportsThinking: true,
@@ -52,20 +50,6 @@ export const kimiCodeSpec: ProviderSpec = {
   },
   discovery: { from: 'sdk:kimi-code' },
   test: { from: 'sdk:kimi-code' },
-  // Declarative OAuth (RFC-8628 device-code). Values inlined from
-  // services/oauth/kimi-code.ts (parity-tested). refreshThresholdSec is OMITTED
-  // — the threshold is adaptive (max(5min, expires_in*0.5)); the 'kimi-code' hook
-  // owns it plus the refresh-token tombstone + rotation-race recovery. No scopes
-  // (device_authorization sends only client_id).
-  auth: {
-    mode: 'oauth',
-    flavor: 'device-code',
-    needs: { deviceCode: true },
-    clientId: '17e5f671-d194-4dfb-9706-5516cb48c098',
-    deviceAuthUrl: 'https://auth.kimi.com/api/oauth/device_authorization',
-    tokenUrl: 'https://auth.kimi.com/api/oauth/token',
-    hooks: 'kimi-code',
-  },
   // The thinking-mode key matches wireOpts.thinkingMode.key ('thinkingMode').
   config: {
     fields: [

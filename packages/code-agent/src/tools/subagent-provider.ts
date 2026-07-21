@@ -23,6 +23,15 @@ export interface SubagentTarget {
   modelId: string | null;
 }
 
+/**
+ * Admin per-profile hard-cap override. A `null` axis is unset (falls through
+ * to env/defaults); an explicit `0` means unlimited for that axis.
+ */
+export interface ProfileLimitOverride {
+  maxToolCalls: number | null;
+  timeoutMs: number | null;
+}
+
 export interface SubagentProviderResolverOpts {
   /** Parent session provider id — a target equal to it (no model) inherits the parent. */
   sessionProvider: string;
@@ -36,6 +45,8 @@ export interface SubagentProviderResolverOpts {
   defaultEffort: string | null;
   /** Per-profile reasoning-effort overrides, already merged with the default by the store. */
   profileEfforts: ReadonlyMap<MicroAgentProfileId, string | null>;
+  /** Per-profile hard-cap overrides. No default layer — budgets are profile-only. */
+  profileLimits?: ReadonlyMap<MicroAgentProfileId, ProfileLimitOverride | null>;
   /** Injected factory (createCoderProvider) — decouples this module from @mcp/services. */
   createProvider: (providerId: string, model?: string) => Promise<ChatProvider>;
 }
@@ -45,6 +56,8 @@ export interface SubagentProviderResolver {
   forProfile(profileId?: string): Promise<ChatProvider | undefined>;
   /** Reasoning-effort for a profile; `undefined` means "inherit the parent session effort". */
   effortFor(profileId?: string): string | undefined;
+  /** Hard-cap override for a profile; `undefined` means "no override" (env/defaults decide). */
+  limitsFor(profileId?: string): ProfileLimitOverride | undefined;
 }
 
 export function createSubagentProviderResolver(
@@ -85,6 +98,14 @@ export function createSubagentProviderResolver(
           : opts.defaultEffort;
       return effort ?? undefined;
     },
+    limitsFor(profileId) {
+      const key = profileId as MicroAgentProfileId | undefined;
+      const entry = key ? opts.profileLimits?.get(key) : undefined;
+      // Unlike targets/efforts there is no default merge; an absent or
+      // all-null entry means "no override" so env/defaults stay in charge.
+      if (!entry || (entry.maxToolCalls == null && entry.timeoutMs == null)) return undefined;
+      return entry;
+    },
   };
 }
 
@@ -115,4 +136,25 @@ export function effortForProfile(
 ): string | undefined {
   const id = typeof profile === 'string' ? profile : profile?.id;
   return deps.resolveEffortForProfile?.(id);
+}
+
+/**
+ * Admin hard-cap override for a subagent of the given profile. `undefined`
+ * means no override — env vars and depth-derived defaults decide
+ * (see `limitsForAgent` in spawn-agent-core.ts).
+ */
+export function limitsOverrideForProfile(
+  deps: SubagentDeps,
+  profile?: MicroAgentProfile | string,
+): ProfileLimitOverride | undefined {
+  const id = typeof profile === 'string' ? profile : profile?.id;
+  return deps.resolveLimitsForProfile?.(id);
+}
+
+/** Ultra dominates stored per-profile efforts across heterogeneous children. */
+export function resolveSubagentExecutionEffort(
+  ultraEnabled: boolean,
+  configuredEffort: string | undefined,
+): string | undefined {
+  return ultraEnabled ? 'ultra' : configuredEffort;
 }

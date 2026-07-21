@@ -8,14 +8,23 @@ function fakeStore() {
   const setSubagentProfileTarget = vi.fn();
   const setSubagentEffort = vi.fn();
   const setSubagentProfileEffort = vi.fn();
+  const setSubagentProfileLimits = vi.fn();
   const store = {
     getProvider: (id: string) => ({ id, enabled: true, use_for_coder: true }),
     setSubagentTarget,
     setSubagentProfileTarget,
     setSubagentEffort,
     setSubagentProfileEffort,
+    setSubagentProfileLimits,
   } as unknown as ProviderStore;
-  return { store, setSubagentTarget, setSubagentProfileTarget, setSubagentEffort, setSubagentProfileEffort };
+  return {
+    store,
+    setSubagentTarget,
+    setSubagentProfileTarget,
+    setSubagentEffort,
+    setSubagentProfileEffort,
+    setSubagentProfileLimits,
+  };
 }
 
 function patch(app: ReturnType<typeof modelsRouter>, id: string, body: unknown) {
@@ -73,5 +82,55 @@ describe('PATCH /providers/:id/subagent-model', () => {
     const res = await patch(modelsRouter(store), 'openai', { effort: null });
     expect(res.status).toBe(200);
     expect(setSubagentEffort).toHaveBeenCalledWith('openai', null);
+  });
+
+  it('routes a per-profile limits patch to setSubagentProfileLimits (partial keys)', async () => {
+    const { store, setSubagentProfileLimits, setSubagentProfileTarget, setSubagentEffort } = fakeStore();
+    const res = await patch(modelsRouter(store), 'openai', { profile: 'explore', max_tool_calls: 40 });
+    expect(res.status).toBe(200);
+    expect(setSubagentProfileLimits).toHaveBeenCalledWith('openai', 'explore', { maxToolCalls: 40 });
+    expect(setSubagentProfileTarget).not.toHaveBeenCalled();
+    expect(setSubagentEffort).not.toHaveBeenCalled();
+  });
+
+  it('accepts explicit 0 (unlimited) and null (clear) limit values', async () => {
+    const { store, setSubagentProfileLimits } = fakeStore();
+    const res = await patch(modelsRouter(store), 'openai', {
+      profile: 'explore',
+      max_tool_calls: 0,
+      timeout_ms: null,
+    });
+    expect(res.status).toBe(200);
+    expect(setSubagentProfileLimits).toHaveBeenCalledWith('openai', 'explore', {
+      maxToolCalls: 0,
+      timeoutMs: null,
+    });
+  });
+
+  it('rejects a limits patch without a profile', async () => {
+    const { store, setSubagentProfileLimits } = fakeStore();
+    const res = await patch(modelsRouter(store), 'openai', { max_tool_calls: 40 });
+    expect(res.status).toBe(400);
+    expect(setSubagentProfileLimits).not.toHaveBeenCalled();
+  });
+
+  it('rejects out-of-bounds limit values', async () => {
+    const { store, setSubagentProfileLimits } = fakeStore();
+    const tooManyTools = await patch(modelsRouter(store), 'openai', {
+      profile: 'explore',
+      max_tool_calls: 100_001,
+    });
+    expect(tooManyTools.status).toBe(400);
+    const subMinuteTimeout = await patch(modelsRouter(store), 'openai', {
+      profile: 'explore',
+      timeout_ms: 5_000,
+    });
+    expect(subMinuteTimeout.status).toBe(400);
+    const fractional = await patch(modelsRouter(store), 'openai', {
+      profile: 'explore',
+      max_tool_calls: 10.5,
+    });
+    expect(fractional.status).toBe(400);
+    expect(setSubagentProfileLimits).not.toHaveBeenCalled();
   });
 });

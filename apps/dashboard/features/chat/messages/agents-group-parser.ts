@@ -32,6 +32,7 @@ function collectAgentSections(content: string): string[] {
 export function parsePersistedAgentsGroup(
   input: Record<string, unknown> | undefined,
   result: PersistedToolResult | undefined,
+  toolUseId?: string,
 ): AgentsGroup | null {
   const agents = (input as { agents?: unknown[] })?.agents;
   if (!Array.isArray(agents) || agents.length === 0) return null;
@@ -49,6 +50,7 @@ export function parsePersistedAgentsGroup(
     output: number;
     summary: string;
     attempt?: number;
+    maxTools?: number;
   }>();
   const groupProviderMatch = result?.content?.match(
     /\[parallel agents:[^\]]*provider=([^\s,\]]+)\s+model=([^\s,\]]+)/,
@@ -67,7 +69,7 @@ export function parsePersistedAgentsGroup(
       // `profile=...` existed briefly in this slot; keep parsing old rows.
       // provider/model live on the group header, not per-agent.
       const metaMatch = section.match(
-        /\[type=(\S+)(?:\s+profile=\S+)?\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)(?:\s+attempt=(\d+))?\]/,
+        /\[type=(\S+)(?:\s+profile=\S+)?\s+reason=(\w+)\s+tools=(\d+)\s+input=(\d+)\s+output=(\d+)(?:\s+attempt=(\d+))?(?:\s+max_tools=(\d+))?\]/,
       );
       const summaryStart = section.indexOf('\n', section.indexOf(']') + 1);
       const summary = summaryStart >= 0 ? stripTransportMarkers(section.slice(summaryStart)) : '';
@@ -79,6 +81,7 @@ export function parsePersistedAgentsGroup(
         output: parseInt(metaMatch?.[5] ?? '0', 10),
         summary,
         attempt: metaMatch?.[6] ? parseInt(metaMatch[6], 10) : undefined,
+        maxTools: metaMatch?.[7] ? parseInt(metaMatch[7], 10) : undefined,
       });
     }
 
@@ -92,6 +95,7 @@ export function parsePersistedAgentsGroup(
         groupModel = groupModel ?? m[2];
         const bodyStart = result.content.indexOf('\n', result.content.indexOf(']'));
         const summary = bodyStart >= 0 ? stripTransportMarkers(result.content.slice(bodyStart)) : '';
+        const singleMax = result.content.match(/\[subagent [^\]]*\bmax_tools=(\d+)/);
         agentResults.set(0, {
           provider: m[1],
           model: m[2],
@@ -101,12 +105,22 @@ export function parsePersistedAgentsGroup(
           input: parseInt(m[5], 10),
           output: parseInt(m[6], 10),
           summary,
+          maxTools: singleMax ? parseInt(singleMax[1], 10) : undefined,
         });
       }
     }
   }
 
-  const isCompleted = !!result;
+  const backgroundStartMatch = result?.content?.match(
+    /^\[spawn_agent background\]\s+job=(\S+)\s+group=(\S+)\s+agents=\d+\b.*\sstarted\./m,
+  );
+  const persistedGroupId = backgroundStartMatch?.[2]
+    ?? result?.content?.match(/\[parallel agents:[^\]]*\bgroup=([^,\s\]]+)/)?.[1]
+    ?? result?.content?.match(/\[subagent [^\]]*\bspawn=([^\s\]]+)/)?.[1];
+  // A background spawn persists an immediate tool_result saying only that the
+  // job started. It is not a terminal agent report and must remain running.
+  const isBackgroundStart = Boolean(backgroundStartMatch);
+  const isCompleted = !!result && !isBackgroundStart;
   const parsedInputTotal = Array.from(agentResults.values()).reduce((s, r) => s + r.input, 0);
   const parsedOutputTotal = Array.from(agentResults.values()).reduce((s, r) => s + r.output, 0);
   const headerInputTotal = parseInt(groupUsageMatch?.[1] ?? '0', 10);
@@ -115,11 +129,13 @@ export function parsePersistedAgentsGroup(
   const background = (input as { background?: unknown })?.background === true;
 
   return {
-    groupId: `persisted-${Date.now()}`,
+    groupId: persistedGroupId ?? stablePersistedGroupId(input, toolUseId),
+    toolUseId,
     status: isCompleted ? 'completed' : 'running',
     provider: groupProvider,
     model: groupModel,
     background: background || undefined,
+    jobId: backgroundStartMatch?.[1],
     totalUsage: isCompleted
       ? {
           input_tokens: headerInputTotal || parsedInputTotal,
@@ -142,11 +158,11 @@ export function parsePersistedAgentsGroup(
         index: i,
         label: String(raw.label ?? `Agent ${i + 1}`),
         status: parsed
-          ? parsed.reason === 'error'
-            ? ('error' as const)
-            : ('completed' as const)
+          ? statusFromPersistedReason(parsed.reason)
           : isCompleted
-            ? ('completed' as const)
+            ? result?.isError
+              ? ('error' as const)
+              : ('completed' as const)
             : ('pending' as const),
         toolCallCount: parsed?.tools ?? 0,
         provider: parsed?.provider ?? groupProvider,
@@ -162,6 +178,7 @@ export function parsePersistedAgentsGroup(
           : undefined,
         softToolTarget: typeof raw.target_tool_calls === 'number' ? raw.target_tool_calls : undefined,
         softTimeTargetMs: typeof raw.target_minutes === 'number' ? raw.target_minutes * 60_000 : undefined,
+        maxToolCalls: parsed?.maxTools,
         agentType:
           parsed?.type ??
           (typeof raw.type === 'string'
@@ -174,4 +191,33 @@ export function parsePersistedAgentsGroup(
       };
     }),
   };
+}
+
+function statusFromPersistedReason(reason: string) {
+  if (reason === 'completed') return 'completed' as const;
+  if (reason === 'aborted') return 'aborted' as const;
+  if (reason === 'timed_out' || reason === 'timeout' || reason === 'stalled') return 'timed_out' as const;
+  if (reason === 'tool_budget' || reason === 'time_budget' || reason === 'max_turns') return 'partial' as const;
+  return 'error' as const;
+}
+
+function stablePersistedGroupId(
+  input: Record<string, unknown> | undefined,
+  toolUseId: string | undefined,
+): string {
+  if (toolUseId) return `persisted-${toolUseId}`;
+  let source = '';
+  try {
+    source = JSON.stringify(input ?? {});
+  } catch {
+    source = String(input ?? 'spawn-agent');
+  }
+  // Small deterministic FNV-1a hash. This is a renderer identity fallback for
+  // legacy rows without tool_use ids, not a security primitive.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `persisted-legacy-${(hash >>> 0).toString(16)}`;
 }

@@ -41,16 +41,19 @@
 import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   runSubagent,
   runParallelAgents,
+  classifySubagentTerminal,
   countSubagentOutcomes,
   extractLastAssistantText,
   emptyCollected,
   type ParallelAgentSpec,
+  type ParallelAgentProgress,
+  type SubagentRunResult,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 import { renderCollectedSnapshotForParent } from '@mcp/code-agent/tools/subagent-collector.js';
 import {
@@ -243,11 +246,77 @@ async function runSingleEphemeral(
   const providerInfo = describeProvider(activeProvider);
   const parentSessionId = ctx.runner?.sessionId;
   const spawnId = randomUUID().slice(0, 8);
+  const toolUseId = ctx.currentToolUseId;
+  const limits = limitsForAgent(agent, deps);
   console.log(
     `[coder s=${parentSessionId ?? '?'}] spawn_agent: type=${agent.type} provider=${providerInfo.label} ` +
     `max_turns=${agent.maxTurns} research=${agent.researchPolicy?.depth ?? 'n/a'} spawn=${spawnId}` +
+    ` max_tools=${limits.maxToolCalls ?? 0}` +
     `${agent.files ? ` files=[${agent.files.join(', ')}]` : ''}`,
   );
+
+  // Keep the single-agent path on the same live event protocol as parallel
+  // and background runs. The dashboard projects these events into both the
+  // transcript block and the Subagents side panel; without them a running
+  // single spawn only appeared as a generic tool call.
+  ctx.runner?.emit('agents_group_start', {
+    groupId: spawnId,
+    toolUseId,
+    provider: providerInfo.provider,
+    model: providerInfo.model,
+    agents: [{
+      index: 0,
+      label: agent.label,
+      provider: providerInfo.provider,
+      model: providerInfo.model,
+      task: agent.task,
+      researchDepth: agent.researchPolicy?.depth,
+      softToolTarget: agent.researchPolicy?.softToolTarget,
+      softTimeTargetMs: agent.researchPolicy?.softTimeTargetMs,
+      maxToolCalls: limits.maxToolCalls,
+      hardTimeoutMs: limits.timeoutMs,
+    }],
+  });
+
+  let toolCallCount = 0;
+  const emitProgress = (
+    progress: Omit<ParallelAgentProgress, 'agentIndex' | 'label' | 'provider' | 'model'>,
+  ): void => {
+    if (typeof progress.toolCallCount === 'number') toolCallCount = progress.toolCallCount;
+    ctx.runner?.emit('agent_progress', {
+      groupId: spawnId,
+      toolUseId,
+      agentIndex: 0,
+      label: agent.label,
+      task: agent.task,
+      provider: providerInfo.provider,
+      model: providerInfo.model,
+      ...progress,
+    });
+  };
+  const emitEnd = (
+    usage: ChatUsage,
+    reason: SubagentRunResult['reason'],
+    resumableCount = 0,
+  ): void => {
+    const outcomeCounts = countSubagentOutcomes([{ reason }]);
+    ctx.runner?.emit('agents_group_end', {
+      groupId: spawnId,
+      totalUsage: usage,
+      agentCount: 1,
+      successCount: outcomeCounts.completedCount,
+      ...outcomeCounts,
+      resumableCount,
+    });
+  };
+  emitProgress({
+    event: 'spawned',
+    status: 'running',
+    toolCallCount: 0,
+    researchDepth: agent.researchPolicy?.depth,
+    softToolTarget: agent.researchPolicy?.softToolTarget,
+    softTimeTargetMs: agent.researchPolicy?.softTimeTargetMs,
+  });
 
   const cacheKeyInput = {
     prompt: agent.task,
@@ -269,6 +338,15 @@ async function runSingleEphemeral(
         `[coder s=${parentSessionId ?? '?'}] spawn_agent: CACHE HIT type=${agent.type} ` +
         `ageMs=${hit.ageMs} hitCount=${hit.hitCount}`,
       );
+      emitProgress({
+        event: 'completed',
+        status: 'completed',
+        toolCallCount: 0,
+        usage: hit.result.usage,
+        summary: hit.result.body.slice(0, 500),
+        note: 'cache hit',
+      });
+      emitEnd(hit.result.usage, 'completed');
       return {
         ...ok(`[cache-hit ageMs=${hit.ageMs} hits=${hit.hitCount}]\n\n` + hit.result.header + hit.result.body),
         subUsage: hit.result.usage,
@@ -302,36 +380,80 @@ async function runSingleEphemeral(
     role: 'user',
     content: [{ type: 'text', text: taskWithWorkspaceBriefing(agent.task, ctx) }],
   }];
-  const result = await runSubagent(
-    {
-      provider: activeProvider,
-      tools: deps.parentTools,
-      ctx,
-      sessionId: parentSessionId,
-      sessionStore: deps.sessionStore,
-      agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-      toolSelectionFilter: deps.toolSelectionFilter,
-      externalToolTiers: deps.externalToolTiers,
-    },
-    {
-      label: agent.label,
-      profile: agent.profile.id,
-      spawnId,
-      reasoningEffort: effortForProfile(deps, agent.profile),
-      systemPrompt: systemPromptForAgent(agent),
-      researchPolicy: agent.researchPolicy,
-      allowlist: agent.profile.allowlist,
-      initialMessages,
-      maxTurns: agent.maxTurns,
-      pathScope: agent.profile.pathScopeMode === 'enforce-writes' && agent.files && agent.files.length > 0
-        ? agent.files
-        : undefined,
-      pathScopeMode: agent.profile.pathScopeMode,
-      limits: limitsForAgent(agent),
-    },
-  );
+  let result: SubagentRunResult;
+  try {
+    result = await runSubagent(
+      {
+        provider: activeProvider,
+        tools: deps.parentTools,
+        ctx,
+        sessionId: parentSessionId,
+        sessionStore: deps.sessionStore,
+        agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        toolSelectionFilter: deps.toolSelectionFilter,
+        externalToolTiers: deps.externalToolTiers,
+      },
+      {
+        label: agent.label,
+        profile: agent.profile.id,
+        spawnId,
+        reasoningEffort: effortForProfile(deps, agent.profile),
+        systemPrompt: systemPromptForAgent(agent),
+        researchPolicy: agent.researchPolicy,
+        allowlist: agent.profile.allowlist,
+        initialMessages,
+        maxTurns: agent.maxTurns,
+        pathScope: agent.profile.pathScopeMode === 'enforce-writes' && agent.files && agent.files.length > 0
+          ? agent.files
+          : undefined,
+        pathScopeMode: agent.profile.pathScopeMode,
+        limits,
+        onProgress: (progress) => {
+          emitProgress({
+            event: progress.event,
+            status: progress.status ?? 'running',
+            toolCallCount: progress.toolCallCount,
+            note: progress.note,
+            phase: progress.phase,
+            turn: progress.turn,
+            elapsedMs: progress.elapsedMs,
+            stallMs: progress.stallMs,
+            idleMs: progress.idleMs,
+            deadlineMs: progress.deadlineMs,
+            lastToolName: progress.lastToolName ?? progress.toolName,
+            limit: progress.limit,
+            researchDepth: agent.researchPolicy?.depth,
+            softToolTarget: agent.researchPolicy?.softToolTarget,
+            softTimeTargetMs: agent.researchPolicy?.softTimeTargetMs,
+          });
+        },
+      },
+    );
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+    emitProgress({
+      event: 'error',
+      status: 'error',
+      toolCallCount,
+      error: errorText,
+    });
+    emitEnd({ input_tokens: 0, output_tokens: 0 }, 'error');
+    throw error;
+  }
 
-  const header = renderSingleHeader(providerInfo, agent.type, result.reason, result.usage, spawnId);
+  const terminal = classifySubagentTerminal(result.reason, result.finalText);
+  emitProgress({
+    event: terminal.event,
+    status: terminal.status,
+    toolCallCount,
+    usage: result.usage,
+    summary: result.finalText.slice(0, 500),
+    error: terminal.status === 'error' || terminal.status === 'timed_out' || terminal.status === 'aborted'
+      ? (result.failureDetail ?? result.finalText).slice(0, 500)
+      : undefined,
+  });
+
+  const header = renderSingleHeader(providerInfo, agent.type, result.reason, result.usage, spawnId, limits.maxToolCalls);
   const body = renderSingleBody(result.finalText, result.reason);
   // Frente C — append the sub's structured trail (memos / snapshots /
   // board posts) so the master sees what the sub explicitly flagged for
@@ -349,13 +471,14 @@ async function runSingleEphemeral(
   void extractLastAssistantText; // keep helper referenced for re-exports
 
   // Retain for resume_agent (failed → transcript kept, hint appended).
-  retainSpawnGroup({
+  const resumableCount = retainSpawnGroup({
     sessionId: parentSessionId,
     spawnId,
     provider: providerInfo.provider,
     model: providerInfo.model,
-    agents: [toRetentionAgent(0, agent, result)],
+    agents: [toRetentionAgent(0, agent, result, limits)],
   });
+  emitEnd(result.usage, result.reason, resumableCount);
   const hint = result.reason !== 'completed' ? renderResumeHint(spawnId, 1) : '';
   return { ...ok(header + body + trail + hint), subUsage: result.usage };
 }
@@ -367,6 +490,7 @@ async function runParallelEphemeral(
 ): Promise<ToolResult> {
   const parentSessionId = ctx.runner?.sessionId;
   const groupId = randomUUID().slice(0, 8);
+  const toolUseId = ctx.currentToolUseId;
   // Resolve each agent's provider from its profile (memoized in the resolver,
   // so same-profile agents in the batch reuse one provider; a profile that
   // inherits falls back to the parent provider).
@@ -374,6 +498,9 @@ async function runParallelEphemeral(
     agents.map((a) => providerForProfile(deps, a.profile)),
   );
   const agentInfos = agentProviders.map((p) => describeProvider(p));
+  // Resolve every agent's hard caps once — the same values feed the dispatch
+  // specs, the live events (badge denominator), and resume retention.
+  const agentLimits = agents.map((a) => limitsForAgent(a, deps));
   // Representative label for batch-level summaries (header/retention). When the
   // batch mixes providers, show them joined instead of one misleading value.
   const distinctLabels = [...new Set(agentInfos.map((info) => info.label))];
@@ -387,6 +514,7 @@ async function runParallelEphemeral(
 
   ctx.runner?.emit('agents_group_start', {
     groupId,
+    toolUseId,
     provider: agentInfos[0]?.provider,
     model: agentInfos[0]?.model,
     agents: agents.map((a, i) => ({
@@ -398,6 +526,8 @@ async function runParallelEphemeral(
       researchDepth: a.researchPolicy?.depth,
       softToolTarget: a.researchPolicy?.softToolTarget,
       softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
+      maxToolCalls: agentLimits[i]?.maxToolCalls,
+      hardTimeoutMs: agentLimits[i]?.timeoutMs,
     })),
   });
 
@@ -435,7 +565,7 @@ async function runParallelEphemeral(
       ? a.files
       : undefined,
     pathScopeMode: a.profile.pathScopeMode,
-    limits: limitsForAgent(a),
+    limits: agentLimits[i],
   }));
 
   const { results, totalUsage } = await runParallelAgents(
@@ -456,6 +586,8 @@ async function runParallelEphemeral(
       const info = agentInfos[progress.agentIndex] ?? headInfo;
       ctx.runner?.emit('agent_progress', {
         groupId,
+        toolUseId,
+        task: agents[progress.agentIndex]?.task,
         provider: info.provider,
         model: info.model,
         ...progress,
@@ -472,6 +604,7 @@ async function runParallelEphemeral(
     usage: r.usage,
     finalText: r.finalText,
     collected: r.collected,
+    maxToolCalls: agentLimits[i]?.maxToolCalls,
   })));
 
   // Persist each sub-agent's digest into the investigation ledger (non-company).
@@ -488,7 +621,7 @@ async function runParallelEphemeral(
     provider: headInfo.provider,
     model: headInfo.model,
     agents: results.map((r, i) => ({
-      ...toRetentionAgent(i, agents[i], r),
+      ...toRetentionAgent(i, agents[i], r, agentLimits[i]),
       toolCallCount: r.toolCallCount,
     })),
   });

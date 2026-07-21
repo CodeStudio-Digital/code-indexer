@@ -1,7 +1,7 @@
 /**
  * Moonshot AI Open Platform provider definition.
  *
- * Distinct from kimi-code (OAuth) — uses static API keys against the
+ * Distinct from kimi-code (coding/v1 API token) — uses Moonshot API keys against the
  * api.moonshot.ai/v1 (or .cn/v1) endpoints. Reuses the KimiCode adapter
  * classes for wire compatibility (thinking-mode, reasoning streaming,
  * tool-schema normalization).

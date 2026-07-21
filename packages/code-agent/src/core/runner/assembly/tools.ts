@@ -160,9 +160,26 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     (isProtected ? protectedBucket : others).push(t);
   }
   const modelMaxTools = getModelMaxTools(args.provider.model ?? '');
-  const maxTools = args.sessionToolCap != null && args.sessionToolCap > 0
-    ? Math.min(modelMaxTools, args.sessionToolCap)
-    : modelMaxTools;
+  // Perf W3 — default session ceiling. `getModelMaxTools` falls back to 200
+  // for models missing from the registry, and sessions without a preflight
+  // cap shipped the whole catalog (telemetry: 1319 turns >96 visible tools,
+  // ~105k chars ≈ 26k tokens of defs per turn, constant 128-tool sessions).
+  // The default is run-constant, so membership only changes across runs —
+  // never mid-run — which preserves the prompt-cache contract. Pins and the
+  // protected floor still survive the cap. `CODER_TOOL_CAP_DEFAULT=0`
+  // disables the default (legacy: model cap only). Applies only to
+  // tier-managed sessions: `activeTiers === null` (subagents/tests) relies
+  // on the full registry being exposed — see the invariant on BuildToolsArgs.
+  const defaultCapRaw = Number.parseInt(process.env.CODER_TOOL_CAP_DEFAULT ?? '', 10);
+  const defaultSessionCap = Number.isFinite(defaultCapRaw) && defaultCapRaw >= 0
+    ? defaultCapRaw
+    : 48;
+  const sessionCap = args.sessionToolCap != null && args.sessionToolCap > 0
+    ? args.sessionToolCap
+    : args.activeTiers !== null
+      ? defaultSessionCap
+      : 0;
+  const maxTools = sessionCap > 0 ? Math.min(modelMaxTools, sessionCap) : modelMaxTools;
   const totalBefore = protectedBucket.length + others.length;
   let capInfo: BuildToolsCapInfo | null = null;
   if (totalBefore > maxTools) {
@@ -187,7 +204,11 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     const overflow = protectedBucket.length > maxTools
       ? ` — protected set alone exceeds the cap, kept all ${protectedBucket.length}`
       : '';
-    const capSource = maxTools < modelMaxTools ? 'session preflight cap' : 'model limit';
+    const capSource = maxTools >= modelMaxTools
+      ? 'model limit'
+      : args.sessionToolCap != null && args.sessionToolCap > 0
+        ? 'session preflight cap'
+        : 'default session cap';
     console.log(
       `[coder] tool cap: ${totalBefore} → ${filtered.length} (${capSource} ${maxTools} for ${args.provider.model}, strategy=${legacy ? 'legacy' : 'priority'}) — ` +
         `${protectedBucket.length} protected kept, ${keptOthers.length}/${others.length} others kept, ${cutNames.length} dropped${overflow}. ` +
@@ -215,13 +236,14 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     && !args.activeTiers.has('navigate')
     && !args.activeTiers.has('admin')
   );
-  // Compact-catalog models (cap ≤ 64 — GLM flash class) get terse
-  // descriptions in EVERY tier state: serialized bytes compete with real
-  // context on a small model, and full text is recoverable via find_tools.
-  // Exception: the NEVER_TRIM core keeps its full USE/DON'T text — those
-  // are the tools whose discipline notes matter most. Deliberately keyed
-  // to the MODEL cap, not the session preflight cap.
-  const compactModel = modelMaxTools <= 64;
+  // Compact catalogs (EFFECTIVE cap ≤ 64) get terse descriptions in EVERY
+  // tier state: serialized bytes compete with real context, and full text is
+  // recoverable via find_tools. Exception: the NEVER_TRIM core keeps its
+  // full USE/DON'T text — those are the tools whose discipline notes matter
+  // most. Perf W3 — keyed to the effective cap (was: model cap only), so the
+  // default 48-tool session ships terse defs (~1.5k chars/tool measured with
+  // full text). Run-constant inputs → byte-stable within a run.
+  const compactModel = maxTools <= 64;
   const useTerse = (name: string): boolean =>
     (bootstrapOnly || compactModel) && !(compactModel && NEVER_TRIM.has(name));
 

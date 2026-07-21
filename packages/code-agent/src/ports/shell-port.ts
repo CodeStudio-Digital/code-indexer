@@ -36,7 +36,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { delimiter } from 'node:path';
-import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 /**
  * Per-project runtime PATH/env to inject into agent-spawned processes — the
@@ -405,19 +405,27 @@ export class LocalShellAdapter implements IShellPort {
       const stderr = new BoundedUtf8Capture(maxBytes);
       let timedOut = false;
       let killed = false;
+      const terminateOwnedTree = (): void => {
+        void killProcessTree(child.pid, 'SIGKILL').finally(() => {
+          // Fallback when taskkill is unavailable or its bounded circuit is
+          // open. The tree helper runs first so Windows can still discover
+          // descendants before the direct shell handle disappears.
+          try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        });
+      };
 
       const timer = setTimeout(() => {
         timedOut = true;
         killed = true;
-        // Timeout/abort is a hot background path. Kill through the existing
-        // handle; the process-wide tracker performs the expensive tree sweep
-        // only when the owning worker/application shuts down.
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        // `run_command` uses a shell. Killing only that direct handle leaves
+        // descendants such as Unity.exe alive and holding the project lock.
+        // The shared helper serializes/bounds taskkill on Windows.
+        terminateOwnedTree();
       }, timeoutMs);
 
       const onAbort = () => {
         killed = true;
-        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        terminateOwnedTree();
       };
       signal?.addEventListener('abort', onAbort);
 

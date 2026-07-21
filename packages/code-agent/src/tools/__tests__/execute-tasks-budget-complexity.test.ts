@@ -108,8 +108,27 @@ describe('resolveTaskLimit (per-kind + complexity composition)', () => {
     expect(out.timeoutMs).toBe(DEFAULT_LIMITS.verify.timeoutMs * 2);
   });
 
-  it('keeps investigate unlimited at small complexity', () => {
+  it('halves the investigate hard-cap defaults at small complexity', () => {
     const out = resolveTaskLimit(task({ kind: 'investigate', estimated_complexity: 'small' }));
+    expect(out.maxToolCalls).toBe(DEFAULT_LIMITS.investigate.maxToolCalls / 2);
+    expect(out.timeoutMs).toBe(DEFAULT_LIMITS.investigate.timeoutMs / 2);
+  });
+
+  it('lets the admin per-profile override replace env/defaults before complexity scaling', () => {
+    vi.stubEnv('CODER_TASK_INVESTIGATE_MAX_TOOLS', '999');
+    const out = resolveTaskLimit(
+      task({ kind: 'investigate', estimated_complexity: 'small' }),
+      { maxToolCalls: 60, timeoutMs: null },
+    );
+    expect(out.maxToolCalls).toBe(30); // override 60, then small = 0.5x
+    expect(out.timeoutMs).toBe(DEFAULT_LIMITS.investigate.timeoutMs / 2); // null axis falls through
+  });
+
+  it('keeps an explicit override 0 unlimited at every complexity', () => {
+    const out = resolveTaskLimit(
+      task({ kind: 'investigate', estimated_complexity: 'large' }),
+      { maxToolCalls: 0, timeoutMs: 0 },
+    );
     expect(out.maxToolCalls).toBe(0);
     expect(out.timeoutMs).toBe(0);
   });

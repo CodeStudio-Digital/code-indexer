@@ -37,7 +37,7 @@ const {
 const {
   kimiCodeSeedUpsertModels,
   mapKimiCodeModels,
-} = await import('@mcp/services/services/oauth/kimi-code.js');
+} = await import('@mcp/services/services/kimi-code.js');
 import type { AgentMessage, ChatDelta } from '../../core/messages.js';
 
 describe('isEffectivelyEmptyText', () => {
@@ -134,6 +134,53 @@ describe('toKimiToolParam — M6 builtin functions (prefix $)', () => {
     const result = toKimiToolParam({ name: 'foo$bar', description: 'x' });
     expect(result.type).toBe('function');
   });
+
+  it('expands scalar property shorthands into Moonshot-compatible schema objects', () => {
+    const result = toKimiToolParam({
+      name: 'dynamic_tool',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: 'string',
+          enabled: 'boolean',
+          unrestricted: true,
+        },
+      },
+    });
+
+    const fn = result.function as { parameters: { properties: Record<string, unknown> } };
+    expect(fn.parameters.properties).toEqual({
+      type: { type: 'string' },
+      enabled: { type: 'boolean' },
+      unrestricted: {},
+    });
+  });
+
+  it('normalizes scalar shorthands recursively inside nested object properties', () => {
+    const result = toKimiToolParam({
+      name: 'nested_tool',
+      parameters: {
+        type: 'object',
+        properties: {
+          options: {
+            properties: {
+              type: 'string',
+            },
+          },
+        },
+      },
+    });
+
+    const fn = result.function as {
+      parameters: {
+        properties: { options: { type: string; properties: Record<string, unknown> } };
+      };
+    };
+    expect(fn.parameters.properties.options).toEqual({
+      type: 'object',
+      properties: { type: { type: 'string' } },
+    });
+  });
 });
 
 describe('KimiCodeChatProvider.chat() — H6 skip empty tool_call deltas', () => {
@@ -210,7 +257,11 @@ describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
     })();
   }
 
-  async function run(model: string, reasoningEffort?: string): Promise<Record<string, unknown>> {
+  async function run(
+    model: string,
+    reasoningEffort?: string,
+    temperature?: number,
+  ): Promise<Record<string, unknown>> {
     mockCreate.mockResolvedValueOnce(completedStream());
     const provider = new KimiCodeChatProvider({ apiKey: 'test', model });
     for await (const _delta of provider.chat({
@@ -218,6 +269,7 @@ describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
       tools: [],
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(typeof temperature === 'number' ? { inference: { temperature } } : {}),
     })) {
       // Drain the stream so the provider request completes.
     }
@@ -238,6 +290,21 @@ describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
   it('does not send reasoning_effort to older Kimi models', async () => {
     const body = await run('kimi-k2.6', 'high');
     expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('forces K3 temperature to 1 despite a user override', async () => {
+    const body = await run('k3', undefined, 0.2);
+    expect(body.temperature).toBe(1);
+  });
+
+  it('sends K3 temperature 1 even without a user override', async () => {
+    const body = await run('k3');
+    expect(body.temperature).toBe(1);
+  });
+
+  it('keeps user temperature behavior for non-K3 models', async () => {
+    const body = await run('kimi-for-coding', undefined, 0.2);
+    expect(body.temperature).toBe(0.2);
   });
 });
 

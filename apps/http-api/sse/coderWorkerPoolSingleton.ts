@@ -14,6 +14,7 @@
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import {
   CoderWorkerPool,
+  DEFAULT_CODER_WORKER_HEAP_MB,
   type CoderWorkerDocDeps,
 } from './CoderWorkerPool.js';
 import type { McpExternalPool } from './McpExternalPool.js';
@@ -81,7 +82,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
   const configuredHeapMb = Number(process.env.CODER_WORKER_HEAP_MB);
   const workerHeapMb = Number.isFinite(configuredHeapMb) && configuredHeapMb >= 256
     ? Math.floor(configuredHeapMb)
-    : 2_048;
+    : DEFAULT_CODER_WORKER_HEAP_MB;
   cachedPool = new CoderWorkerPool({
     workerFile: resolved.file,
     workerExecArgv: resolved.execArgv,

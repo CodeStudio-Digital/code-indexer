@@ -144,6 +144,16 @@ export interface ProjectIndexSettings {
   /** MCP_WATCH_IDLE_MS — stop recursive watcher after the last fs subscriber leaves. */
   watchIdleMs: number;
   /**
+   * MCP_WATCH_MAX_FILES — skip live per-file watching for a project whose
+   * watchable tree exceeds this many entries. chokidar opens one native handle
+   * per directory and re-reads a whole directory on every change inside it, so a
+   * giant tree (e.g. a Unity project whose `Assets/` holds tens of thousands of
+   * imported asset files) turns routine editor/tool activity into a sustained
+   * CPU drain. Over budget, freshness falls back to the git-meta watcher +
+   * structural reconcile (both authoritative). 0 disables the guard.
+   */
+  watchMaxFiles: number;
+  /**
    * MCP_INDEX_OPEN_DELAY_MS — defer the CPU-bound structural run on a
    * non-manual open so the renderer's first paint + screen mount finish
    * before the indexer worker pins a core. 0 = run immediately.
@@ -174,6 +184,7 @@ export function readProjectIndexSettings(): ProjectIndexSettings {
     watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
     watchOpenDelayMs: envIntZero('MCP_WATCH_OPEN_DELAY_MS', 1200),
     watchIdleMs: envIntZero('MCP_WATCH_IDLE_MS', 60000),
+    watchMaxFiles: envIntZero('MCP_WATCH_MAX_FILES', 20000),
     openDelayMs: envIntZero('MCP_INDEX_OPEN_DELAY_MS', 700),
   };
 }

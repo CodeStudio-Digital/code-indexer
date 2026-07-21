@@ -28,10 +28,11 @@ import { events } from '../machine/events.js';
 import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
-import { buildTools, fingerprintToolsJson } from '../assembly/tools.js';
+import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
+import { maybeKickSummaryPrecompute, shouldKickPrecompute } from '../compaction/precompute.js';
 // PR-F integration — Codex BodyAfterPrefix (post-response, prefix-cache-aware
 // trigger) + Kimi pre-emit (pre-provider-call estimate so the request that
 // would tip the window over doesn't even go out). Both gates compose with
@@ -123,7 +124,13 @@ export class ExecutingNode implements BehaviorNode {
       /\b(ignore|disregard|skip|don'?t use|do not use|n[aã]o use|n[aã]o usar)\b[\s\S]{0,20}mem(?:o|ó)r(?:y|ia)\b(?!\s*(?:leak|leaks|usage|check|checks|profile|profiler|pressure|footprint|heap|ram|cache))/i.test(
         memoryTaskText ?? '',
       );
-    if (!ignoreMemory && ctx.bridge?.getRelevantProjectMemory) {
+    // Perf W1 — the two recall blocks below are independent (distinct
+    // injectionState fields + throttle keys) yet ran serially, both awaited
+    // on the critical path before the provider call. Run them concurrently;
+    // the internal synthesize→retrieve dependency of the project-memory
+    // block is preserved inside its closure.
+    const recallProjectMemory = async (): Promise<void> => {
+      if (ignoreMemory || !ctx.bridge?.getRelevantProjectMemory) return;
       // Derive the recall query + throttle verdict (pure). A normal message IS
       // the query; a META / continuation ("continue", "Reanalise tudo que fez,
       // se não deixou passar nada!") carries no task semantics, so the raw text
@@ -135,46 +142,46 @@ export class ExecutingNode implements BehaviorNode {
         ctx.injectionState.lastMemoryQuery,
         ctx.turn,
       );
-      if (shouldRetrieve) {
-        // Only for a meta message do we spend the (paid, on-critical-path) LLM
-        // synthesizer to sharpen the walk-back query; fail-open to the candidate.
-        let memoryQuery = candidate;
-        if (meta && ctx.bridge.synthesizeMemoryQuery) {
-          try {
-            const synthesized = await ctx.bridge.synthesizeMemoryQuery(buildConversationTail(ctx.messages));
-            if (synthesized) memoryQuery = synthesized;
-          } catch (e) {
-            dbg('memory query synthesis failed', (e as Error).message);
-          }
-        }
+      if (!shouldRetrieve) return;
+      // Only for a meta message do we spend the (paid, on-critical-path) LLM
+      // synthesizer to sharpen the walk-back query; fail-open to the candidate.
+      let memoryQuery = candidate;
+      if (meta && ctx.bridge.synthesizeMemoryQuery) {
         try {
-          ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(memoryQuery, ctx.turn);
-          ctx.injectionState.lastMemoryQuery = candidate; // STABLE throttle key
+          const synthesized = await ctx.bridge.synthesizeMemoryQuery(buildConversationTail(ctx.messages));
+          if (synthesized) memoryQuery = synthesized;
         } catch (e) {
-          dbg('memory retrieval failed', (e as Error).message);
+          dbg('memory query synthesis failed', (e as Error).message);
         }
       }
-    }
+      try {
+        ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(memoryQuery, ctx.turn);
+        ctx.injectionState.lastMemoryQuery = candidate; // STABLE throttle key
+      } catch (e) {
+        dbg('memory retrieval failed', (e as Error).message);
+      }
+    };
 
     // Session-local history uses the same material-task-change throttle as
     // project memory, but retrieval is independently bounded to two excerpts.
-    if (ctx.bridge?.getRelevantConversationChapters) {
+    const recallConversationChapters = async (): Promise<void> => {
+      if (!ctx.bridge?.getRelevantConversationChapters) return;
       const { candidate, shouldRetrieve } = planMemoryRecall(
         memoryTaskText,
         ctx.messages,
         ctx.injectionState.lastConversationChapterQuery,
         ctx.turn,
       );
-      if (shouldRetrieve && candidate.trim()) {
-        try {
-          ctx.injectionState.pendingConversationChapters =
-            await ctx.bridge.getRelevantConversationChapters(candidate, ctx.turn);
-          ctx.injectionState.lastConversationChapterQuery = candidate;
-        } catch (e) {
-          dbg('conversation chapter retrieval failed', (e as Error).message);
-        }
+      if (!shouldRetrieve || !candidate.trim()) return;
+      try {
+        ctx.injectionState.pendingConversationChapters =
+          await ctx.bridge.getRelevantConversationChapters(candidate, ctx.turn);
+        ctx.injectionState.lastConversationChapterQuery = candidate;
+      } catch (e) {
+        dbg('conversation chapter retrieval failed', (e as Error).message);
       }
-    }
+    };
+    await Promise.all([recallProjectMemory(), recallConversationChapters()]);
 
     // Correction nudge — the user's last message looks like a correction or a
     // durable preference: suggest remember() THIS turn. Cheap regex, throttled
@@ -406,18 +413,37 @@ export class ExecutingNode implements BehaviorNode {
       !ctx.activeTiers.has('navigate') &&
       !ctx.activeTiers.has('admin')
     );
-    const toolsBuilt = buildTools({
-      registry: ctx.opts.registry,
-      globalDisabledTools: ctx.opts.globalDisabledTools,
-      sessionDisabledTools: ctx.opts.sessionDisabledTools,
-      externalToolTiers: ctx.opts.externalToolTiers,
-      activeTiers: ctx.activeTiers,
-      pinnedTools: ctx.pinnedTools,
-      sessionToolCap: ctx.opts.sessionToolCap,
-      terseDescriptionsLock: ctx.terseDescriptionsLock,
-      toolContext: ctx.opts.toolContext,
-      provider: ctx.opts.provider,
-    });
+    // Perf W1 — memoized catalog build. `buildTools` is a pure function of
+    // the key below, which is constant for long stretches of a run, yet the
+    // full pipeline (registry scan, tool-filter hook fs read, sort, terse
+    // mapping and the eligible-catalog stringify) ran EVERY turn. A key
+    // change (new pin, tier promotion, cap change) rebuilds; note the
+    // tool-filter hook is therefore only re-read on rebuilds — mid-run hook
+    // edits land on the next membership change, which matches the prompt-
+    // cache contract of a stable catalog anyway.
+    const toolsMemoKey =
+      buildToolsCacheKey({ activeTiers: ctx.activeTiers, pinnedTools: ctx.pinnedTools }) +
+      `|cap=${ctx.opts.sessionToolCap ?? ''}` +
+      `|terse=${String(ctx.terseDescriptionsLock)}` +
+      `|model=${ctx.opts.provider.model ?? ''}`;
+    let toolsBuilt: BuildToolsResult;
+    if (ctx.toolsMemo && ctx.toolsMemo.key === toolsMemoKey) {
+      toolsBuilt = ctx.toolsMemo.built;
+    } else {
+      toolsBuilt = buildTools({
+        registry: ctx.opts.registry,
+        globalDisabledTools: ctx.opts.globalDisabledTools,
+        sessionDisabledTools: ctx.opts.sessionDisabledTools,
+        externalToolTiers: ctx.opts.externalToolTiers,
+        activeTiers: ctx.activeTiers,
+        pinnedTools: ctx.pinnedTools,
+        sessionToolCap: ctx.opts.sessionToolCap,
+        terseDescriptionsLock: ctx.terseDescriptionsLock,
+        toolContext: ctx.opts.toolContext,
+        provider: ctx.opts.provider,
+      });
+      ctx.toolsMemo = { key: toolsMemoKey, built: toolsBuilt, variants: new Map() };
+    }
     // Recovery is a state-dependent capability: exposing get_tool_output
     // before the session has any stored snapshot invites the model to invent
     // an ID. Rebuild runs every provider turn, so the tool appears immediately
@@ -428,9 +454,19 @@ export class ExecutingNode implements BehaviorNode {
         ? outputStore.hasOutputs()
         : true // compatibility for narrow test/host stubs
       : false;
-    const availableTools = hasRecoverableOutput
-      ? toolsBuilt.tools
-      : toolsBuilt.tools.filter((tool) => tool.name !== 'get_tool_output');
+    const toolsVariantKey = hasRecoverableOutput ? 'full' : 'no-recover';
+    let toolsVariant = ctx.toolsMemo.variants.get(toolsVariantKey);
+    if (!toolsVariant) {
+      toolsVariant = {
+        tools: hasRecoverableOutput
+          ? toolsBuilt.tools
+          : toolsBuilt.tools.filter((tool) => tool.name !== 'get_tool_output'),
+        json: null,
+        fingerprint: null,
+      };
+      ctx.toolsMemo.variants.set(toolsVariantKey, toolsVariant);
+    }
+    const availableTools = toolsVariant.tools;
     let toolsForModel = availableTools;
     if (ctx.opts.toolSelectionFilter) {
       try {
@@ -645,7 +681,7 @@ export class ExecutingNode implements BehaviorNode {
       Number(process.env.CODER_STREAM_HEARTBEAT_MS ?? '10000') || 10_000;
     const streamStartedAt = Date.now();
     const streamHeartbeat = setInterval(() => {
-      ctx.operations.progress(providerOpId, {
+      const snapshot = ctx.operations.heartbeat(providerOpId, {
         phase: 'streaming',
         note: `awaiting ${ctx.opts.provider.name}:${ctx.opts.provider.model}`,
       });
@@ -654,6 +690,8 @@ export class ExecutingNode implements BehaviorNode {
         name: 'provider.chat',
         elapsedMs: Date.now() - streamStartedAt,
         note: `awaiting ${ctx.opts.provider.name}:${ctx.opts.provider.model}…`,
+        kind: 'heartbeat',
+        ...(snapshot ? { idleMs: snapshot.idleMs } : {}),
       });
     }, STREAM_HEARTBEAT_MS);
 
@@ -671,11 +709,14 @@ export class ExecutingNode implements BehaviorNode {
           ctx.recovery.get('provider-thinking-timeout') ?? 0,
         ),
         onTextDelta: (text) => {
-          ctx.operations.progress(providerOpId, { phase: 'text_delta' });
+          // Keep operation liveness accurate without mirroring every token as
+          // a second `operation_progress` event. The 10s stream heartbeat
+          // above remains the sampled progress signal for diagnostics/UI.
+          ctx.operations.touch(providerOpId, { phase: 'text_delta' });
           ctx.emit('text_delta', text);
         },
         onThinkingDelta: (text) => {
-          ctx.operations.progress(providerOpId, { phase: 'thinking_delta' });
+          ctx.operations.touch(providerOpId, { phase: 'thinking_delta' });
           ctx.emit('thinking_delta', text);
         },
       });
@@ -725,6 +766,18 @@ export class ExecutingNode implements BehaviorNode {
     // one row.
     const { toolsDefChars, toolsFingerprint } = (() => {
       try {
+        // Perf W1 — when the model got the memoized catalog verbatim (no
+        // relevance selection this turn), serialize/fingerprint ONCE and
+        // cache on the variant; the ~50-105k-char stringify was previously
+        // paid every turn. Selection-filtered catalogs still stringify.
+        if (toolsForModel === toolsVariant.tools) {
+          toolsVariant.json ??= JSON.stringify(toolsForModel);
+          toolsVariant.fingerprint ??= fingerprintToolsJson(toolsVariant.json);
+          return {
+            toolsDefChars: toolsVariant.json.length,
+            toolsFingerprint: toolsVariant.fingerprint,
+          };
+        }
         const json = JSON.stringify(toolsForModel);
         return { toolsDefChars: json.length, toolsFingerprint: fingerprintToolsJson(json) };
       } catch {
@@ -761,7 +814,14 @@ export class ExecutingNode implements BehaviorNode {
           compactionTriggered: false,
           summarizerRan: false,
         });
-        ctx.lastTurnTelemetryId = id;
+        // Perf W1 — async writer path returns a promise; the id lands when
+        // the off-thread insert settles (before the host's flush stamps tool
+        // calls — it awaits runner.lastTurnTelemetryIdPromise).
+        if (id && typeof id === 'object') {
+          void id.then((resolved) => { ctx.lastTurnTelemetryId = resolved; });
+        } else {
+          ctx.lastTurnTelemetryId = id;
+        }
       } catch {
         // Telemetry failures NEVER break the turn.
       }
@@ -896,9 +956,18 @@ export class ExecutingNode implements BehaviorNode {
       },
       onToolCallFinalized: (id, shapedChars) =>
         ctx.emit('tool_call_finalized', id, { shapedChars }),
-      onToolProgress: (id, name, elapsedMs, note) => {
-        ctx.operations.progress(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) });
-        ctx.emit('tool_progress', { id, name, elapsedMs, ...(note ? { note } : {}) });
+      onToolProgress: (id, name, elapsedMs, note, kind = 'heartbeat') => {
+        const snapshot = kind === 'progress'
+          ? ctx.operations.progress(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) })
+          : ctx.operations.heartbeat(`tool:${id}`, { phase: 'running', ...(note ? { note } : {}) });
+        ctx.emit('tool_progress', {
+          id,
+          name,
+          elapsedMs,
+          ...(note ? { note } : {}),
+          kind,
+          ...(snapshot ? { idleMs: snapshot.idleMs } : {}),
+        });
       },
       // Nested-call guards (code_exec): one observer per parent. Invocation
       // dedup is local to that observer; only result-aware failure/no-progress
@@ -1155,6 +1224,14 @@ export class ExecutingNode implements BehaviorNode {
           ? 'token-budget'
           : 'body-after-prefix';
       return events.tokenThresholdHit({ ratio: ratio > 0 ? ratio : 1, trigger });
+    }
+
+    // Perf W1 — the gate hasn't fired but the prompt is close to the trigger:
+    // start the compaction summary in the BACKGROUND so the eventual
+    // Compacting pass consumes a ready result instead of stalling the run
+    // inline (telemetry: summarizer turns averaged 156s vs 40s normal).
+    if (shouldKickPrecompute(Math.max(bodyDecision.ratio, totalDecision.ratio))) {
+      maybeKickSummaryPrecompute(ctx);
     }
 
     // Gate quiet — the prompt is back under the trigger, so any future genuine

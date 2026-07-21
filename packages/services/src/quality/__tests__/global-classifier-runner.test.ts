@@ -7,13 +7,14 @@
  *   - observer errors are swallowed (do not break the pipeline)
  *   - clearing the observer with undefined stops further callbacks
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   setGlobalQualityClassifierPipeline,
   setGlobalQualityClassificationStore,
   getGlobalQualityClassificationStore,
   setGlobalQualityResultObserver,
   runGlobalQualityClassifiers,
+  recordGlobalDeterministicQualitySignal,
   QualityClassifierPipeline,
 } from '../index.js';
 import type { LLMClassifier } from '../llm-classifier.js';
@@ -47,6 +48,26 @@ describe('global-classifier-runner', () => {
     expect(getGlobalQualityClassificationStore()).toBe(fakeStore);
     setGlobalQualityClassificationStore(undefined);
     expect(getGlobalQualityClassificationStore()).toBeUndefined();
+  });
+
+  it('reports deterministic-signal persistence failures without breaking the run', () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      setGlobalQualityClassificationStore({
+        insert: () => { throw new Error('simulated quality schema drift'); },
+      } as never);
+
+      expect(recordGlobalDeterministicQualitySignal({
+        classifierName: 'delivery_overall',
+        verdict: 'flagged',
+        reason: 'missing final',
+        actionTaken: 'advisory',
+      })).toBeNull();
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('simulated quality schema drift'));
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('observer fires after a successful classify()', async () => {

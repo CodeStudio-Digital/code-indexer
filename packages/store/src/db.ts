@@ -100,7 +100,10 @@ export class CodeIndexDB {
   /** Periodic PASSIVE-checkpoint timer (checkpoint owner only). */
   private walCheckpointTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(dbPath: string, opts: { checkpointOwner?: boolean } = {}) {
+  constructor(
+    dbPath: string,
+    opts: { checkpointOwner?: boolean; externalCheckpointer?: boolean } = {},
+  ) {
     this.centralDbPath = dbPath;
     this.checkpointOwner = !!opts.checkpointOwner;
     this.db = new Database(dbPath);
@@ -118,9 +121,14 @@ export class CodeIndexDB {
     // surprise checkpoint mid-commit) and instead runs a periodic NON-BLOCKING
     // PASSIVE checkpoint, plus a full TRUNCATE on close. Worker handles keep
     // autocheckpoint ON — their PASSIVE checkpoints run off the main thread.
+    // Perf W2 — `externalCheckpointer`: the db-maintenance worker owns the
+    // periodic PASSIVE checkpoint on its own thread, so even that non-blocking
+    // pass leaves the main thread entirely. This handle still disables
+    // autocheckpoint (a main-thread write must never pay a surprise
+    // checkpoint) and still TRUNCATEs on close.
     if (this.checkpointOwner) {
       this.db.pragma('wal_autocheckpoint = 0');
-      this.startWalCheckpointer();
+      if (!opts.externalCheckpointer) this.startWalCheckpointer();
     }
     // Schema must exist before migrations that ALTER it.
     initSchema(this.db);
@@ -146,6 +154,16 @@ export class CodeIndexDB {
   getSchemaVersion(): number { return getSchemaVersion(this.db); }
   /** better-sqlite3 handle for stores that need direct prepared-statement access. */
   raw(): DB { return this.db; }
+
+  /**
+   * Fallback for `externalCheckpointer` setups: when the db-maintenance
+   * worker can't run (crashed past its restart budget), the caller restores
+   * the in-process PASSIVE timer so the WAL never goes unbounded. Idempotent.
+   */
+  enableInternalCheckpointer(): void {
+    if (!this.checkpointOwner || this.walCheckpointTimer || this.closed) return;
+    this.startWalCheckpointer();
+  }
   private closed = false;
 
   close(): void {

@@ -51,15 +51,6 @@ vi.mock('@mcp/services/services/oauth/openai.js', () => ({
 vi.mock('@mcp/services/services/oauth/google.js', () => ({
   refreshIfExpired: vi.fn().mockResolvedValue('fresh-google-token'),
 }));
-vi.mock('@mcp/services/services/oauth/kimi-code.js', async () => {
-  const actual = await vi.importActual<typeof import('@mcp/services/services/oauth/kimi-code.js')>(
-    '@mcp/services/services/oauth/kimi-code.js',
-  );
-  return {
-    ...actual,
-    refreshIfExpired: vi.fn().mockResolvedValue('fresh-kimi-token'),
-  };
-});
 vi.mock('@mcp/code-agent/providers/chatgpt.js', async () => {
   const actual = await vi.importActual<typeof import('@mcp/code-agent/providers/chatgpt.js')>(
     '@mcp/code-agent/providers/chatgpt.js',
@@ -73,6 +64,7 @@ import { parseModelWithMode } from '@mcp/services/providers/shared/model-mode.js
 import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
 import { zaiSpec } from '@mcp/provider-engine/specs/openai-compat.js';
 import { googleOAuthSpec } from '@mcp/provider-engine/specs/google-oauth.js';
+import { kimiCodeSpec } from '@mcp/provider-engine/specs/kimi.js';
 
 const zai = buildProviderDefinition(zaiSpec);
 const googleOAuth = buildProviderDefinition(googleOAuthSpec);
@@ -254,6 +246,35 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
     await withMockedStore(store, async () => {
       const { def } = await lookupProvider('openai');
       expect(def.kind).toBe('openai');
+    });
+  });
+
+  it('rewrites the legacy kimi-code instance from openai to its dedicated shape', async () => {
+    const store = {
+      getProvider: (): ProviderConfig => ({
+        id: 'kimi-code',
+        name: 'Kimi',
+        kind: 'openai',
+        base_url: 'https://api.kimi.com/coding/v1',
+        api_key: 'kimi-token',
+        auth_mode: 'oauth',
+        enabled: true,
+        use_for_agent: true,
+        use_for_coder: true,
+        use_for_general: false,
+        is_default: false,
+        extra: { oauth_key: 'oauth/kimi-code' },
+        fallback_provider_id: null,
+        created_at: '',
+        updated_at: '',
+      }),
+      listProviders: () => [],
+    } as unknown as ProviderStore;
+
+    const { lookupProvider } = await import('@mcp/services/providers/factory.js');
+    await withMockedStore(store, async () => {
+      const { def } = await lookupProvider('kimi-code');
+      expect(def.kind).toBe('kimi-code');
     });
   });
 });
@@ -467,25 +488,25 @@ describe('resolveGoogleOAuthCreds — api_key mirror writeback', () => {
   });
 });
 
-describe('resolveKimiCodeCreds — api_key mirror writeback', () => {
-  it('writes the fresh token back to providers.api_key when it changed', async () => {
-    const { store, upsertCalls } = fakeStore();
-    const { resolveKimiCodeCreds } = await import('@mcp/services/providers/shared/oauth.js');
-    await withMockedStore(store, async () => {
-      const cfg: ProviderConfig = {
-        ...baseCfg,
-        id: 'kimi-code',
-        kind: 'kimi-code',
-        base_url: 'https://api.kimi.com/coding/v1',
-        api_key: 'stale-token',
-        extra: { kimi_code_thinking_mode: 'disabled' },
-      };
-      const creds = await resolveKimiCodeCreds(cfg);
-      expect(creds.apiKey).toBe('fresh-kimi-token');
-      expect(creds.baseURL).toBe('https://api.kimi.com/coding/v1');
-      expect(creds.extra?.thinkingMode).toBe('disabled');
-      expect(upsertCalls).toHaveLength(1);
-      expect(upsertCalls[0].api_key).toBe('fresh-kimi-token');
+describe('Kimi Code API-key credential resolution', () => {
+  it('uses the user API token directly and has no OAuth descriptor', async () => {
+    const def = buildProviderDefinition(kimiCodeSpec);
+    const { resolveCreds } = await import('@mcp/services/providers/shared/resolver.js');
+    const cfg: ProviderConfig = {
+      ...baseCfg,
+      id: 'kimi-code',
+      kind: 'kimi-code',
+      base_url: 'https://api.kimi.com/coding/v1',
+      api_key: 'user-api-token',
+      auth_mode: 'api_key',
+      extra: { thinkingMode: 'disabled' },
+    };
+
+    await expect(resolveCreds(def, cfg)).resolves.toMatchObject({
+      apiKey: 'user-api-token',
+      baseURL: 'https://api.kimi.com/coding/v1',
+      extra: { thinkingMode: 'disabled' },
     });
+    expect(def.auth).toBeUndefined();
   });
 });

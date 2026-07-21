@@ -108,6 +108,7 @@ import {
 } from '../../../packages/services/src/verdaccio/verdaccio-service.js';
 import {
   createBus,
+  clearReplayBuffer,
   publish,
   markEnded,
   setBusRunner,
@@ -121,7 +122,8 @@ import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
-import { resolveDocSearchTimeoutMs } from './doc-search-timeout.js';
+import { buildWorkerDocSearch } from './worker-doc-search.js';
+import { requestDocsResearchOverBridge } from './docs-research-rpc.js';
 import { PluginWorkerHost } from '../sse/PluginWorkerHost.js';
 import { buildPluginTools, type EnabledPlugin } from '../../../packages/plugin-host/src/plugin-tool-bridge.js';
 import { buildHostInvoke, type HostInvoke } from '../../../packages/plugin-host/src/host-invoke.js';
@@ -235,26 +237,18 @@ const bridge = new MessageBridge({
 // Per-isolate heap stats for the admin perf monitor (best-effort RPC).
 registerPerfStatsHandler(bridge);
 
-// ─── Doc-corpus shim: route to the main process via RPC ──────────────
+// ─── Doc-corpus shim ────────────────────────────────────────────────
 // `worker_threads` don't share module state, so the `setGlobalDocSearch`
 // + `setGlobalDocsResearcher` singletons populated in server.ts on the
 // main thread are NULL here. Without this shim, `rag_search_docs` from
 // inside the worker would error with "doc corpus backend is not wired
-// into this process". We install a thin proxy that forwards every
-// `search` / `runResearch` call back to the main thread via
-// `bridge.request`; the corresponding handlers live in
-// `apps/http-api/sse/CoderWorkerPool.ts`. The actual `DocHybridSearch`
-// + `DocsResearchBridge` instances live ONCE in the main process —
-// zero duplication, single source of truth.
+// into this process". Search stays in this worker's WAL connection so a
+// slow semantic provider cannot block Electron's event loop. Navigation
+// reads and deep research retain their existing host RPCs.
+const workerDocStore = new DocStore(dbConn.handle);
+const workerDocSearch = buildWorkerDocSearch(workerDocStore);
 const docSearchShim: DocSearchBackend = {
-  search: async (input) =>
-    bridge.request<Awaited<ReturnType<DocSearchBackend['search']>>>(
-      'docSearch',
-      input,
-      // Embedding + reranking can legitimately outlive the former fixed 60s
-      // ceiling on a slow provider. Keep a configurable finite RPC guard.
-      { timeoutMs: resolveDocSearchTimeoutMs() },
-    ),
+  search: workerDocSearch.search,
   // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
   readChunk: async (input) =>
     bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
@@ -280,13 +274,11 @@ const docSearchShim: DocSearchBackend = {
 setGlobalDocSearch(docSearchShim);
 
 // ─── <indexed-docs> hint provider: worker-local DB reads ─────────────
-// Unlike docSearch (which needs the main process's embedder/reranker),
-// the hint only does two SELECTs — a local DocStore over this worker's
-// own WAL handle avoids an RPC round-trip on every turn. Inlined (not
+// The hint only does two SELECTs against the same worker-local DocStore,
+// avoiding an RPC round-trip on every turn. Inlined (not
 // imported from server/docs/search-backend.ts) because that module pulls
 // `@mcp/*` aliases, which don't resolve inside worker_threads (see the
 // relative-imports note at the top of this file).
-const workerDocStore = new DocStore(dbConn.handle);
 setGlobalDocsHintProvider({
   listForProject: (projectId) => {
     try {
@@ -407,7 +399,7 @@ installWorkerLspShim(bridge);
 // the session keeps going. See packages/code-agent/src/core/tool-timeouts.ts.
 const docsResearcherShim = {
   runResearch: (input: Parameters<DocsResearchBridge['runResearch']>[0]): Promise<DocsResearchResult> =>
-    bridge.request<DocsResearchResult>('docsResearch', input, { timeoutMs: 10 * 60_000 }),
+    requestDocsResearchOverBridge(bridge, input),
 } as unknown as DocsResearchBridge;
 setGlobalDocsResearcher(docsResearcherShim);
 
@@ -477,6 +469,26 @@ let activeRun: ActiveRunState | null = null;
 function detachRunForwarders(run: ActiveRunState): void {
   try { run.detachBusSubscription(); } catch { /* best-effort */ }
   try { run.detachBusEndListener(); } catch { /* best-effort */ }
+}
+
+/**
+ * The main process owns the reconnect replay after `bus.end`. Keeping the
+ * worker-side bus alive during the linger window retained a second copy of up
+ * to 2,000 events plus the resolved `runnerReady` promise (and therefore the
+ * entire runner graph). Release that graph as soon as the terminal event has
+ * been mirrored; the warm worker can still serve the next `runFresh` without
+ * retaining any completed-turn state.
+ */
+function releaseCompletedRun(run: ActiveRunState): void {
+  run.runner = null;
+  run.handle = null;
+  run.inProgress = false;
+  detachRunForwarders(run);
+  run.bus.runner = undefined;
+  clearReplayBuffer(run.bus);
+  run.bus.subscribers.clear();
+  run.bus.eventSinks.clear();
+  if (activeRun === run) activeRun = null;
 }
 
 function createActiveRun(runId: number): ActiveRunState {
@@ -882,10 +894,7 @@ bridge.handle('runFresh', async (payload) => {
         void pluginHost?.dispose();
         // The main side mirrors the bus and owns linger/replay. Worker-local
         // state can now be cleared so a later `runFresh` reuses this worker.
-        run.runner = null;
-        run.handle = null;
-        run.inProgress = false;
-        detachRunForwarders(run);
+        releaseCompletedRun(run);
       });
 
     return { ok: true, session: result.session, indexStatus: result.indexStatus };
@@ -894,10 +903,7 @@ bridge.handle('runFresh', async (payload) => {
     const message = err instanceof Error ? err.message : String(err);
     publish(run.bus, 'error', { message });
     markEnded(run.bus, 'error', { message });
-    run.runner = null;
-    run.handle = null;
-    run.inProgress = false;
-    detachRunForwarders(run);
+    releaseCompletedRun(run);
     throw err;
   }
 });

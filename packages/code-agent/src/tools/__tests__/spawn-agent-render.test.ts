@@ -46,6 +46,16 @@ describe('spawn-agent-render', () => {
     );
   });
 
+  it('single header appends max_tools= only for a positive cap', () => {
+    expect(renderSingleHeader(info, 'explore', 'tool_budget', usage, 'ab12cd34', 160)).toBe(
+      '[subagent provider=openai model=gpt-5.4-mini type=explore ' +
+      'reason=tool_budget input=100 output=50 cache_hit=25 spawn=ab12cd34 max_tools=160]\n\n',
+    );
+    // Unlimited (0/undefined) keeps the exact legacy bytes.
+    expect(renderSingleHeader(info, 'explore', 'completed', usage, 'ab12cd34', 0)).not.toContain('max_tools');
+    expect(renderSingleHeader(info, 'explore', 'completed', usage)).not.toContain('max_tools');
+  });
+
   it('single body falls back with the legacy phrasing', () => {
     expect(renderSingleBody('summary', 'completed')).toBe('summary');
     expect(renderSingleBody('', 'timed_out')).toBe(
@@ -75,6 +85,17 @@ describe('spawn-agent-render', () => {
     expect(renderAgentSection(1, result({ attempt: 2, finalText: '' }))).toBe(
       '### Agent 2: auth-flow\n[type=explore reason=completed tools=7 input=100 output=50 attempt=2]\n(no summary produced)',
     );
+  });
+
+  it('agent section renders max_tools= after attempt= only for a positive cap', () => {
+    expect(renderAgentSection(0, result({ attempt: 2, maxToolCalls: 160 }))).toBe(
+      '### Agent 1: auth-flow\n[type=explore reason=completed tools=7 input=100 output=50 attempt=2 max_tools=160]\nfound it',
+    );
+    expect(renderAgentSection(0, result({ maxToolCalls: 160 }))).toContain(
+      '[type=explore reason=completed tools=7 input=100 output=50 max_tools=160]',
+    );
+    expect(renderAgentSection(0, result({ maxToolCalls: 0 }))).not.toContain('max_tools');
+    expect(renderAgentSection(0, result())).not.toContain('max_tools');
   });
 
   it('parallel body joins sections with the legacy separator', () => {

@@ -13,7 +13,12 @@ type Entry = Parameters<typeof loafToRow>[0];
 const mk = (
   duration: number,
   name: string,
-  scripts?: Array<{ sourceURL?: string; invoker?: string; duration: number }>,
+  scripts?: Array<{
+    sourceURL?: string;
+    invoker?: string;
+    duration: number;
+    forcedStyleAndLayoutDuration?: number;
+  }>,
   startTime = 0,
 ): Entry => ({ duration, name, scripts, startTime } as unknown as Entry);
 
@@ -101,6 +106,18 @@ describe('loafToRow', () => {
     expect(loafToRow(mk(99.7, 'frame', []), 1_000).durationMs).toBe(100);
   });
 
+  it('captures LoAF blocking and forced layout timing when Chromium provides it', () => {
+    const entry = mk(125, 'frame', [
+      { sourceURL: 'a.js', duration: 75, forcedStyleAndLayoutDuration: 2.24 },
+      { sourceURL: 'b.js', duration: 50, forcedStyleAndLayoutDuration: 3.31 },
+    ]) as Entry & { blockingDuration: number };
+    entry.blockingDuration = 80.26;
+    expect(loafToRow(entry, 1_000)).toMatchObject({
+      blockingDurationMs: 80.3,
+      forcedStyleAndLayoutDurationMs: 5.6,
+    });
+  });
+
   it('uses performance.timeOrigin + entry.startTime for the epoch', () => {
     expect(rendererEntryEpochMs(mk(80, 'frame', [], 432.6), 1_700_000_000_000)).toBe(1_700_000_000_433);
   });
@@ -169,6 +186,22 @@ describe('global renderer freeze collection', () => {
     expect(local.length).toBe(0);
   });
 
+  it('keeps cumulative report totals after a successful outbox drain', async () => {
+    ensureRendererVitals();
+    const observer = MockPerformanceObserver.instances[0]!;
+    observer.emit([mk(100, 'first', [], 10)]);
+    await __flushRendererVitalsForTests();
+    expect(local.length).toBe(0);
+
+    observer.emit([mk(110, 'second', [], 20)]);
+    const stored = JSON.parse(local.getItem(local.key(0)!)!) as {
+      events: unknown[];
+      report: { count: number; totalDurationMs: number };
+    };
+    expect(stored.events).toHaveLength(1);
+    expect(stored.report).toMatchObject({ count: 2, totalDurationMs: 210 });
+  });
+
   it('retries the same deterministic event id when the first response is lost', async () => {
     fetchMock.mockRejectedValueOnce(new Error('connection reset'));
     ensureRendererVitals();
@@ -227,5 +260,22 @@ describe('global renderer freeze collection', () => {
     expect(postedEvents(fetchMock.mock.calls[0] as unknown[])).toHaveLength(50);
     expect(postedEvents(fetchMock.mock.calls[1] as unknown[])).toHaveLength(1);
     expect(local.length).toBe(0);
+  });
+
+  it('preserves cumulative count and dropped totals when the outbox retains only 120 rows', () => {
+    ensureRendererVitals();
+    MockPerformanceObserver.instances[0]?.emit(
+      Array.from({ length: 121 }, (_, index) => mk(60 + index, 'frame', [], index + 1)),
+    );
+
+    const stored = JSON.parse(local.getItem(local.key(0)!)!) as {
+      events: unknown[];
+      report: { count: number; dropped: number; loafCount: number; totalDurationMs: number };
+    };
+    expect(stored.events).toHaveLength(120);
+    expect(stored.report).toMatchObject({ count: 121, dropped: 1, loafCount: 121 });
+    expect(stored.report.totalDurationMs).toBe(
+      Array.from({ length: 121 }, (_, index) => 60 + index).reduce((sum, value) => sum + value, 0),
+    );
   });
 });

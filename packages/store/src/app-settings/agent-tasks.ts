@@ -16,60 +16,60 @@ export const AGENT_TASK_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_TASK_INVESTIGATE_MAX_TOOLS',
     label: 'Investigate task — max tool calls',
     description:
-      'Cap on tool invocations for an `investigate` subagent. 0 = unlimited; ' +
-      'positive values are multiplied by complexity. Default 0.',
+      'Cap on tool invocations for an `investigate` subagent. Unset = automatic (80). 0 = unlimited; ' +
+      'positive values are multiplied by complexity. The per-profile override in the Providers panel (explore row) wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {
     key: 'CODER_TASK_INVESTIGATE_TIMEOUT_MS',
     label: 'Investigate task — wall-clock timeout (ms)',
-    description: 'Optional wall-clock duration for an `investigate` subagent. 0 = unlimited. Default 0.',
+    description:
+      'Hard wall-clock cap for an `investigate` subagent. Unset = automatic (840000 = 14 min). ' +
+      '0 = unlimited. Providers-panel per-profile override (explore row) wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {
     key: 'CODER_TASK_IMPLEMENT_MAX_TOOLS',
     label: 'Implement task — max tool calls',
     description:
-      'Cap on tool invocations for an `implement` subagent. 0 = unlimited; ' +
-      'positive values are multiplied by complexity. Default 0.',
+      'Cap on tool invocations for an `implement` subagent. Unset = automatic (150). 0 = unlimited; ' +
+      'positive values are multiplied by complexity. Providers-panel per-profile override wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {
     key: 'CODER_TASK_IMPLEMENT_TIMEOUT_MS',
     label: 'Implement task — wall-clock timeout (ms)',
-    description: 'Optional wall-clock duration for an `implement` subagent. 0 = unlimited. Default 0.',
+    description:
+      'Hard wall-clock cap for an `implement` subagent. Unset = automatic (1800000 = 30 min). ' +
+      '0 = unlimited. Providers-panel per-profile override wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {
     key: 'CODER_TASK_VERIFY_MAX_TOOLS',
     label: 'Verify task — max tool calls',
     description:
-      'Cap on tool invocations for a `verify` subagent. 0 = unlimited; ' +
-      'positive values are multiplied by complexity. Default 0.',
+      'Cap on tool invocations for a `verify` subagent. Unset = automatic (80). 0 = unlimited; ' +
+      'positive values are multiplied by complexity. Providers-panel per-profile override wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {
     key: 'CODER_TASK_VERIFY_TIMEOUT_MS',
     label: 'Verify task — wall-clock timeout (ms)',
-    description: 'Optional wall-clock duration for a `verify` subagent. 0 = unlimited. Default 0.',
+    description:
+      'Hard wall-clock cap for a `verify` subagent. Unset = automatic (900000 = 15 min). ' +
+      '0 = unlimited. Providers-panel per-profile override wins.',
     type: 'int',
     category: 'agent',
-    default: '0',
     min: 0,
   },
   {

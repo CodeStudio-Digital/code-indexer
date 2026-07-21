@@ -3,9 +3,16 @@ import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronUp, History } from 'lucide-react';
 import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
-import { INITIAL_PAGE_SIZE, LOAD_MORE_SIZE } from '../constants.js';
+import { LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
-import { collectLatestPersistedInteractivePromptSignatures, groupMessages, visibleLiveBlocks } from '../utils.js';
+import {
+  collectLatestPersistedInteractivePromptSignatures,
+  groupMessages,
+  liveTurnContinuesPersistedAssistant,
+  mergeConsecutiveAssistantGroups,
+  suppressPersistedAgentDuplicates,
+  visibleLiveBlocks,
+} from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -24,6 +31,14 @@ import { loadedChapterMarkers } from './chapter-markers.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
+
+/** Render only the transcript tail once it grows past this many groups —
+ * streaming or idle. Mounting every group of a large idle session on open
+ * froze the renderer; capped groups stay reachable via "load earlier". */
+const RENDER_CAP_THRESHOLD = 80;
+/** Tail size kept in the DOM while capped; also the local reveal step per
+ * "load earlier" trigger before the backend is consulted. */
+const RENDER_CAP = 120;
 
 /** Direct scroll fallback for environments where IntersectionObserver does
  * not re-fire after the conversation moves between retained workbench
@@ -73,6 +88,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   streaming,
   onLoadEarlier,
   onChapterNavigate,
+  liveAgentIdentityKey,
 }: {
   sessionData: SessionData;
   handlers: PromptHandlers;
@@ -81,6 +97,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
   streaming: boolean;
   onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
   onChapterNavigate?: () => void;
+  /** Stable primitive so token deltas do not invalidate the persisted tree. */
+  liveAgentIdentityKey: string;
 }) {
   // Build tool-result map once per sessionData change. Tool-produced images
   // (preview_screenshot / view_image) are rendered as their own image bubble
@@ -141,27 +159,44 @@ const PersistedMessages = React.memo(function PersistedMessages({
     return last;
   }, [sessionData, tasksState]);
 
-  // During streaming with many groups, only render the tail to keep DOM light.
-  const [renderCap, setRenderCap] = useState<number | null>(null);
-  const sessionIdRef = useRef(sessionData.session.id);
-  useEffect(() => {
-    if (sessionIdRef.current !== sessionData.session.id) {
-      sessionIdRef.current = sessionData.session.id;
-      setRenderCap(null);
-    }
-  }, [sessionData.session.id]);
-  useEffect(() => {
-    if (streaming && groups.length > 80 && renderCap === null) {
-      setRenderCap(INITIAL_PAGE_SIZE);
-    }
-    if (!streaming && renderCap !== null) {
-      setRenderCap(null);
-    }
-  }, [streaming, groups.length, renderCap]);
+  // Above RENDER_CAP_THRESHOLD groups, only render the tail to keep DOM light —
+  // streaming or idle (an idle session used to mount every group on open,
+  // freezing the renderer). Derived during render (React's "adjust state on
+  // prop change" pattern) instead of an effect so a heavy transcript is never
+  // mounted uncapped even once; "load earlier" below expands the cap before
+  // consulting the backend.
+  const [renderCap, setRenderCap] = useState<number | null>(
+    () => (groups.length > RENDER_CAP_THRESHOLD ? RENDER_CAP : null),
+  );
+  const [prevSessionId, setPrevSessionId] = useState(sessionData.session.id);
+  if (prevSessionId !== sessionData.session.id) {
+    // Session switched in place — recompute the cap for the new transcript.
+    setPrevSessionId(sessionData.session.id);
+    setRenderCap(groups.length > RENDER_CAP_THRESHOLD ? RENDER_CAP : null);
+  } else if (renderCap === null && groups.length > RENDER_CAP_THRESHOLD) {
+    setRenderCap(RENDER_CAP);
+  }
 
-  const displayGroups = renderCap !== null && groups.length > renderCap
+  const cappedGroups = renderCap !== null && groups.length > renderCap
     ? groups.slice(-renderCap)
     : groups;
+  const liveAgentIdentities = useMemo(
+    () => (liveAgentIdentityKey ? JSON.parse(liveAgentIdentityKey) : []),
+    [liveAgentIdentityKey],
+  );
+  const displayGroups = useMemo(
+    () => mergeConsecutiveAssistantGroups(
+      suppressPersistedAgentDuplicates(cappedGroups, liveAgentIdentities, resultsById),
+    ),
+    [cappedGroups, liveAgentIdentities, resultsById],
+  );
+  // True while already-loaded groups are hidden by the cap — drives the
+  // "load earlier" affordance even when the backend has nothing more.
+  const capHidesGroups = cappedGroups.length < groups.length;
+  // Latest group count for handlers bound once per session (chapter navigate)
+  // — avoids rebinding window listeners on every transcript growth.
+  const groupsLengthRef = useRef(groups.length);
+  groupsLengthRef.current = groups.length;
 
   const chapterIndex = useConversationChapters(sessionData.session.id);
   const [activeChapterId, setActiveChapterId] = useState<number | null>(null);
@@ -195,6 +230,10 @@ const PersistedMessages = React.memo(function PersistedMessages({
       };
       cancelPendingMarkerWait();
       if (scrollToMarker()) return;
+      // The target may be loaded but hidden by the render cap — lift the cap
+      // over the full transcript (plus headroom for the fetch below) so the
+      // marker can mount; the observer below scrolls once it appears.
+      setRenderCap((cap) => (cap === null ? null : Math.max(cap, groupsLengthRef.current + 160)));
       if (onLoadEarlier) {
         // The fetch can resolve before a large prepended transcript finishes
         // reconciling. Observe the chat container and scroll one paint after
@@ -236,13 +275,13 @@ const PersistedMessages = React.memo(function PersistedMessages({
   // group index. Derived from persisted tool calls → survives scrollback/reload.
   const precedingDisplayRoundMessageId = useMemo(() => {
     let roundMessageId = sessionData.preceding_user_message_id ?? undefined;
-    const skipped = groups.length - displayGroups.length;
+    const skipped = groups.length - cappedGroups.length;
     for (let index = 0; index < skipped; index++) {
       const group = groups[index];
       if (group.kind === 'user') roundMessageId = group.messageId;
     }
     return roundMessageId;
-  }, [displayGroups.length, groups, sessionData.preceding_user_message_id]);
+  }, [cappedGroups.length, groups, sessionData.preceding_user_message_id]);
   const turnSummaries = useMemo(
     () => computeTurnEditSummaries(displayGroups, precedingDisplayRoundMessageId),
     [displayGroups, precedingDisplayRoundMessageId],
@@ -284,7 +323,19 @@ const PersistedMessages = React.memo(function PersistedMessages({
   }, [sessionData.session.id]);
 
   const handleLoadEarlier = useCallback(async () => {
-    if (!onLoadEarlier || loadingRef.current || exhaustedRef.current) return;
+    if (loadingRef.current) return;
+    // Cap-hidden groups are already loaded — reveal one step locally (with
+    // the same scroll preservation as a backend prepend) and only hit the
+    // backend once the cap no longer hides anything. `exhausted` gates the
+    // backend, not this purely local reveal.
+    if (renderCap !== null && groups.length > renderCap) {
+      const el = scrollContainerRef.current;
+      if (el) prevScrollHeightRef.current = el.scrollHeight;
+      loadingEarlierRef.current = true;
+      setRenderCap(renderCap + RENDER_CAP);
+      return;
+    }
+    if (!onLoadEarlier || exhaustedRef.current) return;
     const earliestId = sessionData.message_rows[0]?.id;
     // A summarize boundary can leave zero visible rows. In that case there is
     // no `before_id`; the backend anchors at maxMessageId + 1 when the user
@@ -296,6 +347,9 @@ const PersistedMessages = React.memo(function PersistedMessages({
     loadingEarlierRef.current = true;
     setLoadingMore(true);
     try {
+      // Rows→groups is at most 1:1, so growing the cap by the page size
+      // guarantees the freshly fetched page is not immediately re-hidden.
+      if (renderCap !== null) setRenderCap(renderCap + LOAD_MORE_SIZE);
       const count = await onLoadEarlier(earliestId, LOAD_MORE_SIZE, revealArchivedRef.current);
       if (count === 0) {
         // Backend returned nothing — stop polling forever for this session.
@@ -306,7 +360,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
       loadingRef.current = false;
       setLoadingMore(false);
     }
-  }, [onLoadEarlier, sessionData.message_rows, scrollContainerRef]);
+  }, [groups.length, onLoadEarlier, renderCap, sessionData.message_rows, scrollContainerRef]);
 
   // Cross the "summarize & clear" boundary on explicit user request, then let
   // the normal infinite-scroll continue pulling archived pages.
@@ -316,7 +370,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
     void handleLoadEarlier();
   }, [handleLoadEarlier]);
 
-  // After new messages are prepended, restore scroll position
+  // After new messages are prepended — a backend page (messages.length) OR a
+  // local cap reveal (cappedGroups.length) — restore scroll position.
   useLayoutEffect(() => {
     if (!loadingEarlierRef.current) return;
     loadingEarlierRef.current = false;
@@ -324,7 +379,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
     if (!el) return;
     const delta = el.scrollHeight - prevScrollHeightRef.current;
     if (delta > 0) el.scrollTop += delta;
-  }, [sessionData.messages.length, scrollContainerRef]);
+  }, [sessionData.messages.length, cappedGroups.length, scrollContainerRef]);
 
   // Stable ref to the latest handleLoadEarlier — avoids re-creating the
   // IntersectionObserver every time the callback identity changes.
@@ -332,15 +387,17 @@ const PersistedMessages = React.memo(function PersistedMessages({
   handleRef.current = handleLoadEarlier;
 
   // Infinite scroll: auto-load when a sentinel element near the top becomes
-  // visible. The observer is only created once per hasEarlier/exhausted
-  // change and uses refs for all guards to avoid stale closures.
+  // visible. Active while the backend has more rows OR the render cap hides
+  // already-loaded groups; uses refs for all guards to avoid stale closures
+  // (handleLoadEarlier itself routes between cap reveal and backend fetch).
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
     const root = scrollContainerRef.current;
-    if (!sentinel || !root || !hasEarlier || !onLoadEarlier || exhaustedRef.current) return;
+    const backendHasMore = hasEarlier && !!onLoadEarlier && !exhaustedRef.current;
+    if (!sentinel || !root || (!backendHasMore && !capHidesGroups)) return;
     const requestEarlier = () => {
-      if (!loadingRef.current && !exhaustedRef.current) void handleRef.current();
+      if (!loadingRef.current) void handleRef.current();
     };
     const onScroll = () => {
       if (shouldLoadEarlierAtScrollTop(root.scrollTop)) requestEarlier();
@@ -357,15 +414,18 @@ const PersistedMessages = React.memo(function PersistedMessages({
       io.disconnect();
       root.removeEventListener('scroll', onScroll);
     };
-  }, [hasEarlier, exhausted, onLoadEarlier, scrollContainerRef]);
+  }, [capHidesGroups, hasEarlier, exhausted, onLoadEarlier, scrollContainerRef]);
 
   const providerId = sessionData.session.provider;
+  // "Load earlier" affordance covers both sources of hidden history: backend
+  // rows not yet fetched and loaded groups clipped by the render cap.
+  const showEarlierControls = (hasEarlier && !exhausted) || capHidesGroups;
 
   return (
     <>
       {/* Sentinel for infinite scroll — triggers auto-load when near top */}
-      {hasEarlier && !exhausted && <div ref={sentinelRef} className="h-px" />}
-      {hasEarlier && !exhausted && (
+      {showEarlierControls && <div ref={sentinelRef} className="h-px" />}
+      {showEarlierControls && (
         <div className="flex items-center justify-center gap-2 w-full py-2">
           <button
             type="button"
@@ -507,6 +567,7 @@ const LiveTurn = React.memo(function LiveTurn({
   hidden,
   persistedToolUseIds,
   persistedInteractivePromptSignatures,
+  continuation,
 }: {
   currentTurn: AssistantTurn | null;
   streaming: boolean;
@@ -516,6 +577,7 @@ const LiveTurn = React.memo(function LiveTurn({
   hidden: boolean;
   persistedToolUseIds: Set<string>;
   persistedInteractivePromptSignatures: Set<string>;
+  continuation: boolean;
 }) {
   // Drop live blocks already rendered by the persisted history (gate cards on a
   // paused turn, or a tool call the refetch landed before currentTurn cleared).
@@ -524,7 +586,7 @@ const LiveTurn = React.memo(function LiveTurn({
   const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
     return (
-      <AssistantBubble providerId={providerId} streaming={streaming}>
+      <AssistantBubble providerId={providerId} streaming={streaming} continuation={continuation}>
         {visible.map((b, i) => renderStreamBlock(b, i, handlers))}
       </AssistantBubble>
     );
@@ -536,14 +598,14 @@ const LiveTurn = React.memo(function LiveTurn({
   // the bare spinner, until the first SSE event clears it.
   if (preflight && !hidden) {
     return (
-      <AssistantBubble providerId={providerId} streaming>
+      <AssistantBubble providerId={providerId} streaming continuation={continuation}>
         <PreflightBlock startedAt={preflight.startedAt} />
       </AssistantBubble>
     );
   }
   if (streaming) {
     return (
-      <AssistantBubble providerId={providerId} streaming>
+      <AssistantBubble providerId={providerId} streaming continuation={continuation}>
         <div className="dot-pulse text-muted-foreground">
           <span />
           <span />
@@ -658,6 +720,17 @@ export function MessageList({
     () => collectLatestPersistedInteractivePromptSignatures(sessionData?.messages ?? []),
     [sessionData],
   );
+  const liveContinuation = useMemo(
+    () => liveTurnContinuesPersistedAssistant(sessionData?.messages ?? []),
+    [sessionData],
+  );
+  const liveAgentIdentityKey = useMemo(() => JSON.stringify(
+    (currentTurn?.blocks ?? []).flatMap((block) => (
+      block.type === 'agents' && !block.group.groupId.startsWith('tasks-wave-')
+        ? [{ toolUseId: block.group.toolUseId, groupId: block.group.groupId }]
+        : []
+    )),
+  ), [currentTurn]);
 
   // Files edited by the live turn, for its completion summary. Shown only once
   // the turn ended AND before it's mirrored into persisted history (the same
@@ -705,6 +778,7 @@ export function MessageList({
             streaming={streaming}
             onLoadEarlier={onLoadEarlier}
             onChapterNavigate={handleChapterNavigate}
+            liveAgentIdentityKey={liveAgentIdentityKey}
           />
         )}
 
@@ -717,6 +791,7 @@ export function MessageList({
           hidden={liveTurnDuplicatedInHistory}
           persistedToolUseIds={persistedToolUseIds}
           persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
+          continuation={liveContinuation}
         />
 
         {showLiveSummary && (

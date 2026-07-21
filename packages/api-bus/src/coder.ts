@@ -40,6 +40,8 @@ export type BuiltInAgentPreset =
 export type CustomAgentPreset = `custom:${string}`;
 export type AgentPreset = BuiltInAgentPreset | CustomAgentPreset;
 export type ToolProfile = 'bootstrap' | 'navigate' | 'full' | 'auto';
+/** Provider-independent host orchestration profile. Never sent as a provider effort. */
+export type ExecutionMode = 'standard' | 'ultra';
 export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 
 export interface CoderSession {
@@ -49,6 +51,7 @@ export interface CoderSession {
   provider: string;
   model: string;
   model_mode?: string;
+  execution_mode_override: ExecutionMode;
   status: string;
   total_input_tokens: number;
   total_output_tokens: number;
@@ -68,8 +71,22 @@ export interface CreateSessionInput {
   provider: CoderProvider;
   model?: string;
   agent?: AgentPreset;
+  /** Provider-independent orchestration mode. Defaults to `standard`. */
+  execution_mode?: ExecutionMode;
+  /** Native provider effort. Legacy `ultra` is normalized into execution_mode. */
   reasoning_effort?: string | null;
   phase_profile_id?: number | null;
+}
+
+export interface SetSessionExecutionModeInput {
+  id: number;
+  mode: ExecutionMode;
+}
+
+/** Compatibility surface for the legacy reasoning-effort endpoint. */
+export interface SetSessionReasoningEffortInput {
+  id: number;
+  effort: string | null;
 }
 
 export interface UpdateSessionInput {
@@ -216,6 +233,10 @@ export interface CoderSessionsApi {
   get(input: { id: number; includeMessages?: boolean }, ctx: ApiContext): Promise<{ session: CoderSession; messages?: unknown[] }>;
   create(input: CreateSessionInput, ctx: ApiContext): Promise<CoderSession>;
   update(input: { id: number } & UpdateSessionInput, ctx: ApiContext): Promise<CoderSession>;
+  /** Mirrors PATCH /api/coder/sessions/:id/execution-mode. */
+  setExecutionMode(input: SetSessionExecutionModeInput, ctx: ApiContext): Promise<CoderSession>;
+  /** Mirrors the legacy PATCH /reasoning-effort compatibility route. */
+  setReasoningEffort(input: SetSessionReasoningEffortInput, ctx: ApiContext): Promise<CoderSession>;
   delete(input: { id: number }, ctx: ApiContext): Promise<{ ok: true }>;
 
   /** Paginated messages (the dashboard chat history). */

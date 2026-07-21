@@ -1,11 +1,14 @@
 import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DbQueryToolView } from '../DbQueryToolView.js';
+import { bootstrapTestI18n } from '../../../../i18n/test-bootstrap.js';
 
 const input = { connection: 'reporting', sql: 'SELECT 1 AS id' };
 
 describe('DbQueryToolView result display', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('opens Markdown results in preview mode without renderer metadata', () => {
     const html = renderToStaticMarkup(createElement(DbQueryToolView, {
       input,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createAppStudio,
   getAppTeamConfig,
   getAppStudioSession,
   runAppAction,
@@ -38,6 +39,42 @@ afterEach(() => {
 });
 
 describe('App Studio v6 API client', () => {
+  it('sends execution mode independently from provider-native reasoning effort', async () => {
+    const created = {
+      project: { id: 104, name: 'Lontras', root_path: 'C:/apps/lontras' },
+      app_session: detail().session,
+      master_session_id: 1265,
+      company_session_id: 106,
+      team: {
+        runtime_kind: 'app_studio', state: 'ready', company_session_id: 106,
+        company_status: 'idle', master_session_id: 1265, master_agent_run_id: 1266,
+      },
+    };
+    const fetchMock = vi.fn(async () => new Response(
+      `event: done\ndata: ${JSON.stringify(created)}\n\n`,
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createAppStudio({
+      name: 'Lontras',
+      provider: 'openai',
+      model: 'gpt-5',
+      execution_mode: 'ultra',
+      reasoning_effort: 'high',
+    })).resolves.toEqual(created);
+    expect(fetchMock).toHaveBeenCalledWith('/api/app-studio/apps', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Lontras',
+        provider: 'openai',
+        model: 'gpt-5',
+        execution_mode: 'ultra',
+        reasoning_effort: 'high',
+      }),
+    }));
+  });
+
   it('awaits the fetch promise before unwrapping an App detail response', async () => {
     const expected = detail();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(expected), {

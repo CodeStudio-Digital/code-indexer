@@ -59,6 +59,11 @@ export interface ProviderModalProps {
     effort: string | null,
     profile?: string,
   ) => void;
+  onSetSubagentLimits: (
+    providerId: string,
+    profile: string,
+    patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+  ) => void;
 }
 
 export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps) {

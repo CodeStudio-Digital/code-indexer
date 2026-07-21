@@ -13,19 +13,6 @@ export const INDEXING_SETTINGS: readonly SettingDef[] = [
     category: 'indexing',
   },
   {
-    key: 'MCP_DOC_SEARCH_TIMEOUT_MS',
-    label: 'Documentation search timeout (ms)',
-    description:
-      'Worker-to-backend ceiling for rag_search_docs, including remote query embedding and LLM reranking. Default 300000 (5 min); allowed range 60000-1800000 (1-30 min). Restart required.',
-    type: 'int',
-    category: 'indexing',
-    default: '300000',
-    min: 60_000,
-    max: 1_800_000,
-    advanced: true,
-    restartNeeded: true,
-  },
-  {
     key: 'MCP_AUTO_INDEX_STRUCTURAL',
     label: 'Auto structural index on open',
     description: 'Index symbols + FTS automatically when a project is opened (tree-sitter only — no LLM, no embeddings, $0). 0 disables.',
@@ -93,6 +80,16 @@ export const INDEXING_SETTINGS: readonly SettingDef[] = [
     default: '60000',
     min: 0,
     max: 600000,
+    advanced: true,
+  },
+  {
+    key: 'MCP_WATCH_MAX_FILES',
+    label: 'Watcher file budget',
+    description: 'Skip live per-file watching for a project whose watchable tree exceeds this many entries (e.g. a Unity project whose Assets/ holds tens of thousands of imported asset files). Over budget, the watcher opening a handle per directory and re-reading whole directories on every touch becomes a sustained CPU drain, so freshness falls back to git-metadata events + the structural reconcile. 0 disables the guard.',
+    type: 'int',
+    category: 'indexing',
+    default: '20000',
+    min: 0,
     advanced: true,
   },
   {

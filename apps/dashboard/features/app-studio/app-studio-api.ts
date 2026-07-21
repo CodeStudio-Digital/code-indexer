@@ -236,8 +236,18 @@ export interface AppStudioCreated {
   team: AppTeamSessionView;
 }
 
+export type AppStudioExecutionMode = 'standard' | 'ultra';
+
+export interface AppStudioCreateRequest {
+  name: string;
+  provider: string;
+  model: string;
+  execution_mode?: AppStudioExecutionMode;
+  reasoning_effort?: string | null;
+}
+
 export async function createAppStudio(
-  input: { name: string; provider: string; model: string; reasoning_effort?: string | null },
+  input: AppStudioCreateRequest,
   handlers: { onPhase?: (phase: string, label: string) => void; onLog?: (stream: 'stdout' | 'stderr', chunk: string) => void } = {},
 ): Promise<AppStudioCreated> {
   const response = await fetch('/api/app-studio/apps', {

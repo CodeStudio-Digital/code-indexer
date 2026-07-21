@@ -16,10 +16,10 @@ export const MCP_SETTINGS: readonly SettingDef[] = [
     key: 'CODER_WORKER_HEAP_MB',
     label: 'Coder worker heap (MB)',
     description:
-      'Per-session V8 old-generation limit. Default 2048 MB. Raise only for unusually large histories or tool catalogs.',
+      'Per-session V8 old-generation limit. Default 1024 MB. Raise only for unusually large histories or tool catalogs.',
     type: 'int',
     category: 'mcp',
-    default: '2048',
+    default: '1024',
     min: 256,
     restartNeeded: true,
     advanced: true,

@@ -22,13 +22,42 @@ import {
   type CoderProvider,
   type CoderSession,
   type CoderEvent,
+  type ExecutionMode,
   type SendMessageInput,
   type ContinueSessionInput,
 } from '@mcp/api-bus';
+import { selectRuntimeModelMetadata } from '@mcp/provider-sdk';
 import type { HandlerDeps } from '../types.js';
+
+const EXECUTION_MODES = ['standard', 'ultra'] as const satisfies readonly ExecutionMode[];
+
+function isExecutionMode(value: unknown): value is ExecutionMode {
+  return typeof value === 'string' && EXECUTION_MODES.includes(value as ExecutionMode);
+}
+
+function normalizeEffort(value: unknown): string | null {
+  return typeof value === 'string' ? value.trim() || null : null;
+}
 
 export function createCoderHandlers(deps: HandlerDeps): CoderApi {
   const { sessionStore, providerStore } = deps;
+
+  const validateReasoningEffort = (
+    provider: string,
+    model: string | undefined,
+    effort: string | null,
+  ): void => {
+    if (!effort) return;
+    const row = selectRuntimeModelMetadata(providerStore.listModels(provider), model ?? '');
+    const supported = row?.supported_reasoning_levels;
+    if (supported && supported.length > 0 && !supported.includes(effort)) {
+      throw new ApiError(
+        'bad_input',
+        400,
+        `reasoning effort '${effort}' not supported for ${model ?? '(default model)'}; supported: ${supported.join(',')}`,
+      );
+    }
+  };
 
   return {
     sessions: {
@@ -68,6 +97,22 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         if (!input.project_id || !input.title || !input.provider) {
           throw new ApiError('bad_input', 400, 'project_id, title, provider required');
         }
+        if (input.execution_mode !== undefined && !isExecutionMode(input.execution_mode)) {
+          throw new ApiError('bad_input', 400, `execution_mode: one of ${EXECUTION_MODES.join('|')} required`);
+        }
+        if (
+          input.reasoning_effort !== undefined
+          && input.reasoning_effort !== null
+          && typeof input.reasoning_effort !== 'string'
+        ) {
+          throw new ApiError('bad_input', 400, 'reasoning_effort:string|null required');
+        }
+        const requestedEffort = normalizeEffort(input.reasoning_effort);
+        const legacyUltra = requestedEffort?.toLowerCase() === 'ultra';
+        const executionMode: ExecutionMode = input.execution_mode
+          ?? (legacyUltra ? 'ultra' : 'standard');
+        const reasoningEffort = legacyUltra ? null : requestedEffort;
+        validateReasoningEffort(input.provider, input.model, reasoningEffort);
         const session = sessionStore.createSession({
           project_id: input.project_id,
           title: input.title,
@@ -76,11 +121,11 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
           agent: input.agent ?? null,
           phase_profile_id: input.phase_profile_id ?? null,
         });
-        const effort = input.reasoning_effort?.trim();
-        if (effort) {
-          sessionStore.setSessionReasoningEffort(session.id, effort);
-        }
-        return session as unknown as CoderSession;
+        sessionStore.setSessionExecutionMode(session.id, executionMode);
+        sessionStore.setSessionReasoningEffort(session.id, reasoningEffort);
+        const fresh = sessionStore.getSession(session.id);
+        if (!fresh) throw new ApiError('not_found', 404, 'session not found');
+        return fresh as unknown as CoderSession;
       },
 
       async update({ id, ...patch }) {
@@ -93,6 +138,46 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         if (patch.unrestricted_tool_output !== undefined) {
           sessionStore.setSessionUnrestrictedToolOutput(id, patch.unrestricted_tool_output ?? null);
         }
+        const fresh = sessionStore.getSession(id);
+        if (!fresh) throw new ApiError('not_found', 404, 'session not found');
+        return fresh as unknown as CoderSession;
+      },
+
+      async setExecutionMode({ id, mode }) {
+        if (!isExecutionMode(mode)) {
+          throw new ApiError('bad_input', 400, `mode: one of ${EXECUTION_MODES.join('|')} required`);
+        }
+        const existing = sessionStore.getSession(id);
+        if (!existing) throw new ApiError('not_found', 404, 'session not found');
+        sessionStore.setSessionExecutionMode(id, mode);
+        const fresh = sessionStore.getSession(id);
+        if (!fresh) throw new ApiError('not_found', 404, 'session not found');
+        return fresh as unknown as CoderSession;
+      },
+
+      async setReasoningEffort({ id, effort: rawEffort }) {
+        if (rawEffort !== null && typeof rawEffort !== 'string') {
+          throw new ApiError('bad_input', 400, 'effort:string|null required');
+        }
+        const effort = normalizeEffort(rawEffort);
+        const existing = sessionStore.getSession(id);
+        if (!existing) throw new ApiError('not_found', 404, 'session not found');
+
+        // Pre-241 clients exposed Ultra as a pseudo-effort. Preserve their
+        // intent without ever storing or forwarding that unsupported sentinel.
+        if (effort?.toLowerCase() === 'ultra') {
+          sessionStore.setSessionExecutionMode(id, 'ultra');
+          sessionStore.setSessionReasoningEffort(id, null);
+        } else {
+          validateReasoningEffort(existing.provider, existing.model, effort);
+          // The legacy effort route is a complete control surface: selecting a
+          // native effort or provider default must also leave a prior Ultra mode.
+          if (existing.execution_mode_override === 'ultra') {
+            sessionStore.setSessionExecutionMode(id, 'standard');
+          }
+          sessionStore.setSessionReasoningEffort(id, effort);
+        }
+
         const fresh = sessionStore.getSession(id);
         if (!fresh) throw new ApiError('not_found', 404, 'session not found');
         return fresh as unknown as CoderSession;

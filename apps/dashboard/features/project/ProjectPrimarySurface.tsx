@@ -27,6 +27,39 @@ interface ProjectPrimarySurfaceProps {
   apiWorkbenchSlots: ApiClientWorkbenchSlots;
 }
 
+type StatefulPrimarySurface = 'editor' | 'sessions' | 'api' | 'ssh';
+
+const STATEFUL_PRIMARY_SURFACES = new Set<StatefulPrimarySurface>(['editor', 'sessions', 'api', 'ssh']);
+/** Active surface plus one recently used warm surface. */
+export const PRIMARY_SURFACE_BUDGET = 2;
+
+function isStatefulPrimarySurface(surface: string): surface is StatefulPrimarySurface {
+  return STATEFUL_PRIMARY_SURFACES.has(surface as StatefulPrimarySurface);
+}
+
+/**
+ * MRU budget for expensive primary trees. The active surface is always kept;
+ * one previous surface stays warm. A transient active surface consumes one of
+ * the two renderer slots, so only the most recent stateful surface is retained.
+ */
+export function retainedPrimarySurfaces(
+  previous: readonly StatefulPrimarySurface[],
+  activeSurface: string,
+  budget = PRIMARY_SURFACE_BUDGET,
+): StatefulPrimarySurface[] {
+  const active = isStatefulPrimarySurface(activeSurface) ? activeSurface : null;
+  const limit = active ? Math.max(1, budget) : Math.max(0, budget - 1);
+  if (limit === 0) return [];
+  const candidates: StatefulPrimarySurface[] = active ? [active, ...previous] : [...previous];
+  const unique: StatefulPrimarySurface[] = [];
+  for (const surface of candidates) {
+    if (!STATEFUL_PRIMARY_SURFACES.has(surface) || unique.includes(surface)) continue;
+    unique.push(surface);
+    if (unique.length === limit) break;
+  }
+  return unique;
+}
+
 function RetainedPane({
   active,
   surface,
@@ -48,11 +81,10 @@ function RetainedPane({
 }
 
 /**
- * Keep inactive primary surfaces mounted without letting a child override the
- * concealment. `visibility` is inherited, so DatabaseEditorStack's active-tab
- * `visible` class could make a retained SQL editor paint over ChatSurface.
- * Opacity applies to the composed parent layer instead and keeps dimensions
- * available for Monaco and virtualized grids.
+ * Keep the one warm primary surface isolated from the active layer. Do not put
+ * Monaco under React Activity: @monaco-editor/react disposes its imperative
+ * editor when hidden effects are cleaned up, but its preserved mount state does
+ * not recreate that editor when the Activity becomes visible again.
  */
 export function retainedPaneClassName(active: boolean): string {
   return cn(
@@ -61,36 +93,46 @@ export function retainedPaneClassName(active: boolean): string {
   );
 }
 
-/** Keeps stateful Editor, Sessions and SSH surfaces mounted while navigating. */
+/** Keeps only the active and most-recent stateful surface mounted. */
 export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
-  const [sessionsSeen, setSessionsSeen] = useState(props.surface === 'sessions');
-  const [apiSeen, setApiSeen] = useState(props.surface === 'api');
-  const [sshSeen, setSshSeen] = useState(props.surface === 'ssh');
+  const [retention, setRetention] = useState<{
+    projectId: number;
+    surfaces: StatefulPrimarySurface[];
+  }>(() => ({
+    projectId: props.projectId,
+    surfaces: retainedPrimarySurfaces([], props.surface),
+  }));
+  // A project switch invalidates the old MRU immediately, before the syncing
+  // effect, so a heavy tree can never render one frame with another project.
+  const previous = retention.projectId === props.projectId ? retention.surfaces : [];
+  const mountedSurfaces = retainedPrimarySurfaces(previous, props.surface);
 
   useEffect(() => {
-    if (props.surface === 'sessions') setSessionsSeen(true);
-  }, [props.surface]);
-  useEffect(() => {
-    if (props.surface === 'api') setApiSeen(true);
-  }, [props.surface]);
-  useEffect(() => {
-    if (props.surface === 'ssh') setSshSeen(true);
-  }, [props.surface]);
+    setRetention((current) => {
+      const currentProjectSurfaces = current.projectId === props.projectId ? current.surfaces : [];
+      const next = retainedPrimarySurfaces(currentProjectSurfaces, props.surface);
+      if (current.projectId === props.projectId
+        && current.surfaces.length === next.length
+        && current.surfaces.every((surface, index) => surface === next[index])) return current;
+      return { projectId: props.projectId, surfaces: next };
+    });
+  }, [props.projectId, props.surface]);
   useEffect(() => {
     if (props.surface === 'editor') reapplySharedMonacoTheme();
   }, [props.surface]);
 
-  const renderSsh = sshSeen || props.surface === 'ssh';
-  const transient = !['editor', 'sessions', 'api', 'ssh'].includes(props.surface);
+  const transient = !isStatefulPrimarySurface(props.surface);
   return (
     <div className="relative h-full min-h-0 bg-[var(--workbench-surface)]">
-      <RetainedPane active={props.surface === 'editor'} surface="editor">
-        <EditorPaneHost />
-        <Suspense fallback={null}>
-          <ProjectLspInstallPrompts projectId={props.projectId} />
-        </Suspense>
-      </RetainedPane>
-      {sessionsSeen && (
+      {mountedSurfaces.includes('editor') && (
+        <RetainedPane active={props.surface === 'editor'} surface="editor">
+          <EditorPaneHost />
+          <Suspense fallback={null}>
+            <ProjectLspInstallPrompts projectId={props.projectId} />
+          </Suspense>
+        </RetainedPane>
+      )}
+      {mountedSurfaces.includes('sessions') && (
         <RetainedPane active={props.surface === 'sessions'} surface="sessions">
           <ChatSurface
             projectId={props.projectId}
@@ -103,7 +145,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
           />
         </RetainedPane>
       )}
-      {renderSsh && (
+      {mountedSurfaces.includes('ssh') && (
         <RetainedPane active={props.surface === 'ssh'} surface="ssh">
           <TransientSurface
             tab="ssh"
@@ -116,7 +158,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
           />
         </RetainedPane>
       )}
-      {apiSeen && (
+      {mountedSurfaces.includes('api') && (
         <RetainedPane active={props.surface === 'api'} surface="api">
           <TransientSurface
             tab="api"

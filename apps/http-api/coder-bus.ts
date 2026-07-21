@@ -12,10 +12,10 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
  *   - GET /sessions/:id/attach lets the same (or another) client re-subscribe
  *     and replay missed events via the Last-Event-ID header (or from seq -1).
  *
- * The buffer is a fixed-capacity ring; older events are dropped once the cap
- * is exceeded. That's fine because persisted assistant/tool messages are
- * already in the DB — only the *live* view (text deltas + in-progress tool
- * calls) relies on the buffer.
+ * The buffer is bounded by both row count and approximate retained bytes;
+ * older events are dropped once either cap is exceeded. That's fine because
+ * persisted assistant/tool messages are already in the DB — only the *live*
+ * view (text deltas + in-progress tool calls) relies on the buffer.
  */
 
 export interface BufferedEvent {
@@ -36,6 +36,15 @@ export interface CoderRunBus {
    */
   busId: string;
   buffer: BufferedEvent[];
+  /**
+   * Approximate retained size of `buffer`. Optional for compatibility with
+   * lightweight test/company bus facades that predate the byte budget.
+   */
+  bufferBytes?: number;
+  /** Per-row estimates kept parallel to `buffer` so eviction never re-walks payloads. */
+  bufferEventBytes?: number[];
+  /** Number of replay rows evicted by either the count or byte budget. */
+  droppedBufferEvents?: number;
   nextSeq: number;
   subscribers: Set<BusSubscriber>;
   ended: boolean;
@@ -56,6 +65,72 @@ export interface CoderRunBus {
 }
 
 export const BUFFER_CAP = 2000;
+/**
+ * A count-only ring can still retain hundreds of MB when tool results contain
+ * large patches/JSON. Keep replay bounded by bytes as well as rows. Live
+ * subscribers still receive every event; only the reconnect replay is pruned.
+ */
+export const BUFFER_BYTE_CAP = 8 * 1024 * 1024;
+
+const SIZE_WALK_NODE_CAP = 10_000;
+
+/**
+ * Cheap, cycle-safe retained-size estimate. Strings and binary payloads carry
+ * the exact byte cost; structured payloads are walked only up to a hard node
+ * cap, at which point we conservatively treat the row as oversized. This
+ * avoids JSON.stringify in the token-stream hot path.
+ */
+function estimateReplayBytes(value: unknown): number {
+  const stack: unknown[] = [value];
+  const seen = new Set<object>();
+  let bytes = 32;
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    if (++nodes > SIZE_WALK_NODE_CAP) return BUFFER_BYTE_CAP + 1;
+    const current = stack.pop();
+    if (current == null) {
+      bytes += 4;
+    } else if (typeof current === 'string') {
+      bytes += Buffer.byteLength(current, 'utf8');
+    } else if (typeof current === 'number' || typeof current === 'bigint') {
+      bytes += 8;
+    } else if (typeof current === 'boolean') {
+      bytes += 4;
+    } else if (typeof current === 'object') {
+      if (seen.has(current)) continue;
+      seen.add(current);
+      if (current instanceof ArrayBuffer) {
+        bytes += current.byteLength;
+      } else if (ArrayBuffer.isView(current)) {
+        bytes += current.byteLength;
+      } else if (Array.isArray(current)) {
+        bytes += current.length * 8;
+        for (const item of current) stack.push(item);
+      } else {
+        for (const [key, item] of Object.entries(current)) {
+          bytes += Buffer.byteLength(key, 'utf8') + 8;
+          stack.push(item);
+        }
+      }
+    }
+    if (bytes > BUFFER_BYTE_CAP) return bytes;
+  }
+  return bytes;
+}
+
+function ensureBufferAccounting(bus: CoderRunBus): void {
+  if (bus.bufferEventBytes && typeof bus.bufferBytes === 'number') return;
+  bus.bufferEventBytes = bus.buffer.map((event) => estimateReplayBytes(event.event) + estimateReplayBytes(event.data));
+  bus.bufferBytes = bus.bufferEventBytes.reduce((sum, size) => sum + size, 0);
+  bus.droppedBufferEvents ??= 0;
+}
+
+export function clearReplayBuffer(bus: CoderRunBus): void {
+  bus.buffer.length = 0;
+  bus.bufferEventBytes = [];
+  bus.bufferBytes = 0;
+}
 
 export function createBus(ctrl: AbortController): CoderRunBus {
   let resolveRunner!: (r: CoderRunner) => void;
@@ -72,6 +147,9 @@ export function createBus(ctrl: AbortController): CoderRunBus {
     ctrl,
     busId: randomUUID(),
     buffer: [],
+    bufferBytes: 0,
+    bufferEventBytes: [],
+    droppedBufferEvents: 0,
     nextSeq: 0,
     subscribers: new Set(),
     ended: false,
@@ -96,8 +174,33 @@ export function setBusRunner(bus: CoderRunBus, runner: CoderRunner): void {
 
 export function publish(bus: CoderRunBus, event: string, data: unknown): BufferedEvent {
   const ev: BufferedEvent = { seq: bus.nextSeq++, event, data };
+  ensureBufferAccounting(bus);
+  const eventBytes = estimateReplayBytes(event) + estimateReplayBytes(data);
   bus.buffer.push(ev);
-  if (bus.buffer.length > BUFFER_CAP) bus.buffer.shift();
+  bus.bufferEventBytes!.push(eventBytes);
+  bus.bufferBytes = (bus.bufferBytes ?? 0) + eventBytes;
+  // Find the eviction prefix first, then compact each parallel array once.
+  // Repeated Array.shift() turns one oversized tool result after a full ring
+  // into O(BUFFER_CAP²) element moves on the event-loop hot path.
+  let removeCount = 0;
+  let removedBytes = 0;
+  const retainedBytes = bus.bufferBytes;
+  while (
+    removeCount < bus.buffer.length
+    && (
+      bus.buffer.length - removeCount > BUFFER_CAP
+      || retainedBytes - removedBytes > BUFFER_BYTE_CAP
+    )
+  ) {
+    removedBytes += bus.bufferEventBytes![removeCount] ?? 0;
+    removeCount += 1;
+  }
+  if (removeCount > 0) {
+    bus.buffer.splice(0, removeCount);
+    bus.bufferEventBytes!.splice(0, removeCount);
+    bus.bufferBytes = Math.max(0, retainedBytes - removedBytes);
+    bus.droppedBufferEvents = (bus.droppedBufferEvents ?? 0) + removeCount;
+  }
   for (const sub of bus.subscribers) {
     try { sub(ev); } catch { /* ignore subscriber errors */ }
   }
@@ -188,6 +291,106 @@ export function subscribe(
     if (ev.seq > sinceSeq) {
       try { sub(ev); } catch { /* ignore */ }
     }
+  }
+  bus.subscribers.add(sub);
+  return () => { bus.subscribers.delete(sub); };
+}
+
+/**
+ * Perf W2 — attach-replay trim. A remount attach (`since=-1`) used to replay
+ * the ENTIRE ring (up to BUFFER_CAP=2000 events / 8MB) in one burst, which
+ * the renderer parses synchronously — a major part of the open-session
+ * freeze. The persisted transcript already covers finished turns, so the
+ * attach replay only needs (a) the LIVE tail — everything from the last
+ * `message_complete` on, which is what reconstructs `currentTurn` — plus
+ * (b) the low-volume CROSS-TURN state kinds below (task runs, spawned-agent
+ * groups, pipelines, interactive gates) that the dashboard accumulates from
+ * events across turns. The replay weight lives in the turn-local kinds
+ * (text/thinking deltas, tool_call_*), which are exactly what gets dropped.
+ *
+ * Reconnects with a cursor (`since >= 0`) NEVER trim — the client's
+ * (busId, hwm) dedup depends on the contiguous cursor replay.
+ */
+export const REPLAY_STATE_KINDS = new Set<string>([
+  // TRANSCRIPT-bearing kinds (incident 2026-07-20: dropping these erased the
+  // live run's completed turns from the UI — the client rebuilds turns it
+  // hasn't refetched from these events, not only from the GET). The real
+  // volume is in text/thinking deltas + worker_log, which stay excluded.
+  'message_complete', 'tool_call_start', 'tool_call_result', 'provider_call',
+  // Interactive gates / cards that may still be pending from an older turn.
+  'tool_approval_request', 'tool_approval_resolved',
+  'plan', 'spec', 'question', 'decision',
+  // Task board + execute_tasks runs span many turns.
+  'tasks_posted', 'task_started', 'task_finished', 'task_updated',
+  'task_run_started', 'task_run_task_started', 'task_run_task_progress',
+  'task_run_task_finished', 'task_run_finished',
+  // Spawned-agent groups (background jobs) span turns.
+  'agents_group_start', 'agent_progress', 'agents_group_end',
+  // Pipeline lifecycle spans turns.
+  'pipeline_started', 'pipeline_node_started', 'pipeline_node_completed',
+  'pipeline_node_failed', 'pipeline_paused', 'pipeline_resumed',
+  'pipeline_completed', 'pipeline_aborted', 'pipeline_failed',
+  // Latest-wins session state the client has no other live source for.
+  'todos_updated', 'session_agent_changed', 'session_drive_changed',
+  'session_snapshot_changed', 'diagram_changed', 'context_status',
+  'index_status', 'auto_continue',
+  // Long-running operation markers (started/finished only — progress ticks
+  // re-emit within seconds and would dominate the window).
+  'operation_started', 'operation_finished',
+]);
+
+export const DEFAULT_ATTACH_REPLAY_MAX_EVENTS = 600;
+
+/** Hard safety cap for the trimmed attach replay (most-recent wins). */
+export function attachReplayCap(): number {
+  const n = Number.parseInt(process.env.CODER_ATTACH_REPLAY_MAX_EVENTS ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_ATTACH_REPLAY_MAX_EVENTS;
+}
+
+/**
+ * OPT-IN (CODER_ATTACH_REPLAY_TRIM=1). Default OFF after the 2026-07-20
+ * incident: the first cut also dropped transcript-bearing kinds and a mid-run
+ * attach lost the run's visible history. The kind list above is fixed, but
+ * the trim stays flagged until a live Electron E2E (attach mid-run, continue,
+ * session switch) proves the client rebuilds everything. The renderer-side
+ * chunked drain already removes most of the freeze regardless.
+ */
+export function attachReplayTrimEnabled(): boolean {
+  return process.env.CODER_ATTACH_REPLAY_TRIM === '1';
+}
+
+/**
+ * The trimmed `since=-1` replay window: cross-turn state kinds from the whole
+ * buffer + everything from the last `message_complete` (inclusive — it may
+ * not have hit the DB yet when the client GETs the transcript), in strict
+ * buffer order, bounded by `attachReplayCap()` keeping the most recent.
+ */
+export function buildAttachReplay(bus: CoderRunBus): BufferedEvent[] {
+  let boundary = 0;
+  for (let i = bus.buffer.length - 1; i >= 0; i--) {
+    if (bus.buffer[i].event === 'message_complete') { boundary = i; break; }
+  }
+  const out: BufferedEvent[] = [];
+  for (let i = 0; i < bus.buffer.length; i++) {
+    const ev = bus.buffer[i];
+    if (i >= boundary || REPLAY_STATE_KINDS.has(ev.event)) out.push(ev);
+  }
+  const cap = attachReplayCap();
+  return out.length > cap ? out.slice(-cap) : out;
+}
+
+/**
+ * Replay a precomputed event window, then subscribe live. Used by the SSE
+ * pump's trimmed attach path; `subscribe` keeps the full-replay contract for
+ * every other caller (worker forwarding, company streams, tests).
+ */
+export function subscribeWithReplay(
+  bus: CoderRunBus,
+  sub: BusSubscriber,
+  replay: readonly BufferedEvent[],
+): () => void {
+  for (const ev of replay) {
+    try { sub(ev); } catch { /* ignore */ }
   }
   bus.subscribers.add(sub);
   return () => { bus.subscribers.delete(sub); };

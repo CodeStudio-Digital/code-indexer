@@ -1,4 +1,11 @@
 import type { Database as DB } from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
+
+const WORKER_INSTANCE_ID = `${process.pid}:${randomUUID()}`;
+
+export function currentSubagentWorkerInstanceId(): string {
+  return WORKER_INSTANCE_ID;
+}
 
 /** Additive persisted contract; older rows naturally expose null/default fields. */
 export interface SubagentRunTelemetry {
@@ -37,6 +44,9 @@ export interface SubagentRunTelemetry {
   output_id: string | null;
   started_at: string;
   completed_at: string | null;
+  status: 'running' | 'completed' | 'interrupted';
+  heartbeat_at: string | null;
+  worker_instance_id: string | null;
 }
 
 export interface SubagentToolCallTelemetry {
@@ -109,26 +119,44 @@ export interface CompleteSubagentRunInput {
 }
 
 export function start(db: DB, input: StartSubagentRunInput): void {
+  // A session has one owning coder worker. A new worker instance starting a
+  // child means incomplete rows from a different instance are crash orphans.
+  if (input.session_id != null) {
+    recoverOrphaned(db, {
+      sessionId: input.session_id,
+      currentWorkerInstanceId: WORKER_INSTANCE_ID,
+    });
+  }
   db.prepare(`
     INSERT INTO coder_subagent_runs (
       session_id, run_id, parent_run_id, spawn_id, profile, label, task_preview,
       max_turns, max_tool_calls, timeout_ms, stall_ms, research_depth,
-      soft_tool_target, soft_time_target_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      soft_tool_target, soft_time_target_ms, status, heartbeat_at, worker_instance_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', datetime('now'), ?)
     ON CONFLICT(run_id) DO UPDATE SET
       parent_run_id=excluded.parent_run_id, profile=excluded.profile,
       label=excluded.label, task_preview=excluded.task_preview,
       research_depth=excluded.research_depth,
       soft_tool_target=excluded.soft_tool_target,
-      soft_time_target_ms=excluded.soft_time_target_ms
+      soft_time_target_ms=excluded.soft_time_target_ms,
+      status='running', heartbeat_at=datetime('now'),
+      worker_instance_id=excluded.worker_instance_id, completed_at=NULL
   `).run(
     input.session_id, input.run_id, input.parent_run_id ?? null,
     input.spawn_id ?? null, input.profile, input.label ?? null,
     input.task_preview?.slice(0, 1000) ?? null, input.max_turns,
     input.max_tool_calls ?? null, input.timeout_ms ?? null, input.stall_ms ?? null,
     input.research_depth ?? null, input.soft_tool_target ?? null,
-    input.soft_time_target_ms ?? null,
+    input.soft_time_target_ms ?? null, WORKER_INSTANCE_ID,
   );
+}
+
+export function heartbeat(db: DB, runId: string): void {
+  db.prepare(`
+    UPDATE coder_subagent_runs
+    SET heartbeat_at=datetime('now')
+    WHERE run_id=? AND status='running' AND completed_at IS NULL
+  `).run(runId);
 }
 
 export function recordToolCall(db: DB, input: SubagentToolCallInput): void {
@@ -143,6 +171,7 @@ export function recordToolCall(db: DB, input: SubagentToolCallInput): void {
     input.is_error ? 1 : 0, input.refusal_kind ?? null,
     input.duration_ms, input.result_chars,
   );
+  heartbeat(db, input.run_id);
 }
 
 export function complete(db: DB, input: CompleteSubagentRunInput): void {
@@ -152,7 +181,8 @@ export function complete(db: DB, input: CompleteSubagentRunInput): void {
       productive_operations=?, paginate_calls=?, duplicate_calls=?, error_calls=?,
       refused_calls=?, elapsed_ms=?, input_tokens=?, output_tokens=?,
       cache_read_input_tokens=?, cache_creation_input_tokens=?, has_summary=?,
-      output_id=?, synthesis_nudged=?, completed_at=datetime('now')
+      output_id=?, synthesis_nudged=?, status='completed',
+      heartbeat_at=datetime('now'), completed_at=datetime('now')
     WHERE run_id=?
   `).run(
     input.reason, input.turns, input.auto_continues, input.tool_calls,
@@ -162,6 +192,49 @@ export function complete(db: DB, input: CompleteSubagentRunInput): void {
     input.cache_creation_input_tokens ?? 0, input.has_summary ? 1 : 0,
     input.output_id ?? null, input.synthesis_nudged ? 1 : 0, input.run_id,
   );
+}
+
+export interface RecoverOrphanedSubagentRunsOptions {
+  sessionId?: number;
+  /** When set, preserve incomplete rows owned by this live worker instance. */
+  currentWorkerInstanceId?: string;
+}
+
+/**
+ * Mark incomplete rows left by a dead/replaced worker as terminal. Idempotent;
+ * completed rows and rows owned by the current worker are never touched.
+ */
+export function recoverOrphaned(
+  db: DB,
+  opts: RecoverOrphanedSubagentRunsOptions = {},
+): number {
+  const table = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='coder_subagent_runs'",
+  ).get();
+  if (!table) return 0;
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(coder_subagent_runs)').all() as Array<{ name: string }>)
+      .map((row) => row.name),
+  );
+  if (!columns.has('status') || !columns.has('heartbeat_at') || !columns.has('worker_instance_id')) return 0;
+
+  const where: string[] = ["completed_at IS NULL", "status = 'running'"];
+  const params: unknown[] = [];
+  if (opts.sessionId != null) {
+    where.push('session_id = ?');
+    params.push(opts.sessionId);
+  }
+  if (opts.currentWorkerInstanceId) {
+    where.push('(worker_instance_id IS NULL OR worker_instance_id <> ?)');
+    params.push(opts.currentWorkerInstanceId);
+  }
+  const result = db.prepare(`
+    UPDATE coder_subagent_runs
+    SET status='interrupted', reason=COALESCE(reason, 'worker_restart'),
+        heartbeat_at=datetime('now'), completed_at=datetime('now')
+    WHERE ${where.join(' AND ')}
+  `).run(...params);
+  return result.changes;
 }
 
 export function listRuns(db: DB, sessionId: number, limit = 50): SubagentRunTelemetry[] {

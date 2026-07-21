@@ -40,6 +40,15 @@ const containerfileProject = {
   whenFiles: ['Containerfile', 'Dockerfile'],
 };
 
+const composeProject = {
+  whenFiles: [
+    'compose.yaml',
+    'compose.yml',
+    'docker-compose.yml',
+    'docker-compose.yaml',
+  ],
+};
+
 export default definePlugin({
   permissions: {
     fs: {
@@ -162,6 +171,7 @@ export default definePlugin({
           command: 'podman',
           args: ['build', '-t', 'project:dev', '.'],
           scope: 'project',
+          activation: containerfileProject,
         }),
         contributeRunConfiguration({
           id: 'podman-compose-up',
@@ -170,6 +180,7 @@ export default definePlugin({
           command: 'podman',
           args: ['compose', 'up', '-d'],
           scope: 'project',
+          activation: composeProject,
         }),
       ],
     }),

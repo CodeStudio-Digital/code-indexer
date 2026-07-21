@@ -129,7 +129,9 @@ describe('spawn_agent background + collect_agents', () => {
     const collect = buildCollectAgentsTool(deps);
     const r = await collect.handler({ job_id: jobId, wait: false }, ctx);
     expect(String(r.content)).toContain(jobId);
-    expect(String(r.content)).toContain('call collect_agents again');
+    expect(String(r.content)).toContain('Do not poll repeatedly');
+    expect(String(r.content)).toContain('runner will park event-driven');
+    expect(String(r.content)).not.toContain('call collect_agents again');
   });
 
   it('a bumpSessionUsage throw does NOT turn a successful job into a failure (H1)', async () => {

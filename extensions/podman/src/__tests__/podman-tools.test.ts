@@ -203,6 +203,23 @@ describe('podman plugin tools', () => {
     ]));
   });
 
+  it('only contributes runnable Podman configurations for matching project files', () => {
+    const configurations = plugin.modules[0].runConfigurations ?? [];
+    expect(configurations.find((item) => item.id === 'podman-build-run')).toMatchObject({
+      activation: { whenFiles: ['Containerfile', 'Dockerfile'] },
+    });
+    expect(configurations.find((item) => item.id === 'podman-compose-up')).toMatchObject({
+      activation: {
+        whenFiles: [
+          'compose.yaml',
+          'compose.yml',
+          'docker-compose.yml',
+          'docker-compose.yaml',
+        ],
+      },
+    });
+  });
+
   it('podman_containerize writes a non-root Containerfile + .dockerignore for a node project', async () => {
     const { ctx, writes } = makeCtx(() => ({ code: 0, stdout: '' }), {
       'package.json': JSON.stringify({ scripts: { start: 'node server.js', build: 'tsc' } }),

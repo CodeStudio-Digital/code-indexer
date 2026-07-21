@@ -154,6 +154,33 @@ export interface RunContext {
   /** Dedup deterministic loop-strategy reminders for five turns. */
   lastStrategyNudgeTurnByKey: Map<string, number>;
   /**
+   * Perf W1 — background compaction-summary precompute. Kicked by the
+   * Executing post-turn gate when the size ratio nears the trigger, consumed
+   * (and cleared) by the Compacting node so the ~2-minute inline summary
+   * stall happens off the critical path. Null = nothing in flight. See
+   * `compaction/precompute.ts` for the identity-validation contract.
+   */
+  summaryPrecompute: import('../compaction/precompute.js').SummaryPrecomputeState | null;
+  /**
+   * Perf W1 — memoized `buildTools` output. The catalog is a pure function
+   * of (tiers, pins, cap, terse lock, model) which are constant for long
+   * stretches of a run, yet it was rebuilt — registry scan, tool-filter hook
+   * fs read, sort, terse mapping and a full catalog JSON.stringify — on
+   * EVERY turn. Keyed by `buildToolsCacheKey` plus the run-constant inputs;
+   * invalidated automatically when the key changes (new pin / tier
+   * promotion). `variants` caches the serialized JSON + fingerprint for the
+   * telemetry path (full vs `get_tool_output`-trimmed membership).
+   */
+  toolsMemo: {
+    key: string;
+    built: import('../assembly/tools.js').BuildToolsResult;
+    variants: Map<string, {
+      tools: import('../assembly/tools.js').SerializedTool[];
+      json: string | null;
+      fingerprint: string | null;
+    }>;
+  } | null;
+  /**
    * EMA of `real_prompt_tokens / tokenizer_estimate`, learned on turns where
    * the provider reported usage. Calibrates the pre-emit projection and the
    * estimate fallback of the post-turn gates (chars/4 drifts with content
@@ -627,7 +654,9 @@ export interface BridgeCallbacks {
     responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
-  }) => number | null;
+    // Perf W1 — a promise return means the async writer (dbWriter) took the
+    // insert; the id lands on ctx.lastTurnTelemetryId when it settles.
+  }) => number | null | Promise<number | null>;
   /**
    * Background (fire-and-forget) subagent liveness. Present only when the
    * host wired the job manager (single sessions with subagent capability);

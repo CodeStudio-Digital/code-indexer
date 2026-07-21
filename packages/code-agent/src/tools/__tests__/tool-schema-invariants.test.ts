@@ -13,8 +13,10 @@
  *     overlapping symbol/around_line/search_term/force_reread modes),
  *   - the high-frequency, always-visible tools stay under a hard arg ceiling.
  *
- * Heavy specialist tools (manage_path, create_skill) are intentionally exempt:
- * their params are operation-scoped / navigate-tier, not hot bootstrap surface.
+ * Heavy specialist tools (manage_path, create_skill, http_request) are
+ * intentionally exempt: their params are operation-scoped / navigate-tier, not
+ * hot bootstrap surface. Exempt does not mean unguarded — they get an exact
+ * param-set assertion instead of the ceiling.
  */
 import { describe, it, expect } from 'vitest';
 import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
@@ -41,15 +43,28 @@ describe('tool schema invariants — fs tools', () => {
       new Set(['path', 'start_line', 'end_line', 'symbol', 'force']),
     );
   });
+
+  it('http_request exposes exactly its declared surface', () => {
+    // Navigate-tier, so it is exempt from the always-on ceiling below — but it
+    // still may not grow silently. `timeoutMs`/`insecure` were already read by
+    // the handler before being declared; `maxBytes`/`resetCookies` back the
+    // network-read ceiling and the cookie-jar reset.
+    expect(new Set(propNames(httpRequestTool))).toEqual(
+      new Set([
+        'url', 'method', 'headers', 'json', 'body',
+        'timeoutMs', 'insecure', 'resetCookies', 'maxBytes',
+      ]),
+    );
+  });
 });
 
 describe('tool schema invariants — always-on argument ceiling', () => {
   const CEILING = 6;
-  // manage_path (operation-scoped, 7 params) is deliberately excluded.
+  // manage_path (operation-scoped, 7 params) and http_request (navigate-tier,
+  // 9 params — pinned exactly above) are deliberately excluded.
   const alwaysOn: CoderTool[] = [
     ...fsTools.filter((t) => t.name !== 'manage_path'),
     ...shellTools,
-    httpRequestTool,
   ];
 
   for (const t of alwaysOn) {

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseVerdictBlock,
   buildVerifyInitialMessage,
+  resolveVerifyMaxTurns,
 } from '@mcp/code-agent/tools/verify-completion-subagent.js';
 
 describe('parseVerdictBlock', () => {
@@ -73,8 +74,24 @@ describe('buildVerifyInitialMessage', () => {
   });
 
   it('tells the verifier to run git_diff itself when no diff is provided', () => {
-    const msg = buildVerifyInitialMessage({ goal: 'g', diff: '' });
+    const msg = buildVerifyInitialMessage({
+      goal: 'g',
+      diff: '',
+      files: ['src/owned.ts', 'test/owned.test.ts'],
+    });
     expect(msg).toContain('run `git_diff` yourself');
+    expect(msg).toContain('# Session-owned file scope');
+    expect(msg).toContain('`src/owned.ts`');
+    expect(msg).toContain('unrelated concurrent changes');
     expect(msg).not.toContain('```diff');
+  });
+});
+
+describe('resolveVerifyMaxTurns', () => {
+  it('bounds automatic Ultra verification while preserving explicit overrides', () => {
+    expect(resolveVerifyMaxTurns(undefined, 12)).toBe(12);
+    expect(resolveVerifyMaxTurns('5', 12)).toBe(5);
+    expect(resolveVerifyMaxTurns('0', 12)).toBe(0);
+    expect(resolveVerifyMaxTurns('invalid', 12)).toBe(12);
   });
 });

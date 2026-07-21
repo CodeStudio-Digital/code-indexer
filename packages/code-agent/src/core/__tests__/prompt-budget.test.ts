@@ -76,6 +76,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Tool tiers (IMPORTANT)': 720,
   '# Tool strategy — token economy': 1150,
   '# Tool strategy — project NOT indexed': 1010,
+  '# Tool strategy — index starting': 1010,
   '# Tool strategy — native only (MCP bridge unavailable)': 770,
   '# Native tools available to this session': 800, // capability-derived catalog (2026-07-11; measured 700)
   '# Images & vision': 500,
@@ -90,7 +91,9 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Explanatory output': 420,
   '# Learning output': 420,
   '# Operating autonomously': 760,
-  '# Plan mode is ACTIVE': 5700, // plan.txt + ## Plan depth block + decision-gate step/section + recall step 0 (2026-07)
+  '# Multi-agent mode (Ultra)': 1350,
+  '# Multi-agent mode (explicit request only)': 600,
+  '# Plan mode is ACTIVE': 5800, // plan.txt + ## Plan depth block + decision-gate step/section + recall step 0 (2026-07; complex measured 5792)
 
   '# Explore mode is ACTIVE': 2600, // + recall-first reword + directory-skeleton hint (2026-07, measured 2564)
   '# Build mode is ACTIVE': 2980, // Track G: + pre-execution destructive-action evidence line
@@ -140,6 +143,8 @@ MATRIX.push({ label: 'zai|lang=pt-BR', ctx: { ...BASE_CTX, responseLanguage: 'Po
 MATRIX.push({ label: 'zai|style=explanatory', ctx: { ...BASE_CTX, outputStyle: 'explanatory' } });
 MATRIX.push({ label: 'zai|style=learning', ctx: { ...BASE_CTX, outputStyle: 'learning' } });
 MATRIX.push({ label: 'zai|unsupervised', ctx: { ...BASE_CTX, unsupervised: true } });
+MATRIX.push({ label: 'zai|multi-agent=ultra', ctx: { ...BASE_CTX, multiAgentMode: 'proactive' } });
+MATRIX.push({ label: 'zai|multi-agent=explicit', ctx: { ...BASE_CTX, multiAgentMode: 'explicit_request_only' } });
 
 describe('prompt-budget — per-section ceilings', () => {
   it('every section is registered and within budget across the matrix', () => {

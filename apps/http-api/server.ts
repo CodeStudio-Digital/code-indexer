@@ -523,6 +523,18 @@ export function createApp() {
     console.warn(`[coder] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // Subagent telemetry is append-only evidence, but an abrupt worker exit can
+  // miss its terminal update. At process boot no coder workers are live yet,
+  // so every incomplete row is an orphan and can be closed deterministically.
+  try {
+    const recovered = deps.sessionStore.recoverOrphanedSubagentRuns();
+    if (recovered > 0) {
+      console.log(`[coder] Startup recovery: ${recovered} subagent run(s) → interrupted`);
+    }
+  } catch (e) {
+    console.warn(`[coder] Subagent recovery failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   // GC orphan global-session virtual workspaces (synthetic union projects with
   // no session, + stray junction dirs) left by a crash or uncovered delete path.
   // SAFE: only unlinks junctions, never the real projects' files.

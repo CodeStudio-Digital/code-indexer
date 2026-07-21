@@ -36,7 +36,11 @@ export { runScaffoldStream } from './projects/scaffold.js';
 export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
 export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
 export { runAppStudioScaffoldStream } from './app-studio/studio-scaffold.js';
-export type { AppStudioCreateInput, AppStudioStreamEvent } from './app-studio/studio-scaffold.js';
+export type {
+  AppStudioCreateInput,
+  AppStudioExecutionMode,
+  AppStudioStreamEvent,
+} from './app-studio/studio-scaffold.js';
 export {
   canonicalAppTeamRole,
   createAppTeamSession,

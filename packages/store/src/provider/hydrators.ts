@@ -6,6 +6,12 @@ import type {
   ProviderModel,
 } from './types.js';
 
+function normalizeNativeReasoningLevel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const level = value.trim();
+  return level && level.toLowerCase() !== 'ultra' ? level : null;
+}
+
 export interface ProviderConfigRaw {
   id: string;
   name: string;
@@ -89,17 +95,27 @@ export function hydrateProvider(r: ProviderConfigRaw): ProviderConfig {
 function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
   if (!levels) return null;
   const result: string[] = [];
+  const seen = new Set<string>();
   for (const lv of levels) {
+    let raw: unknown = lv;
     if (typeof lv === 'string') {
-      result.push(lv);
+      raw = lv;
     } else if (lv && typeof lv === 'object' && 'effort' in lv && typeof (lv as Record<string, unknown>).effort === 'string') {
-      result.push((lv as Record<string, unknown>).effort as string);
+      raw = (lv as Record<string, unknown>).effort;
     }
+    const level = normalizeNativeReasoningLevel(raw);
+    if (!level || seen.has(level.toLowerCase())) continue;
+    seen.add(level.toLowerCase());
+    result.push(level);
   }
   return result.length > 0 ? result : null;
 }
 
 export function hydrateModel(r: ProviderModelRaw): ProviderModel {
+  const defaultReasoningLevel = normalizeNativeReasoningLevel(r.default_reasoning_level);
+  const supportedReasoningLevels = normalizeStoredLevels(
+    parseJson<unknown[] | null>(r.supported_reasoning_levels, null),
+  );
   return {
     provider_id: r.provider_id,
     model_id: r.model_id,
@@ -108,15 +124,17 @@ export function hydrateModel(r: ProviderModelRaw): ProviderModel {
     context_window: r.context_window,
     context_window_overridden: !!r.context_window_overridden,
     default_max_tokens: r.default_max_tokens,
-    can_reason: !!r.can_reason,
+    // Infer capability from native metadata as a read-boundary repair for
+    // older catalogs that persisted levels while leaving can_reason at 0.
+    can_reason: !!r.can_reason || defaultReasoningLevel !== null || supportedReasoningLevels !== null,
     supports_attachments: !!r.supports_attachments,
     enabled: !!r.enabled,
     source: r.source,
     updated_at: r.updated_at,
     display_name: r.display_name,
     description: r.description,
-    default_reasoning_level: r.default_reasoning_level,
-    supported_reasoning_levels: normalizeStoredLevels(parseJson<unknown[] | null>(r.supported_reasoning_levels, null)),
+    default_reasoning_level: defaultReasoningLevel,
+    supported_reasoning_levels: supportedReasoningLevels,
     apply_patch_tool_type: r.apply_patch_tool_type,
     available_in_plans: parseJson<string[] | null>(r.available_in_plans, null),
     minimal_client_version: r.minimal_client_version,

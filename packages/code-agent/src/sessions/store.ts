@@ -13,6 +13,7 @@ import type {
   CoderMessageRow,
   CoderPlanRow,
   CoderPlanStatus,
+  CoderExecutionMode,
   CoderSession,
   CoderSessionGroup,
   CoderSessionStats,
@@ -150,6 +151,7 @@ export class SessionStore {
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
+  setSessionExecutionMode(id: number, mode: CoderExecutionMode): void { state.setExecutionMode(this.db, id, mode); }
   setSessionThinkingEnabled(id: number, enabled: boolean): void { state.setThinkingEnabled(this.db, id, enabled); }
   setSessionPlanDepth(id: number, depth: string | null): void { state.setPlanDepth(this.db, id, depth); }
   setSessionResponseLanguage(id: number, language: string | null): void { state.setResponseLanguage(this.db, id, language); }
@@ -363,8 +365,12 @@ export class SessionStore {
 
   // ─── Per-turn telemetry (migration 069) ────────────────────────
   startSubagentRun(input: subagentTelemetry.StartSubagentRunInput): void { subagentTelemetry.start(this.db, input); }
+  heartbeatSubagentRun(runId: string): void { subagentTelemetry.heartbeat(this.db, runId); }
   recordSubagentToolCall(input: subagentTelemetry.SubagentToolCallInput): void { subagentTelemetry.recordToolCall(this.db, input); }
   completeSubagentRun(input: subagentTelemetry.CompleteSubagentRunInput): void { subagentTelemetry.complete(this.db, input); }
+  recoverOrphanedSubagentRuns(opts: subagentTelemetry.RecoverOrphanedSubagentRunsOptions = {}): number {
+    return subagentTelemetry.recoverOrphaned(this.db, opts);
+  }
   listSubagentRuns(sessionId: number, limit = 50): subagentTelemetry.SubagentRunTelemetry[] { return subagentTelemetry.listRuns(this.db, sessionId, limit); }
   listSubagentToolCalls(runId: string, limit = 100): subagentTelemetry.SubagentToolCallTelemetry[] { return subagentTelemetry.listToolCalls(this.db, runId, limit); }
   getSubagentBudgetRecommendations(): subagentRecommendations.SubagentBudgetRecommendation[] {

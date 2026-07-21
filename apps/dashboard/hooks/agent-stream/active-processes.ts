@@ -15,6 +15,7 @@ export interface ActiveProcessPatch {
   phase?: string;
   note?: string;
   elapsedMs?: number;
+  idleMs?: number;
   parentId?: string;
   groupId?: string;
   background?: boolean;
@@ -43,6 +44,7 @@ export function upsertActiveProcess(
     ...(patch.phase !== undefined ? { phase: patch.phase } : {}),
     ...(patch.note !== undefined ? { note: patch.note } : {}),
     ...(patch.elapsedMs !== undefined ? { elapsedMs: patch.elapsedMs } : {}),
+    ...(patch.idleMs !== undefined ? { idleMs: patch.idleMs } : {}),
     ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
     ...(patch.groupId !== undefined ? { groupId: patch.groupId } : {}),
     ...(patch.background !== undefined ? { background: patch.background } : {}),

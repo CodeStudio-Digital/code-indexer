@@ -138,6 +138,30 @@ describe('useWorkspaceStore — isolamento por projeto (P1)', () => {
     expect(b.dirty).toBe(true);
   });
 
+  it('separa dirty imediato do espelho de conteúdo debounced do Monaco', () => {
+    useWorkspaceStore.setState({
+      activeProjectId: 1,
+      openFiles: [{ ...file(1, 'x.ts'), content: 'before' }],
+      activeFilePath: 'x.ts',
+    });
+
+    useWorkspaceStore.getState().markEditorDirty(1, 'x.ts');
+    let current = useWorkspaceStore.getState().openFiles[0] as OpenFile;
+    expect(current.dirty).toBe(true);
+    expect(current.content).toBe('before');
+
+    useWorkspaceStore.getState().syncEditorContent(1, 'x.ts', 'after');
+    current = useWorkspaceStore.getState().openFiles[0] as OpenFile;
+    expect(current.content).toBe('after');
+    expect(current.dirty).toBe(true);
+
+    useWorkspaceStore.getState().markClean(1, 'x.ts', 'mtime');
+    useWorkspaceStore.getState().syncEditorContent(1, 'x.ts', 'saved');
+    current = useWorkspaceStore.getState().openFiles[0] as OpenFile;
+    expect(current.content).toBe('saved');
+    expect(current.dirty).toBe(false);
+  });
+
   it('markExternallyChanged / applyExternalContent respeitam (projectId, path)', () => {
     useWorkspaceStore.setState({
       activeProjectId: 1,

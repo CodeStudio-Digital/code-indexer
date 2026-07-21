@@ -48,6 +48,7 @@ import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
+import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -410,32 +411,9 @@ export class WorkerOrchestratorPool {
     }
 
     // ─── Doc-corpus RPC bridges from worker → main ───────────────
-    // The company-worker boot installs `DocSearchBackend` /
-    // `DocsResearchBridge` shims that call `bridge.request('docSearch' /
-    // 'docsResearch', ...)`. The corresponding handlers live HERE — they
-    // route the request to the main-process singletons. Without this,
-    // `rag_search_docs` / `docs_deep_research` from inside the company
-    // worker fail with "doc corpus backend is not wired into this process"
-    // — the singleton set via `setGlobalDocSearch` in server.ts lives in
-    // the main-thread module instance and worker_threads don't share
-    // module state. Mirrors `CoderWorkerPool` for the chat path.
-    //
-    // Handlers degrade gracefully when the deps box is empty (tests,
-    // headless runs) — they throw an error whose message matches the
-    // in-process "not configured" message so the worker shim can forward
-    // it verbatim.
-    const offDocSearch = bridge.handle('docSearch', async (payload) => {
-      const backend = this.opts.docDeps?.docSearch;
-      if (!backend) {
-        throw new Error(
-          'rag_search_docs is not configured: the doc corpus backend is not wired into this process. Ask the user to ensure the Documentação feature is enabled.',
-        );
-      }
-      return backend.search(payload as Parameters<DocSearchBackend['search']>[0]);
-    });
-    // rag_read_doc — same deps box; the verb is optional on older backends
-    // so the worker shim gets the same "not available" the in-process tool
-    // would emit.
+    // `rag_search_docs` runs in the worker. Only structural navigation and
+    // deep research cross this bridge; the navigation verbs are short SQLite
+    // reads and the methods remain optional for compatibility with old hosts.
     const offDocReadChunk = bridge.handle('docReadChunk', async (payload) => {
       const backend = this.opts.docDeps?.docSearch;
       if (!backend?.readChunk) {
@@ -461,15 +439,10 @@ export class WorkerOrchestratorPool {
       }
       return backend.outline(payload as Parameters<NonNullable<DocSearchBackend['outline']>>[0]);
     });
-    const offDocsResearch = bridge.handle('docsResearch', async (payload) => {
-      const researcher = this.opts.docDeps?.docsResearch;
-      if (!researcher) {
-        throw new Error(
-          'docs_deep_research is not configured: no DocsResearchBridge installed. Use rag_search_docs as a fallback.',
-        );
-      }
-      return researcher.runResearch(payload as Parameters<DocsResearchBridge['runResearch']>[0]);
-    });
+    const offDocsResearch = registerDocsResearchRpcHandlers(
+      bridge,
+      () => this.opts.docDeps?.docsResearch,
+    );
     // Role recommender — the autonomous CompanyScheduler in the worker asks the
     // main-thread embedding pipeline for a role per card. Degrades to an empty
     // recommendation (scheduler skips the card) when no recommender is wired.
@@ -610,7 +583,6 @@ export class WorkerOrchestratorPool {
       try { offEnd(); } catch { /* best-effort */ }
       try { offSupervisorBoot(); } catch { /* best-effort */ }
       try { offSupervisorIncident(); } catch { /* best-effort */ }
-      try { offDocSearch(); } catch { /* best-effort */ }
       try { offDocReadChunk(); } catch { /* best-effort */ }
       try { offDocReadSection(); } catch { /* best-effort */ }
       try { offDocOutline(); } catch { /* best-effort */ }

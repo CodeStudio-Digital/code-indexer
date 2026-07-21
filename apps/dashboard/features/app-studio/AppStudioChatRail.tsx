@@ -49,9 +49,8 @@ export function AppStudioChatRail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyStream, initialPrompt, masterSessionId]);
 
-  if (!companySessionId || !companyStream) {
-    return <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">{t('appStudio:v6.teamUnavailable')}</div>;
-  }
+  const teamAvailable = Boolean(companySessionId && companyStream);
+  const conversationCount = companyStream?.boardMessages.length ?? 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-surface)]">
@@ -62,31 +61,29 @@ export function AppStudioChatRail({
         </span>
         {onCollapse && <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onCollapse}><ChevronRight className="h-3.5 w-3.5" /></Button>}
       </header>
-      {companyStream.error && <div className="border-b border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-700">{companyStream.error}</div>}
+      {companyStream?.error && <div className="border-b border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-700">{companyStream.error}</div>}
       <div className="flex shrink-0 gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] p-1">
         <button type="button" className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded text-[10px] font-medium ${view === 'orchestration' ? 'bg-accent text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setView('orchestration')}>
           <ListChecks className="h-3.5 w-3.5" />{t('appStudio:v6.orchestration.tab')}
         </button>
-        <button type="button" className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded text-[10px] font-medium ${view === 'conversation' ? 'bg-accent text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setView('conversation')}>
+        <button type="button" disabled={!teamAvailable} className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded text-[10px] font-medium disabled:opacity-50 ${view === 'conversation' ? 'bg-accent text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setView('conversation')}>
           <MessagesSquare className="h-3.5 w-3.5" />{t('appStudio:v6.orchestration.conversationTab')}
-          {companyStream.boardMessages.length > 0 && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px]">{companyStream.boardMessages.length}</span>}
+          {conversationCount > 0 && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px]">{conversationCount}</span>}
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
         {view === 'orchestration' ? <AppStudioOrchestrationBoard detail={detail} onChanged={onChanged} /> : (
-          <BoardPanel
+          companySessionId && companyStream ? <BoardPanel
             messages={companyStream.boardMessages}
             masterPrompts={Array.from(companyStream.masterPrompts.values())}
             onAnswerQuestion={(promptId, answer) => companyStream.respondToMasterQuestion(promptId, answer)}
             onRespondPlan={(promptId, approved, feedback) => companyStream.respondToMasterPlan(promptId, approved, feedback)}
             sessionId={companySessionId}
             sessionName={projectName}
-          />
+          /> : <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">{t('appStudio:v6.teamUnavailable')}</div>
         )}
       </div>
-      <div className="shrink-0 border-t p-2">
-        <MasterComposer sessionId={companySessionId} onSend={send} placeholder={t('agents:company.inputPlaceholderMaster')} />
-      </div>
+      {companySessionId && companyStream && <div className="shrink-0 border-t p-2"><MasterComposer sessionId={companySessionId} onSend={send} placeholder={t('agents:company.inputPlaceholderMaster')} /></div>}
     </div>
   );
 }

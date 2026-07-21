@@ -585,7 +585,7 @@ async function runGroupParallel(
       allowlist: art.allowlist,
       pathScope: art.pathScope,
       pathScopeMode: art.pathScopeMode,
-      limits: resolveTaskLimit(t),
+      limits: resolveTaskLimit(t, deps.resolveLimitsForProfile?.(profile)),
     };
   }));
 
@@ -599,6 +599,8 @@ async function runGroupParallel(
       researchDepth: specs[i].researchPolicy?.depth,
       softToolTarget: specs[i].researchPolicy?.softToolTarget,
       softTimeTargetMs: specs[i].researchPolicy?.softTimeTargetMs,
+      maxToolCalls: specs[i].limits?.maxToolCalls,
+      hardTimeoutMs: specs[i].limits?.timeoutMs,
     })),
   });
 
@@ -629,7 +631,9 @@ async function runGroupParallel(
             task,
             count,
             progress.note ?? `${progress.label}: ${count} tool call(s)`,
-            progressToTaskMeta(progress, resolveTaskLimit(task)),
+            // Report the limit actually dispatched with the spec (includes the
+            // admin per-profile override), not a bare env/default re-resolve.
+            progressToTaskMeta(progress, specs[progress.agentIndex]?.limits ?? resolveTaskLimit(task)),
           );
         }
       },
@@ -725,7 +729,8 @@ async function runOneTask(
   ctx.runner?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
 
   const art = resolveKindArtifacts(task, ctx);
-  const limits = resolveTaskLimit(task);
+  const taskProfile = task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement');
+  const limits = resolveTaskLimit(task, deps.resolveLimitsForProfile?.(taskProfile));
 
   // PR-C: each attempt re-spawns a fresh subagent with the same briefing.
   // Per-attempt rows land in coder_task_run_items via run.persist; the
@@ -762,7 +767,6 @@ async function runOneTask(
     const initialMessages: AgentMessage[] = [
       { role: 'user', content: [{ type: 'text', text: buildTaskBriefing(task) }] },
     ];
-    const taskProfile = task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement');
     let raw: Awaited<ReturnType<typeof runSubagent>>;
     try {
       raw = await runSubagent(

@@ -67,7 +67,10 @@ const UNITY_PROFILE: IgnoreProfile = {
     '.meta', '.csproj', '.sln', '.slnx', '.unityproj', '.pidb', '.booproj',
     '.svd', '.pdb', '.mdb', '.opendb', '.vc.db', '.user', '.userprefs', '.suo',
   ],
-  filePatterns: [],
+  // Unity's directory monitor drops (and immediately deletes) a
+  // `~UnityDirMonSyncFile~<guid>` marker into every folder it watches — pure
+  // churn that would otherwise spam the watcher/index with add+unlink pairs.
+  filePatterns: ['~UnityDirMonSyncFile~*'],
 };
 
 const PROFILES: Record<ProjectIgnoreKind, IgnoreProfile> = {

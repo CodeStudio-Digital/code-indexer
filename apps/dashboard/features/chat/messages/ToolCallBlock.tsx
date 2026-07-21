@@ -50,6 +50,7 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
     // note would never update.
     a.startedAt === b.startedAt &&
     a.elapsedMs === b.elapsedMs &&
+    a.idleMs === b.idleMs &&
     a.progressNote === b.progressNote &&
     // Approval requests attach/detach mid-flight (PermissionGate pauses).
     a.approvals === b.approvals
@@ -142,6 +143,9 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
         ? Math.floor(call.elapsedMs / 1000)
         : null
     : null;
+  const noRealOutput = isRunning && call.idleMs != null && call.idleMs >= 5_000
+    ? t('messages.noRealOutput', { duration: formatShortDuration(call.idleMs) })
+    : null;
 
   return (
     <div className="my-2 rounded-lg border bg-muted/30 overflow-hidden text-xs">
@@ -194,8 +198,8 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
         ) : call.durationMs !== undefined ? (
           <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{call.durationMs}ms</span>
         ) : elapsedSec !== null ? (
-          <span className="ml-auto text-muted-foreground tabular-nums shrink-0">
-            running {elapsedSec}s
+          <span className="ml-auto text-muted-foreground tabular-nums shrink-0" title={noRealOutput ?? undefined}>
+            running {elapsedSec}s{noRealOutput ? ` · ${noRealOutput}` : ''}
           </span>
         ) : null}
       </button>
@@ -284,4 +288,10 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
       )}
     </div>
   );
+}
+
+function formatShortDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
 }

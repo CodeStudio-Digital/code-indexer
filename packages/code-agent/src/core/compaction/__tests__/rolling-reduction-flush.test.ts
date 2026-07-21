@@ -106,6 +106,15 @@ describe('applyRollingReduction — tranche flush', () => {
     expect(r.pendingRetired).toBe(0);
   });
 
+  it('threshold Infinity = defer-all: detects but never applies (perf W1 default)', () => {
+    const msgs = pad(dupes(5)); // 5k retirable — any finite tranche would flush
+    const r = applyRollingReduction(msgs, { flushThresholdChars: Number.POSITIVE_INFINITY });
+    expect(r.messages).toBe(msgs); // byte-identical, same reference
+    expect(r.reduced).toBe(0);
+    expect(r.pendingRetired).toBe(5);
+    expect(r.pendingChars).toBe(5000);
+  });
+
   it('default opts (no threshold) = legacy apply-immediately', () => {
     const r = applyRollingReduction(pad(dupes(1)));
     expect(r.reduced).toBe(1);

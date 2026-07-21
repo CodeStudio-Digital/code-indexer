@@ -4,7 +4,7 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
 
 export interface CoderAttachment {
   name: string;
@@ -307,6 +307,12 @@ export interface RunCoderOptions {
    * precedence than per-session, higher than agent preset default.
    */
   roleTemperature?: number;
+  /**
+   * Provider-independent execution profile. Unlike `reasoningEffort`, this is
+   * a host orchestration policy and is persisted on the session before the run
+   * is configured. `ultra` is never forwarded directly to a provider API.
+   */
+  executionMode?: CoderExecutionMode;
   /**
    * Explicit reasoning-effort override (e.g. `minimal`/`low`/`medium`/`high`/
    * `xhigh`). Company callers pass the master/role config value here; for

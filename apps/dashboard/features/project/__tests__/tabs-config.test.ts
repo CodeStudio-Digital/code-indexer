@@ -3,6 +3,7 @@ import {
   LEFT_TOOL_TABS,
   API_RIGHT_TOOL,
   PRIMARY_SURFACES,
+  PROJECT_RAIL_TABS,
   RIGHT_TOOL_TABS,
   WORKSPACE_SURFACES,
   projectSurface,
@@ -20,6 +21,10 @@ describe('project workbench surface registry', () => {
       'sessions', 'api', 'ssh', 'diagrams', 'snapshots', 'index', 'preview',
     ]);
     expect(WORKSPACE_SURFACES.filter((tab) => tab.separatorBefore).map((tab) => tab.id)).toEqual(['sessions']);
+    expect(PROJECT_RAIL_TABS.map((tab) => tab.id)).toEqual([
+      'sessions', 'files', 'git', 'databases', 'api', 'ssh', 'diagrams', 'snapshots', 'index', 'preview',
+    ]);
+    expect(PROJECT_RAIL_TABS.filter((tab) => tab.separatorBefore).map((tab) => tab.id)).toEqual(['api']);
   });
 
   it('offers a single lookup and side filter for deep links and pins', () => {

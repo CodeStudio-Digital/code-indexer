@@ -2,8 +2,10 @@ import { createEventHandlers } from './handlers.js';
 import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
+import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { noteWorkerLogBus, pushWorkerLog } from './worker-log-store.js';
+import { createWorkerLogCapturePolicy } from './worker-log-policy.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
 
 /**
@@ -62,6 +64,24 @@ function buildLogEntry(eventName: string, data: Record<string, unknown>): Worker
     message: eventName,
     data,
   };
+}
+
+/**
+ * Events processed per drain batch before yielding the main thread back to
+ * the renderer. A reattach can replay the server's whole ring buffer (up to
+ * ~2000 events / 8MB) in one burst; ~50 per batch keeps each batch well
+ * under a frame budget while a full replay costs only ~40 yields.
+ */
+const EVENT_BATCH_SIZE = 50;
+
+/**
+ * Yield the renderer main thread between drain batches. Prefers
+ * `scheduler.yield()` (Chromium 129+ — resumes at continuation priority,
+ * ahead of other queued tasks) and falls back to a 0ms macrotask.
+ */
+function yieldToEventLoop(): Promise<void> {
+  const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  return sched?.yield ? sched.yield() : new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export interface OpenStreamOpts {
@@ -130,6 +150,7 @@ export async function openStream(
     : -1;
   // Throttle the `lastEventAt` commit (stall detector only needs ~1s).
   let lastEventAtCommit = 0;
+  const shouldCaptureWorkerLog = createWorkerLogCapturePolicy();
   // Clear the "Analyzing the task…" (preflight) indicator once the run actually
   // starts streaming — the first event means preflight finished and the model
   // is now producing output.
@@ -202,71 +223,133 @@ export async function openStream(
     }
   }
 
+  // Process ONE event through the session pipeline. Called only from the
+  // drain loop below, strictly in arrival order — never straight from the
+  // transport.
+  const processEvent = (ev: SSEEvent): void => {
+    // Transport-level preamble sent once per (re)connection, before any
+    // replay: identifies the bus instance so the worker-log store can
+    // dedup by (busId, seq). Never logged and never fed to handlers.
+    // It flows through the same queue as data events ON PURPOSE — resetting
+    // the (busKey, hwm) mark out of order would poison the dedup for events
+    // of the previous bus still awaiting drain.
+    if (ev.event === 'bus_info') {
+      try {
+        const info = JSON.parse(ev.data || '{}') as { bus_id?: string };
+        if (info.bus_id && noteWorkerLogBus(sid, info.bus_id)) {
+          // Bus changed under the same stream (a reconnect crossed a run
+          // boundary): seq restarted at 0 on the new bus, so zero the
+          // cursor — the next reconnect must replay the new bus from the
+          // start instead of skipping past a stale high Last-Event-ID.
+          lastSeenSeq = -1;
+          lastSeenSeqMap.delete(sid);
+        }
+      } catch { /* malformed preamble — ignore */ }
+      return;
+    }
+    // Persist the highest id for reattach in a ref (no re-render). This
+    // fires on every event; writing it to React state was a hidden 50+/s
+    // churn source even though nothing renders the value.
+    if (ev.id !== undefined && ev.id > lastSeenSeq) {
+      lastSeenSeq = ev.id;
+      lastSeenSeqMap.set(sid, ev.id);
+    }
+    if (!ev.data) return;
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    // Capture diagnostic events before dispatch, but do not duplicate raw
+    // token deltas and sample repeated progress heartbeats. Semantic events
+    // such as lifecycle/tool boundaries, errors and changed progress notes
+    // remain lossless. The chat handlers below still receive every event.
+    const receivedAt = Date.now();
+    if (shouldCaptureWorkerLog(ev.event, data, receivedAt)) {
+      const entry = buildLogEntry(ev.event, data);
+      pushWorkerLog(sid, entry, ev.id);
+    }
+    // Stall detector (StuckBanner) only needs ~1s granularity — throttle
+    // the lastEventAt commit so it isn't a per-event re-render of AgentChat.
+    if (receivedAt - lastEventAtCommit >= 1000) {
+      lastEventAtCommit = receivedAt;
+      updateSession(sid, { lastEventAt: receivedAt });
+    }
+    if (!preflightCleared) {
+      preflightCleared = true;
+      updateSession(sid, { preflight: null });
+    }
+    const handler = handlers[ev.event];
+    if (handler) handler(data, ev.event);
+  };
+
+  // Chunked event pump. A reattach replay bursts the whole ring buffer into
+  // the SSE read loop in one tick; running processEvent synchronously per
+  // event froze the renderer main thread for the entire replay (the rAF
+  // batching above only coalesces the final setState, not the per-event
+  // JSON.parse + handler work). Events are therefore ALWAYS enqueued and
+  // drained in ordered batches, yielding the event loop between batches. A
+  // single FIFO queue + `draining` flag keeps STRICT arrival order even when
+  // new events land while a drain is suspended in a yield. The live path
+  // (1–2 events per tick) merely defers by one macrotask — invisible next to
+  // the rAF-coalesced flush.
+  const eventQueue: SSEEvent[] = [];
+  let draining = false;
+  let drainDone: Promise<void> = Promise.resolve();
+
+  const drainEventQueue = async (): Promise<void> => {
+    draining = true;
+    try {
+      do {
+        // Yield BEFORE each batch: the SSE framer delivers a parsed chunk's
+        // events in one synchronous loop, so deferring lets the whole burst
+        // accumulate instead of "batching" one event at a time.
+        await yieldToEventLoop();
+        if (ctrl.signal.aborted) {
+          // Unmounted / superseded (see abortMap): the pipeline is dead —
+          // discard pending events instead of pumping a detached session.
+          eventQueue.length = 0;
+          return;
+        }
+        for (const ev of eventQueue.splice(0, EVENT_BATCH_SIZE)) processEvent(ev);
+      } while (eventQueue.length > 0);
+    } finally {
+      draining = false;
+    }
+  };
+
   const client = new ReconnectingSSEClient({
     url: absoluteUrl,
     method: opts.method,
     body: opts.body,
     signal: ctrl.signal,
     getLastEventId: () => lastSeenSeq,
+    // Never reconnect over a stale cursor: `lastSeenSeq` advances at
+    // processing time, so a retry racing an in-flight drain would ask the
+    // server to replay events still sitting in the queue (double delivery
+    // into the handlers). The backoff sleep normally outlasts the drain;
+    // awaiting it here makes that a guarantee.
+    onReconnect: async () => { await drainDone; },
     onEvent: (ev) => {
-      // Transport-level preamble sent once per (re)connection, before any
-      // replay: identifies the bus instance so the worker-log store can
-      // dedup by (busId, seq). Never logged and never fed to handlers.
-      if (ev.event === 'bus_info') {
-        try {
-          const info = JSON.parse(ev.data || '{}') as { bus_id?: string };
-          if (info.bus_id && noteWorkerLogBus(sid, info.bus_id)) {
-            // Bus changed under the same stream (a reconnect crossed a run
-            // boundary): seq restarted at 0 on the new bus, so zero the
-            // cursor — the next reconnect must replay the new bus from the
-            // start instead of skipping past a stale high Last-Event-ID.
-            lastSeenSeq = -1;
-            lastSeenSeqMap.delete(sid);
-          }
-        } catch { /* malformed preamble — ignore */ }
-        return;
-      }
-      // Persist the highest id for reattach in a ref (no re-render). This
-      // fires on every event; writing it to React state was a hidden 50+/s
-      // churn source even though nothing renders the value.
-      if (ev.id !== undefined && ev.id > lastSeenSeq) {
-        lastSeenSeq = ev.id;
-        lastSeenSeqMap.set(sid, ev.id);
-      }
-      if (!ev.data) return;
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
-      // Capture EVERY event into the worker log BEFORE dispatch. The
-      // existing per-event handlers below only fire for events the UI
-      // explicitly renders (text, tool_*, plan, etc.) — many events
-      // like history_compacted / provider_call / worker_log have no
-      // chat-side handler but are precious for debugging stalls. Routed
-      // through a coalesced store so the firehose doesn't re-render the
-      // chat (only the Worker Log panel, when open, subscribes).
-      const entry = buildLogEntry(ev.event, data);
-      pushWorkerLog(sid, entry, ev.id);
-      // Stall detector (StuckBanner) only needs ~1s granularity — throttle
-      // the lastEventAt commit so it isn't a per-event re-render of AgentChat.
-      if (entry.ts - lastEventAtCommit >= 1000) {
-        lastEventAtCommit = entry.ts;
-        updateSession(sid, { lastEventAt: entry.ts });
-      }
-      if (!preflightCleared) {
-        preflightCleared = true;
-        updateSession(sid, { preflight: null });
-      }
-      const handler = handlers[ev.event];
-      if (handler) handler(data, ev.event);
+      eventQueue.push(ev);
+      if (!draining) drainDone = drainEventQueue();
     },
     isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
   });
 
   try {
-    await client.run();
+    try {
+      await client.run();
+    } finally {
+      // The transport resolves on the RAW terminal frame (isTerminal above),
+      // which may still be sitting in the queue. Drain — or, when aborted,
+      // discard — before the error handling / teardown below so handler-side
+      // state (doneReason, final flushNow) lands first, exactly as it did
+      // when the pipeline was synchronous.
+      if (ctrl.signal.aborted) eventQueue.length = 0;
+      await drainDone;
+    }
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
       // Special case: server returned 409 INTERACTION_PENDING because the

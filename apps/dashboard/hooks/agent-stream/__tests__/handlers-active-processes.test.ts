@@ -29,8 +29,13 @@ describe('active process event lifecycle', () => {
       { id: 'tool:t1', source: 'tool', label: 'code_exec', status: 'running' },
     ]);
 
-    handlers.tool_progress({ id: 't1', name: 'code_exec', elapsedMs: 2_000, note: 'running tests' }, 'tool_progress');
-    expect(getState().activeProcesses[0]).toMatchObject({ elapsedMs: 2_000, note: 'running tests' });
+    handlers.tool_progress({
+      id: 't1', name: 'code_exec', elapsedMs: 2_000, idleMs: 1_500,
+      kind: 'heartbeat', note: 'running tests',
+    }, 'tool_progress');
+    expect(getState().activeProcesses[0]).toMatchObject({
+      elapsedMs: 2_000, idleMs: 1_500, note: 'running tests',
+    });
 
     handlers.tool_approval_request({
       toolUseId: 't1',

@@ -21,7 +21,7 @@ import {
 } from '@mcp/services/services/oauth/openai.js';
 import { resolveChatGPTCreds } from '@mcp/services/providers/shared/oauth.js';
 import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';
-import type { ProviderSpec } from '@mcp/provider-sdk';
+import { nativeReasoningLevel, nativeReasoningLevels, type ProviderSpec } from '@mcp/provider-sdk';
 import type { DiscoveryResult } from './index.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -122,6 +122,8 @@ export async function discoverChatgptModels(
 function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
   const isListed = m.visibility === undefined || m.visibility === 'list';
   const isApi = m.supported_in_api !== false;
+  const defaultReasoningLevel = nativeReasoningLevel(normalizeReasoningLevel(m.default_reasoning_level));
+  const supportedReasoningLevels = normalizeReasoningLevels(m.supported_reasoning_levels);
 
   return {
     model_id: m.slug,
@@ -134,8 +136,9 @@ function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
     default_enabled: isListed && isApi,
     display_name: m.display_name ?? null,
     description: m.description ?? null,
-    default_reasoning_level: normalizeReasoningLevel(m.default_reasoning_level),
-    supported_reasoning_levels: normalizeReasoningLevels(m.supported_reasoning_levels),
+    can_reason: defaultReasoningLevel !== null || supportedReasoningLevels !== null,
+    default_reasoning_level: defaultReasoningLevel,
+    supported_reasoning_levels: supportedReasoningLevels,
     apply_patch_tool_type: m.apply_patch_tool_type ?? null,
     available_in_plans: m.available_in_plans ?? null,
     minimal_client_version: m.minimal_client_version ?? null,
@@ -160,7 +163,8 @@ function normalizeReasoningLevels(levels: unknown[] | undefined): string[] | nul
     const s = normalizeReasoningLevel(lv);
     if (s) result.push(s);
   }
-  return result.length > 0 ? result : null;
+  const native = nativeReasoningLevels(result);
+  return native.length > 0 ? native : null;
 }
 
 function seedFallback(): UpsertModelInput[] {
@@ -172,8 +176,9 @@ function seedFallback(): UpsertModelInput[] {
     // Carry reasoning hints so the admin reasoning-effort dropdown renders
     // even when the live `/models` discovery is unreachable. Live discovery
     // overwrites these with the upstream-advertised values when it succeeds.
-    default_reasoning_level: m.default_reasoning_level ?? null,
-    supported_reasoning_levels: m.supported_reasoning_levels ?? null,
+    can_reason: Boolean(m.default_reasoning_level || m.supported_reasoning_levels?.length),
+    default_reasoning_level: nativeReasoningLevel(m.default_reasoning_level),
+    supported_reasoning_levels: normalizeReasoningLevels(m.supported_reasoning_levels ?? undefined),
     apply_patch_tool_type: m.apply_patch_tool_type ?? null,
   }));
 }

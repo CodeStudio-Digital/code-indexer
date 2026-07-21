@@ -1,6 +1,6 @@
 import type { ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
-import { withStreamResilience } from '@mcp/provider-sdk';
+import { withReasoningCapabilities, withStreamResilience } from '@mcp/provider-sdk';
 import { getRegistry, getDefinition } from './registry.js';
 import { getStore } from './shared/store.js';
 import { resolveCreds } from './shared/resolver.js';
@@ -20,6 +20,16 @@ export interface LookupResult {
 function effectiveKind(cfg: ProviderConfig): string {
   if (cfg.kind === 'openai' && (cfg.id === 'zai' || cfg.extra?.zai_has_coding_mode === true)) {
     return 'zai';
+  }
+  if (
+    cfg.kind === 'openai'
+    && cfg.id === 'kimi-code'
+    && (
+      cfg.base_url?.replace(/\/$/, '').toLowerCase() === 'https://api.kimi.com/coding/v1'
+      || cfg.extra?.oauth_key === 'oauth/kimi-code'
+    )
+  ) {
+    return 'kimi-code';
   }
   return cfg.kind;
 }
@@ -107,7 +117,11 @@ export async function createCoderProvider(
   // socket teardown AFTER a stream already completed. withStreamResilience
   // swallows that post-`done` close and re-throws genuine mid-stream truncations.
   return withStreamResilience(
-    def.createCoder(creds, model, { ...opts, providerId, providerModels }),
+    withReasoningCapabilities(
+      def.createCoder(creds, model, { ...opts, providerId, providerModels }),
+      providerModels,
+      model,
+    ),
   );
 }
 

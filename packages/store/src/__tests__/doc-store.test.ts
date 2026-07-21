@@ -270,6 +270,22 @@ describe('DocStore.getSourceHealth', () => {
     expect(health.chunks_embedded).toBe(0);
     expect(health.embedding_complete).toBe(false);
   });
+
+  it('keeps vector counts source-scoped when a collection has multiple sources', () => {
+    const c = h.store.createCollection({ name: 'multi-source' });
+    const s1 = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://one.example' });
+    const s2 = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://two.example' });
+    const first = h.store.insertChunks(Array.from({ length: 2 }, (_, ord) => ({
+      collection_id: c.id, source_id: s1.id, ord, content: `a${ord}`, content_hash: `a${ord}`,
+    })));
+    const second = h.store.insertChunks(Array.from({ length: 3 }, (_, ord) => ({
+      collection_id: c.id, source_id: s2.id, ord, content: `b${ord}`, content_hash: `b${ord}`,
+    })));
+    recordSemanticVectors(h, c.id, [...first, ...second]);
+
+    expect(h.store.getSourceHealth(s1.id)?.chunks_embedded).toBe(2);
+    expect(h.store.getSourceHealth(s2.id)?.chunks_embedded).toBe(3);
+  });
 });
 
 describe('DocStore.listChunksMissingEmbedding scoping', () => {

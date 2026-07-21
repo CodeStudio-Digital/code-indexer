@@ -1,5 +1,7 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
+import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import { selectRuntimeModelMetadata } from '@mcp/provider-sdk';
 import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { decide } from '@mcp/code-agent/agents/decision-engine.js';
@@ -44,6 +46,49 @@ type PlanDepth = (typeof PLAN_DEPTHS)[number];
 /** Allowed output-style values (migration 178). */
 const OUTPUT_STYLES = ['proactive', 'explanatory', 'learning'] as const;
 type OutputStyle = (typeof OUTPUT_STYLES)[number];
+
+/** Provider-independent agent orchestration mode (migration 241). */
+const EXECUTION_MODES = ['standard', 'ultra'] as const satisfies readonly CoderExecutionMode[];
+
+function isExecutionMode(value: unknown): value is CoderExecutionMode {
+  return typeof value === 'string' && EXECUTION_MODES.includes(value as CoderExecutionMode);
+}
+
+type CreationExecutionSettings =
+  | { ok: true; executionMode: CoderExecutionMode; reasoningEffort: string | null }
+  | { ok: false; error: string };
+
+/**
+ * Normalize both the migration-241 contract and the legacy UI contract. Old
+ * clients sent `reasoning_effort: "ultra"`; retain that intent as orchestration
+ * mode while guaranteeing the literal is never persisted/forwarded as effort.
+ */
+function resolveCreationExecutionSettings(
+  executionMode: unknown,
+  rawReasoningEffort: unknown,
+): CreationExecutionSettings {
+  if (executionMode !== undefined && !isExecutionMode(executionMode)) {
+    return { ok: false, error: `execution_mode: one of ${EXECUTION_MODES.join('|')} required` };
+  }
+  if (rawReasoningEffort !== undefined && rawReasoningEffort !== null && typeof rawReasoningEffort !== 'string') {
+    return { ok: false, error: 'reasoning_effort:string|null required' };
+  }
+  const normalizedEffort = typeof rawReasoningEffort === 'string'
+    ? rawReasoningEffort.trim() || null
+    : null;
+  const legacyUltra = normalizedEffort?.toLowerCase() === 'ultra';
+  return {
+    ok: true,
+    // The first-class field is authoritative when both old and new clients'
+    // spellings are present. The legacy sentinel only supplies a missing mode.
+    executionMode: isExecutionMode(executionMode)
+      ? executionMode
+      : legacyUltra
+        ? 'ultra'
+        : 'standard',
+    reasoningEffort: legacyUltra ? null : normalizedEffort,
+  };
+}
 
 /** Upper bound on a response-language label (migration 177) — a language name, not prose. */
 const MAX_RESPONSE_LANGUAGE_LEN = 64;
@@ -258,6 +303,10 @@ interface CreateGlobalSessionBody {
   /** Reuse an existing virtual workspace (synthetic union project) instead of
    *  creating a new one. When set, `project_ids` is ignored. */
   reuse_project_id?: number;
+  /** Provider-independent orchestration mode. */
+  execution_mode?: CoderExecutionMode;
+  /** Native provider effort; legacy `ultra` is converted to execution_mode. */
+  reasoning_effort?: string | null;
 }
 
 interface CreateSessionBody {
@@ -271,6 +320,8 @@ interface CreateSessionBody {
   agent?: AgentSelectionId;
   /** Sticky reasoning-effort override for the new session. Null = model default. */
   reasoning_effort?: string | null;
+  /** Provider-independent orchestration mode. Defaults to standard. */
+  execution_mode?: CoderExecutionMode;
   /** Initial sticky extended-thinking state. Defaults to false. */
   thinking_enabled?: boolean;
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
@@ -319,10 +370,7 @@ export function mountCoderSessionsRoutes(
     effort: string | null,
   ): string | null => {
     if (!effort) return null;
-    const bareModel = (model ?? '').split('::')[0];
-    const row = providerStore
-      .listModels(provider)
-      .find((m) => m.model_id === bareModel);
+    const row = selectRuntimeModelMetadata(providerStore.listModels(provider), model ?? '');
     const supported = row?.supported_reasoning_levels;
     if (supported && supported.length > 0 && !supported.includes(effort)) {
       return `reasoning effort '${effort}' not supported for ${model ?? '(default model)'}; supported: ${supported.join(',')}`;
@@ -383,6 +431,10 @@ export function mountCoderSessionsRoutes(
     if (body.agent != null && !validateAgentSelection(body.agent)) {
       return c.json({ error: 'unknown or disabled agent' }, 400);
     }
+    const execution = resolveCreationExecutionSettings(body.execution_mode, body.reasoning_effort);
+    if (!execution.ok) return c.json({ error: execution.error }, 400);
+    const effortError = validateReasoningEffort(body.provider, body.model, execution.reasoningEffort);
+    if (effortError) return c.json({ error: effortError }, 400);
     // Reuse path: attach a new session to an EXISTING virtual workspace (already
     // built + indexed) — no re-build, no re-index, instant.
     if (body.reuse_project_id) {
@@ -394,7 +446,9 @@ export function mountCoderSessionsRoutes(
           model: body.model ?? '',
           agent: body.agent ?? null,
         });
-        return c.json(session, 201);
+        sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
+        sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
+        return c.json(sessionStore.getSession(session.id) ?? session, 201);
       } catch (e) {
         return c.json({ error: `could not reuse workspace: ${e instanceof Error ? e.message : String(e)}` }, 400);
       }
@@ -432,7 +486,9 @@ export function mountCoderSessionsRoutes(
     } catch (e) {
       return c.json({ error: `could not create global workspace: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
-    return c.json(session, 201);
+    sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
+    sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
+    return c.json(sessionStore.getSession(session.id) ?? session, 201);
   });
 
   /** Built-in presets plus enabled user-defined agents for the dashboard picker. */
@@ -657,20 +713,29 @@ export function mountCoderSessionsRoutes(
   app.patch('/api/coder/sessions/:id/reasoning-effort', async (c) => {
     const id = parseIdParam(c);
     const body = await parseJsonBody<{ effort?: string | null }>(c);
-    const effort = body.effort ?? null;
-    if (effort !== null && typeof effort !== 'string') {
+    const rawEffort = body.effort ?? null;
+    if (rawEffort !== null && typeof rawEffort !== 'string') {
       return c.json({ error: 'effort:string|null required' }, 400);
     }
+    const effort = typeof rawEffort === 'string' ? rawEffort.trim() || null : null;
     const session = sessionStore.getSession(id);
     if (!session) return notFound(c);
+    // Backward compatibility for clients that exposed Ultra as a reasoning
+    // option. Do not let the unsupported literal reach a provider request.
+    if (effort?.toLowerCase() === 'ultra') {
+      sessionStore.setSessionExecutionMode(id, 'ultra');
+      sessionStore.setSessionReasoningEffort(id, null);
+      const updated = sessionStore.getSession(id);
+      if (!updated) return notFound(c);
+      return c.json(updated);
+    }
     if (effort !== null) {
       // Validate against the model's persisted supported levels. When the row
       // says null we don't know what the model accepts, so we don't gate.
-      // `session.model` may carry a `::mode` suffix — match the bare id.
-      const bareModel = session.model.split('::')[0];
-      const row = providerStore
-        .listModels(session.provider)
-        .find((m) => m.model_id === bareModel);
+      const row = selectRuntimeModelMetadata(
+        providerStore.listModels(session.provider),
+        session.model,
+      );
       const supported = row?.supported_reasoning_levels;
       if (supported && supported.length > 0 && !supported.includes(effort)) {
         return c.json(
@@ -681,7 +746,29 @@ export function mountCoderSessionsRoutes(
         );
       }
     }
+    // This endpoint is also the complete control surface for pre-241 clients:
+    // after selecting the legacy Ultra pseudo-effort, choosing any native
+    // effort (or model default via null) must let them leave Ultra again. New
+    // clients use the dedicated execution-mode endpoint for the orthogonal axis.
+    if (session.execution_mode_override === 'ultra') {
+      sessionStore.setSessionExecutionMode(id, 'standard');
+    }
     sessionStore.setSessionReasoningEffort(id, effort);
+    const updated = sessionStore.getSession(id);
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
+  /** Persist the provider-independent execution mode for this conversation. */
+  app.patch('/api/coder/sessions/:id/execution-mode', async (c) => {
+    const id = parseIdParam(c);
+    const body = await parseJsonBody<{ mode?: unknown }>(c);
+    if (!isExecutionMode(body.mode)) {
+      return c.json({ error: `mode: one of ${EXECUTION_MODES.join('|')} required` }, 400);
+    }
+    const session = sessionStore.getSession(id);
+    if (!session) return notFound(c);
+    sessionStore.setSessionExecutionMode(id, body.mode);
     const updated = sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
@@ -888,16 +975,12 @@ export function mountCoderSessionsRoutes(
     if (body.agent !== undefined && !validateAgentSelection(body.agent)) {
       return c.json({ error: 'unknown or disabled agent' }, 400);
     }
-    if (body.reasoning_effort !== undefined && body.reasoning_effort !== null && typeof body.reasoning_effort !== 'string') {
-      return c.json({ error: 'reasoning_effort:string|null required' }, 400);
-    }
+    const execution = resolveCreationExecutionSettings(body.execution_mode, body.reasoning_effort);
+    if (!execution.ok) return c.json({ error: execution.error }, 400);
     if (body.thinking_enabled !== undefined && typeof body.thinking_enabled !== 'boolean') {
       return c.json({ error: 'thinking_enabled:boolean required' }, 400);
     }
-    const reasoningEffort = typeof body.reasoning_effort === 'string'
-      ? body.reasoning_effort.trim() || null
-      : null;
-    const effortError = validateReasoningEffort(provider, model, reasoningEffort);
+    const effortError = validateReasoningEffort(provider, model, execution.reasoningEffort);
     if (effortError) return c.json({ error: effortError }, 400);
     // Builder projects (projects.builder_json set) default the chat agent to
     // `builder` (persona + scope) unless the caller passed an explicit agent.
@@ -910,9 +993,8 @@ export function mountCoderSessionsRoutes(
       agent: body.agent ?? (isBuilderProject ? 'builder' : null),
       phase_profile_id: body.phase_profile_id ?? null,
     });
-    if (reasoningEffort) {
-      sessionStore.setSessionReasoningEffort(session.id, reasoningEffort);
-    }
+    sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
+    sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
     if (body.thinking_enabled === true) {
       sessionStore.setSessionThinkingEnabled(session.id, true);
     }

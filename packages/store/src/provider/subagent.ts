@@ -7,6 +7,10 @@ interface ProfileEntry {
   model?: string;
   /** Reasoning-effort override (e.g. minimal/low/medium/high/xhigh) for this profile. */
   effort?: string;
+  /** Hard cap of tool CALLS for this profile's subagents. 0 = unlimited. */
+  max_tool_calls?: number;
+  /** Hard wall-clock timeout (ms) for this profile's subagents. 0 = unlimited. */
+  timeout_ms?: number;
 }
 
 function readStr(value: unknown): string | null {
@@ -27,15 +31,15 @@ function persistExtra(db: DB, providerId: string, extra: Record<string, unknown>
 
 /**
  * Merge a patch into `extra.subagent_profiles[profileId]`, preserving the keys
- * not named in the patch (so setting the model never clobbers the effort, and
- * vice-versa). A key set to `undefined`/'' is cleared; an entry with no keys
- * left is removed, and an empty map is stripped entirely.
+ * not named in the patch (so setting the model never clobbers the effort or a
+ * budget, and vice-versa). A key set to `null`/`undefined`/'' is cleared; an
+ * entry with no keys left is removed, and an empty map is stripped entirely.
  */
 function updateProfileEntry(
   db: DB,
   providerId: string,
   profileId: string,
-  patch: Partial<Record<keyof ProfileEntry, string | null>>,
+  patch: Partial<Record<keyof ProfileEntry, string | number | null>>,
 ): void {
   const cfg = providers.get(db, providerId);
   if (!cfg) return;
@@ -45,9 +49,10 @@ function updateProfileEntry(
   for (const key of Object.keys(patch) as (keyof ProfileEntry)[]) {
     const v = patch[key];
     if (v === null || v === undefined || v === '') delete entry[key];
-    else entry[key] = v;
+    else (entry as Record<string, string | number>)[key] = v;
   }
-  if (!entry.provider_id && !entry.model && !entry.effort) delete profiles[profileId];
+  // Any surviving key (string overrides OR numeric budgets) keeps the entry.
+  if (Object.keys(entry).length === 0) delete profiles[profileId];
   else profiles[profileId] = entry;
   if (Object.keys(profiles).length === 0) delete nextExtra.subagent_profiles;
   else nextExtra.subagent_profiles = profiles;
@@ -188,4 +193,45 @@ export function setProfileEffort(
   effort: string | null,
 ): void {
   updateProfileEntry(db, providerId, profileId, { effort });
+}
+
+// ─── Hard caps (max tool calls / wall-clock timeout) ─────────────
+
+function readNonNegInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
+}
+
+/**
+ * Per-profile hard-cap overrides (`extra.subagent_profiles[P].max_tool_calls`
+ * / `.timeout_ms`). Profile-only — there is deliberately NO provider-level
+ * default layer for budgets. A `null` axis is unset (the runtime falls
+ * through to env vars / depth-derived defaults); an explicit `0` = unlimited.
+ */
+export function getProfileLimits(
+  db: DB,
+  providerId: string,
+  profileId: string,
+): { maxToolCalls: number | null; timeoutMs: number | null } {
+  const cfg = providers.get(db, providerId);
+  if (!cfg) return { maxToolCalls: null, timeoutMs: null };
+  const entry = readProfiles(cfg.extra)[profileId];
+  return {
+    maxToolCalls: readNonNegInt(entry?.max_tool_calls),
+    timeoutMs: readNonNegInt(entry?.timeout_ms),
+  };
+}
+
+/** Patch semantics: key present → set (`null` clears); key absent → untouched. */
+export function setProfileLimits(
+  db: DB,
+  providerId: string,
+  profileId: string,
+  patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+): void {
+  const entryPatch: Partial<Record<keyof ProfileEntry, string | number | null>> = {};
+  if ('maxToolCalls' in patch) entryPatch.max_tool_calls = patch.maxToolCalls ?? null;
+  if ('timeoutMs' in patch) entryPatch.timeout_ms = patch.timeoutMs ?? null;
+  if (Object.keys(entryPatch).length === 0) return;
+  updateProfileEntry(db, providerId, profileId, entryPatch);
 }

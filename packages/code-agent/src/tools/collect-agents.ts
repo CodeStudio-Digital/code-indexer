@@ -6,7 +6,9 @@
  * `wait:true` (default) blocks on the job's settle promise (no polling; a
  * `timeout_s` deadline is the only timer), emitting a heartbeat so the
  * StuckBanner stays quiet; on timeout / `wait:false` it returns a per-agent
- * status snapshot and tells the model to call again.
+ * status snapshot and tells the model to continue useful work or finish the
+ * turn so the runner can park event-driven. It never encourages provider-side
+ * polling loops.
  */
 import { ok, err, type CoderTool, type ToolResult, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
@@ -32,13 +34,16 @@ function slotLine(a: BackgroundAgentSlot): string {
   return `- ${parts.join(', ')}`;
 }
 
-function renderSnapshot(jobs: SubagentJob[]): string {
+function renderSnapshot(jobs: SubagentJob[], waitExpired: boolean): string {
   if (jobs.length === 0) return 'collect_agents: no outstanding background jobs.';
   const blocks = jobs.map((j) => {
     const head = `job ${j.jobId} (${j.status}, ${j.agents.length} agents):`;
     return [head, ...j.agents.map(slotLine)].join('\n');
   });
-  return blocks.join('\n\n') + '\n\nStill running — call collect_agents again to keep waiting, or do other work.';
+  const guidance = waitExpired
+    ? 'The wait reached its safety deadline. Do not poll collect_agents again in this run. Continue other useful work or finish the turn; the runner will park without another provider call and wake when a job completes.'
+    : 'Snapshot only. Do not poll repeatedly. Continue other useful work or finish the turn; the runner will park event-driven and wake when a job completes.';
+  return `${blocks.join('\n\n')}\n\n${guidance}`;
 }
 
 const COLLECT_DESC =
@@ -63,7 +68,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
       properties: {
         job_id: { type: 'string', description: 'Background job id from spawn_agent. Omit to wait for any outstanding job.' },
         wait: { type: 'boolean', description: 'Default true: block until the target finishes. false: return a status snapshot now.' },
-        timeout_s: { type: 'number', description: 'Max seconds to wait (default 300, max 1800).' },
+        timeout_s: { type: 'number', description: 'Max seconds to wait (default 1800, max 1800).' },
       },
       additionalProperties: false,
     },
@@ -73,7 +78,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
       const manager = getSubagentJobManager();
       const jobId = typeof args.job_id === 'string' && args.job_id.trim() ? args.job_id.trim() : null;
       const wait = args.wait !== false;
-      const timeoutS = Math.min(1800, Math.max(1, typeof args.timeout_s === 'number' ? args.timeout_s : 300));
+      const timeoutS = Math.min(1800, Math.max(1, typeof args.timeout_s === 'number' ? args.timeout_s : 1800));
 
       if (jobId && !manager.get(sessionId, jobId)) {
         return err(
@@ -82,13 +87,11 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
         );
       }
 
-      const t0 = Date.now();
       const heartbeat = wait
         ? setInterval(() => {
             const active = manager.list(sessionId).filter((j) => j.status === 'running');
             const note = `waiting on ${jobId ?? 'any job'} (${active.length} running)`;
-            ctx.runner?.emit('tool_progress', { id: 'collect_agents', name: 'collect_agents', elapsedMs: Date.now() - t0, note });
-            ctx.reportProgress?.(note);
+            ctx.reportHeartbeat?.(note);
           }, HEARTBEAT_MS)
         : null;
 
@@ -100,7 +103,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
             return ok(res.job.resultText ?? '(background job produced no result)');
           case 'timeout': {
             const jobs = jobId ? manager.list(sessionId).filter((j) => j.jobId === jobId) : manager.list(sessionId).filter((j) => j.status === 'running');
-            return ok(renderSnapshot(jobs));
+            return ok(renderSnapshot(jobs, wait));
           }
           case 'aborted':
             return ok('[collect_agents: wait aborted]');

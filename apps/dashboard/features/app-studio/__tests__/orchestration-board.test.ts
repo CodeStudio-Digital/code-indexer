@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppWorkItemView } from '../app-studio-api.js';
-import { currentWorkAttempt, groupAppWorkItems, recentEventKind } from '../AppStudioOrchestrationBoard.js';
+import { currentWorkAttempt, groupAppWorkItems, recentEventKind, workRuntimeSummary } from '../AppStudioOrchestrationBoard.js';
 
 function work(id: string, status: AppWorkItemView['status'], priority = 0): AppWorkItemView {
   return {
@@ -68,5 +68,15 @@ describe('App Studio orchestration board', () => {
   it('accepts canonical and preview event kind fields', () => {
     expect(recentEventKind({ id: 1, kind: 'work.status', created_at: '2026-07-19 01:00:00' })).toBe('work.status');
     expect(recentEventKind({ id: 2, event_type: 'agents.specialist_dispatched', created_at: '2026-07-19 01:00:00' })).toBe('agents.specialist_dispatched');
+  });
+
+  it('recovers the agent and attempt from durable dispatch events on older detail payloads', () => {
+    const item = work('foundation', 'running');
+    expect(workRuntimeSummary(item, [{
+      id: 12,
+      event_type: 'agents.specialist_dispatched',
+      payload: { work_item_id: 'foundation', role: 'fullstack', attempt: 2, company_agent_run_id: 550 },
+      created_at: '2026-07-19 01:00:00',
+    }])).toEqual({ role: 'fullstack', agentRunId: 550, attempt: 2 });
   });
 });

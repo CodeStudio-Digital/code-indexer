@@ -75,6 +75,25 @@ export function currentWorkAttempt(item: AppWorkItemView): AppWorkAttemptView | 
   return [...item.attempts].sort((a, b) => b.attempt - a.attempt || b.id - a.id)[0] ?? null;
 }
 
+export interface AppWorkRuntimeSummary {
+  role: string;
+  agentRunId: number | null;
+  attempt: number | null;
+}
+
+export function workRuntimeSummary(item: AppWorkItemView, events: AppRecentEventView[]): AppWorkRuntimeSummary | null {
+  const attempt = currentWorkAttempt(item);
+  if (attempt) return { role: attempt.role || item.owner_role, agentRunId: attempt.company_agent_run_id, attempt: attempt.attempt };
+  const dispatch = [...events]
+    .sort((a, b) => b.id - a.id)
+    .find((event) => recentEventKind(event) === 'agents.specialist_dispatched' && event.payload?.work_item_id === item.id);
+  if (!dispatch) return null;
+  const role = typeof dispatch.payload?.role === 'string' ? dispatch.payload.role : item.owner_role;
+  const agentRunId = typeof dispatch.payload?.company_agent_run_id === 'number' ? dispatch.payload.company_agent_run_id : null;
+  const attemptNumber = typeof dispatch.payload?.attempt === 'number' ? dispatch.payload.attempt : null;
+  return { role, agentRunId, attempt: attemptNumber };
+}
+
 export function recentEventKind(event: AppRecentEventView): string {
   return event.kind ?? event.event_type ?? 'workflow.updated';
 }
@@ -132,13 +151,14 @@ function DecisionCard({ appId, decision, onChanged }: { appId: number; decision:
   );
 }
 
-function WorkCard({ item }: { item: AppWorkItemView }) {
+function WorkCard({ item, events }: { item: AppWorkItemView; events: AppRecentEventView[] }) {
   const { t } = useTranslation('appStudio');
   const attempt = currentWorkAttempt(item);
-  const agentLabel = attempt?.company_agent_run_id
-    ? t('v6.orchestration.agentAttempt', { role: attempt.role || item.owner_role, agent: attempt.company_agent_run_id, attempt: attempt.attempt })
-    : attempt
-      ? t('v6.orchestration.attempt', { role: attempt.role || item.owner_role, attempt: attempt.attempt })
+  const runtime = workRuntimeSummary(item, events);
+  const agentLabel = runtime?.agentRunId && runtime.attempt != null
+    ? t('v6.orchestration.agentAttempt', { role: runtime.role, agent: runtime.agentRunId, attempt: runtime.attempt })
+    : runtime?.attempt != null
+      ? t('v6.orchestration.attempt', { role: runtime.role, attempt: runtime.attempt })
       : item.owner_role;
 
   return (
@@ -163,7 +183,7 @@ function WorkCard({ item }: { item: AppWorkItemView }) {
 
 function eventSummary(event: AppRecentEventView): string | null {
   const payload = event.payload ?? {};
-  for (const key of ['title', 'message', 'reason', 'status_message', 'role', 'status']) {
+  for (const key of ['title', 'message', 'reason', 'error', 'status_message', 'role', 'status', 'mode']) {
     const value = payload[key];
     if (typeof value === 'string' && value.trim()) return value;
   }
@@ -256,7 +276,7 @@ export function AppStudioOrchestrationBoard({ detail, onChanged }: { detail: App
           {groups.map(({ group, items }) => (
             <div key={group} className="space-y-1.5">
               <div className="flex items-center gap-2"><p className="text-[10px] font-medium text-muted-foreground">{t(`v6.orchestration.groups.${group}`)}</p><span className="h-px flex-1 bg-border/70" /><span className="text-[9px] text-muted-foreground">{items.length}</span></div>
-              {items.map((item) => <WorkCard key={item.id} item={item} />)}
+              {items.map((item) => <WorkCard key={item.id} item={item} events={detail.recent_events ?? []} />)}
             </div>
           ))}
         </section>

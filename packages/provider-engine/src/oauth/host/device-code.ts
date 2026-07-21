@@ -1,7 +1,6 @@
 /**
  * Generic RFC-8628 device-code flow — the host primitive behind
- * `OAuthHostCapabilities.deviceCode`. Generalizes the proven kimi-code +
- * copilot device flows (services/oauth/{kimi-code,copilot}.ts): the standard
+ * `OAuthHostCapabilities.deviceCode`. Generalizes the Copilot device flow: the standard
  * mechanics (POST device_authorization → poll the token endpoint, handling
  * `authorization_pending` / `slow_down` / `expired_token`) live here ONCE; the
  * provider-specific bits plug in as DATA — per-provider `headers` (kimi's

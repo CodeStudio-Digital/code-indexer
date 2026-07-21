@@ -33,6 +33,10 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
     setData((cur) => {
       if (cur === null) return cur;
       const next = fn(cur);
+      // A late session-scoped updater may deliberately reject itself by
+      // returning the current value. Do not publish that unrelated current
+      // payload under the updater's stale URL cache key.
+      if (Object.is(next, cur)) return cur;
       // Keep same-URL siblings consistent: refresh the live cache entry so a
       // sibling useApi(sameUrl) mounting within the TTL sees the optimistic value.
       writeThrough(getKey(url), next);

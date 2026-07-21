@@ -136,16 +136,3 @@ export type GoogleFlowState =
   | { state: 'waiting'; authorizeUrl: string; flowState: string }
   | { state: 'success'; providerId?: string; modelCount?: number }
   | { state: 'error'; message: string };
-
-export type KimiCodeFlowState =
-  | { state: 'idle' }
-  | {
-      state: 'waiting';
-      verificationUrl: string;
-      verificationUriComplete?: string;
-      userCode: string;
-      flowState: string;
-      interval: number;
-    }
-  | { state: 'success'; providerId?: string; modelCount?: number }
-  | { state: 'error'; message: string };

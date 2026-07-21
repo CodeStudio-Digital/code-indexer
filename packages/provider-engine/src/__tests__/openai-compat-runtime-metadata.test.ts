@@ -37,4 +37,23 @@ describe('openai-compat runtime model metadata', () => {
       'glm-5.1': 24_000,
     });
   });
+
+  it('uses the active transport mode instead of colliding rows by model id', () => {
+    const wire = buildOpenAICompat(zaiSpec);
+    wire.createCoder!(
+      { apiKey: 'k', extra: {} },
+      'glm-5.1::coding',
+      {
+        providerModels: [
+          { model_id: 'glm-5.1', mode: '', default_max_tokens: 8_000 },
+          { model_id: 'glm-5.1', mode: 'coding', default_max_tokens: 32_000 },
+        ],
+      },
+    );
+
+    expect(constructedWith.at(-1)?.model).toBe('glm-5.1');
+    expect(constructedWith.at(-1)?.modelMaxOutputTokens).toEqual({
+      'glm-5.1': 32_000,
+    });
+  });
 });

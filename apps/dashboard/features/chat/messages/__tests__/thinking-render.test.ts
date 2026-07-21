@@ -1,7 +1,8 @@
 import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { cleanThinkingMarkdown, thinkingPreviewText } from '../thinking-text.js';
+import { bootstrapTestI18n } from '../../../../i18n/test-bootstrap.js';
 
 const SAMPLE = `**Investigating duplicate transaction handling in SIGER**
 
@@ -12,6 +13,8 @@ const SAMPLE = `**Investigating duplicate transaction handling in SIGER**
 <!-- -->`;
 
 describe('thinking render', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('cleans provider summary separators without dropping markdown', () => {
     expect(cleanThinkingMarkdown(SAMPLE)).toBe(
       [

@@ -1,4 +1,11 @@
-import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
+import {
+  parseRuntimeModelRef,
+  selectRuntimeModelMetadata,
+  type ProviderSpec,
+  type ResolvedCreds,
+  type ProviderDefinition,
+  type CreateCoderOpts,
+} from '@mcp/provider-sdk';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
 import { getStore } from '@mcp/services/providers/shared/store.js';
 
@@ -19,6 +26,7 @@ export function buildCodex(spec: ProviderSpec): WireParts {
   return {
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const resolvedModel = model ?? spec.defaultModel ?? spec.defaultModels[0];
+      const wireModel = parseRuntimeModelRef(resolvedModel).id;
 
       // Reasoning capability + apply_patch tool type from the persisted
       // provider_models row (migration 052 + live discovery). Best-effort.
@@ -27,15 +35,14 @@ export function buildCodex(spec: ProviderSpec): WireParts {
       try {
         const store = getStore();
         const providerId = opts?.providerId;
-        if (store && providerId) {
-          const row = store.listModels(providerId).find((m) => m.model_id === resolvedModel);
-          if (row) {
-            reasoning = {
-              supportedLevels: row.supported_reasoning_levels,
-              defaultLevel: row.default_reasoning_level,
-            };
-            applyPatchToolType = row.apply_patch_tool_type;
-          }
+        const models = opts?.providerModels ?? (store && providerId ? store.listModels(providerId) : undefined);
+        const row = selectRuntimeModelMetadata(models, resolvedModel);
+        if (row) {
+          reasoning = {
+            supportedLevels: row.supported_reasoning_levels,
+            defaultLevel: row.default_reasoning_level,
+          };
+          applyPatchToolType = row.apply_patch_tool_type ?? null;
         }
       } catch {
         // ignore — provider still constructed without reasoning capability
@@ -46,13 +53,13 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(resolvedModel);
+      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(wireModel);
 
       return new ChatGPTCodexProvider({
         apiKey: creds.apiKey ?? '',
         baseURL: creds.baseURL ?? DEFAULT_BASE_URL,
         accountId: (creds.extra?.accountId as string | null | undefined) ?? null,
-        model: resolvedModel,
+        model: wireModel,
         reasoning,
         applyPatchToolType,
         imageGenerationEnabled,

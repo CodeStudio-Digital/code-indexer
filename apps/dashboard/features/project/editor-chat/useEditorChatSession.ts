@@ -18,10 +18,17 @@ import { useAgentStream, type AgentAttachment } from '../../../hooks/useAgentStr
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
+import {
+  executionModeChangeLocked,
+  hydratedReasoningEffort,
+  modelCanReason,
+  ultraManagesThinking,
+} from '../../chat/execution-mode-state.js';
 import type { SessionLaunchConfig } from '../../chat/SessionLaunchDialog.js';
 import { fetchSnapshotList } from '../../snapshots/api.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
 import { buildSnapshotFileMap, type SnapshotActions } from '../../chat/messages/snapshot-files-context.js';
+import { mergeEarlierMessagePage, sessionDataForSelection } from '../../chat/messages/session-message-data.js';
 import type { CoderSession, CoderSessionGroup, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
 import {
   editorChatContextActions,
@@ -107,6 +114,17 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=120` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
+  const selectedSessionData = useMemo(
+    () => sessionDataForSelection(sessionData, selectedId),
+    [selectedId, sessionData],
+  );
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
+  useEffect(() => () => {
+    for (const controller of messagePageAbortControllersRef.current) controller.abort();
+    messagePageAbortControllersRef.current.clear();
+  }, [selectedId]);
 
   const notificationContext = useMemo<NotificationSourceContext | undefined>(() => {
     if (!selectedId) return undefined;
@@ -116,10 +134,10 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
         route: `/projects/${projectId}?session=${selectedId}`,
         scopeId: projectId,
         sessionId: selectedId,
-        label: sessionData?.session.title ?? `Project ${projectId} session`,
+        label: selectedSessionData?.session.title ?? `Project ${projectId} session`,
       },
     };
-  }, [projectId, selectedId, sessionData?.session.title]);
+  }, [projectId, selectedId, selectedSessionData?.session.title]);
 
   const stream = useAgentStream(selectedId, notificationContext);
   const {
@@ -133,7 +151,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       selectedId,
       doneReason,
       tasksRefreshTick,
-      sessionData: sessionData ?? null,
+      sessionData: selectedSessionData,
       currentTurn,
       provider,
       model,
@@ -141,7 +159,16 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       setModel,
     });
 
-  const settings = useEditorSessionSettings(selectedId, sessionData ?? null);
+  const settings = useEditorSessionSettings(selectedId, selectedSessionData, {
+    updateSessionData,
+    runnerBusy: executionModeChangeLocked(
+      streaming,
+      selectedSessionData?.session.status,
+      selectedSessionData?.session.id,
+      selectedId,
+    ),
+    refetchSession,
+  });
 
   useEffect(() => {
     if (initialSessionId) setSelectedId(initialSessionId);
@@ -246,9 +273,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       setAgent(agentLock);
       return;
     }
-    const next = sessionData?.session?.agent;
+    const next = selectedSessionData?.session?.agent;
     if (isValidAgentId(next)) setAgent(next);
-  }, [sessionData?.session?.agent, agentLock]);
+  }, [selectedSessionData?.session?.agent, agentLock]);
 
   useEffect(() => {
     const onAgentChanged = (e: Event): void => {
@@ -269,16 +296,16 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   // model default. maxTurns is intentionally NOT hydrated: it has no persisted
   // column, it's a per-send param, so the "50" placeholder is correct.
   useEffect(() => {
-    const s = sessionData?.session;
-    if (!s || s.id !== selectedId) return;
+    const s = selectedSessionData?.session;
+    if (!s) return;
     const tmp = (s as { temperature_override?: number | null } | undefined)?.temperature_override;
     setTemperature(typeof tmp === 'number' ? tmp : null);
-    const eff = s?.reasoning_effort_override;
-    setReasoningEffort(typeof eff === 'string' && eff.length > 0 ? eff : null);
+    const effort = hydratedReasoningEffort(s, selectedId);
+    if (effort !== undefined) setReasoningEffort(effort);
     const dep = s?.plan_depth_override;
     setPlanDepth(typeof dep === 'string' && dep.length > 0 ? dep : null);
     setThinking(s.thinking_enabled === true);
-  }, [selectedId, sessionData?.session]);
+  }, [selectedId, selectedSessionData?.session]);
 
   // Persist a manual dropdown pick immediately (applies to the next run).
   const handleAgentChange = useCallback((next: AgentId) => {
@@ -304,7 +331,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const ensureAgentLock = useCallback(async () => {
     if (!agentLock || !selectedId) return;
-    if (sessionData?.session.agent === agentLock) return;
+    if (selectedSessionData?.session.agent === agentLock) return;
     setAgent(agentLock);
     try {
       await apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: agentLock });
@@ -312,13 +339,13 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     } catch {
       /* best-effort; handleSend carries a locked-agent override if needed */
     }
-  }, [agentLock, selectedId, sessionData?.session.agent, refetchSession]);
+  }, [agentLock, selectedId, selectedSessionData?.session.agent, refetchSession]);
 
   useEffect(() => {
     if (!agentLock || !selectedId) return;
-    if (sessionData?.session.agent === agentLock) return;
+    if (selectedSessionData?.session.agent === agentLock) return;
     void ensureAgentLock();
-  }, [agentLock, selectedId, sessionData?.session.agent, ensureAgentLock]);
+  }, [agentLock, selectedId, selectedSessionData?.session.agent, ensureAgentLock]);
 
   // Avoid double-rendering the live turn once it lands in the DB.
   useEffect(() => {
@@ -374,6 +401,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       const selectedReasoningEffort = config.useLastModel
         ? null
         : (config.reasoningEffort === undefined ? reasoningEffort : config.reasoningEffort);
+      const selectedExecutionMode = config.useLastModel
+        ? 'standard'
+        : (config.executionMode === undefined ? settings.executionMode : config.executionMode);
       const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
       const selectedMaxTurns = config.useLastModel
         ? null
@@ -390,6 +420,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
         model: selectedModel,
         use_last_model: config.useLastModel === true,
         agent: selectedAgent,
+        execution_mode: selectedExecutionMode,
         reasoning_effort: selectedReasoningEffort || null,
         thinking_enabled: selectedThinking,
       });
@@ -400,6 +431,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       setModel(created.model);
       setAgent(selectedAgent);
       setReasoningEffort(selectedReasoningEffort);
+      settings.adoptExecutionMode(selectedExecutionMode);
       setThinking(selectedThinking);
       setMaxTurns(selectedMaxTurns);
       setTemperature(selectedTemperature);
@@ -413,7 +445,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       pendingAutoTitle.current.creationInFlight = false;
       setCreating(false);
     }
-  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, thinking, maxTurns, temperature, updateSessions, refetchSessions]);
+  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, thinking, maxTurns, temperature, updateSessions, refetchSessions]);
 
   const archiveSession = useCallback(async (id: number, archived = true) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
@@ -470,6 +502,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
+    await settings.awaitPendingExecutionMode();
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Prepend staged code selections as <selected-code> blocks — pinned
@@ -500,7 +533,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
     const outgoing = prefix ? `${prefix}\n\n${text}` : text;
     const allAtts = shots.length ? [...atts, ...shots] : atts;
-    const lockedAgentOverride = agentLock && sessionData?.session.agent !== agentLock ? agentLock : undefined;
+    const lockedAgentOverride = agentLock && selectedSessionData?.session.agent !== agentLock ? agentLock : undefined;
     await ensureAgentLock();
     await sendMessage(outgoing, async () => {
       refetchSession();
@@ -510,7 +543,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
     }, { attachments: allAtts, agent: lockedAgentOverride, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
-  }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, projectId, sendMessage, refetchSession, refetchSessions, ensureAgentLock, agentLock, sessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
+  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, sendMessage, refetchSession, refetchSessions, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Live run → POST /inject (no new stream; the open SSE renders the injected
@@ -525,12 +558,13 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       );
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
-    const lockedAgentOverride = agentLock && sessionData?.session.agent !== agentLock ? agentLock : undefined;
+    await settings.awaitPendingExecutionMode();
+    const lockedAgentOverride = agentLock && selectedSessionData?.session.agent !== agentLock ? agentLock : undefined;
     await ensureAgentLock();
     await sendMessage(text, async () => { refetchSession(); }, {
       agent: lockedAgentOverride, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds: skillIds, interject,
     });
-  }, [selectedId, sendMessage, refetchSession, ensureAgentLock, agentLock, sessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
+  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
     if (!selectedId) return;
@@ -561,11 +595,11 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const onSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
     setProvider(newProvider);
     setModel(newModel);
-    if (selectedId && (streaming || sessionData)) {
+    if (selectedId && (streaming || selectedSessionData)) {
       await switchProvider(newProvider, newModel || undefined);
       refetchSession();
     }
-  }, [selectedId, streaming, sessionData, switchProvider, refetchSession]);
+  }, [selectedId, streaming, selectedSessionData, switchProvider, refetchSession]);
 
   const handleTemperatureChange = useCallback(async (next: number | null) => {
     setTemperature(next);
@@ -592,22 +626,31 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   }, [selectedId]);
 
   const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40, includeArchived = false): Promise<number> => {
-    if (!selectedId) return 0;
+    const requestedSessionId = selectedId;
+    if (!requestedSessionId) return 0;
+    const controller = new AbortController();
+    messagePageAbortControllersRef.current.add(controller);
     try {
       const archivedQs = includeArchived ? '&include_archived=1' : '';
-      const res = await fetch(`/api/coder/sessions/${selectedId}/messages?before_id=${beforeId}&limit=${limit}${archivedQs}`);
+      const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?before_id=${beforeId}&limit=${limit}${archivedQs}`, {
+        signal: controller.signal,
+      });
       if (!res.ok) return 0;
       const page = (await res.json()) as MessagePage;
       if (!page.message_rows.length) return 0;
-      updateSessionData((prev) => ({
-        ...prev,
-        messages: [...page.messages, ...prev.messages],
-        message_rows: [...page.message_rows, ...prev.message_rows],
-        tool_results: [...(page.tool_results ?? []), ...(prev.tool_results ?? [])],
-      }));
-      return page.message_rows.length;
-    } catch { return 0; }
-  }, [selectedId, updateSessionData]);
+      if (selectedIdRef.current !== requestedSessionId) return 0;
+      const preview = selectedSessionData
+        ? mergeEarlierMessagePage(selectedSessionData, page, requestedSessionId)
+        : null;
+      if (!preview || preview.addedRows === 0) return 0;
+      updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
+      return preview.addedRows;
+    } catch {
+      return 0;
+    } finally {
+      messagePageAbortControllersRef.current.delete(controller);
+    }
+  }, [selectedId, selectedSessionData, updateSessionData]);
 
   const handlers: PromptHandlers = useMemo(() => ({
     onAnswer: (answer) => answerQuestion(answer),
@@ -621,7 +664,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     sessions: sessions ?? null, groups: groups ?? null, refetchSessions, selectedId, setSelectedId,
     createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
     moveSessionToGroup, createGroup,
-    sessionData: sessionData ?? null, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
+    sessionData: selectedSessionData, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
     liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
@@ -632,6 +675,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     reasoningLevels: resolveReasoningLevels(provider, providerOptions, model),
     providerOptions, currentProviderModels, getModelsForProvider,
     thinking, setThinking: handleThinkingChange, supportsThinking: providerSupportsThinking(provider, providerOptions, model),
+    ultraControlsThinking: ultraManagesThinking(settings.executionMode, modelCanReason(provider, providerOptions, model)),
     ...settings,
   };
 }

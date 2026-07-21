@@ -70,15 +70,23 @@
         "work.status": "Trabalho atualizado",
         "decision.requested": "Decisão solicitada",
         "decision.resolved": "Decisão respondida",
+        "decision.coordination_failed": "Decisão salva; retomada pendente",
         "agents.specialist_dispatched": "Especialista despachado",
+        "agents.unbound_claim_recovered": "Reserva de trabalho recuperada",
+        "agents.run_without_evidence": "Execução terminou sem evidência",
+        "agents.run_recovered_after_restart": "Execução recuperada após reinício",
+        "agents.run_failed": "Execução do agente falhou",
+        "agents.duplicate_run_cancelled": "Execução duplicada reconciliada",
         "database.changed": "Dados atualizados",
         "database.provisioned": "Banco provisionado",
+        "team.config_updated": "Configuração da equipe atualizada",
         "deployment.publishing": "Publicação iniciada",
         "deployment.live": "App publicado",
         "deployment.failed": "Falha na publicação",
         "build.paused": "Construção pausada",
         "build.resumed": "Construção retomada",
-        "build.cancelled": "Construção cancelada"
+        "build.cancelled": "Construção cancelada",
+        "build.scheduler_resume_failed": "Plano aprovado; retomada do scheduler falhou"
       }
     },
     "sessions": {

@@ -13,6 +13,7 @@
  * of an exception).
  */
 import { randomUUID } from 'node:crypto';
+import { warnQualityPersistenceFailure } from './persistence-diagnostics.js';
 import type { TelemetryEvent, TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
   durationToBucket,
@@ -62,13 +63,42 @@ function worstOf(verdicts: ClassificationVerdict[]): QualityVerdict {
   }, 'ok');
 }
 
+/** Perf W4 — consecutive all-system-error calls before a session stops
+ * classifying. Telemetry showed 24% of verdicts were classifier INFRA
+ * failures (broken binding / provider timeouts) — each one still paying the
+ * full timeout per turn. A single healthy verdict resets the streak. */
+const SYSTEM_ERROR_BREAKER_THRESHOLD = 5;
+/** Bound the per-session streak map (sessions are transient). */
+const BREAKER_MAP_CAP = 500;
+
 export class QualityClassifierPipeline {
   constructor(private opts: QualityClassifierPipelineOptions) {}
+
+  private readonly systemErrorStreaks = new Map<string, number>();
+  private breakerKey(output: AgentOutputForClassification): string {
+    return `${output.sessionId ?? ''}:${output.companySessionId ?? ''}`;
+  }
 
   /** Run all classifiers in parallel. Never throws. */
   async classify(output: AgentOutputForClassification): Promise<QualityResult> {
     const started = performance.now();
     const assessmentId = randomUUID();
+
+    // Perf W4 — circuit breaker: after N consecutive calls where EVERY
+    // verdict was a systemError, the classifier infra is down for this
+    // session (unparseable model / dead binding / timeout storm). Skip the
+    // provider calls instead of burning a full timeout per turn; the streak
+    // entry lives until the process recycles or a healthy call resets it.
+    const breakerKey = this.breakerKey(output);
+    const streak = this.systemErrorStreaks.get(breakerKey) ?? 0;
+    if (streak >= SYSTEM_ERROR_BREAKER_THRESHOLD) {
+      return {
+        verdicts: [],
+        worstVerdict: 'ok',
+        durationMs: 0,
+        assessmentId,
+      };
+    }
     const settled = await mapWithConcurrency(
       this.opts.classifiers,
       this.opts.maxConcurrency ?? DEFAULT_CLASSIFIER_CONCURRENCY,
@@ -114,6 +144,7 @@ export class QualityClassifierPipeline {
 
     // Optional persistence — one row per classifier verdict.
     if (this.opts.store) {
+      let persistenceError: unknown;
       for (const v of verdicts) {
         const row: QualityClassificationInsert = {
           session_id: output.sessionId ?? null,
@@ -151,11 +182,36 @@ export class QualityClassifierPipeline {
           provider_requests: v.providerRequests ?? 0,
           raw_response: v.raw,
         };
-        try { this.opts.store.insert(row); } catch { /* never throw from persistence */ }
+        try { this.opts.store.insert(row); }
+        catch (error) { persistenceError ??= error; }
+      }
+      if (persistenceError != null) {
+        warnQualityPersistenceFailure(`assessment ${assessmentId}`, persistenceError);
       }
     }
 
     const durationMs = performance.now() - started;
+
+    // Perf W4 — feed the circuit breaker: a call where EVERY verdict failed
+    // on infra bumps the streak; any healthy verdict clears it.
+    if (verdicts.length > 0 && verdicts.every((v) => v.systemError)) {
+      const next = streak + 1;
+      this.systemErrorStreaks.set(breakerKey, next);
+      if (next === SYSTEM_ERROR_BREAKER_THRESHOLD) {
+        console.warn(
+          `[quality] classifier breaker OPEN for session ${breakerKey} — ` +
+            `${next} consecutive all-system-error runs; skipping further classification`,
+        );
+      }
+      // Bounded map: evict the oldest entry (insertion order) past the cap.
+      if (this.systemErrorStreaks.size > BREAKER_MAP_CAP) {
+        const oldest = this.systemErrorStreaks.keys().next().value;
+        if (oldest !== undefined) this.systemErrorStreaks.delete(oldest);
+      }
+    } else if (streak > 0) {
+      this.systemErrorStreaks.delete(breakerKey);
+    }
+
     // Aggregated telemetry event.
     if (this.opts.telemetry) {
       // Only classifier FAILURES count as telemetry errors. A content verdict

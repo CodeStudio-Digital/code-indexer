@@ -80,6 +80,9 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     planNudges: 0,
     goalVerifyAttempts: 0,
     lastStrategyNudgeTurnByKey: new Map(),
+    // Perf W1 — background summary precompute + buildTools memo start empty.
+    summaryPrecompute: null,
+    toolsMemo: null,
     estimateCalibration: null,
     runId: randomUUID(),
     aborted: false,

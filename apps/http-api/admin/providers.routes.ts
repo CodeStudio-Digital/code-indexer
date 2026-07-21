@@ -10,11 +10,18 @@ import type {
   ProviderStore,
   ProviderKind,
   AuthMode,
+  UpsertModelInput,
 } from '@mcp/store/provider-store.js';
 import { getDefinition } from '@mcp/services/providers/registry.js';
 import { resolveCreds } from '@mcp/services/providers/shared/resolver.js';
 import { publicProvider } from './shared/mask.js';
 import { refreshAllProviderModels } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
+import {
+  fetchKimiCodeModels,
+  kimiCodeSeedUpsertModels,
+  mapKimiCodeModels,
+  KIMI_CODE_BASE_URL,
+} from '@mcp/services/services/kimi-code.js';
 
 export function providersRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -66,6 +73,51 @@ export function providersRouter(store: ProviderStore): Hono {
     return c.json(publicProvider(p));
   });
 
+  /** Validate and persist the only supported Kimi Code credential: an API token. */
+  app.post('/providers/:id/connect-api-key', async (c) => {
+    const id = c.req.param('id');
+    const existing = store.getProvider(id);
+    if (existing && existing.kind !== 'kimi-code') {
+      return c.json({ error: `provider ${id} is not a Kimi Code provider` }, 400);
+    }
+    const body = await c.req.json<{ api_token?: string }>();
+    const apiToken = body.api_token?.trim() ?? '';
+    if (!apiToken) return c.json({ error: 'Kimi Code API token is required' }, 400);
+
+    const baseURL = existing?.base_url ?? KIMI_CODE_BASE_URL;
+    let models: UpsertModelInput[];
+    try {
+      const live = await fetchKimiCodeModels({ baseURL, apiKey: apiToken });
+      models = mapKimiCodeModels(live);
+    } catch (error) {
+      return c.json({ error: `Kimi Code API token validation failed: ${(error as Error).message}` }, 400);
+    }
+    if (models.length === 0) models = kimiCodeSeedUpsertModels();
+
+    const saved = store.upsertProvider({
+      ...(existing ?? {
+        id,
+        name: 'Kimi Code',
+        kind: 'kimi-code' as const,
+        enabled: true,
+        use_for_agent: true,
+        use_for_coder: true,
+        use_for_general: false,
+        is_default: false,
+      }),
+      kind: 'kimi-code',
+      name: existing?.name ?? 'Kimi Code',
+      base_url: baseURL,
+      api_key: apiToken,
+      auth_mode: 'api_key',
+      extra: stripKimiCodeOAuthMetadata(existing?.extra ?? {}),
+    });
+    store.deleteOAuth(id);
+    store.replaceModelsFromSource(id, 'live', models);
+    store.setProviderCatalogEtag(id, null);
+    return c.json({ provider_id: saved.id, model_count: models.length });
+  });
+
   app.post('/providers', async (c) => {
     const body = await c.req.json<{
       id: string;
@@ -86,6 +138,18 @@ export function providersRouter(store: ProviderStore): Hono {
     }
     if (store.getProvider(body.id)) {
       return c.json({ error: `provider ${body.id} already exists` }, 409);
+    }
+    if (body.kind === 'kimi-code') {
+      if (body.auth_mode && body.auth_mode !== 'api_key') {
+        return c.json({ error: 'Kimi Code supports API token authentication only' }, 400);
+      }
+      if (!body.api_key?.trim()) {
+        return c.json({ error: 'Kimi Code API token is required' }, 400);
+      }
+      body.api_key = body.api_key.trim();
+      body.auth_mode = 'api_key';
+      body.base_url = body.base_url || KIMI_CODE_BASE_URL;
+      body.extra = stripKimiCodeOAuthMetadata(body.extra ?? {});
     }
     const created = store.upsertProvider(body);
     return c.json(publicProvider(created), 201);
@@ -109,6 +173,22 @@ export function providersRouter(store: ProviderStore): Hono {
       extra?: Record<string, unknown>;
       fallback_provider_id?: string | null;
     }>();
+    const targetKind = body.kind ?? existing.kind;
+    if (targetKind === 'kimi-code') {
+      if (body.auth_mode && body.auth_mode !== 'api_key') {
+        return c.json({ error: 'Kimi Code supports API token authentication only' }, 400);
+      }
+      const effectiveToken = body.api_key === undefined ? existing.api_key : body.api_key;
+      if (!effectiveToken?.trim()) {
+        return c.json({ error: 'Kimi Code API token is required' }, 400);
+      }
+      body.api_key = effectiveToken.trim();
+      body.auth_mode = 'api_key';
+      body.base_url = body.base_url === undefined
+        ? (existing.base_url ?? KIMI_CODE_BASE_URL)
+        : (body.base_url || KIMI_CODE_BASE_URL);
+      body.extra = stripKimiCodeOAuthMetadata(body.extra ?? existing.extra);
+    }
     // Keep existing fields when not provided. Null on api_key/base_url is
     // intentional "clear"; undefined means "leave alone".
     const updated = store.upsertProvider({
@@ -125,6 +205,7 @@ export function providersRouter(store: ProviderStore): Hono {
       is_default: body.is_default ?? existing.is_default,
       extra: body.extra ?? existing.extra,
     });
+    if (targetKind === 'kimi-code') store.deleteOAuth(id);
     // Handle fallback_provider_id separately (not part of upsertProvider)
     if (body.fallback_provider_id !== undefined) {
       store.setFallbackProvider(id, body.fallback_provider_id);
@@ -179,4 +260,20 @@ export function providersRouter(store: ProviderStore): Hono {
   });
 
   return app;
+}
+
+function stripKimiCodeOAuthMetadata(extra: Record<string, unknown>): Record<string, unknown> {
+  const clean = { ...extra };
+  for (const key of [
+    'client_id',
+    'device_id',
+    'expires_in',
+    'oauth_host',
+    'oauth_key',
+    'scope',
+    'token_type',
+  ]) {
+    delete clean[key];
+  }
+  return clean;
 }

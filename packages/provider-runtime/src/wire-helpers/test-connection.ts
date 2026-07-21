@@ -146,7 +146,7 @@ export function buildTestConnection(spec: ProviderSpec): TestConnection | undefi
       };
 
     case 'sdk:kimi-code':
-      // kimi-code: creds are already resolved by the plugin-owned resolver.
+      // kimi-code: standard API-key credentials resolved by the plugin adapter.
       return async ({ creds, config }) => {
         const headers = creds.extraHeaders;
         const baseURL = creds.baseURL ?? config.base_url;

@@ -18,8 +18,9 @@
  *     research, subagents, parallel orchestrators) or whose latency we
  *     CAN'T predict (any MCP tool, vector-search/docs tools). MCP tools
  *     can transparently call a remote DB / API, so being generous here
- *     is correct. (code_exec self-caps at 30s; run_command declares its
- *     own 10-min timeoutMs — neither belongs in this tier.)
+ *     is correct. (`code_exec` declares a wall-clock backstop above its
+ *     nested calls; `run_command` declares a request-aware timeout plus
+ *     cleanup grace — neither relies on this tier in production.)
  *   - INFINITY        — interactive tools (`submit_plan`, `ask_user`,
  *     `submit_tasks`) and tools that explicitly declare `timeoutMs: Infinity`.
  *     Repeat policy never implies an unbounded invocation.
@@ -30,7 +31,8 @@
  *   - MCP_TOOL_HEARTBEAT_MS       (default 5_000; set 0 to disable
  *     heartbeats during tool execution)
  *
- * Explicit `tool.timeoutMs` on the tool definition always wins.
+ * A valid per-invocation `tool.resolveTimeoutMs(args)` wins first, followed by
+ * the static `tool.timeoutMs` value.
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
@@ -52,16 +54,13 @@ const SLOW_NATIVE_NAMES = new Set<string>([
   // those caps instead of the 5-min NORMAL default that was killing them.
   'spawn_agent',
   'execute_tasks',
-  // code_exec batches nested tool calls — including long shell installs. Its
-  // own timeout now measures only JS-active time (PAUSED while a nested tool
-  // runs, codex `code_mode` model; see code-exec.ts), so the runner backstop
-  // must sit ABOVE the longest nested tool (run_command = 10 min) instead of
-  // the 5-min NORMAL default that would otherwise cut a multi-install batch.
+  // Fallback for synthetic/test definitions that omit code_exec's explicit
+  // wall-clock backstop. The real tool declares its own timeoutMs.
   'code_exec',
 ]);
-// NOTE: run_command is deliberately NOT here — it declares an explicit 10-min
-// `timeoutMs` on its own tool definition (shell.ts), which wins over this tier;
-// a one-shot command should not get the 30-min budget.
+// NOTE: run_command is deliberately NOT here — shell.ts resolves each request:
+// ordinary one-shot commands keep the 10-minute ceiling, while recognized
+// Unity Editor batch/test jobs receive the 30-minute slow-work budget.
 
 /**
  * Name-pattern fallback for tools that do vector search or documentation
@@ -105,15 +104,28 @@ export function resolveHeartbeatIntervalMs(): number {
  * interactive tools and tools that explicitly set `timeoutMs: Infinity`.
  *
  * Resolution order (first match wins):
- *   1. `tool.timeoutMs` explicit value (including `Infinity`)
- *   2. `tool.interactive === true`  → Infinity
- *   3. name in `SLOW_NATIVE_NAMES`  → SLOW
- *   4. name matches `SLOW_NAME_RE`  → SLOW
- *   5. name starts with `SLOW_MCP_PREFIX` → SLOW
- *   6. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
- *   7. otherwise → NORMAL
+ *   1. valid `tool.resolveTimeoutMs(args)` value (when args are available)
+ *   2. `tool.timeoutMs` explicit value (including `Infinity`)
+ *   3. `tool.interactive === true`  → Infinity
+ *   4. name in `SLOW_NATIVE_NAMES`  → SLOW
+ *   5. name matches `SLOW_NAME_RE`  → SLOW
+ *   6. name starts with `SLOW_MCP_PREFIX` → SLOW
+ *   7. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
+ *   8. otherwise → NORMAL
  */
-export function resolveToolTimeoutMs(tool: CoderTool): number {
+export function resolveToolTimeoutMs(
+  tool: CoderTool,
+  args?: Record<string, unknown>,
+): number {
+  if (args && tool.resolveTimeoutMs) {
+    try {
+      const resolved = tool.resolveTimeoutMs(args);
+      if (resolved === Infinity || (Number.isFinite(resolved) && resolved >= 0)) return resolved;
+    } catch {
+      // A dynamic classifier is policy metadata, not part of tool execution.
+      // Fall through to the static/default tier instead of breaking dispatch.
+    }
+  }
   if (tool.timeoutMs !== undefined) return tool.timeoutMs;
   if (tool.interactive) return Infinity;
   if (SLOW_NATIVE_NAMES.has(tool.name)) return SLOW_TIMEOUT_MS;

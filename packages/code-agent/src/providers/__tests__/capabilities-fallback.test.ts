@@ -39,6 +39,7 @@ describe('modelSupportsVision', () => {
   it('treats GLM / Z.AI as text-only (the reported bug)', () => {
     expect(modelSupportsVision({ providerKind: 'zai', modelId: 'glm-4.6' })).toBe(false);
     expect(modelSupportsVision({ providerKind: 'openai', modelId: 'glm-5.1' })).toBe(false);
+    expect(modelSupportsVision({ providerKind: 'openai', modelId: 'zai.glm-5' })).toBe(false);
   });
   it('treats deepseek as text-only', () => {
     expect(modelSupportsVision({ providerKind: 'deepseek', modelId: 'deepseek-chat' })).toBe(false);
@@ -142,6 +143,22 @@ describe('inferContextWindow — Z.AI / GLM family', () => {
     expect(inferContextWindow('glm-5')?.window).toBe(200_000);
     expect(inferContextWindow('glm-5.1')?.window).toBe(200_000);
     expect(inferContextWindow('glm-5')?.via).toBe('family:zai-glm5');
+  });
+
+  it('provider-qualified zai.glm-5 resolves through the bare GLM capability', () => {
+    expect(inferContextWindow('zai.glm-5')?.window).toBe(200_000);
+    expect(inferContextWindow('z-ai/glm-5.1')?.window).toBe(200_000);
+    expect(inferContextWindow('@cf/zai-org/glm-5.2')?.window).toBe(200_000);
+    expect(resolveContextWindowWithSource('zai.glm-5')).toEqual({
+      window: 200_000,
+      source: 'registry-prefix',
+      via: 'prefix:glm-5',
+    });
+    expect(getEffectiveContextWindow('zai.glm-5')).toMatchObject({
+      window: 200_000,
+      isFallback: false,
+      source: 'registry',
+    });
   });
 
   it('glm-4.6 → 200k', () => {

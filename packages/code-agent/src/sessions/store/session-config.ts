@@ -11,11 +11,13 @@
  * this is a dev-first product.
  */
 import type { Database as DB } from 'better-sqlite3';
+import type { CoderExecutionMode } from '../types.js';
 
 export interface SessionConfigLock {
   provider: string;
   model: string;
   permissionMode: string;
+  executionMode: CoderExecutionMode;
   reasoningEffort: string | null;
   planDepth: string | null;
   responseLanguage: string | null;
@@ -30,6 +32,7 @@ export interface ConfigLockInput {
   provider: string;
   model: string;
   permissionMode: string;
+  executionMode?: CoderExecutionMode;
   reasoningEffort?: string | null;
   planDepth?: string | null;
   responseLanguage?: string | null;
@@ -42,11 +45,15 @@ export interface ConfigLockInput {
 
 /** Build a lock snapshot from the effective config. Pure. */
 export function buildConfigLock(input: ConfigLockInput): SessionConfigLock {
+  const reasoningEffort = input.reasoningEffort ?? null;
+  const legacyUltra = typeof reasoningEffort === 'string'
+    && reasoningEffort.trim().toLowerCase() === 'ultra';
   return {
     provider: input.provider,
     model: input.model,
     permissionMode: input.permissionMode,
-    reasoningEffort: input.reasoningEffort ?? null,
+    executionMode: input.executionMode ?? (legacyUltra ? 'ultra' : 'standard'),
+    reasoningEffort: legacyUltra ? null : reasoningEffort,
     planDepth: input.planDepth ?? null,
     responseLanguage: input.responseLanguage ?? null,
     outputStyle: input.outputStyle ?? null,
@@ -63,7 +70,7 @@ export function buildConfigLock(input: ConfigLockInput): SessionConfigLock {
  */
 export function diffConfigLock(stored: SessionConfigLock, current: SessionConfigLock): string[] {
   const fields: (keyof SessionConfigLock)[] = [
-    'provider', 'model', 'permissionMode', 'reasoningEffort',
+    'provider', 'model', 'permissionMode', 'executionMode', 'reasoningEffort',
     'planDepth', 'responseLanguage', 'outputStyle', 'temperature', 'toolOutputCapLevel',
   ];
   const drift: string[] = [];
@@ -73,6 +80,32 @@ export function diffConfigLock(stored: SessionConfigLock, current: SessionConfig
   return drift;
 }
 
+/**
+ * Upgrade a persisted pre-241 lock in memory. Legacy locks may omit the mode
+ * and encode Ultra in `reasoningEffort`; normalizing avoids false drift after
+ * migration 241 moves that intent to the dedicated session column.
+ */
+export function normalizeConfigLock(value: unknown): SessionConfigLock | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const lock = value as Record<string, unknown>;
+  const reasoningEffort = typeof lock.reasoningEffort === 'string' || lock.reasoningEffort === null
+    ? lock.reasoningEffort
+    : null;
+  const legacyUltra = typeof reasoningEffort === 'string'
+    && reasoningEffort.trim().toLowerCase() === 'ultra';
+  const explicitMode: CoderExecutionMode | null = lock.executionMode === 'ultra'
+    ? 'ultra'
+    : lock.executionMode === 'standard'
+      ? 'standard'
+      : null;
+  const executionMode: CoderExecutionMode = explicitMode ?? (legacyUltra ? 'ultra' : 'standard');
+  return {
+    ...(lock as unknown as SessionConfigLock),
+    executionMode,
+    reasoningEffort: legacyUltra ? null : reasoningEffort,
+  };
+}
+
 /** Read the stored lock for a session, or null when unset/unparseable. */
 export function getConfigLock(db: DB, sessionId: number): SessionConfigLock | null {
   const row = db
@@ -80,7 +113,7 @@ export function getConfigLock(db: DB, sessionId: number): SessionConfigLock | nu
     .get(sessionId) as { j: string | null } | undefined;
   if (!row?.j) return null;
   try {
-    return JSON.parse(row.j) as SessionConfigLock;
+    return normalizeConfigLock(JSON.parse(row.j));
   } catch {
     return null;
   }

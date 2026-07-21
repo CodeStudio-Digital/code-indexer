@@ -171,6 +171,13 @@ export interface CoderTool {
    * `fetch`/child processes) can clean up.
    */
   timeoutMs?: number;
+  /**
+   * Optional per-invocation timeout resolver. Use this when the handler accepts
+   * a bounded timeout argument (for example `run_command.timeout_ms`) so queue
+   * acquisition and the runner backstop share the same deadline. Invalid or
+   * throwing resolvers fall back to `timeoutMs` / the normal timeout policy.
+   */
+  resolveTimeoutMs?: (args: Record<string, unknown>) => number;
 }
 
 /** One nested tool invocation outcome, reported by code_exec's proxy. */
@@ -377,6 +384,11 @@ export interface ToolContext {
    * "still alive".
    */
   reportProgress?: (note: string) => void;
+  /**
+   * Refresh transport/UI liveness without claiming semantic progress. Unlike
+   * `reportProgress`, this must not reset the operation's no-real-output age.
+   */
+  reportHeartbeat?: (note?: string) => void;
   /** Back-reference to the runner so interactive tools (submit_plan, ask_user)
    *  can pause execution waiting for user input. Set automatically by CoderRunner. */
   runner?: import('@mcp/code-agent/core/runner.js').CoderRunner;

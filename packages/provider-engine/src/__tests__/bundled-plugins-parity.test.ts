@@ -20,7 +20,7 @@ import bedrockPlugin from '../../../../extensions/provider-bedrock/src/plugin.js
 import fuguPlugin from '../../../../extensions/provider-fugu/src/plugin.js';
 
 /**
- * Drift guard: every bundled provider plugin (the 4 api-key + the 6 OAuth/AWS
+ * Drift guard: every bundled provider plugin (API-key + OAuth/AWS
  * connectors) re-exports the CANONICAL engine spec — single source of truth.
  * A forked plugin that inlines a divergent spec fails here.
  */

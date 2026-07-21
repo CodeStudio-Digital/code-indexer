@@ -53,12 +53,15 @@ export async function runBackgroundEphemeral(
   // group-level slots/events while each spec carries its own provider.
   const agentProviders = await Promise.all(agents.map((a) => providerForProfile(deps, a.profile)));
   const agentInfos = agentProviders.map((p) => describeProvider(p));
+  // Same resolved caps feed the dispatch specs, live events, and retention.
+  const agentLimits = agents.map((a) => limitsForAgent(a, deps));
   const distinctLabels = [...new Set(agentInfos.map((i) => i.label))];
   const info = distinctLabels.length <= 1
     ? (agentInfos[0] ?? describeProvider(deps.provider))
     : { provider: 'mixed', model: distinctLabels.join(', '), label: distinctLabels.join(', ') };
   const jobId = `job-${randomUUID().slice(0, 8)}`;
   const groupId = randomUUID().slice(0, 8);
+  const toolUseId = ctx.currentToolUseId;
   const manager = getSubagentJobManager();
 
   const slots: BackgroundAgentSlot[] = agents.map((a, i) => ({
@@ -73,7 +76,7 @@ export async function runBackgroundEphemeral(
   const job = created;
 
   ctx.runner?.emit('agents_group_start', {
-    groupId, jobId, background: true, provider: info.provider, model: info.model,
+    groupId, toolUseId, jobId, background: true, provider: info.provider, model: info.model,
     agents: agents.map((a, i) => ({
       index: i,
       label: a.label,
@@ -84,6 +87,8 @@ export async function runBackgroundEphemeral(
       researchDepth: a.researchPolicy?.depth,
       softToolTarget: a.researchPolicy?.softToolTarget,
       softTimeTargetMs: a.researchPolicy?.softTimeTargetMs,
+      maxToolCalls: agentLimits[i]?.maxToolCalls,
+      hardTimeoutMs: agentLimits[i]?.timeoutMs,
     })),
   });
 
@@ -106,7 +111,7 @@ export async function runBackgroundEphemeral(
     allowlist: a.profile.allowlist,
     pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files?.length ? a.files : undefined,
     pathScopeMode: a.profile.pathScopeMode,
-    limits: limitsForAgent(a),
+    limits: agentLimits[i],
   }));
 
   // Fire-and-forget — do NOT await.
@@ -156,7 +161,16 @@ async function runBackgroundJob(
         });
         const specProvider = specs[progress.agentIndex]?.provider;
         const pinfo = specProvider ? describeProvider(specProvider) : info;
-        ctx.runner?.emit('agent_progress', { groupId: job.groupId, provider: pinfo.provider, model: pinfo.model, ...progress });
+        ctx.runner?.emit('agent_progress', {
+          groupId: job.groupId,
+          toolUseId: jobCtx.currentToolUseId,
+          jobId: job.jobId,
+          background: true,
+          task: agents[progress.agentIndex]?.task,
+          provider: pinfo.provider,
+          model: pinfo.model,
+          ...progress,
+        });
       },
     );
 
@@ -165,6 +179,7 @@ async function runBackgroundJob(
     const body = renderParallelBody(results.map((r, i) => ({
       label: r.label, type: agents[i].type, reason: r.reason, toolCallCount: r.toolCallCount,
       usage: r.usage, finalText: r.finalText, collected: r.collected,
+      maxToolCalls: specs[i]?.limits?.maxToolCalls,
     })));
     const unfinished = results.filter((r) => r.reason !== 'completed').length;
     const hint = unfinished > 0 ? renderResumeHint(job.groupId, unfinished) : '';
@@ -184,7 +199,7 @@ async function runBackgroundJob(
     try {
       resumableCount = retainSpawnGroup({
         sessionId, spawnId: job.groupId, provider: info.provider, model: info.model,
-        agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r), toolCallCount: r.toolCallCount })),
+        agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r, specs[i]?.limits), toolCallCount: r.toolCallCount })),
       });
     } catch (e) { console.warn(`[coder] background retainSpawnGroup failed: ${e instanceof Error ? e.message : String(e)}`); }
     job.resumableCount = resumableCount;

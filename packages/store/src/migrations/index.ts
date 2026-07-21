@@ -246,6 +246,14 @@ import { semanticLocalQ8Auto230 } from './230_semantic_local_q8_auto.js';
 import { splitSemanticKnowledge238 } from './238_split_semantic_knowledge.js';
 import { subagentResearchPolicy239 } from './239_subagent_research_policy.js';
 import { mcpConnectionProfiles240 } from './240_mcp_connection_profiles.js';
+import { sessionExecutionMode241 } from './241_session_execution_mode.js';
+import { repairLegacyKimiCodeProvider242 } from './242_repair_legacy_kimi_code_provider.js';
+import { kimiCodeApiKeyOnly243 } from './243_kimi_code_api_key_only.js';
+import { semanticItemsIdentityLookup244 } from './244_semantic_items_identity_lookup.js';
+import { docChunksEnrichmentLookup245 } from './245_doc_chunks_enrichment_lookup.js';
+import { perfIndexes246 } from './246_perf_indexes.js';
+import { qualityProviderRequestsRepair247 } from './247_quality_provider_requests_repair.js';
+import { subagentRunLifecycle248 } from './248_subagent_run_lifecycle.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -522,6 +530,14 @@ export const MIGRATIONS: Migration[] = [
   splitSemanticKnowledge238,
   subagentResearchPolicy239,
   mcpConnectionProfiles240,
+  sessionExecutionMode241,
+  repairLegacyKimiCodeProvider242,
+  kimiCodeApiKeyOnly243,
+  semanticItemsIdentityLookup244,
+  docChunksEnrichmentLookup245,
+  perfIndexes246,
+  qualityProviderRequestsRepair247,
+  subagentRunLifecycle248,
 ];
 
 /**

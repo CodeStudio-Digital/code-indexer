@@ -3,7 +3,7 @@ import type {
   ProviderDiscoveredModel,
   ProviderDiscoveryResult,
 } from '@mcp/provider-sdk';
-import { KIMI_CODE_BASE_URL } from './auth.js';
+import { KIMI_CODE_BASE_URL } from './spec.js';
 
 export const KIMI_CODE_SEED_MODELS: ProviderDiscoveredModel[] = [
   seedK3(),

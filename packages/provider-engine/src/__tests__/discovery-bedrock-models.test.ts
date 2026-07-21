@@ -12,6 +12,13 @@ const MODEL_SUMMARIES = [
     outputModalities: ['TEXT'],
     inferenceTypesSupported: ['ON_DEMAND'],
   },
+  {
+    modelId: 'zai.glm-5',
+    modelName: 'GLM 5',
+    providerName: 'Z.AI',
+    outputModalities: ['TEXT'],
+    inferenceTypesSupported: ['ON_DEMAND'],
+  },
   // Dropped: PROVISIONED-only (no ON_DEMAND).
   {
     modelId: 'meta.llama3-70b-instruct-v1:0',
@@ -70,6 +77,12 @@ describe('bedrock-models discovery', () => {
         model_id: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         name: 'Anthropic Claude 3.5 Sonnet v2',
         context_window: getCtx('anthropic.claude-3-5-sonnet-20241022-v2:0'),
+        source: 'live',
+      },
+      {
+        model_id: 'zai.glm-5',
+        name: 'Z.AI GLM 5',
+        context_window: 200_000,
         source: 'live',
       },
       {

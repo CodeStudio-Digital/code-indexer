@@ -26,7 +26,7 @@ interface ArchivedSample {
 
 interface ArchivedFreeze {
   at: number;
-  source: 'handler' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
   channel?: string;
   durationMs: number;
   detail?: string;
@@ -39,6 +39,8 @@ interface ArchivedRendererFreeze {
   name: string;
   script?: string;
   kind: 'loaf' | 'longtask';
+  blockingDurationMs?: number;
+  forcedStyleAndLayoutDurationMs?: number;
 }
 
 interface ArchivedSlowCall {
@@ -54,9 +56,35 @@ interface RunDetail {
   samples: ArchivedSample[];
   freezes: ArchivedFreeze[];
   rendererFreezes: ArchivedRendererFreeze[];
+  rendererFreezeSummary?: {
+    count: number;
+    persisted: number;
+    retained: number;
+    dropped: number;
+    droppedBeforePersist: number;
+    droppedFromDetail: number;
+    unavailable: number;
+    totalDurationMs: number;
+    maxDurationMs: number;
+    loafCount: number;
+    longtaskCount: number;
+    blockingDurationTotalMs: number;
+    forcedStyleAndLayoutDurationTotalMs: number;
+    firstAt: number | null;
+    lastAt: number | null;
+  };
   slowCalls: ArchivedSlowCall[];
   recordsRead: number;
   corruptLines: number;
+  read?: {
+    cutoffAt: number;
+    dataThroughAt: number | null;
+    complete: boolean;
+    reasons: string[];
+    filesAvailable: number;
+    filesRead: number;
+    bytesRead: number;
+  };
 }
 
 function formatBytes(bytes: number): string {
@@ -144,7 +172,20 @@ export function PersistentDiagnosticsPanel() {
 
   const exportDetail = () => {
     if (!detail) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(detail, null, 2)], { type: 'application/json' }));
+    const exportedAt = Date.now();
+    const payload = {
+      ...detail,
+      exportMetadata: {
+        schemaVersion: 1,
+        exportedAt,
+        cutoffAt: detail.read?.cutoffAt ?? exportedAt,
+        dataThroughAt: detail.read?.dataThroughAt ?? null,
+        readComplete: detail.read?.complete ?? false,
+        runComplete: detail.run.status !== 'current',
+        completenessReasons: detail.read?.reasons ?? ['read-metadata-unavailable'],
+      },
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `performance-run-${detail.run.id}.json`;
@@ -187,11 +228,23 @@ export function PersistentDiagnosticsPanel() {
 
       {detail && (
         <>
-          <div className="grid gap-2 text-xs sm:grid-cols-4">
+          <div className="grid gap-2 text-xs sm:grid-cols-6">
             <div><span className="text-muted-foreground">{t('perf.journal.status')}:</span> {statusLabel(detail.run.status)}</div>
             <div><span className="text-muted-foreground">{t('perf.journal.records')}:</span> {detail.recordsRead}</div>
             <div><span className="text-muted-foreground">{t('perf.journal.size')}:</span> {formatBytes(detail.run.sizeBytes)}</div>
             <div><span className="text-muted-foreground">{t('perf.journal.corruptLines')}:</span> {detail.corruptLines}</div>
+            <div>
+              <span className="text-muted-foreground">{t('perf.journal.rendererFreezes')}:</span>{' '}
+              {detail.rendererFreezeSummary
+                ? `${detail.rendererFreezeSummary.retained}/${detail.rendererFreezeSummary.count}`
+                : detail.rendererFreezes.length}
+            </div>
+            <div>
+              <span className="text-muted-foreground">{t('perf.journal.read')}:</span>{' '}
+              <span title={detail.read?.reasons.join(', ') || undefined}>
+                {detail.read?.complete ? t('perf.journal.readComplete') : t('perf.journal.readPartial')}
+              </span>
+            </div>
           </div>
           <div className="break-all rounded bg-muted/30 px-2 py-1 font-mono text-[10px] text-muted-foreground">
             {t('perf.journal.path')}: {detail.run.path}

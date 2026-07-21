@@ -43,6 +43,8 @@ import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
+import { enrichElectronProcessMetrics } from './src/process-metrics.js';
+import { registerTaskManagerShortcut, TASK_MANAGER_ROUTE } from './src/task-manager-shortcut.js';
 import { childRegistry } from './src/child-process-registry.js';
 import { sharedPtyManager } from '@mcp/api-handlers';
 import {
@@ -233,7 +235,16 @@ async function bootstrap() {
   // Perf monitor: hand the backend the Electron process tree
   // (GPU/renderer/utility working sets — what Task Manager shows).
   // Read lazily per sampler tick, so assigning after createApp is fine.
-  deps.processMetricsProvider = () => app.getAppMetrics();
+  deps.processMetricsProvider = () => enrichElectronProcessMetrics(
+    app.getAppMetrics(),
+    BrowserWindow.getAllWindows()
+      .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+      .map((window) => ({
+        pid: window.webContents.getOSProcessId(),
+        url: window.webContents.getURL(),
+        appWindow: (window as unknown as { __mcpAppWindow?: boolean }).__mcpAppWindow === true,
+      })),
+  );
 
   // Wire the admin "Restart backend" button to Electron's relaunch
   // primitives — without this, `process.exit(75)` would kill the main
@@ -504,6 +515,7 @@ async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Pro
   win.webContents.once('did-finish-load', reveal);
 
   attachWindowHandlers(win);
+  registerTaskManagerShortcut(win, () => focusOrOpenRoute(TASK_MANAGER_ROUTE));
   applyProductionHardening(win);
 
   if (DEV_URL) {

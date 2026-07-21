@@ -39,6 +39,15 @@ describe('resolveToolTimeoutMs — orchestrators in the SLOW tier', () => {
     expect(resolveToolTimeoutMs(t({ name: 'whatever', timeoutMs: Infinity }))).toBe(Infinity);
   });
 
+  it('prefers a valid per-invocation timeout and falls back on invalid metadata', () => {
+    const dynamic = t({
+      timeoutMs: 9_000,
+      resolveTimeoutMs: (args) => Number(args.timeout_ms),
+    });
+    expect(resolveToolTimeoutMs(dynamic, { timeout_ms: 250 })).toBe(250);
+    expect(resolveToolTimeoutMs(dynamic, { timeout_ms: Number.NaN })).toBe(9_000);
+  });
+
   it('separates pollable from volatile timeout semantics', () => {
     expect(resolveToolTimeoutMs(t({ name: 'poll', repeatPolicy: 'pollable' }))).toBe(NORMAL_TIMEOUT_MS);
     expect(resolveToolTimeoutMs(t({ name: 'poll', repeatable: true }))).toBe(NORMAL_TIMEOUT_MS);
@@ -74,10 +83,17 @@ describe('resolveToolMetadata — interactive classification (policy)', () => {
 });
 
 describe('run_command and code_exec timeout policy', () => {
-  it('caps run_command at 10 minutes via an explicit tool timeoutMs', () => {
+  it('gives run_command a cleanup grace and resolves the requested deadline', () => {
     const runCommand = shellTools.find((tool) => tool.name === 'run_command')!;
-    expect(runCommand.timeoutMs).toBe(10 * 60_000);
-    expect(resolveToolTimeoutMs(runCommand)).toBe(10 * 60_000);
+    expect(runCommand.timeoutMs).toBe(10 * 60_000 + 5_000);
+    expect(resolveToolTimeoutMs(runCommand)).toBe(10 * 60_000 + 5_000);
+    expect(resolveToolTimeoutMs(runCommand, { timeout_ms: 120_000 })).toBe(125_000);
+  });
+
+  it('does not cut Unity Editor batch tests off at the generic requested deadline', () => {
+    const runCommand = shellTools.find((tool) => tool.name === 'run_command')!;
+    const command = '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.5f2\\Editor\\Unity.exe" -batchmode -runTests';
+    expect(resolveToolTimeoutMs(runCommand, { command, timeout_ms: 300_000 })).toBe(30 * 60_000 + 5_000);
   });
 
   it('puts code_exec in the SLOW tier (its own clock pauses during nested tools)', () => {

@@ -1,4 +1,8 @@
-import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
+import {
+  selectRuntimeModelMetadata,
+  type ProviderSpec,
+  type ProviderDefinition,
+} from '@mcp/provider-sdk';
 import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
 import { parseModelWithMode } from '../wire-helpers/model-mode.js';
 import { resolveBaseURL } from '../wire-helpers/base-url.js';
@@ -31,13 +35,19 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
       const parsed = parseModelWithMode(model);
       const baseURL = resolveBaseURL(spec, creds, parsed.mode);
       const baseModel = parsed.model ?? spec.defaultModel ?? spec.defaultModels[0];
-      const modelMaxOutputTokens = Object.fromEntries(
+      const modelMaxOutputTokens: Record<string, number> = Object.fromEntries(
         (opts?.providerModels ?? [])
           .filter((entry) => (
+            (entry.mode ?? '') === ''
+            &&
             typeof entry.default_max_tokens === 'number' && entry.default_max_tokens > 0
           ))
           .map((entry) => [entry.model_id, entry.default_max_tokens as number]),
       );
+      const activeMetadata = selectRuntimeModelMetadata(opts?.providerModels, model ?? baseModel);
+      if (typeof activeMetadata?.default_max_tokens === 'number' && activeMetadata.default_max_tokens > 0) {
+        modelMaxOutputTokens[baseModel] = activeMetadata.default_max_tokens;
+      }
       const persistedOutputLimits = Object.keys(modelMaxOutputTokens).length > 0
         ? modelMaxOutputTokens
         : undefined;

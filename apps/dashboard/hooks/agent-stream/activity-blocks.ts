@@ -149,6 +149,8 @@ export interface ToolProgressPayload {
   name: string;
   elapsedMs: number;
   note?: string;
+  kind?: 'heartbeat' | 'progress';
+  idleMs?: number;
 }
 
 /** Activity kind inferred from a tool_progress id/name (provider.chat,
@@ -170,6 +172,7 @@ export function activityPatchFromToolProgress(d: ToolProgressPayload): ActivityP
     phase: d.name === 'provider.chat' ? 'awaiting provider' : 'running',
     note: d.note,
     elapsedMs: d.elapsedMs,
+    idleMs: d.idleMs,
     status: 'running',
   };
 }

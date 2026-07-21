@@ -214,21 +214,8 @@ export function updateEnrichmentMode(db: DB, id: number, mode: string): void {
 export function getHealth(db: DB, sourceId: number): DocSourceHealth | null {
   const row = db
     .prepare(
-      `SELECT s.id AS source_id, s.status, s.last_indexed_at, s.embedding_fingerprint,
+      `SELECT s.id AS source_id, s.collection_id, s.status, s.last_indexed_at, s.embedding_fingerprint,
               (SELECT COUNT(*) FROM doc_chunks WHERE source_id = s.id) AS chunks_persisted,
-              (SELECT COUNT(DISTINCT c.id)
-                 FROM doc_chunks c
-                 JOIN semantic_namespace_generations ng
-                   ON ng.namespace = 'docs:c' || c.collection_id
-                 JOIN semantic_items si
-                   ON si.namespace = ng.namespace
-                  AND si.generation_id = COALESCE(
-                    ng.building_generation_id, ng.active_generation_id
-                  )
-                  AND si.item_key = 'doc_chunk:' || c.id
-                  AND si.status = 'indexed'
-                  AND si.vector_id IS NOT NULL
-                WHERE c.source_id = s.id) AS chunks_embedded,
               (SELECT COUNT(*) FROM doc_chunks c
                 WHERE c.source_id=s.id AND c.enrichment_fingerprint='pending:llm') AS chunks_unenriched,
               (SELECT id FROM doc_ingest_runs r WHERE r.source_id=s.id AND r.state='running'
@@ -241,7 +228,34 @@ export function getHealth(db: DB, sourceId: number): DocSourceHealth | null {
     .get(sourceId) as Record<string, unknown> | undefined;
   if (!row) return null;
   const persisted = row.chunks_persisted as number;
-  const embedded = row.chunks_embedded as number;
+  const collectionId = row.collection_id as number;
+  const namespace = `docs:c${collectionId}`;
+  const collectionState = db.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM doc_sources WHERE collection_id = @collectionId) AS source_count,
+       COALESCE((SELECT indexed_items FROM semantic_namespace_generations WHERE namespace = @namespace), 0)
+         AS indexed_items`,
+  ).get({ collectionId, namespace }) as { source_count: number; indexed_items: number };
+
+  // The common case is one source per collection. Its namespace counter is
+  // already the authoritative accepted-vector total, so no chunk↔item join is
+  // needed. Multi-source collections still resolve the exact per-source count
+  // with one generation scan and indexed chunk lookups.
+  const embedded = collectionState.source_count <= 1
+    ? Math.min(persisted, collectionState.indexed_items)
+    : Number((db.prepare(
+      `SELECT COUNT(DISTINCT c.id) AS count
+         FROM semantic_namespace_generations ng
+         JOIN semantic_items si INDEXED BY idx_semantic_items_identity
+           ON si.generation_id = COALESCE(ng.building_generation_id, ng.active_generation_id)
+          AND si.namespace = ng.namespace
+          AND si.status = 'indexed'
+          AND si.vector_id IS NOT NULL
+         JOIN doc_chunks c ON c.id = CAST(substr(si.item_key, 11) AS INTEGER)
+        WHERE ng.namespace = @namespace
+          AND si.item_key LIKE 'doc_chunk:%'
+          AND c.source_id = @sourceId`,
+    ).get({ namespace, sourceId }) as { count: number }).count);
   return {
     source_id: row.source_id as number,
     status: row.status as DocSourceStatus,

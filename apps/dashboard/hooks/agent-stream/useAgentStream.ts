@@ -11,7 +11,10 @@ import type {
 } from './types.js';
 import { EMPTY_STATE } from './types.js';
 import { pruneSessions } from './prune-sessions.js';
+import { createAbortedSessionPatch } from './abort-state.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
+
+const ABORT_TERMINAL_EVENT_GRACE_MS = 2_000;
 
 /**
  * Streams a coder session message via SSE (POST /api/coder/sessions/:id/messages).
@@ -28,6 +31,8 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
   // never interrupts an in-flight run; coming back shows it where it was.
   const [stateMap, setStateMap] = useState<Record<number, SessionState>>({});
   const abortMap = useRef<Map<number, AbortController>>(new Map());
+  const abortRequestMap = useRef<Map<number, Promise<void>>>(new Map());
+  const abortFallbackTimerMap = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const notificationContextRef = useRef(notificationContext);
   notificationContextRef.current = notificationContext;
   // Highest SSE id per sid for reattach Last-Event-ID. A ref (not React
@@ -51,6 +56,8 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
     return () => {
       for (const ctrl of map.values()) ctrl.abort();
       map.clear();
+      for (const timer of abortFallbackTimerMap.current.values()) clearTimeout(timer);
+      abortFallbackTimerMap.current.clear();
     };
   }, []);
 
@@ -223,13 +230,57 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
 
   const abort = useCallback(async () => {
     if (sessionId === null) return;
-    try {
-      await fetch(`/api/coder/sessions/${sessionId}/abort`, { method: 'POST' });
-    } catch {
-      /* ignore */
+    const sid = sessionId;
+    const pending = abortRequestMap.current.get(sid);
+    if (pending) {
+      await pending;
+      return;
     }
-    abortMap.current.get(sessionId)?.abort();
-  }, [sessionId]);
+
+    const controller = abortMap.current.get(sid);
+    const finalizeLocally = () => {
+      // A terminal event already closed this stream, or a newer run replaced
+      // it. In either case, never let an old Stop clobber the newer state.
+      if (controller) {
+        if (abortMap.current.get(sid) !== controller) return;
+        controller.abort();
+      } else if (abortMap.current.has(sid)) {
+        return;
+      }
+      updateSession(sid, (state) => createAbortedSessionPatch(state));
+    };
+
+    // The worker emits operation_end/done after abort. Keep this SSE alive long
+    // enough to receive those events; closing it immediately is what left the
+    // provider activity pill stuck on "running". The timer is only a safety net
+    // for a dead worker/transport and is identity-guarded against a newer run.
+    const previousTimer = abortFallbackTimerMap.current.get(sid);
+    if (previousTimer) clearTimeout(previousTimer);
+    const fallbackTimer = setTimeout(() => {
+      abortFallbackTimerMap.current.delete(sid);
+      finalizeLocally();
+    }, ABORT_TERMINAL_EVENT_GRACE_MS);
+    abortFallbackTimerMap.current.set(sid, fallbackTimer);
+
+    const request = (async () => {
+      try {
+        const response = await fetch(`/api/coder/sessions/${sid}/abort`, { method: 'POST' });
+        if (!response.ok) finalizeLocally();
+      } catch {
+        // Preserve the existing best-effort Stop contract. If the control
+        // request itself fails, at least terminate the stale local UI state.
+        finalizeLocally();
+      }
+    })();
+    abortRequestMap.current.set(sid, request);
+    try {
+      await request;
+    } finally {
+      if (abortRequestMap.current.get(sid) === request) {
+        abortRequestMap.current.delete(sid);
+      }
+    }
+  }, [sessionId, updateSession]);
 
   const postAndResume = useCallback(
     async (

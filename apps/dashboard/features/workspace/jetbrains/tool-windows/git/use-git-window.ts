@@ -18,6 +18,104 @@ export type { GitStatus, GitStatusFile } from '@mcp/api-bus';
 
 const STATUS_PAGE_SIZE = 1_000;
 const MUTATION_BATCH_SIZE = 2_000; // Matches the server-side safety bound.
+const GIT_REV_RELOAD_DEBOUNCE_MS = 150;
+
+interface GitReloadRun {
+  silent: boolean;
+  isCurrent: () => boolean;
+}
+
+interface GitReloadCoordinator {
+  setRunner: (runner: (run: GitReloadRun) => Promise<void>) => void;
+  request: (options?: { silent?: boolean; debounce?: boolean }) => Promise<void>;
+  invalidate: () => void;
+}
+
+/**
+ * Serializes status refreshes. Watcher bumps are debounced, while explicit
+ * refreshes bypass the timer. A request received during a run supersedes that
+ * result and is folded into one final run after the current one settles.
+ */
+export function createGitReloadCoordinator(
+  debounceMs = GIT_REV_RELOAD_DEBOUNCE_MS,
+): GitReloadCoordinator {
+  let runner: (run: GitReloadRun) => Promise<void> = async () => {};
+  let revision = 0;
+  let pendingRevision: number | null = null;
+  let pendingSilent = true;
+  let pendingImmediate = false;
+  let inFlight = false;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let waiters: Array<{ revision: number; resolve: () => void; reject: (error: unknown) => void }> = [];
+
+  const clearDebounce = () => {
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    debounceTimer = null;
+  };
+  const settleThrough = (completedRevision: number, error?: unknown) => {
+    const settled = waiters.filter((waiter) => waiter.revision <= completedRevision);
+    waiters = waiters.filter((waiter) => waiter.revision > completedRevision);
+    for (const waiter of settled) {
+      if (error === undefined) waiter.resolve();
+      else waiter.reject(error);
+    }
+  };
+
+  const drain = async (): Promise<void> => {
+    if (inFlight || debounceTimer !== null || pendingRevision === null) return;
+    const runRevision = pendingRevision;
+    const silent = pendingSilent;
+    pendingRevision = null;
+    pendingSilent = true;
+    pendingImmediate = false;
+    inFlight = true;
+    try {
+      await runner({ silent, isCurrent: () => runRevision === revision });
+      if (runRevision === revision) settleThrough(runRevision);
+    } catch (error) {
+      if (runRevision === revision) settleThrough(runRevision, error);
+    } finally {
+      inFlight = false;
+      if (pendingRevision !== null && debounceTimer === null) void drain();
+    }
+  };
+
+  return {
+    setRunner(nextRunner) {
+      runner = nextRunner;
+    },
+    request(options = {}) {
+      const hadPending = pendingRevision !== null;
+      const requestRevision = ++revision;
+      pendingRevision = requestRevision;
+      pendingSilent = hadPending ? pendingSilent && (options.silent ?? false) : (options.silent ?? false);
+      pendingImmediate = hadPending ? pendingImmediate || !options.debounce : !options.debounce;
+
+      const completion = new Promise<void>((resolve, reject) => {
+        waiters.push({ revision: requestRevision, resolve, reject });
+      });
+      if (pendingImmediate) {
+        clearDebounce();
+        void drain();
+      } else {
+        clearDebounce();
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          void drain();
+        }, debounceMs);
+      }
+      return completion;
+    },
+    invalidate() {
+      revision += 1;
+      pendingRevision = null;
+      pendingSilent = true;
+      pendingImmediate = false;
+      clearDebounce();
+      settleThrough(revision);
+    },
+  };
+}
 
 /**
  * The API keeps an immutable snapshot, but UI pagination makes group counts and
@@ -113,10 +211,12 @@ export function useGitWindow(
   const [statusCounts, setStatusCounts] = useState<GitWorkspaceSnapshot['counts'] | null>(null);
   const openDiff = useWorkspaceStore((s) => s.openDiff);
   const staleWhileHidden = useRef(false);
-  const reloadRequest = useRef(0);
+  const observedGitRevision = useRef<{ context: string; revision: number } | null>(null);
+  const reloadCoordinatorRef = useRef<GitReloadCoordinator | null>(null);
+  const reloadCoordinator = reloadCoordinatorRef.current
+    ?? (reloadCoordinatorRef.current = createGitReloadCoordinator());
 
   useEffect(() => {
-    reloadRequest.current += 1;
     staleWhileHidden.current = false;
     setStatus(null);
     setMergeState(null);
@@ -156,15 +256,7 @@ export function useGitWindow(
   // `silent` skips the loading flag (no toolbar spinner) — used for background
   // refreshes driven by the git-meta watcher (a commit/fetch shouldn't blink the
   // spinner); the initial load and explicit user refresh stay non-silent.
-  const reload = useCallback(async (silent = false) => {
-    if (!active) {
-      staleWhileHidden.current = true;
-      return;
-    }
-    // Hold the initial fetch until repos are known so repoPath is settled (else
-    // the first status would be the project-wide aggregate). Stays in loading.
-    if (!ready) return;
-    const requestId = ++reloadRequest.current;
+  reloadCoordinator.setRunner(async ({ silent, isCurrent }) => {
     const includeFiles = tab === 'changes';
     if (!silent) setLoading(true);
     const finishStatusSpan = startRouteSpan('GitWindow:status', {
@@ -196,7 +288,7 @@ export function useGitWindow(
             throw err;
           }),
       ]);
-      if (requestId !== reloadRequest.current) return;
+      if (!isCurrent()) return;
       setStatus(s);
       if ('counts' in s) {
         setStatusCounts(s.counts);
@@ -217,23 +309,45 @@ export function useGitWindow(
       }
       setError(null);
     } catch (err) {
-      if (requestId === reloadRequest.current) setError(err instanceof Error ? err.message : String(err));
+      if (isCurrent()) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (requestId === reloadRequest.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [active, ready, projectId, repoPath, repoPrefix, tab]);
+  });
+
+  const reload = useCallback((silent = false): Promise<void> => {
+    if (!active || !ready) {
+      staleWhileHidden.current = true;
+      return Promise.resolve();
+    }
+    if (!silent) setLoading(true);
+    return reloadCoordinator.request({ silent });
+  }, [active, ready, reloadCoordinator]);
 
   useEffect(() => {
-    if (active) void reload(staleWhileHidden.current);
-  }, [active, reload]);
+    if (active && ready) void reload(staleWhileHidden.current);
+    else reloadCoordinator.invalidate();
+    return () => reloadCoordinator.invalidate();
+  }, [active, ready, projectId, repoPath, repoPrefix, tab, reload, reloadCoordinator]);
 
   // The git-meta watcher bumps this on any .git change (incl. external
   // checkout) — reload status + mergeState so the window never goes stale.
   const gitRev = useGitRevision((s) => s.revByProject[projectId] ?? 0);
+  const reloadContext = `${projectId}\0${repoPath ?? ''}\0${repoPrefix ?? ''}\0${tab}`;
   useEffect(() => {
-    if (gitRev) void reload(true); // hidden windows only mark stale; visible windows refresh silently
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bump on revision only
-  }, [gitRev]);
+    const observed = observedGitRevision.current;
+    observedGitRevision.current = { context: reloadContext, revision: gitRev };
+    // The context-load effect already covers the first revision observed for a
+    // project/repo/tab. Only subsequent watcher bumps need a background refresh.
+    if (!observed || observed.context !== reloadContext || observed.revision === gitRev || !gitRev) return;
+    if (!active || !ready) {
+      staleWhileHidden.current = true;
+      reloadCoordinator.invalidate();
+      return;
+    }
+    void reloadCoordinator.request({ silent: true, debounce: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- active/ready changes are handled by the context-load effect
+  }, [gitRev, reloadContext, reloadCoordinator]);
 
   // Auto-surface the Conflicts tab the moment a sequencer op flips into a
   // conflicted state; fall back to Changes once it clears. Keyed per project in

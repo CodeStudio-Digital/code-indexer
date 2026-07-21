@@ -22,6 +22,8 @@ interface ComposerActionIconsProps {
   handleFiles: (files: FileList | null) => Promise<void>;
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
+  /** Ultra owns the effective reasoning flag; preserve the stored Standard preference. */
+  thinkingManaged?: boolean;
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
   outputCapLevel?: OutputCapLevel;
@@ -45,6 +47,7 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
   handleFiles,
   thinking,
   setThinking,
+  thinkingManaged = false,
   describeImages,
   setDescribeImages,
   outputCapLevel,
@@ -122,17 +125,20 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
         <button
           type="button"
           onClick={() => setThinking?.(!thinking)}
-          aria-pressed={thinking ?? false}
+          aria-pressed={thinkingManaged || (thinking ?? false)}
           aria-label={t('composer.thinkingToggle', { defaultValue: 'Extended thinking' })}
-          title={t('composer.thinkingToggle', { defaultValue: 'Extended thinking' })}
+          title={thinkingManaged
+            ? t('ultra.thinkingManaged', { defaultValue: 'Ultra controls reasoning for this model. Your Think preference is preserved for Standard mode.' })
+            : t('composer.thinkingToggle', { defaultValue: 'Extended thinking' })}
+          disabled={thinkingManaged}
           className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-            thinking
+            thinkingManaged || thinking
               ? 'bg-purple-500/15 text-purple-500 hover:bg-purple-500/25'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted'
           }`}
         >
           <Brain className="h-3.5 w-3.5" />
-          {thinking && (
+          {(thinkingManaged || thinking) && (
             <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-purple-500" />
           )}
         </button>

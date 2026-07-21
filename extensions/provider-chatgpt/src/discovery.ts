@@ -5,6 +5,7 @@ import type {
   ProviderDiscoveredModel,
   ProviderDiscoveryResult,
 } from '@mcp/provider-sdk';
+import { nativeReasoningLevel, nativeReasoningLevels } from '@mcp/provider-sdk';
 import { CHATGPT_CODEX_BASE_URL } from './auth.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -19,20 +20,21 @@ export const CHATGPT_SEED_MODELS: Array<{
 }> = [
   // GPT-5.6 family (Sol / Terra / Luna) — mirrored from the upstream Codex
   // catalog (codex-rs/models-manager/models.json): 372K context, `freeform`
-  // apply_patch, reasoning efforts low→ultra (Luna caps at `max`). Sol is the
-  // flagship (the `gpt-5.6` alias routes to Sol). Live discovery overrides.
+  // apply_patch and native reasoning efforts through `max`. Ultra is a local
+  // execution profile (max native effort + proactive delegation), never a
+  // provider-supported reasoning level. Live discovery overrides these seeds.
   {
     model_id: 'gpt-5.6-sol',
     name: 'GPT-5.6 Sol',
     default_reasoning_level: 'low',
-    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
     apply_patch_tool_type: 'freeform',
   },
   {
     model_id: 'gpt-5.6-terra',
     name: 'GPT-5.6 Terra',
     default_reasoning_level: 'medium',
-    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
     apply_patch_tool_type: 'freeform',
   },
   {
@@ -176,6 +178,8 @@ export async function discoverChatGPTModels(
 function toUpsertInput(model: CodexModelInfo): ProviderDiscoveredModel {
   const isListed = model.visibility === undefined || model.visibility === 'list';
   const isApi = model.supported_in_api !== false;
+  const defaultReasoningLevel = nativeReasoningLevel(normalizeReasoningLevel(model.default_reasoning_level));
+  const supportedReasoningLevels = normalizeReasoningLevels(model.supported_reasoning_levels);
 
   return {
     model_id: model.slug,
@@ -185,8 +189,9 @@ function toUpsertInput(model: CodexModelInfo): ProviderDiscoveredModel {
     default_enabled: isListed && isApi,
     display_name: model.display_name ?? null,
     description: model.description ?? null,
-    default_reasoning_level: normalizeReasoningLevel(model.default_reasoning_level),
-    supported_reasoning_levels: normalizeReasoningLevels(model.supported_reasoning_levels),
+    can_reason: defaultReasoningLevel !== null || supportedReasoningLevels !== null,
+    default_reasoning_level: defaultReasoningLevel,
+    supported_reasoning_levels: supportedReasoningLevels,
     apply_patch_tool_type: model.apply_patch_tool_type ?? null,
     available_in_plans: model.available_in_plans ?? null,
     minimal_client_version: model.minimal_client_version ?? null,
@@ -207,7 +212,9 @@ function normalizeReasoningLevel(level: unknown): string | null {
 
 function normalizeReasoningLevels(levels: unknown[] | undefined): string[] | null {
   if (!Array.isArray(levels)) return null;
-  const result = levels.map(normalizeReasoningLevel).filter((v): v is string => Boolean(v));
+  const result = nativeReasoningLevels(
+    levels.map(normalizeReasoningLevel).filter((v): v is string => Boolean(v)),
+  );
   return result.length > 0 ? result : null;
 }
 
@@ -217,8 +224,9 @@ function seedFallback(): ProviderDiscoveredModel[] {
     name: model.name,
     context_window: getRegistryContextWindow(model.model_id),
     source: 'live',
-    default_reasoning_level: model.default_reasoning_level ?? null,
-    supported_reasoning_levels: model.supported_reasoning_levels ?? null,
+    can_reason: Boolean(model.default_reasoning_level || model.supported_reasoning_levels?.length),
+    default_reasoning_level: nativeReasoningLevel(model.default_reasoning_level),
+    supported_reasoning_levels: normalizeReasoningLevels(model.supported_reasoning_levels ?? undefined),
     apply_patch_tool_type: model.apply_patch_tool_type ?? null,
   }));
 }

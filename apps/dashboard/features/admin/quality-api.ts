@@ -81,6 +81,14 @@ export interface QualityOverview {
   runtimeIncidents: number;
 }
 
+async function throwQualityHttpError(response: Response, endpoint: string): Promise<never> {
+  let detail = '';
+  try {
+    detail = (await response.text()).replace(/\s+/g, ' ').trim().slice(0, 240);
+  } catch { /* response body is best-effort diagnostics */ }
+  throw new Error(`${endpoint}: HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
+}
+
 export async function fetchQualityDistribution(opts: {
   classifierName?: string;
   since?: string;
@@ -129,7 +137,7 @@ export async function clearAllQuality(): Promise<{ deleted: number }> {
 /** Read effective hybrid Quality state, including active-worker ACKs. */
 export async function fetchQualityEnabled(): Promise<QualityStatus> {
   const r = await fetch('/api/admin/quality/enabled');
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) return throwQualityHttpError(r, '/api/admin/quality/enabled');
   return (await r.json()) as QualityStatus;
 }
 
@@ -140,7 +148,7 @@ export async function setQualityEnabled(enabled: boolean): Promise<QualityStatus
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) return throwQualityHttpError(r, '/api/admin/quality/enabled');
   return (await r.json()) as QualityStatus;
 }
 
@@ -148,7 +156,7 @@ export async function fetchQualityOverview(since?: string): Promise<QualityOverv
   const p = new URLSearchParams();
   if (since) p.set('since', since);
   const r = await fetch(`/api/admin/quality/overview?${p.toString()}`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) return throwQualityHttpError(r, '/api/admin/quality/overview');
   return (await r.json()) as QualityOverview;
 }
 
@@ -160,7 +168,7 @@ export async function fetchQualityScopedRows(
   if (opts.since) p.set('since', opts.since);
   if (opts.limit) p.set('limit', String(opts.limit));
   const r = await fetch(`/api/admin/quality/${scope}?${p.toString()}`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) return throwQualityHttpError(r, `/api/admin/quality/${scope}`);
   return (await r.json()) as { rows: QualityRow[]; distribution?: VerdictDistribution[] };
 }
 

@@ -1006,6 +1006,43 @@ describe('code_exec metadata safety and scheduling', () => {
     await queued;
     expect(acquired).toBe(true);
   });
+
+  it('times out a queued unsafe call before lane acquisition', async () => {
+    const registry = new ToolRegistry();
+    let physicalInvocations = 0;
+    registry.register({
+      ...noopTool('run_command'),
+      mutates: true,
+      parallelSafe: false,
+      resolveTimeoutMs: (args) => Number(args.timeout_ms),
+      handler: () => {
+        physicalInvocations++;
+        return new Promise<never>(() => {}); // deliberately ignores cancellation
+      },
+    });
+    const started = Date.now();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.prependListener('unhandledRejection', onUnhandled);
+    let result;
+    try {
+      result = await buildCodeExecTool(registry).handler({
+        code: `return await Promise.all([
+          tools.run_command({command:'first', timeout_ms:80}),
+          tools.run_command({command:'second', timeout_ms:30})
+        ]);`,
+      }, makeCtx());
+      await sleep(20);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('timed out after 30 ms');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(physicalInvocations).toBe(1);
+    expect(unhandled).toEqual([]);
+  });
 });
 
 describe('code_exec nested-failure try/catch hint (telemetry: create_file killed the script)', () => {

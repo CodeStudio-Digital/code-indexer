@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -73,6 +74,7 @@ import type { AdminProvider } from './types.js';
 
 export default function Admin() {
   const { t } = useTranslation(['admin', 'common']);
+  const [searchParams] = useSearchParams();
   const {
     providers,
     loading,
@@ -97,6 +99,7 @@ export default function Admin() {
     backfillContextWindows,
     setSubagentTarget,
     setSubagentEffort,
+    setSubagentLimits,
     setFallback,
   } = useAdminProviders();
 
@@ -116,7 +119,16 @@ export default function Admin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providers]);
 
-  const [section, setSection] = useState<SectionId>('providers');
+  const requestedSection = searchParams.get('section');
+  const [section, setSection] = useState<SectionId>(() => (
+    requestedSection === 'perf' ? 'perf' : 'providers'
+  ));
+  // Shift+Esc may navigate here while Admin is already mounted on another
+  // section. React Router keeps the component alive, so mirror the explicit
+  // task-manager query into local section state.
+  useEffect(() => {
+    if (requestedSection === 'perf') setSection('perf');
+  }, [requestedSection]);
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
   const [bedrockOpen, setBedrockOpen] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
@@ -353,6 +365,7 @@ export default function Admin() {
                 onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
                 onSetSubagentEffort={setSubagentEffort}
+                onSetSubagentLimits={setSubagentLimits}
               />
             </div>
           )}
@@ -420,6 +433,7 @@ export default function Admin() {
       )}
       {kimiCodeOpen && (
         <KimiCodeConnectionDialog
+          provider={providers.find((provider) => provider.kind === 'kimi-code')}
           onClose={() => setKimiCodeOpen(false)}
           onConnected={handleConnected}
         />

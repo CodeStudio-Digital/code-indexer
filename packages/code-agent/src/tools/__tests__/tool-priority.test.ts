@@ -64,6 +64,7 @@ function makeArgs(model: string) {
 
 afterEach(() => {
   delete process.env.CODER_PRIORITY_TRIM_DISABLE;
+  delete process.env.CODER_TOOL_CAP_DEFAULT;
 });
 
 describe('selectUnderCap', () => {
@@ -133,10 +134,31 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
 
-  it('does not trim for large-catalog models (capInfo null)', () => {
+  it('perf W3: the default session cap (48) trims large-catalog models — cold tiers die first', () => {
+    const res = buildTools(makeArgs('claude-opus-4-7'));
+    const names = res.tools.map((t) => t.name);
+    expect(res.capInfo).not.toBeNull();
+    expect(res.capInfo!.cap).toBe(48);
+    expect(names.length).toBeLessThanOrEqual(48);
+    expect(names).not.toContain('cf__deploy_worker'); // custom tier dies first
+    expect(names).not.toContain('git_commit'); // then admin-cold
+    for (const n of NEVER_TRIM) {
+      if (![...BOOTSTRAP_SET, ...NAVIGATE_SET].includes(n)) continue;
+      expect(names, `NEVER_TRIM tool ${n} must survive the default cap`).toContain(n);
+    }
+  });
+
+  it('CODER_TOOL_CAP_DEFAULT=0 restores the legacy model-cap-only behavior (capInfo null)', () => {
+    process.env.CODER_TOOL_CAP_DEFAULT = '0';
     const res = buildTools(makeArgs('claude-opus-4-7'));
     expect(res.capInfo).toBeNull();
     expect(res.tools.map((t) => t.name)).toContain('git_commit');
+    expect(res.tools.map((t) => t.name)).toContain('cf__deploy_worker');
+  });
+
+  it('subagents/tests (activeTiers null) are exempt from the default cap', () => {
+    const res = buildTools({ ...makeArgs('claude-opus-4-7'), activeTiers: null });
+    expect(res.capInfo).toBeNull();
     expect(res.tools.map((t) => t.name)).toContain('cf__deploy_worker');
   });
 
@@ -287,8 +309,15 @@ describe('buildTools — session tool cap (task preflight)', () => {
     }
   });
 
-  it('session cap does NOT flip descriptions to terse on a large model', () => {
+  it('perf W3: an effective cap ≤ 64 ships terse descriptions; NEVER_TRIM keeps full text', () => {
     const tools = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 40 }).tools;
+    const byName = new Map(tools.map((t) => [t.name, t.description]));
+    expect(byName.get('mcp__search')).toBe('mcp__search description.');
+    expect(byName.get('read_file')).toBe(`read_file description. ${TAIL}`);
+  });
+
+  it('an explicit session cap ABOVE 64 keeps full descriptions (not a compact catalog)', () => {
+    const tools = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 80 }).tools;
     expect(tools.find((t) => t.name === 'mcp__search')?.description).toBe(
       `mcp__search description. ${TAIL}`,
     );
@@ -306,7 +335,8 @@ describe('buildTools — terse descriptions for compact-catalog models', () => {
     expect(byName.get('code_exec')).toBe(`code_exec description. ${TAIL}`);
   });
 
-  it('large-catalog model with navigate active keeps full descriptions (byte parity)', () => {
+  it('legacy mode (CODER_TOOL_CAP_DEFAULT=0): large-catalog model keeps full descriptions (byte parity)', () => {
+    process.env.CODER_TOOL_CAP_DEFAULT = '0';
     const tools = buildTools(makeArgs('claude-opus-4-7')).tools;
     expect(tools.find((t) => t.name === 'mcp__search')?.description).toBe(
       `mcp__search description. ${TAIL}`,

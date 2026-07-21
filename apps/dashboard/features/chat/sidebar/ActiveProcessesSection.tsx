@@ -46,6 +46,9 @@ export function ActiveProcessesSection({ sessionId, processes }: ActiveProcesses
         {visible.map((process) => {
           const detail = process.note || readablePhase(process.phase) || t('chat:state.processRunning');
           const elapsed = Math.max(process.elapsedMs ?? 0, now - process.startedAt);
+          const semanticIdle = process.idleMs == null
+            ? null
+            : process.idleMs + Math.max(0, now - process.updatedAt);
           return (
             <li
               key={process.id}
@@ -71,6 +74,11 @@ export function ActiveProcessesSection({ sessionId, processes }: ActiveProcesses
                     <span aria-hidden="true">·</span>
                     <span className="truncate" title={detail}>{detail}</span>
                   </div>
+                  {semanticIdle != null && semanticIdle >= 5_000 && (
+                    <div className="mt-0.5 text-[10px] tabular-nums text-warning/90">
+                      {t('chat:state.processNoRealOutput', { duration: formatElapsed(semanticIdle) })}
+                    </div>
+                  )}
                 </div>
                 <span
                   className={cn(

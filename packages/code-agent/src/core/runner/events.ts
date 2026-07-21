@@ -53,7 +53,15 @@ export interface RunnerEvents {
    * a heartbeat would confuse the UI. Explicitly unbounded execution still
    * emits heartbeats.
    */
-  tool_progress: (payload: { id: string; name: string; elapsedMs: number; note?: string }) => void;
+  tool_progress: (payload: {
+    id: string;
+    name: string;
+    elapsedMs: number;
+    note?: string;
+    kind?: 'heartbeat' | 'progress';
+    /** Time since semantic progress; heartbeats intentionally do not reset it. */
+    idleMs?: number;
+  }) => void;
   /**
    * Fires once per tool block AFTER smart-reducer + buildToolResultBlock
    * shaping is complete, carrying the size the LLM actually sees in the
@@ -281,6 +289,8 @@ export interface RunnerEvents {
   /** Emitted when spawn_agents starts a parallel agent group. */
   agents_group_start: (payload: {
     groupId: string;
+    /** Canonical parent tool_use id for live/history reconciliation. */
+    toolUseId?: string;
     provider?: string;
     model?: string;
     /** True for a fire-and-forget background job (spawn_agent background:true). */
@@ -300,6 +310,10 @@ export interface RunnerEvents {
       researchDepth?: 'quick' | 'standard' | 'deep' | 'exhaustive';
       softToolTarget?: number;
       softTimeTargetMs?: number;
+      /** Hard tool-call cap resolved at dispatch (0/undefined = unlimited). */
+      maxToolCalls?: number;
+      /** Hard wall-clock cap (ms) resolved at dispatch (0/undefined = unlimited). */
+      hardTimeoutMs?: number;
       status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
       attempt?: number;
     }>;
@@ -307,8 +321,13 @@ export interface RunnerEvents {
   /** Emitted for per-agent progress within a parallel group. */
   agent_progress: (payload: {
     groupId: string;
+    /** Repeated on progress so a reattach can rebuild the canonical identity. */
+    toolUseId?: string;
     agentIndex: number;
     label: string;
+    task?: string;
+    background?: boolean;
+    jobId?: string;
     event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
     status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
     provider?: string;

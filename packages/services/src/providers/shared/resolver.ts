@@ -5,7 +5,6 @@ import {
   resolveChatGPTCreds,
   resolveGoogleOAuthCreds,
   resolveClaudeCodeCreds,
-  resolveKimiCodeCreds,
   runOAuthRefresh,
 } from './oauth.js';
 import { resolveBedrockCreds } from './aws.js';
@@ -128,7 +127,6 @@ export async function resolveCreds(
       if (def.kind === 'chatgpt') return resolveChatGPTCreds(cfg);
       if (def.kind === 'google-oauth') return resolveGoogleOAuthCreds(cfg);
       if (def.kind === 'claude-code') return resolveClaudeCodeCreds(cfg);
-      if (def.kind === 'kimi-code') return resolveKimiCodeCreds(cfg);
       throw new Error(`Unknown OAuth shape: ${def.kind}`);
 
     case 'aws':

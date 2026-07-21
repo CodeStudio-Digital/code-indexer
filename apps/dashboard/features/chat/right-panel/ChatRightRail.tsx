@@ -13,6 +13,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Bell,
+  Bot,
   BookOpen,
   ChartNoAxesCombined,
   ClipboardList,
@@ -108,6 +109,7 @@ export const ChatRightRail = memo(function ChatRightRail({
 
   const inspectEntries = useMemo<RailEntry[]>(
     () => [
+      { id: 'subagents', icon: Bot, labelKey: 'rightRail.subagents', kind: 'panel' },
       {
         id: 'notifications',
         icon: Bell,

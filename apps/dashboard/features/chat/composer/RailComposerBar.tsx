@@ -26,7 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { Brain, Gauge, Layers, Network, Send, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
-import type { EnrichedProviderModel, ProviderOption } from '../types.js';
+import type { EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
@@ -62,6 +62,10 @@ interface RailComposerBarProps {
   reasoningEffort?: string | null;
   setReasoningEffort?: (v: string | null) => void;
   reasoningLevels?: string[];
+  executionMode?: ExecutionMode;
+  setExecutionMode?: (v: ExecutionMode) => void;
+  executionModePending?: boolean;
+  executionModeLocked?: boolean;
   /** Per-session sticky plan-depth (migration 151): simple|normal|complex.
    *  Selector renders only while the `plan` agent is active. */
   planDepth?: string | null;
@@ -78,6 +82,7 @@ interface RailComposerBarProps {
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
+  ultraControlsThinking?: boolean;
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
@@ -85,6 +90,7 @@ interface RailComposerBarProps {
   /** When streaming + queueable, show the queue split button beside Stop. */
   queueable?: boolean;
   onQueueSend?: (mode: QueueMode) => void;
+  sendBlocked?: boolean;
   /** Append voice-transcribed text to the composer input. */
   onTranscript?: (text: string) => void;
 }
@@ -104,6 +110,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
           handleFiles={props.handleFiles}
           thinking={props.thinking}
           setThinking={props.setThinking}
+          thinkingManaged={props.ultraControlsThinking}
           describeImages={props.describeImages}
           setDescribeImages={props.setDescribeImages}
           outputCapLevel={props.outputCapLevel}
@@ -130,6 +137,11 @@ export function RailComposerBar(props: RailComposerBarProps) {
               t('composer.selectModel', { defaultValue: 'Select a model' }),
             )}
           </span>
+          {props.executionMode === 'ultra' && (
+            <span className="ml-1.5 shrink-0 font-medium text-violet-600 dark:text-violet-300">
+              {t('chat:ultra.badge', { defaultValue: 'Ultra' })}
+            </span>
+          )}
         </button>
       </div>
 
@@ -152,6 +164,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
               aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
               className="h-7 rounded border bg-background px-1.5 text-xs"
               value={props.reasoningEffort ?? ''}
+              disabled={props.executionMode === 'ultra'}
               onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
             >
               <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>
@@ -189,13 +202,16 @@ export function RailComposerBar(props: RailComposerBarProps) {
           <button
             type="button"
             onClick={() => props.setThinking?.(!props.thinking)}
-            aria-pressed={props.thinking ?? false}
+            aria-pressed={props.ultraControlsThinking || (props.thinking ?? false)}
+            disabled={props.ultraControlsThinking}
             className={`inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium transition-colors ${
-              props.thinking
+              props.ultraControlsThinking || props.thinking
                 ? 'bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-            }`}
-            title={t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
+            } disabled:opacity-60 disabled:cursor-not-allowed`}
+            title={props.ultraControlsThinking
+              ? t('chat:ultra.thinkingManaged', { defaultValue: 'Ultra controls reasoning for this model. Your Think preference is preserved for Standard mode.' })
+              : t('chat:toolbar.thinking', { defaultValue: 'Extended thinking' })}
           >
             <Brain className="h-3.5 w-3.5" />
             <span>{t('composer.think', { defaultValue: 'Think' })}</span>
@@ -213,11 +229,11 @@ export function RailComposerBar(props: RailComposerBarProps) {
               </Button>
             </>
           ) : props.selectedPipelineId != null ? (
-            <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" variant="default" className="h-7">
+            <Button onClick={props.onSend} disabled={!props.hasInput || props.sendBlocked} size="sm" variant="default" className="h-7">
               <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
             </Button>
           ) : (
-            <Button onClick={props.onSend} disabled={!props.hasInput} size="sm" className="h-7">
+            <Button onClick={props.onSend} disabled={!props.hasInput || props.sendBlocked} size="sm" className="h-7">
               <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}
             </Button>
           )}
@@ -244,6 +260,10 @@ export function RailComposerBar(props: RailComposerBarProps) {
         reasoningEffort={props.reasoningEffort}
         setReasoningEffort={props.setReasoningEffort}
         reasoningLevels={props.reasoningLevels}
+        executionMode={props.executionMode}
+        setExecutionMode={props.setExecutionMode}
+        executionModePending={props.executionModePending}
+        executionModeLocked={props.executionModeLocked}
         planDepth={props.planDepth}
         setPlanDepth={props.setPlanDepth}
         fallbackProvider={props.fallbackProvider}

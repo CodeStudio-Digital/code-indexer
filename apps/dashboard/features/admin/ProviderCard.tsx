@@ -48,6 +48,11 @@ interface ProviderCardProps {
     effort: string | null,
     profile?: string,
   ) => void;
+  onSetSubagentLimits: (
+    providerId: string,
+    profile: string,
+    patch: { maxToolCalls?: number | null; timeoutMs?: number | null },
+  ) => void;
 }
 
 export function ProviderCard({
@@ -76,6 +81,7 @@ export function ProviderCard({
   onSetFallback,
   onSetSubagentTarget,
   onSetSubagentEffort,
+  onSetSubagentLimits,
 }: ProviderCardProps) {
   const { t } = useTranslation(['admin', 'common']);
   const selectedSubagentProviderId = readSubagentProviderId(p.extra?.subagent_provider_id);
@@ -298,6 +304,9 @@ export function ProviderCard({
               }
               onSetProfileEffort={(providerId, profileId, effort) =>
                 onSetSubagentEffort(providerId, effort, profileId)
+              }
+              onSetProfileLimits={(providerId, profileId, patch) =>
+                onSetSubagentLimits(providerId, profileId, patch)
               }
             />
           </div>

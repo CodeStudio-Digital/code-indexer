@@ -1,0 +1,208 @@
+/**
+ * db-maintenance-worker — WAL checkpointing + retention for the CENTRAL
+ * index DB (~/.mcp-code-indexer/index.db), OFF the Electron main thread.
+ *
+ * Why: the main-process CodeIndexDB handle used to own the periodic
+ * `wal_checkpoint(PASSIVE)` timer. Under coder-worker write bursts that
+ * checkpoint runs synchronously on the Electron main thread and freezes
+ * every window. This worker opens its OWN connection (WAL,
+ * `synchronous=NORMAL`, `busy_timeout=5000` — see `openWorkerDb`) and owns:
+ *
+ *   - `wal_checkpoint(PASSIVE)` every MCP_SQLITE_CHECKPOINT_MS (default 30s)
+ *   - retention: batched DELETEs of rows older than
+ *     MCP_CENTRAL_RETENTION_DAYS (default 90; 0 disables) — hourly, plus a
+ *     first pass ~1min after boot. Batches of 5000 with a short pause so a
+ *     long prune never monopolizes the write lock.
+ *
+ * The main handle keeps `wal_autocheckpoint=0` + close-time TRUNCATE (see
+ * CodeIndexDB `externalCheckpointer`). Kill switch MCP_DB_MAINTENANCE=0 in
+ * deps.ts never spawns this file and restores the old main-thread timer.
+ *
+ * The retention core is exported as pure functions over a minimal
+ * `MaintenanceDb` so tests run WITHOUT the native better-sqlite3 ABI: the
+ * driver import is lazy, inside the `parentPort`-guarded runtime only.
+ */
+import { parentPort, workerData, type MessagePort } from 'node:worker_threads';
+import { MessageBridge, type MessageBridgeOpts } from '../../../packages/orchestrator-host/src/MessageBridge.js';
+import { registerPerfStatsHandler } from './perf-stats.js';
+
+// ─── Pure retention core (node-pure; no native driver) ──────────────────
+
+export interface StatementLike {
+  run(...args: unknown[]): { changes: number | bigint };
+  get(...args: unknown[]): unknown;
+}
+export interface MaintenanceDb { prepare(sql: string): StatementLike }
+
+export const DEFAULT_RETENTION_DAYS = 90;
+export const RETENTION_BATCH_SIZE = 5000;
+/** Pause between full batches so the prune never starves other writers. */
+export const RETENTION_BATCH_PAUSE_MS = 25;
+
+export function envInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]); // NaN-safe: garbage falls back
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** UTC cutoffs `days` back from `nowMs`: `datetime('now')`-format text
+ *  ("YYYY-MM-DD HH:MM:SS", how created_at/closed_at are stored) + epoch ms
+ *  (how session_events.at_ms is stored, mig 195). */
+export function retentionCutoffs(nowMs: number, days: number): { text: string; ms: number } {
+  const ms = nowMs - days * 86_400_000;
+  return { ms, text: new Date(ms).toISOString().slice(0, 19).replace('T', ' ') };
+}
+
+export function tableExists(db: MaintenanceDb, name: string): boolean {
+  try {
+    return !!db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+  } catch { return false; }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Drain one batched DELETE (`sql` must end with `LIMIT ?`): loop until a
+ *  short batch, pausing between full ones. Returns total rows deleted. */
+export async function drainDelete(
+  db: MaintenanceDb, sql: string, params: unknown[],
+  batchSize = RETENTION_BATCH_SIZE, pauseMs = RETENTION_BATCH_PAUSE_MS,
+): Promise<number> {
+  const stmt = db.prepare(sql);
+  let total = 0;
+  for (;;) {
+    const changes = Number(stmt.run(...params, batchSize).changes);
+    total += changes;
+    if (changes < batchSize) return total;
+    if (pauseMs > 0) await sleep(pauseMs);
+  }
+}
+
+interface RetentionPass {
+  name: string;
+  /** ALL must exist — a per-project trimmed DB opened by mistake must not explode. */
+  requires: string[];
+  cutoff: 'text' | 'ms' | 'none';
+  sql: string;
+}
+
+/** What gets pruned. `coder_tool_calls`/`coder_messages` are deliberately NOT
+ *  here (transcript + audit). Every DELETE is `rowid IN (… LIMIT ?)` so each
+ *  batch holds the write lock only briefly. */
+const RETENTION_PASSES: RetentionPass[] = [
+  {
+    name: 'coder_turn_telemetry', requires: ['coder_turn_telemetry'], cutoff: 'text',
+    sql: `DELETE FROM coder_turn_telemetry WHERE rowid IN (
+            SELECT rowid FROM coder_turn_telemetry WHERE created_at < ? LIMIT ?)`,
+  },
+  {
+    name: 'session_events', requires: ['session_events'], cutoff: 'ms',
+    sql: `DELETE FROM session_events WHERE rowid IN (
+            SELECT rowid FROM session_events WHERE at_ms < ? LIMIT ?)`,
+  },
+  { // Same predicate as QualityClassificationStore.pruneOlderThan, batched.
+    name: 'quality_classifications', requires: ['quality_classifications'], cutoff: 'text',
+    sql: `DELETE FROM quality_classifications WHERE rowid IN (
+            SELECT rowid FROM quality_classifications WHERE created_at < ? LIMIT ?)`,
+  },
+  {
+    name: 'baselines_closed', requires: ['session_file_baselines'], cutoff: 'text',
+    sql: `DELETE FROM session_file_baselines WHERE rowid IN (
+            SELECT rowid FROM session_file_baselines
+            WHERE status != 'active' AND closed_at IS NOT NULL AND closed_at < ? LIMIT ?)`,
+  },
+  { // Active baselines whose coder session is archived or deleted. No date
+    // cutoff: once the session is gone the baseline can never close itself.
+    name: 'baselines_orphaned', requires: ['session_file_baselines', 'coder_sessions'], cutoff: 'none',
+    sql: `DELETE FROM session_file_baselines WHERE rowid IN (
+            SELECT b.rowid FROM session_file_baselines b
+            LEFT JOIN coder_sessions s ON s.id = b.session_id
+            WHERE b.session_kind = 'coder' AND b.status = 'active'
+              AND (s.id IS NULL OR s.is_archived = 1)
+            LIMIT ?)`,
+  },
+];
+
+export interface RetentionResult { counts: Record<string, number>; skipped: string[] }
+
+export async function runRetention(
+  db: MaintenanceDb,
+  opts: { retentionDays: number; nowMs?: number; batchSize?: number; pauseMs?: number },
+): Promise<RetentionResult> {
+  const counts: Record<string, number> = {};
+  const skipped: string[] = [];
+  if (opts.retentionDays <= 0) return { counts, skipped };
+  const cut = retentionCutoffs(opts.nowMs ?? Date.now(), opts.retentionDays);
+  for (const pass of RETENTION_PASSES) {
+    if (!pass.requires.every((table) => tableExists(db, table))) { skipped.push(pass.name); continue; }
+    const params = pass.cutoff === 'text' ? [cut.text] : pass.cutoff === 'ms' ? [cut.ms] : [];
+    counts[pass.name] = await drainDelete(db, pass.sql, params, opts.batchSize, opts.pauseMs);
+  }
+  return { counts, skipped };
+}
+
+// ─── Worker runtime (worker_thread only) ─────────────────────────────────
+
+async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
+  // Lazy: keeps this module importable in node-pure tests (no native ABI).
+  const { openWorkerDb } = await import('../../../packages/orchestrator-host/src/DbConnection.js');
+  const conn = openWorkerDb({ dbPath });
+  const db = conn.handle;
+
+  const bridge = new MessageBridge({
+    port: port as unknown as MessageBridgeOpts['port'],
+    onListenerError: (error, context) =>
+      console.warn(`[db-maintenance-worker] listener error in ${context}:`, error),
+  });
+  registerPerfStatsHandler(bridge);
+
+  const timers: Array<ReturnType<typeof setInterval>> = [];
+  const schedule = (timer: ReturnType<typeof setInterval>): void => {
+    (timer as { unref?: () => void }).unref?.();
+    timers.push(timer);
+  };
+
+  const checkpointMs = envInt('MCP_SQLITE_CHECKPOINT_MS', 30_000);
+  if (checkpointMs > 0) {
+    schedule(setInterval(() => {
+      const started = Date.now();
+      try { db.pragma('wal_checkpoint(PASSIVE)'); } catch { /* busy/closing — next tick retries */ }
+      const took = Date.now() - started;
+      if (took > 100) console.warn(`[db-maintenance-worker] wal_checkpoint(PASSIVE) took ${took}ms`);
+    }, checkpointMs));
+  }
+
+  const retentionDays = envInt('MCP_CENTRAL_RETENTION_DAYS', DEFAULT_RETENTION_DAYS);
+  let pruning = false;
+  const retentionCycle = async (): Promise<void> => {
+    if (pruning) return; // an hourly tick must never overlap a slow boot pass
+    pruning = true;
+    const started = Date.now();
+    try {
+      const { counts, skipped } = await runRetention(db, { retentionDays });
+      const parts = Object.entries(counts).map(([name, n]) => `${name}=${n}`);
+      if (skipped.length > 0) parts.push(`skipped=${skipped.join(',')}`);
+      console.log(`[db-maintenance-worker] retention(${retentionDays}d): ${parts.join(' ')} in ${Date.now() - started}ms`);
+    } catch (error) {
+      console.warn(`[db-maintenance-worker] retention failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally { pruning = false; }
+  };
+  if (retentionDays > 0) {
+    schedule(setTimeout(() => { void retentionCycle(); }, 60_000) as unknown as ReturnType<typeof setInterval>);
+    schedule(setInterval(() => { void retentionCycle(); }, 3_600_000));
+  }
+
+  bridge.handle('stop', async () => {
+    for (const timer of timers) clearInterval(timer);
+    conn.close();
+    setImmediate(() => process.exit(0));
+    return { ok: true };
+  });
+  bridge.emit('worker.ready', {});
+}
+
+if (parentPort) {
+  const { dbPath } = workerData as { dbPath: string };
+  void bootWorker(parentPort, dbPath).catch((error) => {
+    console.error('[db-maintenance-worker] boot failed:', error);
+    process.exit(1);
+  });
+}

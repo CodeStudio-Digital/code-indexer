@@ -59,12 +59,13 @@ export async function fetchRoundSnapshotList(
   scope: SessionScope,
   sessionId: number,
   roundMessageId: number,
+  signal?: AbortSignal,
 ): Promise<{
   roundMessageId: number;
   files: RoundSnapshotFileSummary[];
   reviews: RoundSnapshotReviewFinding[];
 }> {
-  const r = await fetch(`/api${base(scope, sessionId)}/round/${roundMessageId}`);
+  const r = await fetch(`/api${base(scope, sessionId)}/round/${roundMessageId}`, { signal });
   if (!r.ok) throw await readError(r, 'Could not load round snapshots');
   return await r.json() as {
     roundMessageId: number;

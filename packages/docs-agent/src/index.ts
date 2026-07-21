@@ -24,6 +24,7 @@ import type DatabaseConstructor from 'better-sqlite3';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type {
   PipelineProviderResolver,
@@ -161,7 +162,10 @@ export async function runDocsAgent(
       const toolContext: ToolContext = {
         cwd: os.tmpdir(),
         projectName: 'docs-agent',
-        signal: opts.signal,
+        // AbortSignal loses its EventTarget methods when structured-cloned.
+        // The worker RPC now rehydrates a local signal, while this guard keeps
+        // rolling-restart/third-party callers from poisoning ToolContext.
+        signal: asAbortSignal(opts.signal),
       };
 
       // 7. Construct the runner. Deliberately omit sessionStore — the

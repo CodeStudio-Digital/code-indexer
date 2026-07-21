@@ -424,7 +424,9 @@ export function mountCoderStreamRoutes(
       last_event_id: lastEventId,
       buffer_size: bus.buffer.length,
     });
-    return pumpBusToSSE(c, bus, { since: lastEventId });
+    // Perf W2 — a cursorless attach (fresh mount) gets the trimmed replay:
+    // cross-turn state + live tail instead of the whole 2000-event ring.
+    return pumpBusToSSE(c, bus, { since: lastEventId, trimReplay: true });
   });
 
   /**
@@ -745,7 +747,7 @@ export function mountCoderStreamRoutes(
       return c.json(decision.body, decision.status);
     }
     if (decision.kind === 'replay') {
-      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+      return pumpBusToSSE(c, decision.bus, { since: decision.since, trimReplay: true });
     }
     if (decision.kind === 'gone') {
       // The retry's original run finished and its bus was evicted. Emit a
@@ -757,6 +759,7 @@ export function mountCoderStreamRoutes(
       keepSemanticProjectAlive(id, decision.bus);
       return pumpBusToSSE(c, decision.bus, {
         since: decision.tailFrom,
+        trimReplay: true,
       });
     }
 
@@ -848,7 +851,7 @@ export function mountCoderStreamRoutes(
     });
 
     if (decision.kind === 'replay') {
-      return pumpBusToSSE(c, decision.bus, { since: decision.since });
+      return pumpBusToSSE(c, decision.bus, { since: decision.since, trimReplay: true });
     }
     if (decision.kind === 'gone') {
       return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
@@ -858,7 +861,7 @@ export function mountCoderStreamRoutes(
         client_msg_id: dedupeKey ?? null,
       });
       keepSemanticProjectAlive(id, decision.bus);
-      return pumpBusToSSE(c, decision.bus, { since: decision.tailFrom });
+      return pumpBusToSSE(c, decision.bus, { since: decision.tailFrom, trimReplay: true });
     }
 
     const bus = decision.bus;

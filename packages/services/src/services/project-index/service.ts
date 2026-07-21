@@ -502,7 +502,12 @@ export class ProjectIndexService {
     const root = project.root_path;
     this.watcher.startWatching(
       projectId,
-      { rootPath: root, debounce: s.watchDebounceMs, ignorePatterns: projectIndexIgnorePatterns(project) },
+      {
+        rootPath: root,
+        debounce: s.watchDebounceMs,
+        ignorePatterns: projectIndexIgnorePatterns(project),
+        maxWatchedFiles: s.watchMaxFiles,
+      },
       { onFileChanged: (events) => this.onWatcherEvents(projectId, root, events) },
     );
     this.status.setWatcher(projectId, true);

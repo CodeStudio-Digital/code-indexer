@@ -140,8 +140,12 @@ export interface ProviderDiscoveryResult {
 /** Persisted model metadata the host may pass to runtime builders. */
 export interface ProviderRuntimeModelMetadata {
   model_id: string;
+  /** Optional provider transport mode for catalogs that expose model variants. */
+  mode?: string | null;
   /** Provider-advertised or admin-selected completion cap for this model. */
   default_max_tokens?: number | null;
+  /** Whether the catalog says this model exposes any native reasoning mode. */
+  can_reason?: boolean | null;
   default_reasoning_level?: string | null;
   supported_reasoning_levels?: string[] | null;
   apply_patch_tool_type?: string | null;

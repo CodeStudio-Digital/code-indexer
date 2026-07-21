@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { bootstrapTestI18n } from '../../../i18n/test-bootstrap.js';
 import { TooltipProvider } from '../../../components/ui/tooltip.js';
 import { ChatHeader } from '../ChatHeader.js';
 import type { CoderSession } from '../types.js';
@@ -18,6 +19,8 @@ function importedSession(source: 'claude-code' | 'codex'): CoderSession {
 }
 
 describe('imported session visuals', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('shows the Claude Code origin in the active-session header', () => {
     const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ChatHeader, {
       session: importedSession('claude-code'), streaming: false, runDelta: {}, lastUsage: null,

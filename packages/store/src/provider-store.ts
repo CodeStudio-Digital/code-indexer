@@ -109,6 +109,8 @@ export class ProviderStore {
   setSubagentEffort(providerId: string, effort: string | null): void { subagent.setSubagentEffort(this.db, providerId, effort); }
   getSubagentProfileEffort(providerId: string, profileId: string): string | null { return subagent.getProfileEffort(this.db, providerId, profileId); }
   setSubagentProfileEffort(providerId: string, profileId: string, effort: string | null): void { subagent.setProfileEffort(this.db, providerId, profileId, effort); }
+  getSubagentProfileLimits(providerId: string, profileId: string): { maxToolCalls: number | null; timeoutMs: number | null } { return subagent.getProfileLimits(this.db, providerId, profileId); }
+  setSubagentProfileLimits(providerId: string, profileId: string, patch: { maxToolCalls?: number | null; timeoutMs?: number | null }): void { subagent.setProfileLimits(this.db, providerId, profileId, patch); }
 
   // ─── OAuth ─────────────────────────────────────────────────────
   getOAuth(providerId: string): OAuthTokenRow | null { return oauth.get(this.db, providerId); }

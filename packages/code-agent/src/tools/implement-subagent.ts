@@ -27,6 +27,7 @@ import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessi
 import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
 import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
 import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
+import { resolveTaskLimit } from '@mcp/code-agent/tools/execute-tasks/task-run-budget.js';
 import {
   buildResearchSynthesisNudge,
   type SubagentResearchPolicy,
@@ -145,6 +146,29 @@ function phaseToReason(phase: string | undefined): SubagentRunResult['reason'] {
     default:
       return 'error';
   }
+}
+
+/**
+ * One-shot system-prompt suffix injected at ~80% of a HARD cap (tool calls or
+ * wall clock). Unlike the research synthesis checkpoint this announces a real
+ * cutoff: when the cap lands, the run is aborted and only a salvage summary
+ * of partial findings reaches the parent.
+ */
+export function buildHardBudgetNudge(input: {
+  trigger: 'tools' | 'time';
+  toolCalls: number;
+  maxToolCalls: number;
+  elapsedMs: number;
+  timeoutMs: number;
+}): string {
+  const used = input.trigger === 'tools'
+    ? `${input.toolCalls} of ${input.maxToolCalls} allowed tool calls`
+    : `${Math.round(input.elapsedMs / 60_000)} of ${Math.round(input.timeoutMs / 60_000)} allowed minutes`;
+  return `\n\n# HARD BUDGET WARNING\n\n` +
+    `You have used ${used}. This is a HARD cap, not a soft target: at the cap the run is cut off ` +
+    'and only a salvage summary of partial findings reaches the parent.\n' +
+    'Produce the final evidence-backed summary NOW, on this turn. Do not start new searches, wide reads, ' +
+    'or another validation sweep. Convert anything still unverified into Open questions instead of investigating further.';
 }
 
 export interface SubagentCollected {
@@ -276,6 +300,14 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   let errorCalls = 0;
   let refusedCalls = 0;
   let synthesisNudged = false;
+  let budgetNudged = false;
+  // Unlimited tool/time budgets must not mean unlimited no-progress retries.
+  // Stop only a tight loop over the exact same stable logical operation; a
+  // productive result, a different operation, or a pollable/mutating tool
+  // resets/exempts the streak. Zero keeps an explicit operator escape hatch.
+  const sameOperationMax = subagentLimit('CODER_SUBAGENT_SAME_OPERATION_MAX', 8, true);
+  let repeatedNoProgressOperation: string | null = null;
+  let repeatedNoProgressCount = 0;
   const logicalOperations = new Set<string>();
   let watchdogFailed = false;
   let watchdogPhase: string | undefined;
@@ -495,6 +527,46 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('turn_start', (turn) => {
     currentTurn = typeof turn === 'number' ? turn : currentTurn + 1;
     markActivity('turn', `turn ${currentTurn}`);
+    if (subagentTelemetryEnabled && parent.sessionStore) {
+      try {
+        (parent.sessionStore as { heartbeatSubagentRun?: (runId: string) => void })
+          .heartbeatSubagentRun?.(subRunner.runId);
+      } catch { /* telemetry must never break child execution */ }
+    }
+    // Hard-budget warning at 80% of either cap — one-shot, and it supersedes
+    // the soft research checkpoint (no point nudging twice in a row).
+    const capTools = limits.maxToolCalls ?? 0;
+    const capMs = limits.timeoutMs ?? 0;
+    const elapsedMs = Date.now() - startedAt;
+    if (!budgetNudged) {
+      const toolsNear = capTools > 0 && subToolCalls >= Math.ceil(capTools * 0.8);
+      const timeNear = capMs > 0 && elapsedMs >= capMs * 0.8;
+      if (toolsNear || timeNear) {
+        budgetNudged = true;
+        synthesisNudged = true;
+        const trigger: 'tools' | 'time' = toolsNear ? 'tools' : 'time';
+        const note = trigger === 'tools'
+          ? `hard tool budget nearly exhausted (${subToolCalls}/${capTools} calls); synthesize now`
+          : `hard time budget nearly exhausted (${Math.round(elapsedMs / 60_000)}/${Math.round(capMs / 60_000)} min); synthesize now`;
+        subRunner.setSystemPromptForNextTurn(finalSystemPrompt + buildHardBudgetNudge({
+          trigger,
+          toolCalls: subToolCalls,
+          maxToolCalls: capTools,
+          elapsedMs,
+          timeoutMs: capMs,
+        }));
+        monitor.recordVisual('budget_nudge', note);
+        if (parentEmit) {
+          parentEmit.emit('tool_progress', {
+            id: `subagent-budget:${subRunner.runId}`,
+            name: 'subagent:budget-warning',
+            elapsedMs,
+            note: `[subagent] ${note}`,
+          });
+        }
+        return;
+      }
+    }
     const policy = spec.researchPolicy;
     if (!policy || synthesisNudged) return;
     const toolsReached = policy.softToolTarget > 0 && subToolCalls >= policy.softToolTarget;
@@ -593,6 +665,31 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         elapsedMs: 0,
         note: `[subagent] ${name} ✓ (#${subToolCalls})`,
       });
+    }
+    const repeatPolicy = ledgerEntry?.repeatPolicy;
+    const logicalOperationId = ledgerEntry?.logicalOperationId;
+    const repeatedStableNoProgress =
+      sameOperationMax > 0
+      && !!logicalOperationId
+      && ledgerEntry?.productive === false
+      && repeatPolicy !== 'pollable'
+      && repeatPolicy !== 'mutating';
+    if (repeatedStableNoProgress) {
+      if (repeatedNoProgressOperation === logicalOperationId) repeatedNoProgressCount++;
+      else {
+        repeatedNoProgressOperation = logicalOperationId;
+        repeatedNoProgressCount = 1;
+      }
+      if (repeatedNoProgressCount >= sameOperationMax) {
+        failWatchdog(
+          `subagent_convergence_watchdog: logical operation ${logicalOperationId} ` +
+          `made no progress ${repeatedNoProgressCount} consecutive times`,
+          'quality',
+        );
+      }
+    } else {
+      repeatedNoProgressOperation = null;
+      repeatedNoProgressCount = 0;
     }
     const maxToolCalls = limits.maxToolCalls;
     if (maxToolCalls != null && maxToolCalls > 0 && subToolCalls >= maxToolCalls) {
@@ -1067,6 +1164,7 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
     // Progressing implementers run to natural completion by default. Operators
     // can still provide an exact positive ceiling via CODER_IMPLEMENT_MAX_TURNS.
     maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 0),
+    limits: resolveTaskLimit(task),
     pathScope: task.files,
     pathScopeMode: 'enforce-writes',
   });
@@ -1337,7 +1435,7 @@ export function countSubagentOutcomes(
   };
 }
 
-function classifySubagentTerminal(
+export function classifySubagentTerminal(
   reason: SubagentRunResult['reason'],
   text: string,
 ): {
@@ -1476,16 +1574,10 @@ export async function runParallelAgents(
   // bubbles up → no agent_progress → no SSE event → StuckBanner trips
   // around 30s). Period chosen well below the 30s threshold.
   const HEARTBEAT_MS = Number(process.env.CODER_PARALLEL_HEARTBEAT_MS ?? '15000') || 15_000;
-  const startedAt = Date.now();
   const heartbeatTimer = setInterval(() => {
-    // Use `tool_progress` on the PARENT runner — same channel the dashboard
-    // already monitors for "still working" feedback during long tools.
-    parent.ctx.runner?.emit('tool_progress', {
-      id: 'spawn_agent',
-      name: 'spawn_agent',
-      elapsedMs: Date.now() - startedAt,
-      note: `${agents.length} parallel agents still running`,
-    });
+    // `reportProgress` is bound by the dispatcher to the real tool_use id.
+    // Emitting a second event with the literal id `spawn_agent` creates an
+    // unrelated activity row in the dashboard and duplicates this heartbeat.
     parent.ctx.reportProgress?.(`${agents.length} parallel agents still running`);
   }, HEARTBEAT_MS);
 

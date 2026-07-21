@@ -22,12 +22,16 @@ import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import type { HandlerDeps } from '../types.js';
 import { createAppTeamSession, type AppTeamSessionView } from './app-team-session.js';
 
+export type AppStudioExecutionMode = 'standard' | 'ultra';
+
 export interface AppStudioCreateInput {
   name: string;
   /** Worker name (wrangler `name`); default slugify(name). */
   app_slug?: string | null;
   provider: string;
   model: string;
+  /** Provider-independent orchestration mode for the coordinator session. */
+  execution_mode?: AppStudioExecutionMode;
   /** Sticky reasoning-effort override for the app session (null = model default). */
   reasoning_effort?: string | null;
 }
@@ -52,6 +56,46 @@ type Emit = (event: AppStudioStreamEvent) => void;
 
 /** Worker name válido: minúsculas/dígitos/hífens, sem hífen nas pontas. */
 const WORKER_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,52}[a-z0-9])?$/;
+const APP_STUDIO_EXECUTION_MODES = ['standard', 'ultra'] as const satisfies readonly AppStudioExecutionMode[];
+
+type AppStudioExecutionSettings =
+  | { ok: true; executionMode: AppStudioExecutionMode; reasoningEffort: string | null }
+  | { ok: false; error: string };
+
+function isAppStudioExecutionMode(value: unknown): value is AppStudioExecutionMode {
+  return typeof value === 'string'
+    && APP_STUDIO_EXECUTION_MODES.includes(value as AppStudioExecutionMode);
+}
+
+/**
+ * Keep execution mode orthogonal to provider-native reasoning effort while
+ * accepting the pre-migration pseudo-effort used by older clients.
+ */
+function resolveExecutionSettings(input: AppStudioCreateInput): AppStudioExecutionSettings {
+  if (input.execution_mode !== undefined && !isAppStudioExecutionMode(input.execution_mode)) {
+    return {
+      ok: false,
+      error: `execution_mode: one of ${APP_STUDIO_EXECUTION_MODES.join('|')} required.`,
+    };
+  }
+  if (
+    input.reasoning_effort !== undefined
+    && input.reasoning_effort !== null
+    && typeof input.reasoning_effort !== 'string'
+  ) {
+    return { ok: false, error: 'reasoning_effort:string|null required.' };
+  }
+
+  const normalizedEffort = typeof input.reasoning_effort === 'string'
+    ? input.reasoning_effort.trim() || null
+    : null;
+  const legacyUltra = normalizedEffort?.toLowerCase() === 'ultra';
+  return {
+    ok: true,
+    executionMode: input.execution_mode ?? (legacyUltra ? 'ultra' : 'standard'),
+    reasoningEffort: legacyUltra ? null : normalizedEffort,
+  };
+}
 
 function resolveAppSlug(input: AppStudioCreateInput): string {
   const raw = input.app_slug?.trim() || slugify(input.name.trim());
@@ -77,6 +121,11 @@ export async function runAppStudioScaffoldStream(
   const invalid = validate(input, appSlug);
   if (invalid) {
     emit({ event: 'error', data: { message: invalid } });
+    return;
+  }
+  const executionSettings = resolveExecutionSettings(input);
+  if (!executionSettings.ok) {
+    emit({ event: 'error', data: { message: executionSettings.error } });
     return;
   }
 
@@ -133,14 +182,15 @@ export async function runAppStudioScaffoldStream(
       model: input.model.trim(),
       agent: 'app_orchestrator',
     });
-    // Esforço de raciocínio escolhido no dialog de criação (sticky na sessão).
-    const effort = input.reasoning_effort?.trim();
-    if (effort) {
-      try {
-        deps.sessionStore.setSessionReasoningEffort(coderSession.id, effort);
-      } catch (e) {
-        emit({ event: 'log', data: { stream: 'stderr', chunk: `reasoning effort set failed (non-fatal): ${(e as Error).message}\n` } });
-      }
+    try {
+      deps.sessionStore.setSessionExecutionMode(coderSession.id, executionSettings.executionMode);
+    } catch (e) {
+      emit({ event: 'log', data: { stream: 'stderr', chunk: `execution mode set failed (non-fatal): ${(e as Error).message}\n` } });
+    }
+    try {
+      deps.sessionStore.setSessionReasoningEffort(coderSession.id, executionSettings.reasoningEffort);
+    } catch (e) {
+      emit({ event: 'log', data: { stream: 'stderr', chunk: `reasoning effort set failed (non-fatal): ${(e as Error).message}\n` } });
     }
 
     const createdTeam = createAppTeamSession(deps, appSession.id, coderSession.id);

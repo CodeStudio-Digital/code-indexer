@@ -1,9 +1,12 @@
 import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { Markdown } from '../Markdown.js';
+import { bootstrapTestI18n } from '../../../../i18n/test-bootstrap.js';
 
 describe('chat Markdown code blocks', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('adds a copy action to fenced code without adding one to inline code', () => {
     const html = renderToStaticMarkup(createElement(Markdown, {
       text: 'Use `inline` here.\n\n```sql\nSELECT * FROM customers;\n```',

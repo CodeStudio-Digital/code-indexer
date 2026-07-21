@@ -15,6 +15,10 @@ export interface LongTaskRow {
   /** LoAF only: the blocking script's source URL. */
   script?: string;
   kind: 'loaf' | 'longtask';
+  /** LoAF main-thread blocking time, when Chromium exposes it. */
+  blockingDurationMs?: number;
+  /** Sum of forced style/layout work reported by the LoAF script timings. */
+  forcedStyleAndLayoutDurationMs?: number;
 }
 
 interface LoafScript {
@@ -22,10 +26,12 @@ interface LoafScript {
   invoker?: string;
   invokerType?: string;
   duration: number;
+  forcedStyleAndLayoutDuration?: number;
 }
 
 interface LoafEntry extends PerformanceEntry {
   scripts?: LoafScript[];
+  blockingDuration?: number;
 }
 
 interface QueuedRendererFreeze extends LongTaskRow {
@@ -37,6 +43,23 @@ interface StoredSessionOutbox {
   sessionId: string;
   createdAt: number;
   events: QueuedRendererFreeze[];
+  /** Cumulative, retry-idempotent totals for rows that may age out of `events`. */
+  report?: RendererFreezeReport;
+}
+
+interface RendererFreezeReport {
+  sessionId: string;
+  createdAt: number;
+  count: number;
+  dropped: number;
+  totalDurationMs: number;
+  maxDurationMs: number;
+  loafCount: number;
+  longtaskCount: number;
+  blockingDurationTotalMs: number;
+  forcedStyleAndLayoutDurationTotalMs: number;
+  firstAt: number | null;
+  lastAt: number | null;
 }
 
 interface RendererVitalsState {
@@ -51,6 +74,8 @@ interface RendererVitalsState {
   retryMs: number;
   pagehideHandler?: () => void;
   fallbackOutboxes: Map<string, StoredSessionOutbox>;
+  /** One process-lifetime accumulator; survives successful outbox drains. */
+  currentReport?: RendererFreezeReport;
 }
 
 const GLOBAL_STATE_KEY = '__mcpRendererVitalsStateV2__';
@@ -119,6 +144,10 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function finiteNonNegative(value: unknown): value is number {
+  return finiteNumber(value) && value >= 0;
+}
+
 function isQueuedEvent(value: unknown): value is QueuedRendererFreeze {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Partial<QueuedRendererFreeze>;
@@ -128,7 +157,94 @@ function isQueuedEvent(value: unknown): value is QueuedRendererFreeze {
     && finiteNumber(row.durationMs)
     && typeof row.name === 'string'
     && (row.kind === 'loaf' || row.kind === 'longtask')
-    && (row.script === undefined || typeof row.script === 'string');
+    && (row.script === undefined || typeof row.script === 'string')
+    && (row.blockingDurationMs === undefined || finiteNonNegative(row.blockingDurationMs))
+    && (row.forcedStyleAndLayoutDurationMs === undefined || finiteNonNegative(row.forcedStyleAndLayoutDurationMs));
+}
+
+function emptyReport(sessionId: string, createdAt: number): RendererFreezeReport {
+  return {
+    sessionId,
+    createdAt,
+    count: 0,
+    dropped: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+    loafCount: 0,
+    longtaskCount: 0,
+    blockingDurationTotalMs: 0,
+    forcedStyleAndLayoutDurationTotalMs: 0,
+    firstAt: null,
+    lastAt: null,
+  };
+}
+
+function addToReport(report: RendererFreezeReport, event: LongTaskRow): void {
+  report.count++;
+  report.totalDurationMs += event.durationMs;
+  report.maxDurationMs = Math.max(report.maxDurationMs, event.durationMs);
+  if (event.kind === 'loaf') report.loafCount++;
+  else report.longtaskCount++;
+  report.blockingDurationTotalMs += event.blockingDurationMs ?? 0;
+  report.forcedStyleAndLayoutDurationTotalMs += event.forcedStyleAndLayoutDurationMs ?? 0;
+  report.firstAt = report.firstAt == null ? event.at : Math.min(report.firstAt, event.at);
+  report.lastAt = report.lastAt == null ? event.at : Math.max(report.lastAt, event.at);
+}
+
+function reportFromEvents(
+  sessionId: string,
+  createdAt: number,
+  events: QueuedRendererFreeze[],
+): RendererFreezeReport {
+  const report = emptyReport(sessionId, createdAt);
+  for (const event of events) addToReport(report, event);
+  return report;
+}
+
+function parseReport(
+  value: unknown,
+  sessionId: string,
+  createdAt: number,
+  knownEvents: QueuedRendererFreeze[],
+  trimmedEvents: number,
+): RendererFreezeReport {
+  const fallback = reportFromEvents(sessionId, createdAt, knownEvents);
+  fallback.dropped = trimmedEvents;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  const row = value as Partial<RendererFreezeReport>;
+  if (row.sessionId !== sessionId || !finiteNumber(row.createdAt) || row.createdAt <= 0) return fallback;
+  const count = finiteNonNegative(row.count) ? Math.floor(row.count) : fallback.count;
+  const dropped = finiteNonNegative(row.dropped) ? Math.floor(row.dropped) : trimmedEvents;
+  return {
+    sessionId,
+    createdAt: row.createdAt,
+    count: Math.max(count, fallback.count),
+    dropped: Math.min(Math.max(dropped, trimmedEvents), Math.max(count, fallback.count)),
+    totalDurationMs: finiteNonNegative(row.totalDurationMs)
+      ? Math.max(row.totalDurationMs, fallback.totalDurationMs)
+      : fallback.totalDurationMs,
+    maxDurationMs: finiteNonNegative(row.maxDurationMs)
+      ? Math.max(row.maxDurationMs, fallback.maxDurationMs)
+      : fallback.maxDurationMs,
+    loafCount: finiteNonNegative(row.loafCount)
+      ? Math.max(Math.floor(row.loafCount), fallback.loafCount)
+      : fallback.loafCount,
+    longtaskCount: finiteNonNegative(row.longtaskCount)
+      ? Math.max(Math.floor(row.longtaskCount), fallback.longtaskCount)
+      : fallback.longtaskCount,
+    blockingDurationTotalMs: finiteNonNegative(row.blockingDurationTotalMs)
+      ? Math.max(row.blockingDurationTotalMs, fallback.blockingDurationTotalMs)
+      : fallback.blockingDurationTotalMs,
+    forcedStyleAndLayoutDurationTotalMs: finiteNonNegative(row.forcedStyleAndLayoutDurationTotalMs)
+      ? Math.max(row.forcedStyleAndLayoutDurationTotalMs, fallback.forcedStyleAndLayoutDurationTotalMs)
+      : fallback.forcedStyleAndLayoutDurationTotalMs,
+    firstAt: finiteNumber(row.firstAt) && fallback.firstAt != null
+      ? Math.min(row.firstAt, fallback.firstAt)
+      : row.firstAt === null || finiteNumber(row.firstAt) ? row.firstAt : fallback.firstAt,
+    lastAt: finiteNumber(row.lastAt) && fallback.lastAt != null
+      ? Math.max(row.lastAt, fallback.lastAt)
+      : row.lastAt === null || finiteNumber(row.lastAt) ? row.lastAt : fallback.lastAt,
+  };
 }
 
 function parseOutbox(raw: string | null): StoredSessionOutbox | null {
@@ -137,11 +253,14 @@ function parseOutbox(raw: string | null): StoredSessionOutbox | null {
     const value = JSON.parse(raw) as Partial<StoredSessionOutbox>;
     if (value.version !== 1 || typeof value.sessionId !== 'string' || !finiteNumber(value.createdAt)) return null;
     if (!Array.isArray(value.events)) return null;
+    const allEvents = value.events.filter(isQueuedEvent);
+    const events = allEvents.slice(-MAX_EVENTS_PER_SESSION);
     return {
       version: 1,
       sessionId: value.sessionId,
       createdAt: value.createdAt,
-      events: value.events.filter(isQueuedEvent).slice(-MAX_EVENTS_PER_SESSION),
+      events,
+      report: parseReport(value.report, value.sessionId, value.createdAt, allEvents, allEvents.length - events.length),
     };
   } catch {
     return null;
@@ -236,12 +355,26 @@ export function loafToRow(e: LoafEntry, at = rendererEntryEpochMs(e)): LongTaskR
     if (!top || script.duration > top.duration) top = script;
   }
   const script = sanitizeScript(top?.sourceURL);
+  const blockingDurationMs = finiteNonNegative(e.blockingDuration)
+    ? Math.round(e.blockingDuration * 10) / 10
+    : undefined;
+  let forcedStyleAndLayoutAvailable = false;
+  const forcedStyleAndLayoutDuration = (e.scripts ?? []).reduce((total, timing) => {
+    if (!finiteNonNegative(timing.forcedStyleAndLayoutDuration)) return total;
+    forcedStyleAndLayoutAvailable = true;
+    return total + timing.forcedStyleAndLayoutDuration;
+  }, 0);
+  const forcedStyleAndLayoutDurationMs = forcedStyleAndLayoutAvailable
+    ? Math.round(forcedStyleAndLayoutDuration * 10) / 10
+    : undefined;
   return {
     at,
     durationMs: Math.round(e.duration),
     name: sanitizeText(top?.invoker, 2_000) || script || sanitizeText(e.name, 2_000) || 'animation-frame',
     script,
     kind: 'loaf',
+    ...(blockingDurationMs === undefined ? {} : { blockingDurationMs }),
+    ...(forcedStyleAndLayoutDurationMs === undefined ? {} : { forcedStyleAndLayoutDurationMs }),
   };
 }
 
@@ -290,9 +423,17 @@ function enqueue(state: RendererVitalsState, event: QueuedRendererFreeze): void 
     events: [],
   };
   if (outbox.events.some((queued) => queued.id === event.id)) return;
+  const report = outbox.report
+    ?? (state.currentReport?.sessionId === outbox.sessionId ? state.currentReport : undefined)
+    ?? reportFromEvents(outbox.sessionId, outbox.createdAt, outbox.events);
+  addToReport(report, event);
+  outbox.report = report;
+  state.currentReport = report;
   outbox.events.push(event);
   if (outbox.events.length > MAX_EVENTS_PER_SESSION) {
-    outbox.events.splice(0, outbox.events.length - MAX_EVENTS_PER_SESSION);
+    const dropped = outbox.events.length - MAX_EVENTS_PER_SESSION;
+    outbox.events.splice(0, dropped);
+    report.dropped += dropped;
   }
   writeOutbox(key, outbox, state);
 }
@@ -338,7 +479,7 @@ async function flushOutboxes(state: RendererVitalsState, keepalive: boolean): Pr
       headers: { 'content-type': 'application/json' },
       // Deliberately omit runId: recovered queues belong to the run selected by
       // each event's epoch timestamp, never automatically to the current boot.
-      body: JSON.stringify({ events: batch }),
+      body: JSON.stringify({ events: batch, report: next.outbox.report }),
       keepalive,
     });
     if (!response.ok) throw new Error(`renderer freeze upload failed: HTTP ${response.status}`);

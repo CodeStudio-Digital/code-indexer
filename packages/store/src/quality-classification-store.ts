@@ -6,6 +6,15 @@ import type DatabaseConstructor from 'better-sqlite3';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+function columnExists(db: DB, table: string, column: string): boolean {
+  try {
+    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+      .some((row) => row.name === column);
+  } catch {
+    return false;
+  }
+}
+
 export type QualityVerdict = 'ok' | 'warn' | 'flagged' | 'error';
 export type QualityScope = 'run_final' | 'runtime' | 'legacy_turn';
 export type QualitySource = 'terminal_llm' | 'deterministic_guard' | 'legacy_llm';
@@ -80,9 +89,50 @@ export interface QualityClassificationInsert {
 }
 
 export class QualityClassificationStore {
-  constructor(private db: DB) {}
+  private readonly hasProviderRequestsColumn: boolean;
+
+  constructor(private db: DB) {
+    // Compatibility for databases that recorded migration 234 before
+    // `provider_requests` was added to that migration's source. Migration 247
+    // repairs those databases on restart, while this guard keeps reads and
+    // best-effort writes working during rolling upgrades and diagnostics.
+    this.hasProviderRequestsColumn = columnExists(db, 'quality_classifications', 'provider_requests');
+  }
 
   insert(row: QualityClassificationInsert): number {
+    const providerRequestsColumn = this.hasProviderRequestsColumn ? ', provider_requests' : '';
+    const providerRequestsValue = this.hasProviderRequestsColumn ? ', @provider_requests' : '';
+    const params: Record<string, unknown> = {
+      session_id: row.session_id ?? null,
+      company_session_id: row.company_session_id ?? null,
+      agent_run_id: row.agent_run_id ?? null,
+      coder_run_id: row.coder_run_id ?? null,
+      parent_run_id: row.parent_run_id ?? null,
+      is_subagent: row.is_subagent ? 1 : 0,
+      subagent_profile: row.subagent_profile ?? null,
+      message_id: row.message_id ?? null,
+      assessment_id: row.assessment_id ?? null,
+      round_message_id: row.round_message_id ?? null,
+      scope: row.scope ?? 'legacy_turn',
+      source: row.source ?? 'legacy_llm',
+      action_taken: row.action_taken ?? 'none',
+      evidence_json: row.evidence != null ? JSON.stringify(row.evidence) : null,
+      classifier_name: row.classifier_name,
+      verdict: row.verdict,
+      system_error: row.system_error ? 1 : 0,
+      confidence: row.confidence ?? null,
+      reason: row.reason ?? null,
+      provider_id: row.provider_id ?? null,
+      model_id: row.model_id ?? null,
+      latency_ms: row.latency_ms ?? null,
+      cost_usd: row.cost_usd ?? null,
+      tokens_in: row.tokens_in ?? null,
+      tokens_out: row.tokens_out ?? null,
+      raw_response_json: row.raw_response != null ? JSON.stringify(row.raw_response) : null,
+    };
+    if (this.hasProviderRequestsColumn) {
+      params.provider_requests = Math.max(0, Math.trunc(row.provider_requests ?? 0));
+    }
     const result = this.db
       .prepare(
         `INSERT INTO quality_classifications (
@@ -90,44 +140,16 @@ export class QualityClassificationStore {
            is_subagent, subagent_profile, message_id,
            assessment_id, round_message_id, scope, source, action_taken, evidence_json,
            classifier_name, verdict, system_error, confidence, reason,
-           provider_id, model_id, latency_ms, cost_usd, tokens_in, tokens_out, provider_requests, raw_response_json
+           provider_id, model_id, latency_ms, cost_usd, tokens_in, tokens_out${providerRequestsColumn}, raw_response_json
          ) VALUES (
            @session_id, @company_session_id, @agent_run_id, @coder_run_id, @parent_run_id,
            @is_subagent, @subagent_profile, @message_id,
            @assessment_id, @round_message_id, @scope, @source, @action_taken, @evidence_json,
            @classifier_name, @verdict, @system_error, @confidence, @reason,
-           @provider_id, @model_id, @latency_ms, @cost_usd, @tokens_in, @tokens_out, @provider_requests, @raw_response_json
+           @provider_id, @model_id, @latency_ms, @cost_usd, @tokens_in, @tokens_out${providerRequestsValue}, @raw_response_json
          )`,
       )
-      .run({
-        session_id: row.session_id ?? null,
-        company_session_id: row.company_session_id ?? null,
-        agent_run_id: row.agent_run_id ?? null,
-        coder_run_id: row.coder_run_id ?? null,
-        parent_run_id: row.parent_run_id ?? null,
-        is_subagent: row.is_subagent ? 1 : 0,
-        subagent_profile: row.subagent_profile ?? null,
-        message_id: row.message_id ?? null,
-        assessment_id: row.assessment_id ?? null,
-        round_message_id: row.round_message_id ?? null,
-        scope: row.scope ?? 'legacy_turn',
-        source: row.source ?? 'legacy_llm',
-        action_taken: row.action_taken ?? 'none',
-        evidence_json: row.evidence != null ? JSON.stringify(row.evidence) : null,
-        classifier_name: row.classifier_name,
-        verdict: row.verdict,
-        system_error: row.system_error ? 1 : 0,
-        confidence: row.confidence ?? null,
-        reason: row.reason ?? null,
-        provider_id: row.provider_id ?? null,
-        model_id: row.model_id ?? null,
-        latency_ms: row.latency_ms ?? null,
-        cost_usd: row.cost_usd ?? null,
-        tokens_in: row.tokens_in ?? null,
-        tokens_out: row.tokens_out ?? null,
-        provider_requests: Math.max(0, Math.trunc(row.provider_requests ?? 0)),
-        raw_response_json: row.raw_response != null ? JSON.stringify(row.raw_response) : null,
-      });
+      .run(params);
     return Number(result.lastInsertRowid);
   }
 
@@ -295,6 +317,9 @@ export class QualityClassificationStore {
   } {
     const sinceSql = opts.since ? 'AND created_at >= @since' : '';
     const params = opts.since ? { since: opts.since } : {};
+    const llmRequestsExpression = this.hasProviderRequestsColumn
+      ? 'SUM(COALESCE(provider_requests, 0))'
+      : '0';
     const row = this.db.prepare(`
       WITH terminal AS (
         SELECT * FROM quality_classifications
@@ -305,7 +330,7 @@ export class QualityClassificationStore {
                MAX(COALESCE(tokens_out, 0)) AS tokens_out,
                MAX(COALESCE(latency_ms, 0)) AS latency_ms,
                MAX(system_error) AS system_error,
-               SUM(COALESCE(provider_requests, 0)) AS llm_requests
+               ${llmRequestsExpression} AS llm_requests
         FROM terminal WHERE assessment_id IS NOT NULL GROUP BY assessment_id
       )
       SELECT

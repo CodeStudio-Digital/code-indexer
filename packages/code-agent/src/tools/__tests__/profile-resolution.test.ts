@@ -13,11 +13,13 @@ import {
  * provider prompt-cache prefix on every round's turn 1.
  */
 
-// Tier ground truth (tiers.ts): read_file=bootstrap, edit_file=navigate,
-// git_commit=admin.
-const TAIL_BOOTSTRAP_ONLY = ['read_file', 'read_file'];
-const TAIL_WITH_NAVIGATE = ['read_file', 'edit_file'];
-const TAIL_WITH_ADMIN = ['read_file', 'git_commit'];
+// Tier ground truth (tiers.ts): mcp__read_file=bootstrap, edit_file=navigate,
+// git_commit=admin. Native `read_file` is NOT bootstrap — P4 (jul/2026)
+// demoted it to navigate as the disk fallback behind mcp__read_file, so it
+// cannot stand in for a bootstrap-only tail.
+const TAIL_BOOTSTRAP_ONLY = ['mcp__read_file', 'mcp__read_file'];
+const TAIL_WITH_NAVIGATE = ['mcp__read_file', 'edit_file'];
+const TAIL_WITH_ADMIN = ['mcp__read_file', 'git_commit'];
 
 describe('widenProfile', () => {
   it('returns the higher-ranked profile', () => {

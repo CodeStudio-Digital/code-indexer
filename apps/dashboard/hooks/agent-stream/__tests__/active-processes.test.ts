@@ -22,6 +22,7 @@ describe('active process state', () => {
       kind: 'subagent',
       label: 'Scout',
       elapsedMs: 5_000,
+      idleMs: 4_000,
       note: 'reading files',
     }, 6_000);
 
@@ -30,6 +31,7 @@ describe('active process state', () => {
       startedAt: 1_000,
       updatedAt: 6_000,
       elapsedMs: 5_000,
+      idleMs: 4_000,
       note: 'reading files',
     });
   });

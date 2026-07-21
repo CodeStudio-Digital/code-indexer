@@ -30,7 +30,8 @@ function fakeDb(
 
 const SETTINGS: ProjectIndexSettings = {
   autoIndex: true, autoWatch: false, maxFiles: 20000,
-  maxWatchedProjects: 3, watchDebounceMs: 50, watchOpenDelayMs: 0, watchIdleMs: 0, openDelayMs: 0,
+  maxWatchedProjects: 3, watchDebounceMs: 50, watchOpenDelayMs: 0, watchIdleMs: 0,
+  watchMaxFiles: 0, openDelayMs: 0,
 };
 
 class FakeExecutor implements StructuralExecutor {

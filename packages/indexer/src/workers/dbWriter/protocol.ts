@@ -1,4 +1,7 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { RecordTurnTelemetryInput } from '@mcp/code-agent/sessions/store/telemetry-record.js';
+
+export type { RecordTurnTelemetryInput };
 
 export interface PersistAssistantTurnPayload {
   session_id: number;
@@ -74,10 +77,13 @@ export interface PersistAssistantTurnPayload {
 }
 
 export type DbWriteReq =
-  | { kind: 'persistAssistantTurn'; payload: PersistAssistantTurnPayload };
+  | { kind: 'persistAssistantTurn'; payload: PersistAssistantTurnPayload }
+  | { kind: 'turn-telemetry'; payload: RecordTurnTelemetryInput };
 
 export type DbWriteRes =
-  | { kind: 'persistAssistantTurn'; messageId: number };
+  | { kind: 'persistAssistantTurn'; messageId: number }
+  // null mirrors telemetry-record.ts: best-effort, never breaks a turn.
+  | { kind: 'turn-telemetry'; telemetryId: number | null };
 
 export interface DbWriterWorkerData {
   dbPath: string;

@@ -129,6 +129,8 @@ export interface CoderSession {
    * Composer (only for models exposing supported_reasoning_levels).
    */
   reasoning_effort_override?: string | null;
+  /** Product execution profile. Ultra is orchestration + max native effort, not an API effort. */
+  execution_mode_override?: ExecutionMode;
   /** Sticky extended-thinking toggle for this conversation (migration 226). */
   thinking_enabled?: boolean;
   /**
@@ -261,6 +263,8 @@ export interface MessagePage {
   tool_results?: ToolResultFallback[];
 }
 
+export type ExecutionMode = 'standard' | 'ultra';
+
 export type ConversationChapterSource = 'auto' | 'manual' | 'legacy' | 'rebuild' | 'import';
 
 export interface ConversationChapterFile {
@@ -374,6 +378,10 @@ export interface EnrichedProviderModel {
   supported_reasoning_levels?: string[] | null;
   /** Model's default effort when no override is set. Shown as the "auto" hint. */
   default_reasoning_level?: string | null;
+  /** Persisted provider-model capability when exposed by the API. Older
+   * servers omit it; the dashboard also derives a safe value from native
+   * reasoning metadata. */
+  can_reason?: boolean;
 }
 
 export interface ProviderCapabilities {

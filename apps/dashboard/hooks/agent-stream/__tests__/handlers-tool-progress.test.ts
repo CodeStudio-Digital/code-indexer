@@ -44,10 +44,17 @@ describe('tool_progress handler', () => {
     const { handlers, blocks, flush } = setup();
     handlers.tool_call_start({ id: 'c1', name: 'docs_deep_research', input: {} }, 'tool_call_start');
     flush.mockClear();
-    handlers.tool_progress({ id: 'c1', name: 'docs_deep_research', elapsedMs: 5_000 }, 'tool_progress');
+    handlers.tool_progress({
+      id: 'c1',
+      name: 'docs_deep_research',
+      elapsedMs: 5_000,
+      kind: 'heartbeat',
+      idleMs: 5_000,
+    }, 'tool_progress');
     expect(flush).toHaveBeenCalledTimes(1);
     const call = getToolCall(blocks, 'c1');
     expect(call?.elapsedMs).toBe(5_000);
+    expect(call?.idleMs).toBe(5_000);
     expect(call?.progressNote).toBeUndefined();
   });
 
