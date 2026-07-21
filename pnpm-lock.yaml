@@ -212,6 +212,9 @@ importers:
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
+      tm-grammars:
+        specifier: ^1.31.15
+        version: 1.31.15
       tree-sitter-wasms:
         specifier: ^0.1.13
         version: 0.1.13
@@ -230,6 +233,12 @@ importers:
       unpdf:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
+      vscode-oniguruma:
+        specifier: ^2.0.1
+        version: 2.0.1
+      vscode-textmate:
+        specifier: ^9.3.2
+        version: 9.3.2
       web-tree-sitter:
         specifier: ^0.24.7
         version: 0.24.7
@@ -6707,6 +6716,9 @@ packages:
   tippy.js@6.3.7:
     resolution: {integrity: sha512-E1d3oP2emgJ9dRQZdf3Kkn0qJgI6ZLpyS5z6ZkY1DF3kaQaBsGZsndEpHwx+eC+tYM41HaSNvNtLx8tU57FzTQ==}
 
+  tm-grammars@1.31.15:
+    resolution: {integrity: sha512-B0DZ06cAD3J/bW4TVDmrl/mYqCwuH9C/cf7IHiLcLkfktmjSf3t1faENrL4Im5/umH+SxTi6z9F/36mzXdf6pw==}
+
   tmp-promise@3.0.3:
     resolution: {integrity: sha512-RwM7MoPojPxsOBYnyd2hy0bxtIlVrihNs9pj5SUvY8Zz1sQcQG2tG1hSr8PDxfgEB8RNKDhqbIlroIarSNDNsQ==}
 
@@ -7022,6 +7034,12 @@ packages:
   void-elements@3.1.0:
     resolution: {integrity: sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w==}
     engines: {node: '>=0.10.0'}
+
+  vscode-oniguruma@2.0.1:
+    resolution: {integrity: sha512-poJU8iHIWnC3vgphJnrLZyI3YdqRlR27xzqDmpPXYzA93R4Gk8z7T6oqDzDoHjoikA2aS82crdXFkjELCdJsjQ==}
+
+  vscode-textmate@9.3.2:
+    resolution: {integrity: sha512-n2uGbUcrjhUEBH16uGA0TvUfhWwliFZ1e3+pTjrkim1Mt7ydB41lV08aUvsi70OlzDWp6X7Bx3w/x3fAXIsN0Q==}
 
   vue-demi@0.14.10:
     resolution: {integrity: sha512-nMZBOwuzabUO0nLgIcc6rycZEebF6eeUfaiQx9+WSk8e29IbLvPU9feI6tqW4kTo3hvoYAJkMh8n8D0fuISphg==}
@@ -14640,6 +14658,8 @@ snapshots:
     dependencies:
       '@popperjs/core': 2.11.8
 
+  tm-grammars@1.31.15: {}
+
   tmp-promise@3.0.3:
     dependencies:
       tmp: 0.2.5
@@ -14903,6 +14923,10 @@ snapshots:
       - msw
 
   void-elements@3.1.0: {}
+
+  vscode-oniguruma@2.0.1: {}
+
+  vscode-textmate@9.3.2: {}
 
   vue-demi@0.14.10(vue@3.5.34(typescript@5.9.3)):
     dependencies:

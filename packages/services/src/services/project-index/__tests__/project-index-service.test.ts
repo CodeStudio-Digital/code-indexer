@@ -4,6 +4,9 @@
  * (autoWatch off), so this suite runs regardless of native ABI state.
  */
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { KeyedMutex } from '../project-mutex.js';
 import { DirtyQueue } from '../dirty-queue.js';
@@ -82,6 +85,8 @@ class FakeFileWatcher {
   events = new Map<number, { onFileChanged: (events: Array<{ path: string; kind: 'upsert' | 'delete'; isDir?: boolean }>) => void | Promise<void> }>();
   waitCalls: number[] = [];
   flushCalls: number[] = [];
+  suspendCalls: number[] = [];
+  resumeCalls: number[] = [];
   onStart?: (projectId: number) => void;
   onReadyWait?: (projectId: number) => void;
 
@@ -103,6 +108,14 @@ class FakeFileWatcher {
 
   async flushPending(projectId: number): Promise<void> {
     this.flushCalls.push(projectId);
+  }
+
+  suspend(projectId: number): void {
+    this.suspendCalls.push(projectId);
+  }
+
+  resume(projectId: number): void {
+    this.resumeCalls.push(projectId);
   }
 
   async stopWatching(projectId: number): Promise<void> {
@@ -609,6 +622,158 @@ describe('ProjectIndexService', () => {
     expect(exec.indexCalls).toEqual([['src/during-scan.ts']]);
     expect(fileWatcher.flushCalls).toEqual([1]);
     await svc.dispose();
+  });
+
+  it('branch reconcile suppresses the checkout burst: dirty cleared, suspend→resume bracket the run', async () => {
+    const exec = new FakeExecutor();
+    exec.delayMs = 20;
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null }),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true }),
+      gitWatcher as never,
+    );
+
+    // Checkout burst lands in the dirty queue first…
+    svc.markDirty(1, Array.from({ length: 5 }, (_, i) => ({ path: `src/burst-${i}.ts`, kind: 'upsert' as const })));
+    // …then the HEAD event triggers the branch reconcile (same sync tick, so
+    // the drain never gets a chance to parse the burst file-by-file).
+    svc.ensureFresh(1, 'branch');
+    expect(fileWatcher.suspendCalls).toContain(1);
+    expect(svc.getStatus(1).dirtyPending).toBe(0); // burst discarded — superseded by the scan
+    await sleep(80);
+    expect(exec.runs).toBe(1);
+    expect(fileWatcher.resumeCalls).toContain(1);
+    expect(exec.indexCalls.flat().filter((p) => p.startsWith('src/burst-'))).toEqual([]);
+    await svc.dispose();
+  });
+
+  it('a branch switch during an open run suppresses immediately and chains one follow-up reconcile', async () => {
+    const exec = new FakeExecutor();
+    exec.delayMs = 30;
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true }),
+      gitWatcher as never,
+    );
+
+    svc.ensureFresh(1, 'open');
+    await sleep(5); // open run in flight
+    svc.markDirty(1, [{ path: 'src/burst.ts', kind: 'upsert' }]);
+    svc.ensureFresh(1, 'branch');
+    expect(fileWatcher.suspendCalls).toContain(1);
+    expect(svc.getStatus(1).dirtyPending).toBe(0);
+    await sleep(140);
+    expect(exec.runs).toBe(2); // open + queued branch follow-up
+    expect(fileWatcher.resumeCalls).toContain(1);
+    expect(exec.indexCalls.flat()).not.toContain('src/burst.ts');
+    await svc.dispose();
+  });
+
+  it('deactivate resumes a suspension whose deferred reconcile was cancelled with it', async () => {
+    const exec = new FakeExecutor();
+    const fileWatcher = new FakeFileWatcher();
+    const gitWatcher = new FakeGitMetaWatcher();
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: null, last_indexed: null }),
+      exec,
+      fileWatcher as never,
+      () => ({ ...SETTINGS, autoWatch: true, openDelayMs: 5_000 }),
+      gitWatcher as never,
+    );
+
+    svc.activate(1, 'view-a'); // arms the deferred activation run
+    svc.ensureFresh(1, 'branch'); // suppresses, then defers to the pending run
+    expect(fileWatcher.suspendCalls).toContain(1);
+    expect(svc.deactivate(1, 'view-a')).toBe(true); // cancels the deferred run
+    expect(fileWatcher.resumeCalls).toContain(1); // suppression must not outlive it
+    expect(exec.runs).toBe(0);
+    await svc.dispose();
+  });
+
+  it('over-budget fallback polls open-file mtimes into markDirty (skipped projects only)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-fallback-'));
+    const prevPoll = process.env.MCP_WATCH_FALLBACK_POLL_MS;
+    process.env.MCP_WATCH_FALLBACK_POLL_MS = '25';
+    try {
+      writeFileSync(join(root, 'a.ts'), 'export const a = 1;');
+      const exec = new FakeExecutor();
+      const fileWatcher = new FakeFileWatcher() as FakeFileWatcher & { isSkipped(id: number): boolean };
+      fileWatcher.isSkipped = () => true; // budget guard skipped this project
+      const gitWatcher = new FakeGitMetaWatcher();
+      const db = {
+        getProject: () => ({
+          id: 1, root_path: root, file_count: 50_000, symbol_count: 0,
+          structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null,
+        }),
+        countSemanticStale: () => 0,
+      } as unknown as CodeIndexDB;
+      const svc = new ProjectIndexService(
+        db, exec, fileWatcher as never,
+        () => ({ ...SETTINGS, autoWatch: true, openDelayMs: 10_000 }),
+        gitWatcher as never,
+      );
+      svc.activate(1, 'view-a');
+      svc.setOpenPathsProvider(() => ['a.ts']);
+
+      await sleep(60); // ≥1 tick — baseline only, nothing dirty
+      expect(exec.indexCalls).toEqual([]);
+
+      // External edit: bump mtime well past the baseline.
+      const future = (Date.now() + 5_000) / 1000;
+      utimesSync(join(root, 'a.ts'), future, future);
+      await sleep(90); // next tick sees the change → markDirty → drain
+      expect(exec.indexCalls.flat()).toContain('a.ts');
+      await svc.dispose();
+    } finally {
+      if (prevPoll === undefined) delete process.env.MCP_WATCH_FALLBACK_POLL_MS;
+      else process.env.MCP_WATCH_FALLBACK_POLL_MS = prevPoll;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('the fallback poll ignores projects that are NOT budget-skipped', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-fallback-live-'));
+    const prevPoll = process.env.MCP_WATCH_FALLBACK_POLL_MS;
+    process.env.MCP_WATCH_FALLBACK_POLL_MS = '25';
+    try {
+      writeFileSync(join(root, 'a.ts'), 'export const a = 1;');
+      const exec = new FakeExecutor();
+      const fileWatcher = new FakeFileWatcher() as FakeFileWatcher & { isSkipped(id: number): boolean };
+      fileWatcher.isSkipped = () => false; // chokidar owns freshness here
+      const gitWatcher = new FakeGitMetaWatcher();
+      const db = {
+        getProject: () => ({
+          id: 1, root_path: root, file_count: 10, symbol_count: 0,
+          structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null,
+        }),
+        countSemanticStale: () => 0,
+      } as unknown as CodeIndexDB;
+      const svc = new ProjectIndexService(
+        db, exec, fileWatcher as never,
+        () => ({ ...SETTINGS, autoWatch: true, openDelayMs: 10_000 }),
+        gitWatcher as never,
+      );
+      svc.activate(1, 'view-a');
+      svc.setOpenPathsProvider(() => ['a.ts']);
+      await sleep(60);
+      const future = (Date.now() + 5_000) / 1000;
+      utimesSync(join(root, 'a.ts'), future, future);
+      await sleep(90);
+      expect(exec.indexCalls).toEqual([]); // fallback never fired
+      await svc.dispose();
+    } finally {
+      if (prevPoll === undefined) delete process.env.MCP_WATCH_FALLBACK_POLL_MS;
+      else process.env.MCP_WATCH_FALLBACK_POLL_MS = prevPoll;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps all active project lifecycles when the watcher cap is exceeded', async () => {

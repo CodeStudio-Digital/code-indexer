@@ -207,6 +207,8 @@ export class FileWatcherService {
   private arming = new Map<number, object>();
   /** Projects skipped because their tree exceeded the budget — no chokidar handle exists. */
   private skipped = new Set<number>();
+  /** Projects under bulk-op suppression (branch switch) — see {@link suspend}. */
+  private suspendedProjects = new Set<number>();
 
   startWatching(projectId: number, options: WatcherOptions, events: WatcherEvents): void {
     if (this.isWatching(projectId)) return;
@@ -305,21 +307,7 @@ export class FileWatcherService {
       if (isDir || isProjectDiscoveryMarker(filePath)) {
         invalidateProjectDiscoveryCache(options.rootPath);
       }
-      const pending = this.pendingChanges.get(projectId)!;
-      // Key carries the dir flag so a file and a dir at the same path (rare
-      // rename races) don't clobber each other's semantics.
-      pending.set(filePath, { kind, isDir }); // unlink after change collapses to delete
-
-      // Reset debounce timer
-      const existingTimer = this.debounceTimers.get(projectId);
-      if (existingTimer) clearTimeout(existingTimer);
-
-      const timer = setTimeout(async () => {
-        this.debounceTimers.delete(projectId);
-        await this.flushPending(projectId);
-      }, options.debounce);
-
-      this.debounceTimers.set(projectId, timer);
+      this.noteChange(projectId, filePath, kind, isDir, options.debounce);
     };
 
     watcher.on('add', handleChange('upsert'));
@@ -331,9 +319,68 @@ export class FileWatcherService {
     this.watchers.set(projectId, watcher);
   }
 
+  /**
+   * Buffer one chokidar event and (unless suspended) re-arm the debounce
+   * flush. Extracted from the chokidar closure so the suppression/buffering
+   * semantics are unit-testable without arming a real watcher.
+   */
+  private noteChange(
+    projectId: number,
+    filePath: string,
+    kind: WatcherFileEvent['kind'],
+    isDir: boolean,
+    debounceMs: number,
+  ): void {
+    const pending = this.pendingChanges.get(projectId);
+    if (!pending) return; // stopped mid-event
+    // Key carries the dir flag so a file and a dir at the same path (rare
+    // rename races) don't clobber each other's semantics.
+    pending.set(filePath, { kind, isDir }); // unlink after change collapses to delete
+
+    // Bulk-op suppression: keep coalescing into the buffer (latest-per-path)
+    // but never arm the debounce flush — the reconcile's scan-barrier
+    // flushPending (or resume) delivers whatever accumulated.
+    if (this.suspendedProjects.has(projectId)) return;
+
+    // Reset debounce timer
+    const existingTimer = this.debounceTimers.get(projectId);
+    if (existingTimer) clearTimeout(existingTimer);
+
+    const timer = setTimeout(async () => {
+      this.debounceTimers.delete(projectId);
+      await this.flushPending(projectId);
+    }, debounceMs);
+
+    this.debounceTimers.set(projectId, timer);
+  }
+
   /** Resolves after chokidar's initial walk for the project's current handle. */
   waitUntilReady(projectId: number): Promise<void> {
     return this.ready.get(projectId) ?? Promise.resolve();
+  }
+
+  /**
+   * Bulk-op suppression (mirrors IntelliJ's BatchFileChangeListener): a branch
+   * switch touches thousands of working-tree files whose per-file drain is
+   * fully superseded by the stat-first reconcile the switch triggers. Discard
+   * the already-buffered burst and stop arming the debounce flush; events that
+   * arrive while suspended still coalesce into the buffer so the reconcile's
+   * scan-barrier `flushPending` observes mid-scan edits. Idempotent.
+   */
+  suspend(projectId: number): void {
+    this.suspendedProjects.add(projectId);
+    const timer = this.debounceTimers.get(projectId);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceTimers.delete(projectId);
+    }
+    this.pendingChanges.get(projectId)?.clear();
+  }
+
+  /** End bulk-op suppression; deliver anything buffered while suspended. */
+  resume(projectId: number): void {
+    if (!this.suspendedProjects.delete(projectId)) return;
+    if ((this.pendingChanges.get(projectId)?.size ?? 0) > 0) void this.flushPending(projectId);
   }
 
   /** Deliver the current debounce buffer immediately (used at scan barriers). */
@@ -356,6 +403,7 @@ export class FileWatcherService {
     // and clear a prior skip so a later arm re-probes (the tree may have shrunk).
     this.arming.delete(projectId);
     this.skipped.delete(projectId);
+    this.suspendedProjects.delete(projectId);
 
     const watcher = this.watchers.get(projectId);
     if (watcher) {
@@ -378,7 +426,9 @@ export class FileWatcherService {
   }
 
   async stopAll(): Promise<void> {
-    const ids = new Set([...this.watchers.keys(), ...this.arming.keys(), ...this.skipped]);
+    const ids = new Set([
+      ...this.watchers.keys(), ...this.arming.keys(), ...this.skipped, ...this.suspendedProjects,
+    ]);
     await Promise.all(Array.from(ids, (id) => this.stopWatching(id)));
   }
 
@@ -386,6 +436,11 @@ export class FileWatcherService {
     // `arming`/`skipped` count as "watching" so the lifecycle doesn't re-arm a
     // project whose probe is still running or that was intentionally skipped.
     return this.watchers.has(projectId) || this.arming.has(projectId) || this.skipped.has(projectId);
+  }
+
+  /** Live watching skipped by the budget guard — the open-files fallback poll's hook. */
+  isSkipped(projectId: number): boolean {
+    return this.skipped.has(projectId);
   }
 
   listWatching(): number[] {

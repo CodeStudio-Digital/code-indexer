@@ -8,6 +8,7 @@ import type * as MonacoNs from 'monaco-editor';
 import { apiCall } from '../../../../lib/api-client.js';
 import { incrementLspCounter, logLsp } from '../lsp-log.js';
 import { withMonacoCancellation } from './cancellation.js';
+import { rerankCompletionEntries } from './local-rerank.js';
 import {
   COMPLETION_TRIGGERS,
   mapCompletionKind,
@@ -138,7 +139,9 @@ export function registerCompletionProviders(
             context: { triggerKind: context.triggerKind + 1, triggerCharacter: context.triggerCharacter },
           }, { signal }));
         if (token.isCancellationRequested || request !== latestRequest.get(model) || model.isDisposed()) return { suggestions: [] };
-        const entries = response.items;
+        // Rerank local do top-K (n-gram vivo + prefixo digitado) — só reescreve
+        // o sortText dos 5 primeiros; o resto preserva a ordem do producer.
+        const entries = rerankCompletionEntries(response.items, model, position);
         // Fase 0 — observabilidade: distinguir "vazio" de "lançou" é o que separa
         // "backend alcançável mas mudo" de "provider lançou" no diagnóstico de P2.
         logLsp({ op: 'completion', file, lang, outcome: entries.length ? 'ok' : 'empty',

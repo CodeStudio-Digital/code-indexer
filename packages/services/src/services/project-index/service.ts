@@ -1,4 +1,5 @@
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
+import { statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
@@ -99,6 +100,12 @@ export class ProjectIndexService {
   private disposed = false;
   private semanticCatchup: SemanticCatchupHooks | null = null;
   private semanticLifecycleActive = new Set<number>();
+  /** Open-document paths per project (DI from the LSP document store). */
+  private openPathsProvider: ((projectId: number) => string[]) | null = null;
+  /** Over-budget freshness fallback: one shared mtime-poll timer. */
+  private fallbackPollTimer: ReturnType<typeof setInterval> | null = null;
+  /** projectId → relPath → last observed mtime (fallback poll baseline). */
+  private fallbackMtimes = new Map<number, Map<string, number>>();
 
   constructor(
     private db: CodeIndexDB,
@@ -113,6 +120,68 @@ export class ProjectIndexService {
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
   setExecutor(executor: StructuralExecutor): void {
     this.executor = executor;
+  }
+
+  /**
+   * Over-budget freshness fallback (the counterpart of the watch-budget guard):
+   * projects whose tree exceeds MCP_WATCH_MAX_FILES get NO chokidar handle, so
+   * external edits to the files the user actually has open would go stale until
+   * the next reconcile. With a provider wired (LSP document store), a light
+   * mtime poll over those open files feeds markDirty — bounded work (open docs
+   * only), regardless of how huge the asset tree is.
+   */
+  setOpenPathsProvider(fn: ((projectId: number) => string[]) | null): void {
+    this.openPathsProvider = fn;
+    if (!fn) return;
+    if (this.disposed || this.fallbackPollTimer) return;
+    const interval = envDelay('MCP_WATCH_FALLBACK_POLL_MS', 3_000);
+    if (interval <= 0) return;
+    const timer = setInterval(() => this.pollSkippedProjects(), interval);
+    timer.unref?.();
+    this.fallbackPollTimer = timer;
+  }
+
+  /** One tick of the over-budget fallback: stat open files of skipped projects. */
+  private pollSkippedProjects(): void {
+    if (this.disposed || !this.openPathsProvider) return;
+    const watcher = this.watcher as FileWatcherService & { isSkipped?: (id: number) => boolean };
+    if (!watcher.isSkipped) return;
+    for (const projectId of this.activations.keys()) {
+      if (!watcher.isSkipped(projectId)) continue;
+      const project = this.db.getProject(projectId);
+      if (!project?.root_path) continue;
+      let paths: string[];
+      try {
+        paths = this.openPathsProvider(projectId).slice(0, 64);
+      } catch {
+        continue;
+      }
+      let seen = this.fallbackMtimes.get(projectId);
+      if (!seen) {
+        seen = new Map();
+        this.fallbackMtimes.set(projectId, seen);
+      }
+      const dirty: DirtyEvent[] = [];
+      for (const raw of paths) {
+        const rel = raw.replace(/\\/g, '/');
+        const st = statSync(join(project.root_path, rel), { throwIfNoEntry: false });
+        const mtime = st?.isFile() ? Math.trunc(st.mtimeMs) : null;
+        const prev = seen.get(rel);
+        if (prev === undefined) {
+          // First sighting = baseline only — the open buffer is current.
+          if (mtime !== null) seen.set(rel, mtime);
+          continue;
+        }
+        if (mtime === null) {
+          seen.delete(rel);
+          dirty.push({ path: rel, kind: 'delete' });
+        } else if (mtime !== prev) {
+          seen.set(rel, mtime);
+          dirty.push({ path: rel, kind: 'upsert' });
+        }
+      }
+      if (dirty.length > 0) this.markDirty(projectId, dirty);
+    }
   }
 
   setSemanticCatchup(hooks: SemanticCatchupHooks | null): void {
@@ -202,6 +271,7 @@ export class ProjectIndexService {
     this.activations.delete(projectId);
     this.reconciledLifecycle.delete(projectId);
     this.queuedReconcile.delete(projectId);
+    this.fallbackMtimes.delete(projectId);
     if (this.semanticLifecycleActive.delete(projectId)) this.notifyProjectInactive(projectId);
     const timer = this.pendingActivation.get(projectId);
     if (timer) {
@@ -209,6 +279,10 @@ export class ProjectIndexService {
       this.pendingActivation.delete(projectId);
       this.status.setScheduledRun(projectId, undefined);
     }
+    // A branch event may have suspended the watcher counting on the deferred
+    // run just cancelled above; without a reconcile to resume in, end the
+    // suppression here so a kept-alive watcher (other subscribers) stays live.
+    this.resumeWatcherEvents(projectId);
     this.scheduleFileWatcherStop(projectId);
     return true;
   }
@@ -219,9 +293,21 @@ export class ProjectIndexService {
     const s = this.settings();
     if (!s.autoIndex && reason !== 'manual') return;
 
-    if ((reason === 'branch' || reason === 'workspace') && this.running.has(projectId)) {
-      if (this.runReason.get(projectId) !== reason) this.queuedReconcile.set(projectId, reason);
-      return;
+    if (reason === 'branch' || reason === 'workspace') {
+      if (this.running.has(projectId)) {
+        if (this.runReason.get(projectId) !== reason) {
+          this.queuedReconcile.set(projectId, reason);
+          // The queued follow-up reconcile supersedes the checkout burst —
+          // suppress now so the running pass's barrier flush doesn't drain the
+          // burst file-by-file first.
+          this.suppressBulkBurst(projectId);
+        }
+        // Same-reason: the running bulk pass already owns suppression; its
+        // barrier/resume flushes keep later deltas correct — discarding here
+        // could drop events for files its scan already passed.
+        return;
+      }
+      this.suppressBulkBurst(projectId);
     }
     if (reason !== 'manual' && (
       this.running.has(projectId)
@@ -312,6 +398,11 @@ export class ProjectIndexService {
     if (this.disposed || this.running.has(projectId)) return;
     this.running.add(projectId);
     this.runReason.set(projectId, reason);
+    // Bulk-op suppression (IntelliJ BatchFileChangeListener): a branch/workspace
+    // reconcile supersedes the checkout's per-file burst. Re-asserted here
+    // (idempotent) because the queued-restart path enters directly, without
+    // passing through ensureFresh. The matching resume lives in the finally.
+    if (reason === 'branch' || reason === 'workspace') this.suppressBulkBurst(projectId);
     this.ensureGitMetaWatching(projectId);
     this.ensureFileWatching(projectId, 0, true);
     let reconciled = false;
@@ -340,8 +431,13 @@ export class ProjectIndexService {
         const queuedReason = this.queuedReconcile.get(projectId);
         this.queuedReconcile.delete(projectId);
         if (queuedReason && !this.disposed) {
+          // Keep suppression armed across the hand-off — the queued bulk run
+          // re-asserts it and its own finally performs the resume.
           this.startStructuralRun(projectId, this.settings(), false, queuedReason);
         } else {
+          // No-op unless this run suspended (resume checks membership). Events
+          // buffered after the scan barrier flush out here and drain normally.
+          this.resumeWatcherEvents(projectId);
           this.scheduleDrain(projectId);
           if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
         }
@@ -561,6 +657,7 @@ export class ProjectIndexService {
     this.activations.delete(projectId);
     this.reconciledLifecycle.delete(projectId);
     this.queuedReconcile.delete(projectId);
+    this.fallbackMtimes.delete(projectId);
     const pending = this.pendingOpen.get(projectId);
     if (pending) {
       clearTimeout(pending);
@@ -635,6 +732,11 @@ export class ProjectIndexService {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    if (this.fallbackPollTimer) {
+      clearInterval(this.fallbackPollTimer);
+      this.fallbackPollTimer = null;
+    }
+    this.fallbackMtimes.clear();
     for (const t of this.pendingOpen.values()) clearTimeout(t);
     for (const t of this.pendingActivation.values()) clearTimeout(t);
     for (const t of this.fileWatchOpenTimers.values()) clearTimeout(t);
@@ -737,6 +839,25 @@ export class ProjectIndexService {
       flushPending?: (id: number) => Promise<void>;
     };
     await watcher.flushPending?.(projectId);
+  }
+
+  /**
+   * Bulk-op suppression: discard the watcher's buffered burst AND the queued
+   * per-file drain work — both are superseded by the stat-first reconcile that
+   * the bulk reason (branch/workspace) is about to run. Clearing the dirty
+   * queue also makes an in-flight drain loop exit at its next takeBatch.
+   */
+  private suppressBulkBurst(projectId: number): void {
+    const watcher = this.watcher as FileWatcherService & { suspend?: (id: number) => void };
+    watcher.suspend?.(projectId);
+    this.dirty.clear(projectId);
+    this.status.setDirtyPending(projectId, 0);
+  }
+
+  /** End bulk-op suppression (no-op when not suspended). */
+  private resumeWatcherEvents(projectId: number): void {
+    const watcher = this.watcher as FileWatcherService & { resume?: (id: number) => void };
+    watcher.resume?.(projectId);
   }
 
   private async drainDirtyLocked(projectId: number): Promise<void> {

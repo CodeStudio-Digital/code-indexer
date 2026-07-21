@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { shouldSkipCompletion, type PrefilterCtx } from '../completion-prefilter.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+  shouldSkipCompletion,
+  extractGateFeatures,
+  scoreAcceptLikelihood,
+  __setGateWeightsForTests,
+  type PrefilterCtx,
+} from '../completion-prefilter.js';
+import { COMPLETION_GATE_WEIGHTS } from '../completion-gate-weights.js';
 
 function ctx(over: Partial<PrefilterCtx>): PrefilterCtx {
   return {
@@ -76,5 +83,50 @@ describe('normal completion positions pass', () => {
     ['call open paren', '  $svc->handle(', ''],
   ])('%s', (_name, lineBefore, lineAfter) => {
     expect(shouldSkipCompletion(ctx({ lineBefore, lineAfter })).skip).toBe(false);
+  });
+});
+
+describe('R7 — learned gate (trigger model)', () => {
+  afterEach(() => __setGateWeightsForTests(null));
+
+  it('shipping weights are the neutral bootstrap: gate inert, score 0.5', () => {
+    expect(COMPLETION_GATE_WEIGHTS.trainedAt).toBeNull();
+    expect(scoreAcceptLikelihood(extractGateFeatures(ctx({})))).toBe(0.5);
+    expect(shouldSkipCompletion(ctx({ lineBefore: '  $result = ' })).skip).toBe(false);
+  });
+
+  it('trained weights below the threshold skip with rule r7; lenient stays exempt', () => {
+    __setGateWeightsForTests({
+      version: 1, trainedAt: '2026-07-20T00:00:00Z', samples: 1000,
+      bias: -3, weights: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // sigmoid(-3) ≈ 0.047
+      thresholds: { strict: 0.35, standard: 0.25, lenient: 0.12 },
+    });
+    expect(shouldSkipCompletion(ctx({ lineBefore: '  $result = ' })))
+      .toMatchObject({ skip: true, rule: 'r7' });
+    // Lenient short-circuits before R7 — the deterministic escape hatch.
+    expect(shouldSkipCompletion(ctx({ lineBefore: '  $result = ', suppression: 'lenient' })).skip)
+      .toBe(false);
+  });
+
+  it('trained weights above the threshold let the request through', () => {
+    __setGateWeightsForTests({
+      version: 1, trainedAt: '2026-07-20T00:00:00Z', samples: 1000,
+      bias: 2, weights: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // sigmoid(2) ≈ 0.88
+      thresholds: { strict: 0.35, standard: 0.25, lenient: 0.12 },
+    });
+    expect(shouldSkipCompletion(ctx({ lineBefore: '  $result = ' })).skip).toBe(false);
+  });
+
+  it('extractGateFeatures produces the versioned 13-slot layout', () => {
+    const f = extractGateFeatures({
+      lineBefore: '  $this->', lineAfter: '', languageId: 'php', prefixTotalTrimmedLen: 2000,
+    });
+    expect(f).toHaveLength(COMPLETION_GATE_WEIGHTS.weights.length);
+    expect(f[2]).toBe(1);   // member trigger
+    expect(f[4]).toBe(1);   // line-after blank
+    expect(f[8]).toBe(0.5); // 2000/4000 prefix size
+    expect(f[11]).toBe(1);  // php = curly-brace language
+    for (const v of f) expect(v).toBeGreaterThanOrEqual(0);
+    for (const v of f) expect(v).toBeLessThanOrEqual(1);
   });
 });

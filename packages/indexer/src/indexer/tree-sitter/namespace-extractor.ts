@@ -102,3 +102,18 @@ function rustModPath(filePath: string): string | null {
   if (last === 'main' || last === 'lib' || last === 'mod') parts.pop();
   return parts.length > 0 ? parts.join('::') : null;
 }
+
+/**
+ * Namespace for the PATH-DERIVED languages (Python dotted module, Rust mod
+ * path) — computable without an AST. The extract-cache uses this to re-stamp
+ * cached symbols when reusing content-keyed analysis at a DIFFERENT path.
+ * Returns `undefined` for every other language: their namespace is declared
+ * in content, so the cached value is already correct as stored.
+ */
+export function pathDerivedNamespace(language: string, filePath: string): string | null | undefined {
+  switch (language) {
+    case 'python': return pythonModule(filePath);
+    case 'rust': return rustModPath(filePath);
+    default: return undefined;
+  }
+}

@@ -5,6 +5,7 @@ import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js
 
 import { enrichReferencesWithLines } from './enrich-references.js';
 import { hashContent, countLines } from '../content-hash.js';
+import { getCachedExtraction, cacheExtraction } from '../extract-cache.js';
 import { structuralPathFlags } from '../mapper.js';
 
 export interface ProcessFileStructuralResult {
@@ -47,7 +48,14 @@ export async function processFileStructural(
     }
   }
 
-  const tsResult = await treeSitter.extract(file.relativePath, content);
+  // Content-keyed reuse (extract-cache): identical content already parsed —
+  // by another project, another path, or this file before a branch revert —
+  // skips the tree-sitter pass entirely (JetBrains shared-index short-circuit).
+  let tsResult = hash ? await getCachedExtraction(hash, file.relativePath) : null;
+  if (!tsResult) {
+    tsResult = await treeSitter.extract(file.relativePath, content);
+    if (hash) await cacheExtraction(hash, file.relativePath, tsResult);
+  }
   const supported = tsResult.supported;
   const symbols = supported ? tsResult.analysis.symbols ?? [] : [];
   const pathFlags = structuralPathFlags(file.relativePath);

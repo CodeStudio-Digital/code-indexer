@@ -14,6 +14,7 @@ import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
 import { ProjectIndexService, createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
+import { docsForProject } from '@mcp/api-handlers/lsp/document-store.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 import { InvestigationSemanticIndex } from '@mcp/services/memory/investigation-semantic-index.js';
@@ -859,6 +860,11 @@ export function createDeps(): ServerDeps {
     }),
   );
   registerShutdownTask('project-index-dispose', () => projectIndexService.dispose());
+  // Over-budget freshness fallback: projects skipped by the watch-budget guard
+  // poll the mtimes of their OPEN documents (LSP document store) so external
+  // edits still reach the index without watching a giant asset tree.
+  projectIndexService.setOpenPathsProvider((projectId) =>
+    docsForProject(projectId).map(({ file }) => file));
   // Embedded database-client connection pools (shared with the db_* agent
   // tools) — drain open TCP sockets / sqlite handles on quit.
   registerShutdownTask('db-client-pools', () => sharedDbConnectionManager().closeAll());

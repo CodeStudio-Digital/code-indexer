@@ -21,6 +21,15 @@ import { extractNamespace, extractPhpTraitUses } from '@mcp/indexer/indexer/tree
 
 // ─── Types ───────────────────────────────────────────────────────
 
+/**
+ * Version-gate for the content-keyed extract cache (../extract-cache.ts) —
+ * the local slice of JetBrains' composite index version. BUMP on ANY change
+ * that shapes `TreeSitterResult.analysis`: this file's walkers/symbol maps,
+ * call-extractor, namespace-extractor, or a grammar upgrade in languages.ts /
+ * tree-sitter-wasms. Stale rows are ignored and pruned, never migrated.
+ */
+export const EXTRACTOR_VERSION = 1;
+
 export interface TreeSitterResult {
   /** Structural analysis (symbols, references and dependencies). */
   analysis: Partial<StructuralFileAnalysis>;

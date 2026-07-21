@@ -38,6 +38,7 @@ import { applyLanguageConfigOverlays } from '../features/workspace/editor/langua
 import { createMonacoClipboardService } from './monaco-clipboard-service.js';
 import { createWorkspaceTextModelService } from './monaco-workspace-text-model-service.js';
 import { setupSharedMonacoTheme } from './monaco-theme.js';
+import { registerTextMateHighlighting } from './textmate/bridge.js';
 
 let initialized = false;
 
@@ -104,6 +105,12 @@ export function setupMonaco(): void {
   // Monaco does not ship a Groovy grammar. Gradle build files otherwise land
   // in plaintext even when their path is recognized correctly.
   registerGroovyHighlighting(monaco);
+
+  // TextMate-grade highlighting for languages Monaco has NO tokenizer for
+  // (Vue/Svelte SFC, TOML, Makefile, diff, Zig, Prisma, Nix, Haskell, CMake).
+  // Additive only — never overrides a language with a Monarch/LSP story.
+  // Grammars + oniguruma WASM lazy-load on each language's first model.
+  registerTextMateHighlighting(monaco);
 
   // Java/C# bundled grammars flatten most symbols to `identifier`; keep a rich
   // syntax fallback while their language servers warm up semantic tokens.

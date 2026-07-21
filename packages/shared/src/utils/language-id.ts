@@ -18,6 +18,10 @@ export function languageIdForPath(path: string): string {
     || base === '.zshrc' || base === '.zprofile') return 'shell';
   if (base === 'jenkinsfile' || base.endsWith('.gradle')) return 'groovy';
   if (base === 'gemfile' || base === 'rakefile' || base === 'vagrantfile') return 'ruby';
+  // TextMate-backed ids (lib/textmate/bridge.ts) — convention files first.
+  if (base === 'makefile' || base === 'gnumakefile') return 'makefile';
+  if (base === 'cmakelists.txt') return 'cmake';
+  if (base === 'cargo.lock') return 'toml';
   const ext = base.includes('.') ? base.split('.').pop() ?? '' : '';
   switch (ext) {
     case 'ts': case 'cts': case 'mts': return 'typescript';
@@ -55,6 +59,14 @@ export function languageIdForPath(path: string): string {
     case 'bat': case 'cmd': return 'bat';
     case 'ps1': return 'powershell';
     case 'dockerfile': case 'containerfile': return 'dockerfile';
+    // TextMate-backed ids (lib/textmate/bridge.ts).
+    case 'mk': case 'mak': return 'makefile';
+    case 'cmake': return 'cmake';
+    case 'diff': case 'patch': return 'diff';
+    case 'zig': return 'zig';
+    case 'prisma': return 'prisma';
+    case 'nix': return 'nix';
+    case 'hs': return 'haskell';
     default: return 'plaintext';
   }
 }

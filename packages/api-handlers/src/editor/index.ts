@@ -20,6 +20,7 @@ import {
 } from '@mcp/services/quality/completion-compatibility.js';
 import { supportsFim, fimCompletion, markFimUnsupported } from '@mcp/services/quality/fim-completion.js';
 import type { ChatCallResult } from '@mcp/services/quality/llm-chat.js';
+import { extractGateFeatures, GATE_FEATURE_VERSION } from '@mcp/shared/editor/completion-prefilter.js';
 import { durationToBucket } from '@mcp/store/pipeline-telemetry-store.js';
 import type { HandlerDeps } from '../types.js';
 import { getDoc } from '../lsp/document-store.js';
@@ -378,10 +379,22 @@ export function createEditorHandlers(deps: EditorDeps): EditorApi {
     resultCache.set(cacheKey, { text: validatedText, requestId, route }, ttl);
     rememberCompletion(input.projectId, input.file, cursorLine, windows.prefix, validatedText, requestId, bindingRevision);
     const latencyMs = performance.now() - startedAt;
+    // Gate-feature capture for the learned completion gate (R7): the trainer
+    // joins these request-side features with the shown/accept/reject feedback
+    // rows by requestId. Same extractor the client gates with — one contract.
+    const prefixNl = windows.prefix.lastIndexOf('\n');
+    const suffixNl = windows.suffix.indexOf('\n');
+    const gateF = extractGateFeatures({
+      lineBefore: windows.prefix.slice(prefixNl + 1),
+      lineAfter: suffixNl === -1 ? windows.suffix : windows.suffix.slice(0, suffixNl),
+      languageId: input.language,
+      prefixTotalTrimmedLen: windows.prefix.trim().length,
+    }).map((v) => Math.round(v * 1000) / 1000);
     const okDiag = {
       status: 'ok', bindingId: binding.bindingId, providerId: binding.provider.id,
       language: input.language, chars: validatedText.length, rawChars: result.content.length,
       endpoint: useFim ? 'fim' : 'chat', served: 'model', multiline, debounceMs,
+      gateF, gateV: GATE_FEATURE_VERSION,
       contextMs: Math.round(contextMs), generationMs: Math.round(generationMs),
       ttftMs: Math.round(result.ttftMs ?? result.latencyMs), postprocessMs: Math.round(postMs), ...ctxDiag,
     };
