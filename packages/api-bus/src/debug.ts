@@ -49,6 +49,13 @@ export interface DebugBreakpoint {
   column?: number;
 }
 
+export interface DebugSessionBreakpoint extends DebugBreakpoint {
+  /** Canonical project source path requested by the editor. */
+  path: string;
+  /** Editor line requested before an adapter relocates the breakpoint. */
+  requestedLine: number;
+}
+
 export interface DebugSourceBreakpoints {
   path: string;
   breakpoints: DebugSourceBreakpoint[];
@@ -84,6 +91,7 @@ export interface DebugSessionSummary {
   exitCode?: number;
   error?: string;
   output: DebugOutputLine[];
+  breakpoints?: DebugSessionBreakpoint[];
 }
 
 export interface DebugThread {

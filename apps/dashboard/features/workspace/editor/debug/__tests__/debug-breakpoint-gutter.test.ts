@@ -81,4 +81,51 @@ describe('attachDebugBreakpointGutter', () => {
     expect(actionDispose).toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it('renders an unverified relocated breakpoint and removes it by its requested line', () => {
+    let mouseListener: ((event: any) => void) | undefined;
+    let decorations: any[] = [];
+    const editor = {
+      getModel: () => ({ getLineCount: () => 40, onDidChangeContent: () => ({ dispose() {} }) }),
+      getPosition: () => null,
+      createDecorationsCollection: (items: any[]) => {
+        decorations = items;
+        return { getRanges: () => [], clear() {} };
+      },
+      onMouseDown: (listener: (event: any) => void) => {
+        mouseListener = listener;
+        return { dispose() {} };
+      },
+      addAction: () => ({ dispose() {} }),
+    };
+    class Range {
+      constructor(public startLineNumber: number) {}
+    }
+    const monaco = {
+      Range,
+      KeyMod: { CtrlCmd: 1 << 11 },
+      KeyCode: { F8: 59 },
+      editor: {
+        GlyphMarginLane: { Center: 2 },
+        MouseTargetType: { GUTTER_GLYPH_MARGIN: 2 },
+        TrackedRangeStickiness: { NeverGrowsWhenTypingAtEdges: 1 },
+      },
+    };
+    const onToggle = vi.fn();
+    const handle = attachDebugBreakpointGutter(editor as never, monaco as never, {
+      breakpoints: [{ line: 9, actualLine: 11, verified: false, verificationMessage: 'source map pending' }],
+      onToggle,
+      onMoved: vi.fn(),
+    });
+
+    expect(decorations[0]?.range.startLineNumber).toBe(11);
+    expect(decorations[0]?.options.glyphMarginClassName).toContain('unverified');
+    expect(decorations[0]?.options.glyphMarginHoverMessage.value).toBe('source map pending');
+    mouseListener?.({
+      event: { leftButton: true },
+      target: { type: 2, detail: { glyphMarginLane: 2 }, position: { lineNumber: 11 } },
+    });
+    expect(onToggle).toHaveBeenCalledWith(9);
+    handle.dispose();
+  });
 });

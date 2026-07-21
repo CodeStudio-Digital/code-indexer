@@ -5,6 +5,7 @@ import type {
   DebugEvaluateResult,
   DebugOutputLine,
   DebugScope,
+  DebugSessionBreakpoint,
   DebugSessionSummary,
   DebugSourceBreakpoints,
   DebugStackFrame,
@@ -12,14 +13,25 @@ import type {
   DebugThread,
   DebugVariable,
 } from '@mcp/api-bus';
-import type { DebugConfigurationInput } from '@mcp/plugin-sdk';
+import {
+  isDebugResolvedConfiguration,
+  type DebugConfigurationInput,
+} from '@mcp/plugin-sdk';
 import {
   isFirstPartyBundledDebugger,
   listDebuggerPlugins,
   loadDebugAdapter,
   type LoadedDebugAdapter,
 } from '@mcp/plugin-host';
-import { startDebugAdapter, type StartedDebugAdapter } from './adapter-process.js';
+import {
+  reserveLoopbackPort,
+  startDebugAdapter,
+  startDebugTarget,
+  terminateDebuggeeTree,
+  type ReservedLoopbackPort,
+  type StartedDebugAdapter,
+  type StartedDebugTarget,
+} from './adapter-process.js';
 import type { DapConnection } from './dap-connection.js';
 
 const OUTPUT_LIMIT = 200;
@@ -27,11 +39,16 @@ const OUTPUT_LIMIT = 200;
 interface DebugSessionRecord {
   summary: DebugSessionSummary;
   adapter: StartedDebugAdapter | null;
+  target: StartedDebugTarget | null;
   loaded: LoadedDebugAdapter | null;
   controlDap: DapConnection | null;
   initializeArgs: Record<string, unknown> | null;
   projectRoot: string;
   initialBreakpoints: DebugSourceBreakpoints[];
+  request: 'launch' | 'attach';
+  dapRequest: 'launch' | 'attach';
+  ownedProcessIds: Set<number>;
+  breakpointBindings: Map<number, { path: string; requestedLine: number }>;
 }
 
 function cloneSummary(summary: DebugSessionSummary): DebugSessionSummary {
@@ -39,6 +56,10 @@ function cloneSummary(summary: DebugSessionSummary): DebugSessionSummary {
     ...summary,
     stopped: summary.stopped ? { ...summary.stopped } : undefined,
     output: summary.output.map((line) => ({ ...line })),
+    breakpoints: summary.breakpoints?.map((breakpoint) => ({
+      ...breakpoint,
+      source: breakpoint.source ? { ...breakpoint.source } : undefined,
+    })),
   };
 }
 
@@ -115,20 +136,28 @@ export class DebugSessionManager {
         state: 'starting',
         startedAt: Date.now(),
         output: [],
+        breakpoints: [],
       },
       adapter: null,
+      target: null,
       loaded: null,
       controlDap: null,
       initializeArgs: null,
       projectRoot,
       initialBreakpoints: input.breakpoints ?? [],
+      request: input.request ?? 'launch',
+      dapRequest: input.request ?? 'launch',
+      ownedProcessIds: new Set(),
+      breakpointBindings: new Map(),
     };
     this.sessions.set(sessionId, record);
     this.emit();
 
+    let targetPort: ReservedLoopbackPort | null = null;
     try {
       const loaded = await loadDebugAdapter(input.adapterId);
       record.loaded = loaded;
+      if (record.request === 'launch') targetPort = await reserveLoopbackPort('127.0.0.1');
       const cwd = projectPath(projectRoot, input.cwd ?? input.runner?.cwd, projectRoot);
       const file = input.file ? projectPath(projectRoot, input.file, projectRoot) : undefined;
       const configurationInput: DebugConfigurationInput = {
@@ -140,6 +169,7 @@ export class DebugSessionManager {
         cwd,
         env: input.env,
         runner: input.runner ? { ...input.runner, cwd } : undefined,
+        targetPort: targetPort?.port,
         configuration: input.configuration,
       };
       const executable = loaded.runtime.resolveAdapter({
@@ -148,7 +178,9 @@ export class DebugSessionManager {
         platform: process.platform,
         nodePath: process.execPath,
       });
-      const configuration = loaded.runtime.resolveConfiguration(configurationInput);
+      const resolved = loaded.runtime.resolveConfiguration(configurationInput);
+      const configuration = isDebugResolvedConfiguration(resolved) ? resolved.configuration : resolved;
+      record.dapRequest = isDebugResolvedConfiguration(resolved) ? resolved.dapRequest : record.request;
       const adapter = await startDebugAdapter(executable);
       record.adapter = adapter;
       record.controlDap = adapter.dap;
@@ -179,7 +211,14 @@ export class DebugSessionManager {
 
       record.summary.state = 'configuring';
       this.emit();
-      const launch = adapter.dap.request(input.request ?? 'launch', configuration, 60_000);
+      await targetPort?.release();
+      targetPort = null;
+      if (isDebugResolvedConfiguration(resolved) && resolved.target) {
+        record.target = await startDebugTarget(resolved.target, (category, output) => {
+          this.appendOutput(record, { category, output, timestamp: Date.now() });
+        });
+      }
+      const launch = adapter.dap.request(record.dapRequest, configuration, 60_000);
       void launch.catch(() => undefined);
       await initialized;
       for (const source of input.breakpoints ?? []) await this.setBreakpoints(sessionId, projectRoot, source);
@@ -189,11 +228,21 @@ export class DebugSessionManager {
       this.emit();
       return cloneSummary(record.summary);
     } catch (error) {
+      await targetPort?.release().catch(() => undefined);
+      targetPort = null;
+      this.appendAdapterDiagnostics(record);
       record.summary.state = 'error';
       record.summary.error = error instanceof Error ? error.message : String(error);
       this.emit();
+      await record.adapter?.dap.request('disconnect', {
+        restart: false,
+        terminateDebuggee: true,
+        suspendDebuggee: false,
+      }, 1_000).catch(() => undefined);
       await record.adapter?.dispose().catch(() => undefined);
       record.adapter = null;
+      await this.cleanupTarget(record);
+      await this.cleanupOwnedProcesses(record);
       throw error;
     }
   }
@@ -214,6 +263,8 @@ export class DebugSessionManager {
     } finally {
       await record.adapter?.dispose().catch(() => undefined);
       record.adapter = null;
+      await this.cleanupTarget(record);
+      await this.cleanupOwnedProcesses(record);
       record.summary.state = 'terminated';
       this.emit();
     }
@@ -238,12 +289,13 @@ export class DebugSessionManager {
     const path = projectPath(projectRoot, source.path, projectRoot);
     record.initialBreakpoints = [
       ...record.initialBreakpoints.filter((existing) => projectPath(projectRoot, existing.path, projectRoot) !== path),
-      { path, breakpoints: source.breakpoints.map((breakpoint) => ({ ...breakpoint })) },
+      { path: source.path, breakpoints: source.breakpoints.map((breakpoint) => ({ ...breakpoint })) },
     ];
-    return this.sendBreakpoints(this.controlConnection(record), path, source);
+    return this.sendBreakpoints(record, this.controlConnection(record), path, source);
   }
 
   private async sendBreakpoints(
+    record: DebugSessionRecord,
     dap: DapConnection,
     path: string,
     source: DebugSourceBreakpoints,
@@ -253,7 +305,9 @@ export class DebugSessionManager {
       breakpoints: source.breakpoints,
       sourceModified: false,
     });
-    return response?.breakpoints ?? [];
+    const breakpoints = response?.breakpoints ?? [];
+    this.recordBreakpointResults(record, source.path, source.breakpoints, breakpoints);
+    return breakpoints;
   }
 
   async threads(sessionId: string): Promise<DebugThread[]> {
@@ -312,6 +366,16 @@ export class DebugSessionManager {
       if (record.summary.output.length > OUTPUT_LIMIT) record.summary.output.splice(0, record.summary.output.length - OUTPUT_LIMIT);
       this.emit();
     });
+    dap.onEvent<{ systemProcessId?: number; isLocalProcess?: boolean }>('process', (body) => {
+      if (
+        record.request === 'launch' &&
+        body?.isLocalProcess !== false &&
+        Number.isSafeInteger(body?.systemProcessId) &&
+        (body.systemProcessId ?? 0) > 0
+      ) {
+        record.ownedProcessIds.add(body.systemProcessId!);
+      }
+    });
     dap.onEvent('stopped', (body: any) => {
       record.controlDap = dap;
       record.summary.state = 'paused';
@@ -332,19 +396,54 @@ export class DebugSessionManager {
       if (typeof body?.exitCode === 'number') record.summary.exitCode = body.exitCode;
       this.emit();
     });
+    dap.onEvent<{ reason?: 'new' | 'changed' | 'removed'; breakpoint?: DebugBreakpoint }>('breakpoint', (body) => {
+      const breakpoint = body?.breakpoint;
+      if (!breakpoint || !Number.isSafeInteger(breakpoint.id)) return;
+      const binding = record.breakpointBindings.get(breakpoint.id!);
+      if (!binding) return;
+      if (body.reason === 'removed') {
+        record.breakpointBindings.delete(breakpoint.id!);
+        record.summary.breakpoints = (record.summary.breakpoints ?? []).filter((item) => item.id !== breakpoint.id);
+      } else {
+        const updated: DebugSessionBreakpoint = {
+          ...breakpoint,
+          path: binding.path,
+          requestedLine: binding.requestedLine,
+        };
+        const current = record.summary.breakpoints ?? [];
+        const index = current.findIndex((item) => item.id === breakpoint.id);
+        record.summary.breakpoints = index < 0
+          ? [...current, updated]
+          : current.map((item, itemIndex) => itemIndex === index ? updated : item);
+      }
+      this.emit();
+    });
     dap.onEvent('terminated', () => {
+      if (record.controlDap !== dap) return;
       record.summary.state = 'terminated';
       record.summary.stopped = undefined;
       this.emit();
       void adapter.dispose().catch(() => undefined).finally(() => {
         if (record.adapter === adapter) record.adapter = null;
+        void this.cleanupTarget(record);
+        void this.cleanupOwnedProcesses(record);
       });
     });
     dap.onClose((error) => {
-      if (record.summary.state === 'terminated' || record.summary.state === 'terminating') return;
+      if (['terminated', 'terminating', 'error'].includes(record.summary.state)) return;
+      // js-debug uses the first TCP connection as a bootstrap/controller and
+      // can hand control to a child DAP session through `startDebugging`.
+      // Closing that superseded bootstrap connection is not a session failure.
+      if (record.controlDap !== dap) return;
+      this.appendAdapterDiagnostics(record);
       record.summary.state = 'error';
       record.summary.error = error?.message ?? 'debug adapter connection closed';
       this.emit();
+      void adapter.dispose().catch(() => undefined).finally(() => {
+        if (record.adapter === adapter) record.adapter = null;
+        void this.cleanupTarget(record);
+        void this.cleanupOwnedProcesses(record);
+      });
     });
   }
 
@@ -394,7 +493,7 @@ export class DebugSessionManager {
     await initialized;
     for (const source of record.initialBreakpoints) {
       const path = projectPath(record.projectRoot, source.path, record.projectRoot);
-      await this.sendBreakpoints(child, path, source);
+      await this.sendBreakpoints(record, child, path, source);
     }
     await child.request('configurationDone', {});
     await launch;
@@ -403,5 +502,67 @@ export class DebugSessionManager {
 
   private emit(): void {
     this.bus.push(this.list());
+  }
+
+  private appendOutput(record: DebugSessionRecord, line: DebugOutputLine): void {
+    record.summary.output.push(line);
+    if (record.summary.output.length > OUTPUT_LIMIT) {
+      record.summary.output.splice(0, record.summary.output.length - OUTPUT_LIMIT);
+    }
+    this.emit();
+  }
+
+  private appendAdapterDiagnostics(record: DebugSessionRecord): void {
+    const diagnostics = record.adapter?.diagnostics();
+    if (!diagnostics) return;
+    for (const [category, output] of Object.entries(diagnostics) as Array<['stdout' | 'stderr', string]>) {
+      const trimmed = output.trim();
+      if (!trimmed || record.summary.output.some((line) => line.category === category && line.output.trim() === trimmed)) continue;
+      record.summary.output.push({ category, output: trimmed, timestamp: Date.now() });
+    }
+    if (record.summary.output.length > OUTPUT_LIMIT) {
+      record.summary.output.splice(0, record.summary.output.length - OUTPUT_LIMIT);
+    }
+  }
+
+  private recordBreakpointResults(
+    record: DebugSessionRecord,
+    path: string,
+    requested: DebugSourceBreakpoints['breakpoints'],
+    resolved: DebugBreakpoint[],
+  ): void {
+    const key = process.platform === 'win32' ? path.toLowerCase() : path;
+    for (const [id, binding] of record.breakpointBindings) {
+      const bindingKey = process.platform === 'win32' ? binding.path.toLowerCase() : binding.path;
+      if (bindingKey === key) record.breakpointBindings.delete(id);
+    }
+    const items = requested.map((sourceBreakpoint, index): DebugSessionBreakpoint => {
+      const result = resolved[index] ?? { verified: false };
+      if (Number.isSafeInteger(result.id)) {
+        record.breakpointBindings.set(result.id!, { path, requestedLine: sourceBreakpoint.line });
+      }
+      return { ...result, path, requestedLine: sourceBreakpoint.line };
+    });
+    record.summary.breakpoints = [
+      ...(record.summary.breakpoints ?? []).filter((item) => {
+        const itemKey = process.platform === 'win32' ? item.path.toLowerCase() : item.path;
+        return itemKey !== key;
+      }),
+      ...items,
+    ];
+    this.emit();
+  }
+
+  private async cleanupOwnedProcesses(record: DebugSessionRecord): Promise<void> {
+    if (record.request !== 'launch' || record.ownedProcessIds.size === 0) return;
+    const pids = [...record.ownedProcessIds];
+    record.ownedProcessIds.clear();
+    await Promise.allSettled(pids.map((pid) => terminateDebuggeeTree(pid)));
+  }
+
+  private async cleanupTarget(record: DebugSessionRecord): Promise<void> {
+    const target = record.target;
+    record.target = null;
+    await target?.dispose().catch(() => undefined);
   }
 }

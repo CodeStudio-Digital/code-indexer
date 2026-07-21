@@ -1,7 +1,7 @@
 /**
- * Resolved-plan sweep. The `plan` card lands in the run-level live buffer
- * after message_complete and must survive while approval is pending. The
- * runner only resumes after the plan is resolved, so the first streamed
+ * Resolved-interaction sweep. Rich prompt cards land in the run-level live
+ * buffer after message_complete and must survive while input is pending. The
+ * runner only resumes after the interaction is resolved, so the first streamed
  * content of the next provider cycle sweeps the card and triggers the history
  * refetch (the persisted row renders the resolved card instead).
  */
@@ -30,13 +30,29 @@ function setup() {
 
 const types = (blocks: StreamBlock[]): string[] => blocks.map((b) => b.type);
 
-describe('resolved-plan sweep', () => {
+describe('resolved-interaction sweep', () => {
   it('the next turn\'s thinking sweeps the plan card and refetches history', () => {
     const { handlers, blocks, onMessageComplete } = setup();
     handlers.plan({ id: 'p1', plan: 'Diagnóstico...' }, 'plan');
     expect(types(blocks)).toEqual(['plan']);
 
     handlers.thinking({ text: 'analisando...' }, 'thinking');
+    expect(types(blocks)).toEqual(['thinking']);
+    expect(onMessageComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('sweeps every rich interactive card before rendering the resumed turn', () => {
+    const { handlers, blocks, onMessageComplete } = setup();
+    handlers.question({ id: 'q1', question: 'Scope?' }, 'question');
+    handlers.decision({
+      id: 'd1',
+      questions: [{ id: 'strategy', question: 'Strategy?', options: [] }],
+    }, 'decision');
+    handlers.tasks_posted({ tool_use_id: 't1', summary: 'Tasks', tasks: [], version: 1 }, 'tasks_posted');
+    handlers.spec({ id: 's1', name: 'Spec', body: '# Spec', spec_path: 'spec.md' }, 'spec');
+    expect(types(blocks)).toEqual(['question', 'decision', 'tasks', 'spec']);
+
+    handlers.thinking({ text: 'resuming...' }, 'thinking');
     expect(types(blocks)).toEqual(['thinking']);
     expect(onMessageComplete).toHaveBeenCalledTimes(1);
   });

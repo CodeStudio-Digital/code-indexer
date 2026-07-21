@@ -1,6 +1,6 @@
 {
   "name": "javascript-debugger",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "First-party JavaScript and TypeScript debugger powered by the Debug Adapter Protocol",
   "author": { "name": "mcp" },
   "apps": ".app.json",

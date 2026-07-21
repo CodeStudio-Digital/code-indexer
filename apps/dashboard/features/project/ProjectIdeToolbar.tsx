@@ -113,6 +113,7 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
           manager: managerFor(config.command),
           executable: config.command,
           args: config.args,
+          command: [config.command, ...(config.args ?? []).map(quoteArg)].join(' '),
           cwd: config.cwd,
           env: config.env,
         },
@@ -139,6 +140,7 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
       debugRunner: {
         manager: runner.manager,
         script: runner.id.includes(':') ? runner.id.slice(runner.id.indexOf(':') + 1) : runner.label,
+        command: runner.command,
         cwd: group.cwd,
       },
       source: 'detected' as const,

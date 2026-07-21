@@ -442,6 +442,11 @@ h4 { font-size: 0.825rem; font-weight: 600; text-transform: uppercase; letter-sp
   box-shadow: 0 0 0 1px color-mix(in srgb, #e5484d 78%, black);
 }
 .mcp-debug-breakpoint-glyph:hover::before { background: #ff6369; }
+.mcp-debug-breakpoint-glyph-unverified::before {
+  background: transparent;
+  border: 2px solid #e5484d;
+}
+.mcp-debug-breakpoint-glyph-unverified:hover::before { background: rgba(229, 72, 77, 0.2); }
 
 /* Host-owned glyphs for declarative plugin editor actions (left gutter lane). */
 .mcp-plugin-gutter { cursor: pointer; text-align: center; }

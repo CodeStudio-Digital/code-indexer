@@ -1,8 +1,14 @@
 import type * as MonacoNs from 'monaco-editor';
 import type { DebugSourceBreakpoint } from '@mcp/api-bus';
 
+export interface DebugBreakpointGutterItem extends DebugSourceBreakpoint {
+  actualLine?: number;
+  verified?: boolean;
+  verificationMessage?: string;
+}
+
 export interface DebugBreakpointGutterOptions {
-  breakpoints: DebugSourceBreakpoint[];
+  breakpoints: DebugBreakpointGutterItem[];
   onToggle(line: number): void;
   onMoved(breakpoints: DebugSourceBreakpoint[]): void;
 }
@@ -21,10 +27,16 @@ export function attachDebugBreakpointGutter(
 
   let rendered = [...options.breakpoints].sort((a, b) => a.line - b.line);
   const collection = editor.createDecorationsCollection(rendered.map((breakpoint) => ({
-    range: new monaco.Range(breakpoint.line, 1, breakpoint.line, 1),
+    range: new monaco.Range(breakpoint.actualLine ?? breakpoint.line, 1, breakpoint.actualLine ?? breakpoint.line, 1),
     options: {
-      glyphMarginClassName: 'mcp-debug-breakpoint-glyph',
-      glyphMarginHoverMessage: { value: `Remover breakpoint da linha ${breakpoint.line} (Ctrl+F8)` },
+      glyphMarginClassName: breakpoint.verified === false
+        ? 'mcp-debug-breakpoint-glyph mcp-debug-breakpoint-glyph-unverified'
+        : 'mcp-debug-breakpoint-glyph',
+      glyphMarginHoverMessage: {
+        value: breakpoint.verified === false
+          ? (breakpoint.verificationMessage ?? `Breakpoint da linha ${breakpoint.line} ainda não foi confirmado`)
+          : `Remover breakpoint da linha ${breakpoint.line} (Ctrl+F8)`,
+      },
       glyphMargin: { position: monaco.editor.GlyphMarginLane.Center },
       stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
     },
@@ -32,7 +44,8 @@ export function attachDebugBreakpointGutter(
 
   const toggleAt = (line: number | undefined): void => {
     if (line == null || line < 1 || line > model.getLineCount()) return;
-    options.onToggle(line);
+    const existing = rendered.find((breakpoint) => (breakpoint.actualLine ?? breakpoint.line) === line);
+    options.onToggle(existing?.line ?? line);
   };
 
   const mouse = editor.onMouseDown((event) => {
@@ -60,6 +73,9 @@ export function attachDebugBreakpointGutter(
       const moved = rendered.map((breakpoint, index) => ({
         ...breakpoint,
         line: ranges[index]?.startLineNumber ?? breakpoint.line,
+        actualLine: undefined,
+        verified: undefined,
+        verificationMessage: undefined,
       })).sort((a, b) => a.line - b.line);
       if (sameLines(rendered, moved)) return;
       rendered = moved;

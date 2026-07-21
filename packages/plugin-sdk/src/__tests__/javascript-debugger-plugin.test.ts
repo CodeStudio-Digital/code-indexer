@@ -60,7 +60,7 @@ describe('javascript debugger plugin', () => {
       runner: { manager: 'pnpm', script: 'dev', args: ['--host'] },
     })).toMatchObject({
       runtimeExecutable: 'pnpm',
-      runtimeArgs: ['run', 'dev', '--host'],
+      runtimeArgs: ['run', 'dev', '--', '--host'],
       cwd: '/work',
       autoAttachChildProcesses: true,
     });
@@ -76,19 +76,51 @@ describe('javascript debugger plugin', () => {
     expect(debugAdapter.resolveConfiguration({
       request: 'launch',
       projectRoot,
-      runner: { manager: 'npm', script: 'dev' },
+      runner: { manager: 'npm', script: 'dev', command: 'npm run dev' },
     })).toMatchObject({
-      runtimeExecutable: 'npm',
-      runtimeArgs: ['run', 'dev'],
-      attachSimplePort: 9333,
-      autoAttachChildProcesses: false,
-      resolveSourceMapLocations: null,
+      dapRequest: 'attach',
+      target: {
+        command: 'npm',
+        args: ['run', 'dev'],
+      },
+      configuration: {
+        type: 'pwa-node',
+        request: 'attach',
+        port: 9333,
+        autoAttachChildProcesses: false,
+        resolveSourceMapLocations: null,
+      },
     });
   });
 
   it('uses Wrangler default inspector port when none is explicit', () => {
     expect(wranglerInspectorPort('wrangler dev --port 8282')).toBe(9229);
+    expect(wranglerInspectorPort('wrangler dev --port 8282', 9411)).toBe(9411);
     expect(wranglerInspectorPort('vite dev')).toBeNull();
+  });
+
+  it.each([
+    ['npm', ['run', 'dev', '--', '--inspector-port=9411']],
+    ['pnpm', ['run', 'dev', '--', '--inspector-port=9411']],
+    ['yarn', ['run', 'dev', '--inspector-port=9411']],
+    ['bun', ['run', 'dev', '--inspector-port=9411']],
+  ] as const)('forwards a host-allocated inspector port through %s', (manager, runtimeArgs) => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-js-debug-wrangler-'));
+    tempDirectories.push(projectRoot);
+    writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({
+      scripts: { dev: 'wrangler dev --port 8787' },
+    }));
+
+    expect(debugAdapter.resolveConfiguration({
+      request: 'launch',
+      projectRoot,
+      targetPort: 9411,
+      runner: { manager, script: 'dev' },
+    })).toMatchObject({
+      dapRequest: 'attach',
+      target: { command: manager, args: runtimeArgs },
+      configuration: { request: 'attach', port: 9411 },
+    });
   });
 
   it('requires a structured launch target', () => {

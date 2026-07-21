@@ -10,33 +10,47 @@ import {
 const PORT_TOKEN = '__MCP_DEBUG_PORT__';
 const DEFAULT_WRANGLER_INSPECTOR_PORT = 9229;
 
-function packageRunnerArgs(input: DebugConfigurationInput): string[] | null {
+function forwardedPackageArguments(manager: string, args: string[]): string[] {
+  if (args.length === 0) return [];
+  return ['npm', 'pnpm'].includes(manager.toLowerCase()) ? ['--', ...args] : args;
+}
+
+function packageRunnerArgs(input: DebugConfigurationInput, debugArgs: string[] = []): string[] | null {
   const runner = input.runner;
   if (!runner) return null;
-  const args = [...(runner.args ?? [])];
-  if (runner.script) return ['run', runner.script, ...args];
+  const args = [...(runner.args ?? []), ...debugArgs];
+  if (runner.script) return ['run', runner.script, ...forwardedPackageArguments(runner.manager, args)];
   return args;
 }
 
 function packageScriptCommand(input: DebugConfigurationInput, cwd: string): string | null {
-  if (!input.runner?.script) return null;
-  try {
-    const manifest = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as {
-      scripts?: Record<string, unknown>;
-    };
-    const command = manifest.scripts?.[input.runner.script];
-    return typeof command === 'string' ? command : null;
-  } catch {
-    return null;
+  if (input.runner?.script) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as {
+        scripts?: Record<string, unknown>;
+      };
+      const command = manifest.scripts?.[input.runner.script];
+      if (typeof command === 'string') return command;
+    } catch {
+      // A plugin-contributed raw command can still be inspected below.
+    }
   }
+  return input.runner?.command ?? null;
 }
 
-export function wranglerInspectorPort(command: string | null | undefined): number | null {
-  if (!command || !/(?:^|[;&|]\s*|\s)(?:npx\s+)?wrangler(?:\.cmd)?\s+dev(?:\s|$)/i.test(command)) return null;
+function explicitWranglerInspectorPort(command: string): number | null {
   const explicitPort = command.match(/--inspector-port(?:\s+|=)(\d{1,5})(?:\s|$)/i)?.[1];
-  if (!explicitPort) return DEFAULT_WRANGLER_INSPECTOR_PORT;
+  if (!explicitPort) return null;
   const port = Number(explicitPort);
-  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : DEFAULT_WRANGLER_INSPECTOR_PORT;
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+}
+
+export function wranglerInspectorPort(
+  command: string | null | undefined,
+  allocatedPort = DEFAULT_WRANGLER_INSPECTOR_PORT,
+): number | null {
+  if (!command || !/(?:^|[;&|]\s*|\s)(?:npx\s+)?wrangler(?:\.cmd)?\s+dev(?:\s|$)/i.test(command)) return null;
+  return explicitWranglerInspectorPort(command) ?? allocatedPort;
 }
 
 export const debugAdapter = defineDebugAdapter({
@@ -96,19 +110,53 @@ export const debugAdapter = defineDebugAdapter({
       if (input.env || input.runner?.env) base.env = { ...(input.runner?.env ?? {}), ...(input.env ?? {}) };
 
       if (input.runner) {
-        base.runtimeExecutable = input.runner.executable ?? input.runner.manager;
-        const runtimeArgs = packageRunnerArgs(input);
-        if (runtimeArgs?.length) base.runtimeArgs = runtimeArgs;
+        // Wrangler hosts application code in Workerd, not in the package
+        // manager's Node process. Keep those lifecycles separate: the MCP host
+        // owns `wrangler dev`, and js-debug performs a regular Inspector attach.
+        const scriptCommand = packageScriptCommand(input, cwd);
+        const explicitInspectorPort = scriptCommand ? explicitWranglerInspectorPort(scriptCommand) : null;
+        const inspectorPort = wranglerInspectorPort(scriptCommand, input.targetPort ?? DEFAULT_WRANGLER_INSPECTOR_PORT);
+        const debugArgs = inspectorPort === null
+          ? []
+          : explicitInspectorPort === null ? [`--inspector-port=${inspectorPort}`] : [];
+        const runtimeArgs = packageRunnerArgs(input, debugArgs);
 
-        // Wrangler hosts application code in workerd, not in the npm process.
-        // js-debug's simple-port launch starts the package script and then
-        // connects to the Workerd Inspector exposed by `wrangler dev`.
-        const inspectorPort = wranglerInspectorPort(packageScriptCommand(input, cwd));
         if (inspectorPort !== null) {
-          base.attachSimplePort = inspectorPort;
-          base.autoAttachChildProcesses = false;
-          base.resolveSourceMapLocations = null;
+          // Match the plain Node attach shape used by Wrangler tooling. The
+          // generic launch/source-map knobs above are intentionally omitted:
+          // Workerd publishes its own script/source-map metadata over CDP.
+          const configuration: Record<string, unknown> = {
+            // VS Code normalizes `node` to `pwa-node` before invoking this
+            // standalone adapter; MCP talks to the adapter directly.
+            type: 'pwa-node',
+            request: 'attach',
+            name: base.name,
+            port: inspectorPort,
+            cwd: '/',
+            attachExistingChildren: false,
+            autoAttachChildProcesses: false,
+            resolveSourceMapLocations: null,
+            ...(input.configuration ?? {}),
+          };
+          // Process ownership and connection details are a single contract;
+          // do not let a loose override desynchronise the launched port.
+          configuration.request = 'attach';
+          configuration.port = inspectorPort;
+          configuration.cwd = '/';
+          return {
+            dapRequest: 'attach',
+            configuration,
+            target: {
+              command: input.runner.executable ?? input.runner.manager,
+              args: runtimeArgs ?? [],
+              cwd,
+              env: { ...(input.runner.env ?? {}), ...(input.env ?? {}) },
+            },
+          };
         }
+
+        base.runtimeExecutable = input.runner.executable ?? input.runner.manager;
+        if (runtimeArgs?.length) base.runtimeArgs = runtimeArgs;
       } else {
         if (!input.file) throw new Error('JavaScript launch requires a file or runner');
         base.program = input.file;

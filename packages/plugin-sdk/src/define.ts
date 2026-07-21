@@ -23,11 +23,13 @@ export { contributeDebugger } from './contributions/debugger.js';
 export { contributeProjectModule } from './contributions/project-module.js';
 export { definePlugin } from './define-plugin.js';
 export type { DefinePluginSpec } from './define-plugin.js';
-export { defineDebugAdapter } from './debug-adapter.js';
+export { defineDebugAdapter, isDebugResolvedConfiguration } from './debug-adapter.js';
 export type {
   DebugAdapterRuntime,
   DebugAdapterExecutable,
   DebugAdapterResolveContext,
   DebugConfigurationInput,
+  DebugResolvedConfiguration,
   DebugRunnerInput,
+  DebugTargetLaunch,
 } from './debug-adapter.js';

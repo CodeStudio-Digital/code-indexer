@@ -21,6 +21,7 @@ import { stageJsDebugAdapter } from './js-debug-adapter-artifact.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const extDir = join(root, 'extensions');
 const stageRoot = join(root, 'dist', 'bundled-plugins');
+const tsxCli = join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 function run(cmd, args) {
   console.log(`\n→ ${cmd} ${args.join(' ')}`);
@@ -49,13 +50,13 @@ for (const ns of plugins) {
   const srcDir = join(extDir, ns);
   // Build → emits dist/plugin.js + .app.json from the declarative spec.
   const buildArgs = [
-    'tsx',
+    tsxCli,
     'packages/plugin-sdk/src/cli/index.ts',
     'build',
     `extensions/${ns}`,
   ];
   if (ns.startsWith('provider-')) buildArgs.push('--trust-providers');
-  run('npx', buildArgs);
+  run(process.execPath, buildArgs);
 
   const appJson = join(srcDir, '.app.json');
   if (!existsSync(appJson)) {

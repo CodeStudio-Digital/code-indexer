@@ -3,11 +3,13 @@ import {
   debugBreakpointsForProject,
   isJavaScriptDebugPath,
   replaceDebugBreakpoints,
+  selectDebugBreakpointRuntime,
+  setDebugBreakpointRuntime,
   toggleDebugBreakpoint,
   useDebugBreakpoints,
 } from '../debug-breakpoints.js';
 
-beforeEach(() => useDebugBreakpoints.setState({ byProject: {} }));
+beforeEach(() => useDebugBreakpoints.setState({ byProject: {}, runtimeByProject: {} }));
 
 describe('debug breakpoints state', () => {
   it('toggles, sorts and removes project-relative breakpoints', () => {
@@ -40,5 +42,23 @@ describe('debug breakpoints state', () => {
     expect(isJavaScriptDebugPath('src/component.tsx')).toBe(true);
     expect(isJavaScriptDebugPath('scripts/start.mjs')).toBe(true);
     expect(isJavaScriptDebugPath('src/main.py')).toBe(false);
+  });
+
+  it('keeps verified and relocated runtime presentation out of persisted breakpoints', () => {
+    replaceDebugBreakpoints(2, 'worker.ts', [{ line: 9 }]);
+    setDebugBreakpointRuntime(2, 'worker.ts', 'session-1', [{ line: 9 }], [{
+      verified: false,
+      line: 11,
+      message: 'source map pending',
+    }]);
+
+    expect(selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', 'session-1')).toEqual([{
+      sessionId: 'session-1',
+      requestedLine: 9,
+      line: 11,
+      verified: false,
+      message: 'source map pending',
+    }]);
+    expect(debugBreakpointsForProject(2)[0]?.breakpoints).toEqual([{ line: 9 }]);
   });
 });

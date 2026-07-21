@@ -109,18 +109,19 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     removeProcesses((process) => ids.has(process.id));
   };
 
-  // A plan card is pushed into the live buffer AFTER `message_complete` (the
-  // `plan` event fires at tool dispatch). The run-level buffer intentionally
-  // survives provider boundaries, so without an explicit resolution sweep the
-  // pending card would stay pinned above the post-approval turn — reading as
-  // "the model is thinking below its own plan". The runner only resumes after
-  // the plan is resolved, so the first streamed content of the next turn is
-  // proof of resolution: sweep the card and refetch history, where the
-  // persisted row renders the collapsed resolved card.
-  const sweepResolvedPlanCards = (): void => {
+  // Interactive cards are pushed into the live buffer AFTER `message_complete`
+  // (their rich event fires at tool dispatch). The run-level buffer
+  // intentionally survives provider boundaries, so without an explicit sweep
+  // a remounted card can revert to its pending controls above the resumed turn.
+  // The runner only produces the next turn after the wait is resolved, making
+  // its first semantic content proof that every earlier interactive card is
+  // complete. Sweep those live cards and refetch history, whose tool_result
+  // renders the durable read-only state.
+  const sweepResolvedInteractiveCards = (): void => {
     let swept = false;
     for (let i = blocks.length - 1; i >= 0; i--) {
-      if (blocks[i].type === 'plan') {
+      const type = blocks[i].type;
+      if (type === 'plan' || type === 'question' || type === 'decision' || type === 'tasks' || type === 'spec') {
         blocks.splice(i, 1);
         swept = true;
       }
@@ -134,7 +135,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
-      sweepResolvedPlanCards();
+      sweepResolvedInteractiveCards();
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       clearProviderProcesses();
       const last = blocks[blocks.length - 1];
@@ -149,7 +150,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     thinking: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
-      sweepResolvedPlanCards();
+      sweepResolvedInteractiveCards();
       if (clearProviderActivities(blocks)) rebuildToolIndex(blocks, toolIndex);
       clearProviderProcesses();
       // Activity heartbeats and live agent telemetry are presentation-only;
@@ -173,7 +174,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     tool_call_start: (data) => {
       const d = data as { id: string; name: string; input?: Record<string, unknown> };
-      sweepResolvedPlanCards();
+      sweepResolvedInteractiveCards();
       if (clearProviderActivities(blocks) || removeActivity(blocks, `tool:${d.id}`)) {
         rebuildToolIndex(blocks, toolIndex);
       }

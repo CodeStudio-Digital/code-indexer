@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DebugSourceBreakpoint, DebugSourceBreakpoints } from '@mcp/api-bus';
+import type { DebugBreakpoint, DebugSourceBreakpoint, DebugSourceBreakpoints } from '@mcp/api-bus';
 
 const STORAGE_KEY = 'mcp-ide:debug-breakpoints:v1';
 const EMPTY_BREAKPOINTS: DebugSourceBreakpoint[] = [];
@@ -7,8 +7,19 @@ const EMPTY_BREAKPOINTS: DebugSourceBreakpoint[] = [];
 type ProjectBreakpoints = Record<string, DebugSourceBreakpoint[]>;
 type BreakpointsByProject = Record<string, ProjectBreakpoints>;
 
+export interface DebugBreakpointRuntimeStatus {
+  sessionId: string;
+  requestedLine: number;
+  line: number;
+  verified: boolean;
+  message?: string;
+}
+
+type RuntimeByProject = Record<string, Record<string, DebugBreakpointRuntimeStatus[]>>;
+
 interface DebugBreakpointsState {
   byProject: BreakpointsByProject;
+  runtimeByProject: RuntimeByProject;
 }
 
 function normalizedPath(path: string): string {
@@ -58,6 +69,7 @@ function persist(byProject: BreakpointsByProject): void {
 
 export const useDebugBreakpoints = create<DebugBreakpointsState>(() => ({
   byProject: loadPersisted(),
+  runtimeByProject: {},
 }));
 
 export function selectDebugBreakpoints(
@@ -66,6 +78,17 @@ export function selectDebugBreakpoints(
   path: string,
 ): DebugSourceBreakpoint[] {
   return state.byProject[String(projectId)]?.[normalizedPath(path)] ?? EMPTY_BREAKPOINTS;
+}
+
+export function selectDebugBreakpointRuntime(
+  state: DebugBreakpointsState,
+  projectId: number,
+  path: string,
+  sessionId: string | undefined,
+): DebugBreakpointRuntimeStatus[] {
+  if (!sessionId) return [];
+  return (state.runtimeByProject[String(projectId)]?.[normalizedPath(path)] ?? [])
+    .filter((status) => status.sessionId === sessionId);
 }
 
 export function replaceDebugBreakpoints(
@@ -83,9 +106,43 @@ export function replaceDebugBreakpoints(
   const byProject = { ...current };
   if (Object.keys(project).length) byProject[projectKey] = project;
   else delete byProject[projectKey];
-  useDebugBreakpoints.setState({ byProject });
+  const runtimeByProject = { ...useDebugBreakpoints.getState().runtimeByProject };
+  const runtimeProject = { ...(runtimeByProject[projectKey] ?? {}) };
+  delete runtimeProject[fileKey];
+  if (Object.keys(runtimeProject).length) runtimeByProject[projectKey] = runtimeProject;
+  else delete runtimeByProject[projectKey];
+  useDebugBreakpoints.setState({ byProject, runtimeByProject });
   persist(byProject);
   return normalized;
+}
+
+export function setDebugBreakpointRuntime(
+  projectId: number,
+  path: string,
+  sessionId: string,
+  requested: DebugSourceBreakpoint[],
+  resolved: DebugBreakpoint[],
+): void {
+  const projectKey = String(projectId);
+  const fileKey = normalizedPath(path);
+  const statuses = requested.map((breakpoint, index): DebugBreakpointRuntimeStatus => {
+    const result = resolved[index];
+    return {
+      sessionId,
+      requestedLine: breakpoint.line,
+      line: result?.line ?? breakpoint.line,
+      verified: result?.verified ?? false,
+      message: result?.message,
+    };
+  });
+  const current = useDebugBreakpoints.getState().runtimeByProject;
+  const project = { ...(current[projectKey] ?? {}) };
+  if (statuses.length) project[fileKey] = statuses;
+  else delete project[fileKey];
+  const runtimeByProject = { ...current };
+  if (Object.keys(project).length) runtimeByProject[projectKey] = project;
+  else delete runtimeByProject[projectKey];
+  useDebugBreakpoints.setState({ runtimeByProject });
 }
 
 export function toggleDebugBreakpoint(projectId: number, path: string, line: number): DebugSourceBreakpoint[] {

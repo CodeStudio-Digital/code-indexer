@@ -54,15 +54,51 @@ export interface DebugConfigurationInput {
   cwd?: string;
   env?: Record<string, string>;
   runner?: DebugRunnerInput;
+  /**
+   * Loopback port selected and temporarily reserved by the host for a target
+   * runtime that cannot publish its own inspector address (for example
+   * `wrangler dev`). Plugins may ignore it when their adapter discovers
+   * targets dynamically.
+   */
+  targetPort?: number;
   /** Adapter-specific explicit overrides, applied last by the plugin. */
   configuration?: Record<string, unknown>;
+}
+
+/** A target process that the trusted host launches and owns outside the DAP. */
+export interface DebugTargetLaunch {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+/**
+ * Structured result for runtimes whose process lifecycle is separate from the
+ * adapter connection. Wrangler is the canonical example: the host launches
+ * `wrangler dev`, while js-debug attaches to Workerd's Inspector endpoint.
+ */
+export interface DebugResolvedConfiguration {
+  configuration: Record<string, unknown>;
+  dapRequest: 'launch' | 'attach';
+  target?: DebugTargetLaunch;
+}
+
+export function isDebugResolvedConfiguration(
+  value: Record<string, unknown> | DebugResolvedConfiguration,
+): value is DebugResolvedConfiguration {
+  return value !== null
+    && typeof value === 'object'
+    && (value as Partial<DebugResolvedConfiguration>).configuration !== undefined
+    && ((value as Partial<DebugResolvedConfiguration>).dapRequest === 'launch'
+      || (value as Partial<DebugResolvedConfiguration>).dapRequest === 'attach');
 }
 
 export interface DebugAdapterRuntime {
   readonly sdkVersion: 1;
   readonly id: string;
   resolveAdapter(context: DebugAdapterResolveContext): DebugAdapterExecutable;
-  resolveConfiguration(input: DebugConfigurationInput): Record<string, unknown>;
+  resolveConfiguration(input: DebugConfigurationInput): Record<string, unknown> | DebugResolvedConfiguration;
 }
 
 export function defineDebugAdapter(
