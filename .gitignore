@@ -35,3 +35,6 @@ worker-market/.deploy.*
 .tmp-deploy/
 .tmp-smoke/
 .smoke/
+.codex-tmp/
+debug.log
+scripts/js-debug-adapter-artifact.d.mts
