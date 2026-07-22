@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoderRunBus } from '../../coder-bus.js';
+import type {
+  ControlPlaneRunContext,
+  ControlPlaneStore,
+} from '@mcp/store/control-plane/index.js';
 
 const mockWorker = vi.hoisted(() => {
   type Listener = (payload: unknown) => void;
@@ -102,12 +106,13 @@ describe('CoderWorkerPool', () => {
     pool = null;
   });
 
-  function createPool(): CoderWorkerPool {
+  function createPool(controlPlaneStore: ControlPlaneStore | null = null): CoderWorkerPool {
     pool = new CoderWorkerPool({
       workerFile: 'mock-worker.js',
       dbPath: ':memory:',
       postRunLingerMs: 60_000,
       log: () => undefined,
+      getControlPlaneStore: () => controlPlaneStore,
     });
     return pool;
   }
@@ -207,6 +212,170 @@ describe('CoderWorkerPool', () => {
     expect(bus2).not.toBe(failedBus);
     expect(bus2.ended).toBe(false);
     expect(mockWorker.state.hosts[0].bridge.requests.filter((request) => request.type === 'runFresh')).toHaveLength(2);
+  });
+
+  it('fences a rejected control-plane attempt without replacing the active run context', async () => {
+    const storeSpies = {
+      terminalizeRun: vi.fn(),
+      interruptRun: vi.fn(),
+    };
+    const activeContext = {
+      sessionId: 'session:coder:14',
+      legacySessionId: 14,
+      commandId: 'command:coder:14:active',
+      correlationId: 'correlation:coder:14:active',
+      actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
+      agentRunId: 'agent-run:coder:14:active',
+      attemptId: 'agent-run-attempt:coder:14:active:1',
+      executorOwnerId: 'coder-worker:14:active',
+      fencingEpoch: 1,
+    } as unknown as ControlPlaneRunContext;
+    const rejectedContext = {
+      ...activeContext,
+      commandId: 'command:coder:14:rejected',
+      correlationId: 'correlation:coder:14:rejected',
+      agentRunId: 'agent-run:coder:14:rejected',
+      attemptId: 'agent-run-attempt:coder:14:rejected:1',
+      executorOwnerId: 'coder-worker:14:rejected',
+    } as unknown as ControlPlaneRunContext;
+    const p = createPool(storeSpies as unknown as ControlPlaneStore);
+    await p.runFresh(14, { userMessage: 'first', controlPlaneRunContext: activeContext });
+
+    await expect(p.runFresh(14, {
+      userMessage: 'second',
+      controlPlaneRunContext: rejectedContext,
+    })).rejects.toThrow('run already in progress');
+
+    expect(storeSpies.interruptRun).toHaveBeenCalledWith(expect.objectContaining({
+      context: rejectedContext,
+      status: 'interrupted',
+      commandStatus: 'failed',
+      reason: 'run-already-in-progress',
+      attemptLeaseStatus: 'fenced',
+    }));
+    expect(storeSpies.terminalizeRun).not.toHaveBeenCalled();
+    expect(p.getControlPlaneRunContext(14)).toEqual(activeContext);
+    expect(mockWorker.state.hosts[0].bridge.requests.filter((request) => request.type === 'runFresh')).toHaveLength(1);
+  });
+
+  it('fences the control-plane attempt when runFresh dispatch fails before ACK', async () => {
+    const storeSpies = {
+      terminalizeRun: vi.fn(),
+      interruptRun: vi.fn(),
+    };
+    const context = {
+      sessionId: 'session:coder:9',
+      legacySessionId: 9,
+      commandId: 'command:coder:9',
+      correlationId: 'correlation:coder:9',
+      actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
+      agentRunId: 'agent-run:coder:9',
+      attemptId: 'agent-run-attempt:coder:9:1',
+      executorOwnerId: 'coder-worker:9',
+      fencingEpoch: 1,
+    } as unknown as ControlPlaneRunContext;
+    const p = createPool(storeSpies as unknown as ControlPlaneStore);
+    mockWorker.state.requestImpl = async () => {
+      throw new Error('run setup failed');
+    };
+
+    await expect(p.runFresh(9, {
+      userMessage: 'first',
+      controlPlaneRunContext: context,
+    })).rejects.toThrow('run setup failed');
+
+    expect(storeSpies.interruptRun).toHaveBeenCalledWith(expect.objectContaining({
+      context,
+      status: 'interrupted',
+      commandStatus: 'failed',
+      reason: 'worker-runFresh-failed',
+      attemptLeaseStatus: 'fenced',
+    }));
+    expect(storeSpies.terminalizeRun).not.toHaveBeenCalled();
+    expect(p.getControlPlaneRunContext(9)).toBeNull();
+  });
+
+  it('mirrors lifecycle boundaries while keeping the control-plane context host-only', async () => {
+    const previousControlPlane = process.env.CODER_CONTROL_PLANE_SHADOW;
+    const previousJournal = process.env.CODER_RUNTIME_JOURNAL_SHADOW;
+    process.env.CODER_CONTROL_PLANE_SHADOW = '1';
+    process.env.CODER_RUNTIME_JOURNAL_SHADOW = '1';
+    try {
+      const storeSpies = {
+        markRunStarted: vi.fn(),
+        appendToolBoundary: vi.fn(),
+        terminalizeRun: vi.fn(),
+        interruptRun: vi.fn(),
+        runs: { renewAttemptLease: vi.fn() },
+      };
+      const context = {
+        sessionId: 'session:coder:13',
+        legacySessionId: 13,
+        commandId: 'command:coder:13',
+        correlationId: 'correlation:coder:13',
+        actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
+        agentRunId: 'agent-run:coder:13',
+        attemptId: 'agent-run-attempt:coder:13:1',
+        executorOwnerId: 'coder-worker:13',
+        fencingEpoch: 1,
+      } as unknown as ControlPlaneRunContext;
+      const p = createPool(storeSpies as unknown as ControlPlaneStore);
+      const bus = await p.runFresh(13, {
+        userMessage: 'first',
+        controlPlaneRunContext: context,
+      });
+      const host = mockWorker.state.hosts[0];
+      const runId = getRunId(bus);
+      const runRequest = host.bridge.requests.at(-1);
+
+      expect(runRequest?.payload).not.toHaveProperty('controlPlaneRunContext');
+      expect(p.getControlPlaneRunContext(13)).toEqual(context);
+
+      host.bridge.emitToPool('bus.event', {
+        runId,
+        event: 'run_started',
+        data: { runId: 'runner-native-13' },
+      });
+      host.bridge.emitToPool('bus.event', {
+        runId,
+        event: 'tool_call_start',
+        data: { id: 'tool-1', name: 'edit_file', input: { secret: 'never-persist-raw' } },
+      });
+      host.bridge.emitToPool('bus.event', {
+        runId,
+        event: 'tool_call_result',
+        data: { id: 'tool-1', name: 'edit_file', result: 'sensitive-result', duration_ms: 12 },
+      });
+      host.bridge.emitToPool('bus.end', {
+        runId,
+        event: 'done',
+        data: { reason: 'completed' },
+      });
+
+      expect(storeSpies.markRunStarted).toHaveBeenCalledWith(context, 'runner-native-13');
+      expect(storeSpies.appendToolBoundary).toHaveBeenCalledTimes(2);
+      expect(storeSpies.appendToolBoundary).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        context,
+        phase: 'started',
+        toolUseId: 'tool-1',
+        toolName: 'edit_file',
+        payload: { valueHash: expect.stringMatching(/^[a-f0-9]{64}$/), durationMs: null },
+      }));
+      expect(JSON.stringify(storeSpies.appendToolBoundary.mock.calls)).not.toContain('never-persist-raw');
+      expect(JSON.stringify(storeSpies.appendToolBoundary.mock.calls)).not.toContain('sensitive-result');
+      expect(storeSpies.terminalizeRun).toHaveBeenCalledWith(expect.objectContaining({
+        context,
+        status: 'completed',
+        commandStatus: 'succeeded',
+        reason: 'completed',
+      }));
+      expect(p.getControlPlaneRunContext(13)).toBeNull();
+    } finally {
+      if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
+      else process.env.CODER_CONTROL_PLANE_SHADOW = previousControlPlane;
+      if (previousJournal === undefined) delete process.env.CODER_RUNTIME_JOURNAL_SHADOW;
+      else process.env.CODER_RUNTIME_JOURNAL_SHADOW = previousJournal;
+    }
   });
 
   it('forwards the persisted round message id to an active worker follow-up', async () => {

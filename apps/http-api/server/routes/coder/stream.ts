@@ -41,6 +41,13 @@ import {
   type AgentSelectionId,
   type ResolvedAgentSelection,
 } from '../../../custom-agents.js';
+import {
+  acceptLocalCoderCommand,
+  coderControlPlaneShadowEnabled,
+  fingerprintLocalCoderMessage,
+  terminalizeLocalCoderCommand,
+  type LocalCoderShadowAcceptance,
+} from '../../../control-plane-shadow.js';
 
 /**
  * Cheap, stable content fingerprint for the preflight-seed cache (mig 180). A
@@ -147,6 +154,7 @@ export function mountCoderStreamRoutes(
   const { sessionStore, providerStore } = deps;
   const { activeRuns, recentMessageKeys } = runtime;
   const workerPool = getCoderWorkerPool();
+  const controlPlaneStore = deps.controlPlaneStore ?? null;
   const semanticBusLeases = new WeakMap<CoderRunBus, () => void>();
 
   function keepSemanticProjectAlive(sessionId: number, bus: CoderRunBus): void {
@@ -668,17 +676,93 @@ export function mountCoderStreamRoutes(
           }
           await pool.interruptWait(id).catch(() => undefined);
         }
-        const userMsg: AgentMessage = {
-          role: 'user',
-          content: [{ type: 'text', text: body.content }],
-          ...(selectedSkillIds ? { selectedSkillIds } : {}),
-        };
-        const roundMessageId = sessionStore.appendMessage(id, userMsg);
-        await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
-        return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
+        const shadowEnabled = coderControlPlaneShadowEnabled();
+        const runContext = shadowEnabled ? pool.getControlPlaneRunContext?.(id) ?? null : null;
+        const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
+        const acceptance = shadowEnabled
+          ? acceptLocalCoderCommand({
+              store: controlPlaneStore,
+              legacySessionId: id,
+              kind: 'send_message',
+              idempotencyKey: dedupeKey,
+              fingerprint: fingerprintLocalCoderMessage({
+                content: body.content,
+                resume: false,
+                agent: agentSelectionId ?? runAgent,
+                profile: body.profile,
+                planMode: body.plan_mode,
+                maxTurns: body.max_turns,
+                selectedSkillIds,
+              }),
+              createRun: false,
+              linkedAgentRunId: runContext?.agentRunId,
+              role: runAgent ?? 'explore',
+              agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
+              requestedProvider: shadowSession?.provider,
+              requestedModel: shadowSession?.model,
+              requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
+              requestedPreset: agentSelectionId ?? runAgent,
+              requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
+            })
+          : null;
+        try {
+          const userMsg: AgentMessage = {
+            role: 'user',
+            content: [{ type: 'text', text: body.content }],
+            ...(selectedSkillIds ? { selectedSkillIds } : {}),
+          };
+          const roundMessageId = sessionStore.appendMessage(id, userMsg);
+          await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
+          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+            status: 'succeeded',
+            reason: 'message-enqueued',
+          });
+          return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
+        } catch (error) {
+          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+            status: 'failed',
+            reason: 'message-enqueue-failed',
+            errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown',
+          });
+          throw error;
+        }
       }
       // `runFresh` spawns the worker if needed and returns the main-side
       // mirrored bus. All model-facing options are forwarded unchanged.
+      const shadowEnabled = coderControlPlaneShadowEnabled();
+      const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
+      const commandKind = body.resume
+        ? 'resume'
+        : shadowEnabled && sessionStore.getMessageCount(id) === 0
+          ? 'start'
+          : 'send_message';
+      const acceptance: LocalCoderShadowAcceptance | null = shadowEnabled
+        ? acceptLocalCoderCommand({
+            store: controlPlaneStore,
+            legacySessionId: id,
+            kind: commandKind,
+            idempotencyKey: dedupeKey,
+            fingerprint: fingerprintLocalCoderMessage({
+              content: body.content,
+              attachments: body.attachments,
+              resume: body.resume,
+              agent: agentSelectionId ?? runAgent,
+              profile: body.profile,
+              planMode: body.plan_mode,
+              maxTurns: body.max_turns,
+              selectedSkillIds,
+              worktree: body.worktree,
+            }),
+            createRun: true,
+            role: runAgent ?? 'explore',
+            agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
+            requestedProvider: shadowSession?.provider,
+            requestedModel: shadowSession?.model,
+            requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
+            requestedPreset: agentSelectionId ?? runAgent,
+            requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
+          })
+        : null;
       const freshBus = await pool.runFresh(id, {
         userMessage: body.content,
         attachments: body.attachments,
@@ -703,6 +787,7 @@ export function mountCoderStreamRoutes(
         // in history. runCoder({resume:true}) picks up from there
         // without pushing a new user turn.
         resume: body.resume,
+        controlPlaneRunContext: acceptance?.runContext,
       });
       return { kind: 'fresh', bus: freshBus };
     };
@@ -830,6 +915,32 @@ export function mountCoderStreamRoutes(
         if (dedupeKey) recentMessageKeys.record(id, dedupeKey, live, live.nextSeq - 1);
         return { kind: 'attach', bus: live, tailFrom: live.nextSeq - 1 };
       }
+      const shadowEnabled = coderControlPlaneShadowEnabled();
+      const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
+      const acceptance = shadowEnabled
+        ? acceptLocalCoderCommand({
+            store: controlPlaneStore,
+            legacySessionId: id,
+            kind: 'resume',
+            idempotencyKey: dedupeKey,
+            fingerprint: fingerprintLocalCoderMessage({
+              content: '',
+              resume: true,
+              agent: agentSelectionId ?? runAgent,
+              profile: body.profile,
+              planMode: body.plan_mode,
+              maxTurns: body.max_turns,
+            }),
+            createRun: true,
+            role: runAgent ?? 'explore',
+            agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
+            requestedProvider: shadowSession?.provider,
+            requestedModel: shadowSession?.model,
+            requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
+            requestedPreset: agentSelectionId ?? runAgent,
+            requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
+          })
+        : null;
       const newBus = await workerPool.runFresh(id, {
         userMessage: '',
         maxTurns: body.max_turns,
@@ -845,6 +956,7 @@ export function mountCoderStreamRoutes(
         previewAvailable: resolvePreviewAvailable(id),
         browserAvailable: resolveBrowserAvailable(),
         ...deps.buildAgentDecisionRuntimeOptions(),
+        controlPlaneRunContext: acceptance?.runContext,
       });
       if (dedupeKey) recentMessageKeys.record(id, dedupeKey, newBus, -1);
       return { kind: 'fresh', bus: newBus };

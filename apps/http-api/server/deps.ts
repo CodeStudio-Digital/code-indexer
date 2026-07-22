@@ -1,4 +1,5 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { ControlPlaneStore } from '@mcp/store/control-plane/index.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
 import {
   canResolveDbMaintenanceWorker,
@@ -293,6 +294,8 @@ export interface ProjectServiceDeps {
 
 export interface CoderDeps {
   sessionStore: SessionStore;
+  /** Default-off durable command/run ledger used only by the control-plane shadow. */
+  controlPlaneStore: ControlPlaneStore;
   /**
    * Resolver for OAuth bearer tokens of external MCP servers. Set by
    * `server.ts` after composing the MCP client auth bundle; `runCoder`
@@ -916,6 +919,9 @@ export function createDeps(): ServerDeps {
   // (and thus IPC for all windows). These two were the last stragglers; the
   // sibling stores below already shared the handle.
   const sessionStore = new SessionStore(db.raw(), semanticMutationSink);
+  const controlPlaneStore = new ControlPlaneStore(db.raw(), {
+    journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
+  });
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
     memoryEmbeddingService,
@@ -1571,6 +1577,7 @@ export function createDeps(): ServerDeps {
     projectMemory,
     recentFilesSource,
     sessionStore,
+    controlPlaneStore,
     companyStore,
     companySandboxStore,
     companySandboxServicesStore,

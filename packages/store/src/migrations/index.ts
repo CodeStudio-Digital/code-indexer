@@ -256,6 +256,7 @@ import { qualityProviderRequestsRepair247 } from './247_quality_provider_request
 import { subagentRunLifecycle248 } from './248_subagent_run_lifecycle.js';
 import { sessionFilesystemRoots249 } from './249_session_filesystem_roots.js';
 import { projectLspProfileOverrides250 } from './250_project_lsp_profile_overrides.js';
+import { controlPlaneFoundation251 } from './251_control_plane_foundation.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -542,6 +543,7 @@ export const MIGRATIONS: Migration[] = [
   subagentRunLifecycle248,
   sessionFilesystemRoots249,
   projectLspProfileOverrides250,
+  controlPlaneFoundation251,
 ];
 
 /**

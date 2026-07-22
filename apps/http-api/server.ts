@@ -126,10 +126,15 @@ import {
 import {
   setCoderWorkerDocDeps,
   setCoderWorkerMcpPool,
+  setCoderWorkerControlPlaneStore,
   describeCoderWorkerStatus,
   getCoderWorkerPool,
 } from './sse/coderWorkerPoolSingleton.js';
 import { createStructuralIndexerExecutor } from './sse/IndexerWorkerClient.js';
+import {
+  coderControlPlaneShadowEnabled,
+  coderRuntimeJournalShadowEnabled,
+} from './control-plane-shadow.js';
 import { startPerfSampler, stopPerfSampler } from './server/perf/perf-sampler.js';
 import { startFreezeWatchdog, stopFreezeWatchdog } from './server/perf/freeze-log.js';
 import { startPersistentPerfDiagnostics } from './server/perf/persistent-diagnostics.js';
@@ -272,6 +277,21 @@ export function createApp() {
   getCoderWorkerPool();
 
   const deps = createDeps();
+  if (coderControlPlaneShadowEnabled()) {
+    setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
+    try {
+      const recovered = deps.controlPlaneStore.recoverInterruptedRuns();
+      console.log(
+        `[control-plane-shadow] enabled journal=${coderRuntimeJournalShadowEnabled()} recovered=${recovered}`,
+      );
+    } catch (error) {
+      console.warn(
+        `[control-plane-shadow] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  } else {
+    setCoderWorkerControlPlaneStore(null);
+  }
 
   // Wire the sandbox persistence store into the SandboxManager module
   // so its reconcile-on-boot + pause/resume paths can read/write DB.

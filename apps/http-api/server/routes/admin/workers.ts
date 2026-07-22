@@ -40,6 +40,12 @@ import {
   describeCoderWorkerStatus,
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
+import {
+  coderControlPlaneShadowEnabled,
+  coderRuntimeJournalShadowEnabled,
+  snapshotCoderControlPlaneShadowMetrics,
+  type CoderControlPlaneShadowMetrics,
+} from '../../../control-plane-shadow.js';
 
 interface WorkerRow {
   sessionId: number;
@@ -63,6 +69,11 @@ interface WorkersResponse {
     reason: string | null;
     workerFile: string | null;
     workers: WorkerRow[];
+  };
+  controlPlaneShadow: {
+    enabled: boolean;
+    journalEnabled: boolean;
+    metrics: CoderControlPlaneShadowMetrics;
   };
   node: { pid: number; uptimeSec: number; memMB: number };
 }
@@ -96,6 +107,11 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
         reason: coderStatus.reason,
         workerFile: coderStatus.resolved?.file ?? null,
         workers: coder,
+      },
+      controlPlaneShadow: {
+        enabled: coderControlPlaneShadowEnabled(),
+        journalEnabled: coderRuntimeJournalShadowEnabled(),
+        metrics: snapshotCoderControlPlaneShadowMetrics(),
       },
       node: {
         pid: process.pid,

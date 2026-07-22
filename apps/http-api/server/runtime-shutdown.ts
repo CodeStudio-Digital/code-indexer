@@ -4,6 +4,7 @@ import {
   disposeCoderWorkerPool,
   setCoderWorkerDocDeps,
   setCoderWorkerMcpPool,
+  setCoderWorkerControlPlaneStore,
 } from '../sse/coderWorkerPoolSingleton.js';
 import {
   disposeWorkerOrchestratorPool,
@@ -171,6 +172,7 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
 
     setCoderWorkerMcpPool(null);
     setCoderWorkerDocDeps(null);
+    setCoderWorkerControlPlaneStore(null);
     setCompanyWorkerDocDeps(null);
     setGlobalMcpExternalPool(null);
     setChromeService(null);

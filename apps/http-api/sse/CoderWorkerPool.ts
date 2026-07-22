@@ -52,6 +52,13 @@ import {
   exitBackgroundActivity,
 } from '../server/perf/freeze-log.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
+import type { ControlPlaneRunContext, ControlPlaneStore } from '@mcp/store/control-plane/index.js';
+import {
+  markLocalCoderRunStarted,
+  mirrorLocalCoderToolBoundary,
+  renewLocalCoderRunLease,
+  terminalizeLocalCoderRun,
+} from '../control-plane-shadow.js';
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -126,6 +133,8 @@ export interface CoderWorkerPoolOpts {
    * `McpServerManager` path alive (covers boot-race + tests).
    */
   getMcpExternalPool?: () => McpExternalPool | null;
+  /** Late-bound main-thread store for the default-off coder control-plane shadow. */
+  getControlPlaneStore?: () => ControlPlaneStore | null;
 }
 
 interface PoolEntry {
@@ -153,6 +162,8 @@ interface PoolEntry {
    */
   runInProgress: boolean;
   qualityEnabled: boolean;
+  controlPlaneRunContext: ControlPlaneRunContext | null;
+  lastControlPlaneLeaseRenewalAt: number;
 }
 
 export interface RunFreshOpts {
@@ -206,6 +217,8 @@ export interface RunFreshOpts {
    * spawn a fresh worker that resumes from the tool_result just appended.
    */
   resume?: boolean;
+  /** Main-process-only shadow context; stripped before the worker RPC. */
+  controlPlaneRunContext?: ControlPlaneRunContext;
 }
 
 /**
@@ -244,6 +257,10 @@ export class CoderWorkerPool {
 
   has(sessionId: number): boolean {
     return this.entries.has(sessionId);
+  }
+
+  getControlPlaneRunContext(sessionId: number): ControlPlaneRunContext | null {
+    return this.entries.get(sessionId)?.controlPlaneRunContext ?? null;
   }
 
   /**
@@ -354,23 +371,55 @@ export class CoderWorkerPool {
    * Returns the mirrored bus the caller should pump to SSE.
    */
   async runFresh(sessionId: number, opts: RunFreshOpts): Promise<CoderRunBus> {
-    const entry = await this.ensureEntry(sessionId);
+    const { controlPlaneRunContext, ...workerOpts } = opts;
+    let entry: PoolEntry;
+    try {
+      entry = await this.ensureEntry(sessionId);
+    } catch (error) {
+      terminalizeLocalCoderRun(
+        this.opts.getControlPlaneStore?.(),
+        controlPlaneRunContext,
+        {
+          event: 'error',
+          data: { message: error instanceof Error ? error.message : String(error) },
+          mode: 'worker_start_failure',
+        },
+      );
+      throw error;
+    }
     if (entry.runInProgress && !entry.bus.ended) {
+      terminalizeLocalCoderRun(
+        this.opts.getControlPlaneStore?.(),
+        controlPlaneRunContext,
+        {
+          event: 'error',
+          data: { reason: 'run-already-in-progress', sessionId },
+          mode: 'worker_start_failure',
+        },
+      );
       throw new Error(`coder-pool: run already in progress for session ${sessionId}`);
     }
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
     const runId = this.nextRunId++;
     this.prepareRunBus(entry, sessionId, runId);
+    entry.controlPlaneRunContext = controlPlaneRunContext ?? null;
+    entry.lastControlPlaneLeaseRenewalAt = Date.now();
     // (B) — mark the run in-progress so the idle sweep keeps hands off
     // until the worker emits its terminal `done`/`error` via the bus
     // event mirror below.
     entry.runInProgress = true;
     const bridge = entry.host.requireBridge();
     try {
-      await bridge.request('runFresh', { ...opts, runId }, { timeoutMs: 60_000 });
+      await bridge.request('runFresh', { ...workerOpts, runId }, { timeoutMs: 60_000 });
     } catch (err) {
       entry.runInProgress = false;
+      terminalizeLocalCoderRun(
+        this.opts.getControlPlaneStore?.(),
+        entry.controlPlaneRunContext,
+        { event: 'error', data: { message: err instanceof Error ? err.message : String(err) }, mode: 'worker_start_failure' },
+      );
+      entry.controlPlaneRunContext = null;
       if (!entry.bus.ended) {
         const message = err instanceof Error ? err.message : String(err);
         publish(entry.bus, 'error', { message, reason: 'worker-runFresh-failed', sessionId });
@@ -536,6 +585,12 @@ export class CoderWorkerPool {
   async evict(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
+    terminalizeLocalCoderRun(
+      this.opts.getControlPlaneStore?.(),
+      entry.controlPlaneRunContext,
+      { event: 'error', data: { reason: 'worker-evicted' }, mode: 'evicted' },
+    );
+    entry.controlPlaneRunContext = null;
     const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
     this.entries.delete(sessionId);
     try {
@@ -656,6 +711,14 @@ export class CoderWorkerPool {
             message: err.message,
             sessionId,
           });
+        }
+        if (entry) {
+          terminalizeLocalCoderRun(
+            this.opts.getControlPlaneStore?.(),
+            entry.controlPlaneRunContext,
+            { event: 'error', data: { reason: 'worker-crashed', message: err.message }, mode: 'worker_crash' },
+          );
+          entry.controlPlaneRunContext = null;
         }
         closePreviewSession(sessionId);
         this.entries.delete(sessionId);
@@ -843,6 +906,44 @@ export class CoderWorkerPool {
       // progress) — so any single such event resets `lastTouchedAt`
       // far below the 5-min TTL.
       e.lastTouchedAt = Date.now();
+      const controlPlaneStore = this.opts.getControlPlaneStore?.() ?? null;
+      const context = e.controlPlaneRunContext;
+      if (context) {
+        if (env.event === 'run_started') {
+          const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
+          markLocalCoderRunStarted(
+            controlPlaneStore,
+            context,
+            typeof data.runId === 'string' ? data.runId : undefined,
+          );
+        } else if (env.event === 'tool_call_start') {
+          const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
+          if (typeof data.id === 'string' && typeof data.name === 'string') {
+            mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
+              phase: 'started',
+              toolUseId: data.id,
+              toolName: data.name,
+              value: data.input,
+            });
+          }
+        } else if (env.event === 'tool_call_result') {
+          const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
+          if (typeof data.id === 'string' && typeof data.name === 'string') {
+            mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
+              phase: 'completed',
+              toolUseId: data.id,
+              toolName: data.name,
+              value: data.result,
+              durationMs: typeof data.duration_ms === 'number' ? data.duration_ms : undefined,
+            });
+          }
+        }
+        const now = Date.now();
+        if (now - e.lastControlPlaneLeaseRenewalAt >= 60_000) {
+          renewLocalCoderRunLease(controlPlaneStore, context, new Date(now).toISOString());
+          e.lastControlPlaneLeaseRenewalAt = now;
+        }
+      }
       publish(e.bus, env.event, env.data);
     });
     const offEnd = bridge.on('bus.end', (payload) => {
@@ -852,6 +953,12 @@ export class CoderWorkerPool {
       if (!e.bus.ended) {
         markEnded(e.bus, env.event, env.data);
       }
+      terminalizeLocalCoderRun(
+        this.opts.getControlPlaneStore?.(),
+        e.controlPlaneRunContext,
+        { event: env.event, data: env.data },
+      );
+      e.controlPlaneRunContext = null;
       // (B) — terminal event: run is no longer in progress; sweep may
       // now consider this entry for eviction once ttlMs elapses without
       // a follow-up `runFresh`/`pushUserMessage`.
@@ -889,6 +996,8 @@ export class CoderWorkerPool {
       // intent.
       runInProgress: false,
       qualityEnabled: effectiveQualityEnabled,
+      controlPlaneRunContext: null,
+      lastControlPlaneLeaseRenewalAt: 0,
       detachBusMirror: () => {
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }

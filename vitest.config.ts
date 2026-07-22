@@ -41,6 +41,7 @@ export default defineConfig({
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
+      ...pkgAliases('@mcp/agent-runtime-contracts', 'agent-runtime-contracts'),
       ...pkgAliases('@mcp/candidate-pipeline', 'candidate-pipeline'),
       ...pkgAliases('@mcp/orchestrator-host', 'orchestrator-host'),
       ...pkgAliases('@mcp/plugin-sdk', 'plugin-sdk'),

@@ -6,3 +6,4 @@ export * from './vectors.js';
 export * from './semantic-store.js';
 export * from './project-vector-store-pool.js';
 export * from './local-vector-router.js';
+export * from './control-plane/index.js';
