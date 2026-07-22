@@ -27,13 +27,13 @@ let bundledRoot: string;
 let fixtureDir: string;
 let installedDir: string;
 
-function writeBundledFixture(): void {
+function writeBundledFixture(version = VERSION): void {
   mkdirSync(join(fixtureDir, 'dist'), { recursive: true });
   writeFileSync(
     join(fixtureDir, 'plugin.json'),
     JSON.stringify({
       name: NS,
-      version: VERSION,
+      version,
       description: 'Bundled runtime fixture',
       author: { name: 'MCP' },
       apps: '.app.json',
@@ -78,6 +78,37 @@ afterAll(() => {
 });
 
 describe('seedBundledPlugins runtime format migration', () => {
+  it('refreshes a cachebusted manifest and preserves user grants', async () => {
+    const nextVersion = `${VERSION}+codex.local-20260722004907`;
+    const nextContributions = {
+      worker: './dist/plugin.js',
+      tools: [],
+      permissions: { storage: true },
+      compatibility: { profiles: [{ id: 'angular-17' }] },
+    };
+    writeBundledFixture(nextVersion);
+    writeFileSync(join(fixtureDir, '.app.json'), JSON.stringify(nextContributions));
+
+    const beforeStore = new InstalledPluginStore(dbPath);
+    beforeStore.setPermissionsGranted(NS, { storage: true });
+    beforeStore.close();
+
+    await seedBundledPlugins();
+
+    const afterStore = new InstalledPluginStore(dbPath);
+    const after = afterStore.get(NS);
+    afterStore.close();
+    expect(after?.version).toBe(nextVersion);
+    expect(after?.enabled).toBe(true);
+    expect(after?.permissions_granted).toEqual({ storage: true });
+    expect(after?.contributions).toMatchObject({
+      worker: './dist/plugin.js',
+      permissions: { storage: true },
+    });
+    expect(JSON.parse(readFileSync(join(installedDir, '.app.json'), 'utf8')))
+      .toEqual(nextContributions);
+  });
+
   it('refreshes an older same-version runtime once', async () => {
     const marker = join(installedDir, 'dist', 'package.json');
     const sentinel = join(installedDir, 'keep-me.txt');

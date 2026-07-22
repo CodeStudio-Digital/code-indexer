@@ -63,7 +63,7 @@ export {
   linkDsToDir,
   type DsConsumerLink,
 } from './projects/link-design-system.js';
-export { createFilesHandlers } from './files/index.js';
+export { createFilesHandlers, resolveSafe } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createSshHandlers, sharedSshManager, disposeSharedSshResources } from './ssh/index.js';
 export { createDbClientHandlers } from './db-client/index.js';

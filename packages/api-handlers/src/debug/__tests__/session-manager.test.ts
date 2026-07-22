@@ -89,7 +89,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.loadDebugAdapter.mockResolvedValue(loadedAdapter());
   mocks.reserveLoopbackPort.mockResolvedValue({ port: 9411, release: vi.fn().mockResolvedValue(undefined) });
-  mocks.startDebugTarget.mockResolvedValue({ child: { pid: 7654 }, dispose: vi.fn().mockResolvedValue(undefined) });
+  mocks.startDebugTarget.mockResolvedValue({
+    child: { pid: 7654 },
+    ready: Promise.resolve(),
+    dispose: vi.fn().mockResolvedValue(undefined),
+  });
   mocks.terminateDebuggeeTree.mockResolvedValue(undefined);
 });
 
@@ -136,7 +140,27 @@ describe('DebugSessionManager lifecycle', () => {
   it('keeps the session running when a superseded bootstrap connection closes', async () => {
     const parent = new FakeDap();
     const child = new FakeDap();
-    child.requestHook = async () => ({});
+    const childRequests: Array<{ command: string; args: Record<string, unknown> }> = [];
+    let resolveChildAttach!: (value: unknown) => void;
+    const childAttach = new Promise<unknown>((resolve) => { resolveChildAttach = resolve; });
+    child.requestHook = async (command, args) => {
+      childRequests.push({ command, args });
+      if (command === 'attach') return childAttach;
+      return {};
+    };
+    mocks.loadDebugAdapter.mockResolvedValue({
+      ...loadedAdapter(),
+      runtime: {
+        ...loadedAdapter().runtime,
+        resolveConfiguration: () => ({
+          type: 'pwa-node',
+          request: 'launch',
+          sourceMaps: true,
+          pauseForSourceMap: true,
+          runtimeSourcemapPausePatterns: ['**'],
+        }),
+      },
+    });
     parent.requestHook = async (command) => {
       if (command === 'launch') {
         const startChild = parent.reverseRequests.get('startDebugging');
@@ -167,6 +191,15 @@ describe('DebugSessionManager lifecycle', () => {
 
     expect(started.state).toBe('running');
     expect(started.error).toBeUndefined();
+    expect(childRequests).toContainEqual({
+      command: 'attach',
+      args: expect.objectContaining({
+        pauseForSourceMap: true,
+        runtimeSourcemapPausePatterns: ['**'],
+        sourceMaps: true,
+      }),
+    });
+    resolveChildAttach({});
     await manager.stop(started.sessionId);
     expect(manager.list()[0]?.state).toBe('terminated');
   });
@@ -182,7 +215,9 @@ describe('DebugSessionManager lifecycle', () => {
       return {};
     };
     const targetDispose = vi.fn().mockResolvedValue(undefined);
-    mocks.startDebugTarget.mockResolvedValue({ child: { pid: 7654 }, dispose: targetDispose });
+    let resolveTargetReady!: () => void;
+    const targetReady = new Promise<void>((resolve) => { resolveTargetReady = resolve; });
+    mocks.startDebugTarget.mockResolvedValue({ child: { pid: 7654 }, ready: targetReady, dispose: targetDispose });
     mocks.loadDebugAdapter.mockResolvedValue({
       ...loadedAdapter(),
       runtime: {
@@ -202,13 +237,18 @@ describe('DebugSessionManager lifecycle', () => {
     });
 
     const manager = new DebugSessionManager();
-    const started = await manager.start(9, 'C:\\project', {
+    const startPromise = manager.start(9, 'C:\\project', {
       projectId: 9,
       adapterId: 'javascript',
       request: 'launch',
       runner: { manager: 'yarn', script: 'dev' },
       breakpoints: [{ path: 'src/index.ts', breakpoints: [{ line: 24 }] }],
     });
+
+    await vi.waitFor(() => expect(mocks.startDebugTarget).toHaveBeenCalled());
+    expect(requests.some((request) => request.command === 'attach')).toBe(false);
+    resolveTargetReady();
+    const started = await startPromise;
 
     expect(mocks.startDebugTarget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'yarn' }),

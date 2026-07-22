@@ -10,8 +10,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapTestI18n } from '../../../i18n/test-bootstrap.js';
 import {
   collectLatestPersistedInteractivePromptSignatures,
+  collectPersistedToolResultIds,
   collectPersistedToolUseIds,
   isLiveTurnDuplicatedInHistory,
+  liveTurnCoversPersistedAssistantRun,
   liveBlockPersistedId,
   visibleLiveBlocks,
 } from '../utils.js';
@@ -90,13 +92,22 @@ const toolBlock = (id: string): StreamBlock =>
 const textBlock = (text: string): StreamBlock => ({ type: 'text', text });
 const taskRunBlock = (runId: string): StreamBlock =>
   ({ type: 'task_run', run: { runId } }) as unknown as StreamBlock;
-const agentsBlock = (groupId: string, toolUseId?: string): StreamBlock => ({
+const agentsBlock = (
+  groupId: string,
+  toolUseId?: string,
+  status: 'running' | 'completed' = 'running',
+): StreamBlock => ({
   type: 'agents',
   group: {
     groupId,
     toolUseId,
-    status: 'running',
-    agents: [{ index: 0, label: 'Scout', status: 'running', toolCallCount: 1 }],
+    status,
+    agents: [{
+      index: 0,
+      label: 'Scout',
+      status: status === 'completed' ? 'completed' : 'running',
+      toolCallCount: 1,
+    }],
   },
 });
 
@@ -107,6 +118,10 @@ const assistantToolUse = (...ids: string[]): PersistedMessage => ({
 const assistantText = (text: string): PersistedMessage => ({
   role: 'assistant',
   content: [{ type: 'text', text }],
+});
+const toolResult = (id: string): PersistedMessage => ({
+  role: 'tool',
+  content: [{ type: 'tool_result', tool_use_id: id, content: 'completed' }],
 });
 const assistantTextAndTool = (text: string, id: string): PersistedMessage => ({
   role: 'assistant',
@@ -184,6 +199,15 @@ describe('collectPersistedToolUseIds', () => {
   });
 });
 
+describe('collectPersistedToolResultIds', () => {
+  it('gathers only durable tool_result ids', () => {
+    expect([...collectPersistedToolResultIds([
+      assistantToolUse('spawn-1'),
+      toolResult('spawn-1'),
+    ])]).toEqual(['spawn-1']);
+  });
+});
+
 describe('visibleLiveBlocks', () => {
   it('drops a gate block whose id is already persisted (the dup case)', () => {
     const persisted = collectPersistedToolUseIds([assistantToolUse('t1')]);
@@ -200,6 +224,18 @@ describe('visibleLiveBlocks', () => {
     const persisted = collectPersistedToolUseIds([assistantToolUse('t1')]);
     const out = visibleLiveBlocks([textBlock('streaming…'), taskRunBlock('r1'), tasksBlock('t1')], persisted);
     expect(out.map((b) => b.type)).toEqual(['text', 'task_run']);
+  });
+
+  it('keeps the complete live sequence intact when it replaces the persisted checkpoint tail', () => {
+    const blocks = [textBlock('First cycle'), toolBlock('tool-1'), textBlock('Still running')];
+
+    expect(visibleLiveBlocks(
+      blocks,
+      new Set(['tool-1']),
+      new Set(),
+      new Set(['tool-1']),
+      true,
+    )).toEqual(blocks);
   });
 
   it('drops a live decision_gate when the latest persisted turn has the same prompt but a different tool_use id', () => {
@@ -242,6 +278,28 @@ describe('visibleLiveBlocks', () => {
     }) as StreamBlock;
 
     expect(visibleLiveBlocks([wrapper, live], new Set(['spawn-1']))).toEqual([live]);
+  });
+
+  it('returns a completed agents group to its persisted chronological position', () => {
+    const completed = agentsBlock('g1', 'spawn-1', 'completed');
+
+    expect(visibleLiveBlocks(
+      [textBlock('later live work'), completed],
+      new Set(['spawn-1']),
+      new Set(),
+      new Set(['spawn-1']),
+    )).toEqual([textBlock('later live work')]);
+  });
+
+  it('keeps a completed agents group live until its result is durable', () => {
+    const completed = agentsBlock('g1', 'spawn-1', 'completed');
+
+    expect(visibleLiveBlocks(
+      [completed],
+      new Set(['spawn-1']),
+      new Set(),
+      new Set(),
+    )).toEqual([completed]);
   });
 
   it('shows execute_tasks only through its rich task run representation', () => {
@@ -342,6 +400,72 @@ describe('isLiveTurnDuplicatedInHistory', () => {
         [assistantToolUse('spawn-1')],
       ),
     ).toBe(false);
+  });
+
+  it('clears an accumulated run when its completed agents result is persisted', () => {
+    expect(
+      isLiveTurnDuplicatedInHistory(
+        {
+          blocks: [
+            textBlock('Delegated work'),
+            agentsBlock('group-1', 'spawn-1', 'completed'),
+            textBlock('Here is the plan'),
+            planBlock('plan-1'),
+          ],
+        },
+        [
+          assistantTextAndTool('Delegated work', 'spawn-1'),
+          toolResult('spawn-1'),
+          assistantTextAndTool('Here is the plan', 'plan-1'),
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps a completed agents turn live while its result has not persisted', () => {
+    expect(
+      isLiveTurnDuplicatedInHistory(
+        { blocks: [agentsBlock('group-1', 'spawn-1', 'completed')] },
+        [assistantToolUse('spawn-1')],
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('liveTurnCoversPersistedAssistantRun', () => {
+  const userMessage: PersistedMessage = {
+    role: 'user',
+    content: [{ type: 'text', text: 'Investigate' }],
+  };
+
+  it('recognizes a checkpointed prefix of the accumulated live run after a session switch', () => {
+    expect(liveTurnCoversPersistedAssistantRun(
+      {
+        blocks: [
+          textBlock('First cycle'),
+          toolBlock('tool-1'),
+          textBlock('Second cycle'),
+          toolBlock('tool-2'),
+        ],
+      },
+      [
+        userMessage,
+        assistantTextAndTool('First cycle', 'tool-1'),
+        toolResult('tool-1'),
+        assistantText('Second cycle'),
+      ],
+    )).toBe(true);
+  });
+
+  it('rejects a cursor suffix that lacks the persisted beginning of the run', () => {
+    expect(liveTurnCoversPersistedAssistantRun(
+      { blocks: [textBlock('Second cycle'), toolBlock('tool-2')] },
+      [
+        userMessage,
+        assistantTextAndTool('First cycle', 'tool-1'),
+        toolResult('tool-1'),
+      ],
+    )).toBe(false);
   });
 });
 

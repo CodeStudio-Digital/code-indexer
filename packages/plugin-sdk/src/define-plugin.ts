@@ -7,6 +7,7 @@ import type {
   ContributedStatusBarItem,
   ContributedRunConfiguration,
   ContributedDebugger,
+  ContributedLanguageServer,
   ContributedProjectModule,
   PluginModule,
 } from './contributions/types.js';
@@ -22,6 +23,7 @@ export interface DefinePluginSpec {
   statusBarItems?: ContributedStatusBarItem[];
   runConfigurations?: ContributedRunConfiguration[];
   debuggers?: ContributedDebugger[];
+  languageServers?: ContributedLanguageServer[];
   modules?: ContributedProjectModule[];
   permissions?: PluginPermissions;
   /** LLM provider metadata this plugin contributes. */
@@ -43,6 +45,7 @@ export function definePlugin(spec: DefinePluginSpec): PluginModule {
     statusBarItems: spec.statusBarItems ?? [],
     runConfigurations: spec.runConfigurations ?? [],
     debuggers: spec.debuggers ?? [],
+    languageServers: spec.languageServers ?? [],
     modules: spec.modules ?? [],
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.providers && spec.providers.length ? { providers: spec.providers } : {}),

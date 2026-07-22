@@ -37,6 +37,7 @@ import { ExternalChangeBanner } from './ExternalChangeBanner.js';
 import { executeCommand, getCommand, onCommandsChanged } from '../../keymap/commands.js';
 import { useKeymapStore, bindingLabel } from '../../keymap/keymap-store.js';
 import { activeFileRenderEqual } from './editor/active-file-render.js';
+import { editorMediaKind } from './editor/media-types.js';
 
 const MonacoMount = lazy(() =>
   import('./editor/MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
@@ -46,6 +47,15 @@ const DiffMount = lazy(() =>
 );
 const MarkdownView = lazy(() =>
   import('./editor/MarkdownView.js').then((m) => ({ default: m.MarkdownView })),
+);
+const HtmlView = lazy(() =>
+  import('./editor/HtmlView.js').then((m) => ({ default: m.HtmlView })),
+);
+const SvgView = lazy(() =>
+  import('./editor/SvgView.js').then((m) => ({ default: m.SvgView })),
+);
+const MediaView = lazy(() =>
+  import('./editor/MediaView.js').then((m) => ({ default: m.MediaView })),
 );
 const DrawioEditor = lazy(() =>
   import('./editor/DrawioEditor.js').then((m) => ({ default: m.DrawioEditor })),
@@ -134,6 +144,7 @@ function EditorPaneView({ paneId }: { paneId: string }) {
     };
   }, [activePath]);
   const activeFile = useWorkspaceStore(selectActiveFile);
+  const mediaKind = activeFile ? editorMediaKind(activeFile.path) : null;
 
   // Stable callback so MonacoMount's handleMount deps / props don't churn.
   const onFocusPane = useCallback(() => setActivePane(paneId), [setActivePane, paneId]);
@@ -184,6 +195,12 @@ function EditorPaneView({ paneId }: { paneId: string }) {
               <DrawioEditor file={activeFile} />
             ) : isMarkdownPath(activeFile.path) ? (
               <MarkdownView file={activeFile} />
+            ) : mediaKind === 'html' ? (
+              <HtmlView file={activeFile} />
+            ) : mediaKind === 'svg' ? (
+              <SvgView file={activeFile} />
+            ) : mediaKind ? (
+              <MediaView file={activeFile} kind={mediaKind} />
             ) : (
               <div className="h-full flex flex-col min-h-0">
                 {activeFile.externallyChanged && (

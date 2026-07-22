@@ -3,30 +3,26 @@
  * + live per-project instances (state, restart). The editor CTA banner is
  * the other install entry point — both share lsp.installServerStream.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Languages, Loader2, RefreshCw, RotateCw, Trash2 } from 'lucide-react';
 import { apiCall, apiStream, electronApi } from '../../lib/api-client.js';
 import { Button } from '../../components/ui/button.js';
 import { useTranslation } from 'react-i18next';
+import type { LspInstallFrame, LspServerInfo } from '@mcp/api-bus';
 
-interface ServerInfo {
-  id: string;
-  label: string;
-  languages: string[];
-  version: string;
-  installed: boolean;
-  sizeLabel: string;
+interface Instance {
+  projectId: number;
+  serverId: string;
+  routeId?: string;
+  profileId?: string;
+  state: string;
+  lastExitReason?: string;
+  stderrTail?: string;
 }
-interface Instance { projectId: number; serverId: string; state: string; lastExitReason?: string; stderrTail?: string }
-type InstallFrame =
-  | { phase: 'start' }
-  | { phase: 'log'; line: string }
-  | { phase: 'done' }
-  | { phase: 'error'; message: string };
 
 export function LspServersPanel() {
   const { t } = useTranslation('admin');
-  const [servers, setServers] = useState<ServerInfo[]>([]);
+  const [servers, setServers] = useState<LspServerInfo[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState('');
@@ -35,7 +31,7 @@ export function LspServersPanel() {
   const refresh = useCallback(async () => {
     try {
       const [s, i] = await Promise.all([
-        apiCall<ServerInfo[]>('lsp.listServers'),
+        apiCall<LspServerInfo[]>('lsp.listServers'),
         apiCall<Instance[]>('lsp.instances'),
       ]);
       setServers(s);
@@ -53,7 +49,7 @@ export function LspServersPanel() {
     setLog('');
     try {
       if (electronApi()) {
-        for await (const f of apiStream<InstallFrame>('lsp.installServerStream', { serverId })) {
+        for await (const f of apiStream<LspInstallFrame>('lsp.installServerStream', { serverId })) {
           if (f.phase === 'log') setLog(f.line);
           if (f.phase === 'error') throw new Error(f.message);
           if (f.phase === 'done') break;
@@ -62,7 +58,7 @@ export function LspServersPanel() {
         await new Promise<void>((resolve, reject) => {
           const es = new EventSource(`/api/lsp/servers/${serverId}/install/stream`);
           es.addEventListener('install', (ev) => {
-            const f = JSON.parse((ev as MessageEvent).data) as InstallFrame;
+            const f = JSON.parse((ev as MessageEvent).data) as LspInstallFrame;
             if (f.phase === 'log') setLog(f.line);
             if (f.phase === 'error') { es.close(); reject(new Error(f.message)); }
             if (f.phase === 'done') { es.close(); resolve(); }
@@ -94,9 +90,24 @@ export function LspServersPanel() {
   };
 
   const restart = async (inst: Instance): Promise<void> => {
-    try { await apiCall('lsp.restartServer', { projectId: inst.projectId, serverId: inst.serverId }); } catch { /* best-effort */ }
+    try {
+      await apiCall('lsp.restartServer', {
+        projectId: inst.projectId,
+        serverId: inst.serverId,
+        routeId: inst.routeId,
+      });
+    } catch { /* best-effort */ }
     void refresh();
   };
+
+  const serverGroups = useMemo(() => {
+    const grouped = new Map<string, LspServerInfo[]>();
+    for (const server of servers) {
+      const key = server.familyId ?? server.id;
+      grouped.set(key, [...(grouped.get(key) ?? []), server]);
+    }
+    return [...grouped.entries()];
+  }, [servers]);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -119,10 +130,23 @@ export function LspServersPanel() {
       {error && <div className="text-xs text-red-400 border border-red-400/30 rounded px-2 py-1">{error}</div>}
 
       <div className="space-y-2">
-        {servers.map((s) => (
-          <div key={s.id} className="rounded-md border bg-card/40 px-3 py-2 flex items-center gap-3">
+        {serverGroups.map(([familyId, family]) => (
+          <div key={familyId} className="rounded-md border bg-card/30 p-2 space-y-1.5">
+            {family.length > 1 && (
+              <div className="px-1 text-[12px] font-semibold">
+                {family[0]?.label}
+                <span className="ml-2 font-normal text-muted-foreground">{family.length} perfis</span>
+              </div>
+            )}
+            {family.map((s) => (
+          <div key={s.id} className="rounded border bg-card/40 px-3 py-2 flex items-center gap-3">
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium">{s.label}</div>
+              <div className="text-[13px] font-medium">
+                {family.length > 1 ? s.profileId ?? s.label : s.label}
+                {s.supportTier === 'best-effort' && (
+                  <span className="ml-2 text-[10px] text-amber-400">legado</span>
+                )}
+              </div>
               <div className="text-[11px] text-muted-foreground">
                 {s.languages.join(', ')} · v{s.version} · {s.sizeLabel}
               </div>
@@ -147,6 +171,8 @@ export function LspServersPanel() {
               </Button>
             )}
           </div>
+            ))}
+          </div>
         ))}
       </div>
 
@@ -160,11 +186,12 @@ export function LspServersPanel() {
           <div className="space-y-1">
             {instances.map((i) => (
               <div
-                key={`${i.projectId}:${i.serverId}`}
+                key={`${i.projectId}:${i.routeId ?? i.serverId}`}
                 className="rounded border bg-card/30 px-2 py-1"
               >
                 <div className="flex items-center gap-3 text-[11.5px]">
                   <span className="font-mono">{i.serverId}</span>
+                  {i.profileId && <span className="text-muted-foreground">{i.profileId}</span>}
                   <span className="text-muted-foreground">projeto #{i.projectId}</span>
                   <span
                     className={

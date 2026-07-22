@@ -37,7 +37,7 @@ The desktop bundle contains the same Claude Code OAuth constants already mirrore
 - Claude.ai scopes: `user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload`
 - Console/API-key scopes: `org:create_api_key user:profile`
 
-Desktop also has local/staging overrides for internal development, but production only allows approved Claude endpoints. Its internal refresh and exchange calls include `anthropic-version: 2023-06-01` on `/v1/oauth/token`; our helper now does the same.
+Desktop also has local/staging overrides for internal development, but production only allows approved Claude endpoints. The Claude Code runtime bundled with the current desktop sends JSON with `Content-Type: application/json` to `/v1/oauth/token`; `anthropic-version: 2023-06-01` belongs to Anthropic API requests, not this token exchange/refresh path.
 
 Important boundary: Claude Desktop can mint some tokens from an already-authenticated Claude web session because it owns the first-party desktop/web integration. For this project, keep using explicit PKCE loopback/manual authorization and stored OAuth rows. Do not depend on Claude Desktop cookies, keychains, or private profile state.
 

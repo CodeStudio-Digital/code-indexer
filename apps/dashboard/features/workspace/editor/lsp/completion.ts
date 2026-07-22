@@ -5,13 +5,16 @@
  * específica chamaria duas vezes, então o fallback pula os ids já cobertos.
  */
 import type * as MonacoNs from 'monaco-editor';
+import type { LspServerStatus } from '@mcp/api-bus';
 import { apiCall } from '../../../../lib/api-client.js';
 import { incrementLspCounter, logLsp } from '../lsp-log.js';
 import { withMonacoCancellation } from './cancellation.js';
 import { rerankCompletionEntries } from './local-rerank.js';
 import {
+  ANGULAR_COMPLETION_TRIGGERS,
   COMPLETION_TRIGGERS,
   mapCompletionKind,
+  mergeCompletionTriggers,
   modelBelongsToProject,
   relPath,
   toEditOps,
@@ -28,6 +31,26 @@ export function registerCompletionProviders(
   ensureSynced: (model: MonacoNs.editor.ITextModel) => Promise<void>,
 ): MonacoNs.IDisposable[] {
   const disposers: MonacoNs.IDisposable[] = [];
+  const specificallyRegistered = new Set(Object.keys(COMPLETION_TRIGGERS));
+
+  const registerSpecificProvider = (
+    languageId: string,
+    triggerCharacters: string[],
+  ): MonacoNs.IDisposable => {
+    const registration = monaco.languages.registerCompletionItemProvider(languageId, {
+      triggerCharacters,
+      provideCompletionItems: completionProvider.provideCompletionItems.bind(completionProvider),
+      resolveCompletionItem: completionProvider.resolveCompletionItem?.bind(completionProvider),
+    });
+    let disposed = false;
+    return {
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        registration.dispose();
+      },
+    };
+  };
 
   // CAUSA-RAIZ DO P2 (autocomplete não abria): `monaco.languages.CompletionItemInsertTextRules`
   // é `undefined` no runtime deste bundle (const enum não exportado como objeto). Acessar
@@ -192,20 +215,50 @@ export function registerCompletionProviders(
     },
   };
 
+  let typescriptRegistration: MonacoNs.IDisposable | undefined;
   for (const [lang, triggerCharacters] of Object.entries(COMPLETION_TRIGGERS)) {
-    disposers.push(
-      monaco.languages.registerCompletionItemProvider(lang, {
-        triggerCharacters,
-        provideCompletionItems: completionProvider.provideCompletionItems.bind(completionProvider),
-        resolveCompletionItem: completionProvider.resolveCompletionItem?.bind(completionProvider),
-      }),
-    );
+    const registration = registerSpecificProvider(lang, triggerCharacters);
+    if (lang === 'typescript') typescriptRegistration = registration;
+    disposers.push(registration);
   }
+
+  // Angular-only trigger characters (`*`, `[`, `(`, `$`, `|`) must never hit
+  // the completion hot path in an ordinary TS project. Resolve the effective
+  // project overlay once, then atomically replace the TS registration and add
+  // HTML only when this project is actually Angular. JavaScript stays base-only:
+  // the Angular overlay does not own JS documents.
+  let asyncDisposed = false;
+  const angularRegistrations: MonacoNs.IDisposable[] = [];
+  disposers.push({
+    dispose() {
+      if (asyncDisposed) return;
+      asyncDisposed = true;
+      for (const registration of angularRegistrations.splice(0)) registration.dispose();
+    },
+  });
+  void apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId: 'typescript' })
+    .then((status) => {
+      const familyId = status.server?.familyId ?? status.server?.id;
+      if (asyncDisposed || familyId !== 'angular-language-server') return;
+      const angularTypescriptTriggers = mergeCompletionTriggers(
+        COMPLETION_TRIGGERS.typescript,
+        ANGULAR_COMPLETION_TRIGGERS,
+      );
+      const nextTypescript = registerSpecificProvider('typescript', angularTypescriptTriggers);
+      typescriptRegistration?.dispose();
+      angularRegistrations.push(nextTypescript);
+
+      const htmlRegistration = registerSpecificProvider('html', [...ANGULAR_COMPLETION_TRIGGERS]);
+      specificallyRegistered.add('html');
+      angularRegistrations.push(htmlRegistration);
+    })
+    .catch(() => undefined);
+
   disposers.push(
     monaco.languages.registerCompletionItemProvider('*', {
       async provideCompletionItems(model, position, context, token) {
         if (!modelBelongsToProject(model, projectId)) return { suggestions: [] };
-        if (model.getLanguageId() in COMPLETION_TRIGGERS) return { suggestions: [] };
+        if (specificallyRegistered.has(model.getLanguageId())) return { suggestions: [] };
         return completionProvider.provideCompletionItems(
           model, position, context, token,
         ) as MonacoNs.languages.ProviderResult<MonacoNs.languages.CompletionList>;

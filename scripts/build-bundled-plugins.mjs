@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stageJsDebugAdapter } from './js-debug-adapter-artifact.mjs';
+import { patchJsDebugWorkerHandoff, stageJsDebugAdapter } from './js-debug-adapter-artifact.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const extDir = join(root, 'extensions');
@@ -32,7 +32,7 @@ function run(cmd, args) {
   }
 }
 
-const bundledProductPlugins = new Set(['javascript-debugger']);
+const bundledProductPlugins = new Set(['angular', 'javascript-debugger']);
 const plugins = readdirSync(extDir, { withFileTypes: true })
   .filter((d) => d.isDirectory() && (d.name.startsWith('provider-') || bundledProductPlugins.has(d.name)))
   .map((d) => d.name)
@@ -55,7 +55,7 @@ for (const ns of plugins) {
     'build',
     `extensions/${ns}`,
   ];
-  if (ns.startsWith('provider-')) buildArgs.push('--trust-providers');
+  buildArgs.push('--trust-first-party');
   run(process.execPath, buildArgs);
 
   const appJson = join(srcDir, '.app.json');
@@ -78,6 +78,8 @@ for (const ns of plugins) {
     const adapterSource = await stageJsDebugAdapter(root, adapterDest);
     const installedAdapter = join(adapterDest, 'js-debug');
     cpSync(adapterSource, installedAdapter, { recursive: true });
+    const adapterEntry = join(installedAdapter, 'src', 'dapDebugServer.js');
+    writeFileSync(adapterEntry, patchJsDebugWorkerHandoff(readFileSync(adapterEntry, 'utf8')));
     // The standalone bundle uses CommonJS-style dynamic require. Without an
     // explicit package scope it inherits this repo's root `type: module` and
     // exits before opening the DAP port.
@@ -91,6 +93,7 @@ for (const ns of plugins) {
   const app = JSON.parse(readFileSync(join(dest, '.app.json'), 'utf8'));
   const count = Array.isArray(app.providers) ? app.providers.length : 0;
   const debuggerCount = Array.isArray(app.debuggers) ? app.debuggers.length : 0;
+  const languageServerCount = Array.isArray(app.languageServers) ? app.languageServers.length : 0;
   if (ns.startsWith('provider-') && count === 0) {
     console.error(`✗ ${ns}: bundled provider has no provider specs`);
     process.exit(1);
@@ -99,7 +102,11 @@ for (const ns of plugins) {
     console.error(`✗ ${ns}: bundled debugger has no debugger declarations`);
     process.exit(1);
   }
-  console.log(`  staged ${ns} → ${dest} (${count} provider spec(s), ${debuggerCount} debugger(s))`);
+  if (ns === 'angular' && languageServerCount === 0) {
+    console.error(`✗ ${ns}: bundled Angular plugin has no language-server declarations`);
+    process.exit(1);
+  }
+  console.log(`  staged ${ns} → ${dest} (${count} provider spec(s), ${debuggerCount} debugger(s), ${languageServerCount} language server(s))`);
 }
 
 console.log(`\n✓ Staged ${plugins.length} bundled plugin(s) → ${stageRoot}`);

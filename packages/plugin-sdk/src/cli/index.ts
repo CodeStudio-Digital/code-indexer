@@ -9,7 +9,7 @@ import { buildPlugin } from './build.js';
 import { publishPlugin } from './publish.js';
 
 const USAGE = 'usage: mcp-plugin <create|validate|build|publish> [name|dir]';
-const BUILD_USAGE = 'usage: mcp-plugin build [dir] [--trust-providers]';
+const BUILD_USAGE = 'usage: mcp-plugin build [dir] [--trust-first-party|--trust-providers]';
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
@@ -31,12 +31,14 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     case 'build': {
+      const trustFirstParty = args.includes('--trust-first-party');
       const trustProviders = args.includes('--trust-providers');
-      const unknownFlags = args.filter((value) => value.startsWith('-') && value !== '--trust-providers');
+      const knownFlags = new Set(['--trust-first-party', '--trust-providers']);
+      const unknownFlags = args.filter((value) => value.startsWith('-') && !knownFlags.has(value));
       const dirs = args.filter((value) => !value.startsWith('-'));
       if (unknownFlags.length > 0 || dirs.length > 1) throw new Error(BUILD_USAGE);
 
-      const r = await buildPlugin(dirs[0] ?? '.', { trustProviders });
+      const r = await buildPlugin(dirs[0] ?? '.', { trustFirstParty, trustProviders });
       console.log(`Built ${r.tools} tool(s) -> ${r.bundle}; wrote ${r.appJson}`);
       for (const f of r.uiFiles) console.log(`Inlined UI -> ${f}`);
       return;

@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import {
   contributeDebugger,
   defineDebugAdapter,
@@ -9,6 +9,7 @@ import {
 
 const PORT_TOKEN = '__MCP_DEBUG_PORT__';
 const DEFAULT_WRANGLER_INSPECTOR_PORT = 9229;
+const WRANGLER_CONFIG_FILES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'] as const;
 
 function forwardedPackageArguments(manager: string, args: string[]): string[] {
   if (args.length === 0) return [];
@@ -43,6 +44,65 @@ function explicitWranglerInspectorPort(command: string): number | null {
   if (!explicitPort) return null;
   const port = Number(explicitPort);
   return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+}
+
+function wranglerCommandHasScript(command: string): boolean {
+  return /(?:^|[;&|]\s*|\s)(?:npx\s+)?wrangler(?:\.cmd)?\s+dev\s+(?!-)(?:"[^"]+"|'[^']+'|[^\s;&|]+)/i.test(command);
+}
+
+function configuredWranglerEntry(cwd: string): string | null {
+  for (const fileName of WRANGLER_CONFIG_FILES) {
+    const configPath = join(cwd, fileName);
+    if (!existsSync(configPath)) continue;
+    try {
+      const source = readFileSync(configPath, 'utf8');
+      let main: string | null = null;
+      if (fileName.endsWith('.toml')) {
+        const value = /^\s*main\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')/m.exec(source)?.[1];
+        if (value) main = value.startsWith('"') ? JSON.parse(value) as string : value.slice(1, -1);
+      } else {
+        const value = /"main"\s*:\s*("(?:\\.|[^"\\])*")/.exec(source)?.[1];
+        if (value) main = JSON.parse(value) as string;
+      }
+      if (main) return resolve(dirname(configPath), main);
+    } catch {
+      // Wrangler will report malformed configuration with its richer diagnostics.
+    }
+  }
+  return null;
+}
+
+export function wranglerDebugWrapperSource(entrySpecifier: string): string {
+  return [
+    `import worker from ${JSON.stringify(entrySpecifier)};`,
+    `export * from ${JSON.stringify(entrySpecifier)};`,
+    'let primed = false;',
+    'function primeDebugger() { if (!primed) { primed = true; debugger; } }',
+    'const handlerNames = ["fetch", "scheduled", "queue", "email", "tail", "trace", "alarm", "test"];',
+    'const wrapped = typeof worker === "function" ? class extends worker {} : { ...worker };',
+    'const owner = typeof worker === "function" ? worker.prototype : worker;',
+    'const destination = typeof worker === "function" ? wrapped.prototype : wrapped;',
+    'for (const name of handlerNames) {',
+    '  const handler = owner?.[name];',
+    '  if (typeof handler !== "function") continue;',
+    '  Object.defineProperty(destination, name, { configurable: true, value: function (...args) {',
+    '    primeDebugger();',
+    '    return handler.apply(typeof worker === "function" ? this : worker, args);',
+    '  } });',
+    '}',
+    'export default wrapped;',
+    '',
+  ].join('\n');
+}
+
+function wranglerDebugWrapper(cwd: string, inspectorPort: number, command: string) {
+  if (wranglerCommandHasScript(command)) return null;
+  const entry = configuredWranglerEntry(cwd);
+  if (!entry) return null;
+  const path = join(cwd, `.mcp-wrangler-debug-${inspectorPort}.mjs`);
+  let entrySpecifier = relative(dirname(path), entry).replace(/\\/g, '/');
+  if (!entrySpecifier.startsWith('.')) entrySpecifier = `./${entrySpecifier}`;
+  return { path, content: wranglerDebugWrapperSource(entrySpecifier) };
 }
 
 export function wranglerInspectorPort(
@@ -116,9 +176,15 @@ export const debugAdapter = defineDebugAdapter({
         const scriptCommand = packageScriptCommand(input, cwd);
         const explicitInspectorPort = scriptCommand ? explicitWranglerInspectorPort(scriptCommand) : null;
         const inspectorPort = wranglerInspectorPort(scriptCommand, input.targetPort ?? DEFAULT_WRANGLER_INSPECTOR_PORT);
+        const wrapper = inspectorPort === null || !scriptCommand
+          ? null
+          : wranglerDebugWrapper(cwd, inspectorPort, scriptCommand);
         const debugArgs = inspectorPort === null
           ? []
-          : explicitInspectorPort === null ? [`--inspector-port=${inspectorPort}`] : [];
+          : [
+              ...(explicitInspectorPort === null ? [`--inspector-port=${inspectorPort}`] : []),
+              ...(wrapper ? [wrapper.path] : []),
+            ];
         const runtimeArgs = packageRunnerArgs(input, debugArgs);
 
         if (inspectorPort !== null) {
@@ -133,6 +199,12 @@ export const debugAdapter = defineDebugAdapter({
             name: base.name,
             port: inspectorPort,
             cwd: '/',
+            sourceMaps: true,
+            // Workerd publishes the original TypeScript source map when the
+            // first request loads the Worker script. Keep that script paused
+            // long enough for js-debug to bind the original-source breakpoint.
+            pauseForSourceMap: true,
+            ...(wrapper ? { mcpPrimeOnFirstDebuggerStatement: true } : {}),
             attachExistingChildren: false,
             autoAttachChildProcesses: false,
             resolveSourceMapLocations: null,
@@ -151,6 +223,9 @@ export const debugAdapter = defineDebugAdapter({
               args: runtimeArgs ?? [],
               cwd,
               env: { ...(input.runner.env ?? {}), ...(input.env ?? {}) },
+              ...(wrapper ? { preparedFiles: [wrapper] } : {}),
+              readyPattern: 'Ready on http://',
+              readyTimeoutMs: 30_000,
             },
           };
         }

@@ -281,19 +281,47 @@ export function markEnded(bus: CoderRunBus, event: 'done' | 'error', data: unkno
  * Subscribe to the bus. Immediately replays every buffered event with
  * seq > sinceSeq, then forwards live events until unsubscribed.
  * Returns an unsubscribe function.
+ *
+ * Race-free ordering: the subscriber is registered BEFORE the replay runs,
+ * with live events that arrive during the replay queued and flushed right
+ * after it. Previously the replay ran first and the subscriber was added
+ * after, so a (reentrant) publish during the replay loop was never
+ * delivered — and a reentrant publish that triggered buffer eviction could
+ * also shift the live array mid-iteration and skip events. Dedup is by
+ * seq: publish() assigns monotonically increasing seqs, so anything live
+ * during the replay has seq > maxReplaySeq.
  */
 export function subscribe(
   bus: CoderRunBus,
   sub: BusSubscriber,
   sinceSeq = -1,
 ): () => void {
-  for (const ev of bus.buffer) {
-    if (ev.seq > sinceSeq) {
-      try { sub(ev); } catch { /* ignore */ }
+  // Snapshot first — the live buffer must not be mutated under our feet by
+  // a reentrant publish (eviction splices the head, growth appends).
+  const replay = bus.buffer.filter((ev) => ev.seq > sinceSeq);
+  const maxReplaySeq = replay.length > 0 ? replay[replay.length - 1]!.seq : sinceSeq;
+  let replaying = true;
+  const queued: BufferedEvent[] = [];
+  const wrapped: BusSubscriber = (ev) => {
+    if (replaying) {
+      if (ev.seq > maxReplaySeq) queued.push(ev);
+      return;
     }
+    sub(ev);
+  };
+  bus.subscribers.add(wrapped);
+  for (const ev of replay) {
+    try { sub(ev); } catch { /* ignore */ }
   }
-  bus.subscribers.add(sub);
-  return () => { bus.subscribers.delete(sub); };
+  // Drain with replay mode still ON and an index-based loop: a reentrant
+  // publish while handling an early queued event is appended to `queued`
+  // and drained in sequence (strict seq order), instead of being delivered
+  // immediately ahead of the older queued events.
+  for (let i = 0; i < queued.length; i++) {
+    try { sub(queued[i]!); } catch { /* ignore */ }
+  }
+  replaying = false;
+  return () => { bus.subscribers.delete(wrapped); };
 }
 
 /**
@@ -383,17 +411,38 @@ export function buildAttachReplay(bus: CoderRunBus): BufferedEvent[] {
  * Replay a precomputed event window, then subscribe live. Used by the SSE
  * pump's trimmed attach path; `subscribe` keeps the full-replay contract for
  * every other caller (worker forwarding, company streams, tests).
+ *
+ * Same race-free ordering as `subscribe`: the live subscription is
+ * registered before the replay, and live events published during the
+ * replay (seq > last replayed seq) are queued and flushed right after it
+ * instead of being lost.
  */
 export function subscribeWithReplay(
   bus: CoderRunBus,
   sub: BusSubscriber,
   replay: readonly BufferedEvent[],
 ): () => void {
+  const maxReplaySeq = replay.length > 0 ? replay[replay.length - 1]!.seq : -1;
+  let replaying = true;
+  const queued: BufferedEvent[] = [];
+  const wrapped: BusSubscriber = (ev) => {
+    if (replaying) {
+      if (ev.seq > maxReplaySeq) queued.push(ev);
+      return;
+    }
+    sub(ev);
+  };
+  bus.subscribers.add(wrapped);
   for (const ev of replay) {
     try { sub(ev); } catch { /* ignore */ }
   }
-  bus.subscribers.add(sub);
-  return () => { bus.subscribers.delete(sub); };
+  // Same ordering guarantee as `subscribe`: replay mode stays on while the
+  // queue drains, so reentrant publishes append and flush in seq order.
+  for (let i = 0; i < queued.length; i++) {
+    try { sub(queued[i]!); } catch { /* ignore */ }
+  }
+  replaying = false;
+  return () => { bus.subscribers.delete(wrapped); };
 }
 
 /**

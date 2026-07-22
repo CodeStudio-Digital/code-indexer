@@ -130,6 +130,18 @@ function completingProviderWithUsage(): ChatProvider {
   };
 }
 
+function reportingProvider(report: string): ChatProvider {
+  return {
+    name: 'mock',
+    model: 'mock-model',
+    setModel() {},
+    async *chat(): AsyncIterable<ChatDelta> {
+      yield { type: 'text_delta', text: report };
+      yield { type: 'done', stop_reason: 'end_turn' };
+    },
+  };
+}
+
 describe('runSubagent limits', () => {
   beforeEach(() => {
     process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS = '20';
@@ -433,6 +445,23 @@ describe('runSubagent limits', () => {
 
     expect(results[0].reason).toBe('time_budget');
     expect(terminal.at(-1)).toBe('partial');
+  });
+
+  it('emits the complete report in parallel progress', async () => {
+    const report = `# Findings\n\n${'Complete parallel evidence. '.repeat(30)}`;
+    let completedSummary: string | undefined;
+    await runParallelAgents(
+      parent(reportingProvider(report), []),
+      [{ task: 'report', label: 'reporter', maxTurns: 0 }],
+      'You are a test subagent.',
+      null,
+      (progress) => {
+        if (progress.event === 'completed') completedSummary = progress.summary;
+      },
+    );
+
+    expect(report.length).toBeGreaterThan(500);
+    expect(completedSummary).toBe(report);
   });
 
   it('lets six progressing agents complete with concurrency five and no global caps', async () => {

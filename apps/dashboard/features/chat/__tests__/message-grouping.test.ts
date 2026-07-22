@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeConsecutiveAssistantGroups,
   liveTurnContinuesPersistedAssistant,
+  suppressLatestPersistedAssistantRun,
   suppressPersistedAgentDuplicates,
 } from '../utils.js';
 import type { PersistedMessage, VisualGroup } from '../types.js';
@@ -76,5 +77,27 @@ describe('assistant visual grouping', () => {
 
     expect(liveTurnContinuesPersistedAssistant([assistantMessage, toolMessage])).toBe(true);
     expect(liveTurnContinuesPersistedAssistant([assistantMessage, userMessage])).toBe(false);
+  });
+
+  it('removes only the latest checkpointed assistant run when the complete run stays live', () => {
+    const firstUser: VisualGroup = {
+      kind: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'First request' }] },
+      messageId: 1,
+    };
+    const latestUser: VisualGroup = {
+      kind: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'Latest request' }] },
+      messageId: 3,
+    };
+    const groups = [
+      firstUser,
+      assistant(2, [{ type: 'text', text: 'Old completed answer' }], true),
+      latestUser,
+      assistant(4, [{ type: 'text', text: 'Checkpoint one' }], true),
+      assistant(5, [{ type: 'tool_use', id: 'read-1', name: 'read_file', input: {} }]),
+    ];
+
+    expect(suppressLatestPersistedAssistantRun(groups)).toEqual(groups.slice(0, 3));
   });
 });

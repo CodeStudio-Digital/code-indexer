@@ -7,6 +7,16 @@ import { parseModelPath } from '../editor-models-path.js';
 
 export type Monaco = typeof MonacoNs;
 
+/** Angular LS completion triggers for templates and inline template metadata. */
+export const ANGULAR_COMPLETION_TRIGGERS = ['<', '.', '*', '[', '(', '$', '|', '@'] as const;
+
+export function mergeCompletionTriggers(
+  existing: readonly string[],
+  additional: readonly string[],
+): string[] {
+  return [...new Set([...existing, ...additional])];
+}
+
 /** Trigger characters per language family; '*' (manual Ctrl+Space) covers the rest. */
 export const COMPLETION_TRIGGERS: Record<string, string[]> = {
   typescript: ['.', '"', "'", '/', '@', '<', '#'],

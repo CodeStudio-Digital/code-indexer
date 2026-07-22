@@ -8,6 +8,7 @@ import {
   contributeStatusBarItem,
   contributeRunConfiguration,
   contributeDebugger,
+  contributeLanguageServer,
 } from '@mcp/plugin-sdk/define.js';
 
 describe('definePlugin', () => {
@@ -21,6 +22,7 @@ describe('definePlugin', () => {
     expect(mod.statusBarItems).toEqual([]);
     expect(mod.runConfigurations).toEqual([]);
     expect(mod.debuggers).toEqual([]);
+    expect(mod.languageServers).toEqual([]);
     expect(mod.modules).toEqual([]);
   });
 
@@ -40,6 +42,18 @@ describe('definePlugin', () => {
         id: 'javascript',
         label: 'JavaScript',
         languageIds: ['javascript'],
+      })],
+      languageServers: [contributeLanguageServer({
+        id: 'angular-language-server',
+        label: 'Angular Language Service',
+        languages: ['typescript', 'html'],
+        activation: { whenFiles: ['angular.json'] },
+        install: { kind: 'npm', package: '@angular/language-server', version: '21.2.18' },
+        entryRelPath: 'node_modules/@angular/language-server/index.js',
+        args: [],
+        launchKind: 'angular',
+        routing: { mode: 'overlay', priority: 100 },
+        sizeLabel: '~30 MB',
       })],
       modules: [
         contributeProjectModule({
@@ -76,6 +90,7 @@ describe('definePlugin', () => {
     expect(res.content).toBe('hi');
     expect(mod.commands[0].id).toBe('c');
     expect(mod.debuggers[0].id).toBe('javascript');
+    expect(mod.languageServers[0].routing.mode).toBe('overlay');
     expect(mod.modules[0].id).toBe('node-project');
     expect(mod.modules[0].editorActions?.[0].runsTool).toBe('echo');
     expect(mod.modules[0].editorActions?.[0].gutter?.line.text).toBe('FROM');

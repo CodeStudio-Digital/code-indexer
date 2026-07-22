@@ -13,6 +13,45 @@ export const JS_DEBUG_VERSION = '1.117.0';
 export const JS_DEBUG_SHA256 = 'ad8d04ede9d4b75cc290fd5438a65047a06f786d04f604b6112485b36f090772';
 export const JS_DEBUG_URL = `https://github.com/microsoft/vscode-js-debug/releases/download/v${JS_DEBUG_VERSION}/js-debug-dap-v${JS_DEBUG_VERSION}.tar.gz`;
 
+export const WORKER_HANDOFF_ORIGINAL =
+  'let h=async()=>(await p.launchBlocker(),n.runIfWaitingForDebugger(),e.threadData.resolve({thread:d,debugAdapter:p}),{});';
+const WORKER_HANDOFF_PATCHED =
+  'let h=async()=>{await p.launchBlocker(),await ae(25),await p.launchBlocker(),d._mcpPrimeBreakpointPause&&(d._mcpPrimeBreakpointPause=!1,await d.resume()),n.runIfWaitingForDebugger();return e.threadData.resolve({thread:d,debugAdapter:p}),{}};';
+export const WORKER_PAUSE_HANDLER_ORIGINAL = 'async _onPaused(e){let t=e.hitBreakpoints??[]';
+const WORKER_PAUSE_HANDLER_PATCHED =
+  'async _onPaused(e){if(this.launchConfig.mcpPrimeOnFirstDebuggerStatement&&!this._mcpPrimeBreakpointConsumed&&e.reason==="other"&&!(e.hitBreakpoints?.length)){this._mcpPrimeBreakpointConsumed=!0,this._mcpPrimeBreakpointPause=!0;return}let t=e.hitBreakpoints??[]';
+
+/**
+ * Workerd publishes the generated script/source map while js-debug is handing
+ * the target to its child DAP session. In the standalone adapter the runtime
+ * was resumed in the same turn that queued script processing, so the first
+ * request could finish before the generated breakpoint was active.
+ *
+ * Give queued script/source-map work one short turn to start, drain launch
+ * blockers again while the first hidden debugger statement from the Wrangler
+ * launch wrapper keeps Workerd paused. The pause is not published to DAP; once
+ * source-mapped breakpoints are active it is resumed internally. This mirrors
+ * WebStorm's first-statement initialization order and exposes only the user's
+ * breakpoint.
+ * The adapter release is hash-pinned, so an upstream layout change must fail
+ * the build instead of silently dropping this compatibility patch.
+ */
+export function patchJsDebugWorkerHandoff(source) {
+  const first = source.indexOf(WORKER_HANDOFF_ORIGINAL);
+  if (first < 0) throw new Error('js-debug worker handoff patch point was not found');
+  if (source.indexOf(WORKER_HANDOFF_ORIGINAL, first + WORKER_HANDOFF_ORIGINAL.length) >= 0) {
+    throw new Error('js-debug worker handoff patch point was not unique');
+  }
+  const pauseHandler = source.indexOf(WORKER_PAUSE_HANDLER_ORIGINAL);
+  if (pauseHandler < 0) throw new Error('js-debug worker pause handler patch point was not found');
+  if (source.indexOf(WORKER_PAUSE_HANDLER_ORIGINAL, pauseHandler + WORKER_PAUSE_HANDLER_ORIGINAL.length) >= 0) {
+    throw new Error('js-debug worker pause handler patch point was not unique');
+  }
+  return source
+    .replace(WORKER_HANDOFF_ORIGINAL, WORKER_HANDOFF_PATCHED)
+    .replace(WORKER_PAUSE_HANDLER_ORIGINAL, WORKER_PAUSE_HANDLER_PATCHED);
+}
+
 const text = (buffer, start, length) => buffer.subarray(start, start + length).toString('utf8').replace(/\0.*$/, '');
 
 function confinedPath(root, archivePath) {

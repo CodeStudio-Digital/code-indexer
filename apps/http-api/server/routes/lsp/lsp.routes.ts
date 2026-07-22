@@ -12,12 +12,13 @@
  * mode (`pnpm dev`) and external tooling.
  */
 
-import type { Context, Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { Hono } from 'hono';
 import { createLspHandlers, createContext } from '@mcp/api-handlers';
-import { ApiError, type CodeActionDTO, type DocChange, type Position } from '@mcp/api-bus';
+import { type CodeActionDTO, type DocChange, type Position } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
+import { mapLspApiError as mapApiError } from './lsp-http-utils.js';
+import { mountLspServerRoutes } from './lsp-server.routes.js';
 
 interface PositionBody {
   file: string;
@@ -26,15 +27,9 @@ interface PositionBody {
   context?: { triggerKind: number; triggerCharacter?: string };
 }
 
-function mapApiError(c: Context, err: unknown) {
-  if (err instanceof ApiError) {
-    return c.json({ error: err.message, code: err.code }, err.status as never);
-  }
-  throw err;
-}
-
 export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
   const h = createLspHandlers(deps);
+  mountLspServerRoutes(app, deps, h);
 
   // ─── Stateful document sync ───────────────────────────────────────
   app.post('/api/lsp/:projectId/did-open', async (c) => {
@@ -65,116 +60,6 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
     } catch (err) {
       return mapApiError(c, err);
     }
-  });
-
-  // ─── External LSP servers (status / catalog / install / lifecycle) ──
-  app.post('/api/lsp/:projectId/server-status', async (c) => {
-    try {
-      const projectId = parseIdParam(c, 'projectId');
-      const body = await c.req.json<{ languageId: string }>();
-      return c.json(await h.serverStatus({ projectId, languageId: body.languageId }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.get('/api/lsp/servers', async (c) => {
-    try {
-      return c.json(await h.listServers(undefined, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.get('/api/lsp/instances', async (c) => {
-    try {
-      return c.json(await h.instances(undefined, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.delete('/api/lsp/servers/:serverId', async (c) => {
-    try {
-      return c.json(await h.removeServer({ serverId: c.req.param('serverId') }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.post('/api/lsp/:projectId/servers/:serverId/restart', async (c) => {
-    try {
-      const projectId = parseIdParam(c, 'projectId');
-      return c.json(await h.restartServer({ projectId, serverId: c.req.param('serverId') }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.post('/api/lsp/:projectId/language-level', async (c) => {
-    try {
-      const projectId = parseIdParam(c, 'projectId');
-      const body = await c.req.json<{ languageId: 'php' | 'python'; level: string }>();
-      return c.json(await h.setLanguageLevel({ projectId, languageId: body.languageId, level: body.level }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  app.get('/api/lsp/:projectId/language-levels', async (c) => {
-    try {
-      const projectId = parseIdParam(c, 'projectId');
-      return c.json(await h.languageLevels({ projectId }, createContext()));
-    } catch (err) {
-      return mapApiError(c, err);
-    }
-  });
-
-  /** Consent-gated install with streamed progress (SSE; MessagePort on Electron). */
-  app.get('/api/lsp/servers/:serverId/install/stream', async (c) => {
-    const serverId = c.req.param('serverId');
-    return streamSSE(c, async (stream) => {
-      let seq = 0;
-      try {
-        for await (const frame of h.installServerStream({ serverId }, createContext())) {
-          await stream.writeSSE({ id: String(seq++), event: 'install', data: JSON.stringify(frame) });
-        }
-      } finally {
-        await stream.close();
-      }
-    });
-  });
-
-  /** Diagnostics push (browser-dev parity for the Electron MessagePort stream). */
-  app.get('/api/lsp/:projectId/diagnostics/stream', async (c) => {
-    const projectId = parseIdParam(c, 'projectId');
-    if (!deps.db.getProject(projectId)) return c.json({ error: 'not_found' }, 404);
-    return streamSSE(c, async (stream) => {
-      let seq = 0;
-      try {
-        for await (const frame of h.diagnosticsStream({ projectId }, createContext())) {
-          await stream.writeSSE({ id: String(seq++), event: 'diagnostics', data: JSON.stringify(frame) });
-        }
-      } finally {
-        await stream.close();
-      }
-    });
-  });
-
-  /** Server-status push (live language chip) — browser-dev parity. */
-  app.get('/api/lsp/:projectId/server-status/stream', async (c) => {
-    const projectId = parseIdParam(c, 'projectId');
-    if (!deps.db.getProject(projectId)) return c.json({ error: 'not_found' }, 404);
-    return streamSSE(c, async (stream) => {
-      let seq = 0;
-      try {
-        for await (const frame of h.serverStatusStream({ projectId }, createContext())) {
-          await stream.writeSSE({ id: String(seq++), event: 'serverStatus', data: JSON.stringify(frame) });
-        }
-      } finally {
-        await stream.close();
-      }
-    });
   });
 
   app.post('/api/lsp/:projectId/completion', async (c) => {
@@ -238,6 +123,61 @@ export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
       const projectId = parseIdParam(c, 'projectId');
       const body = await c.req.json<PositionBody>();
       return c.json(await h.definition({ projectId, ...body }, createContext({ signal: c.req.raw.signal })));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/type-definition', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; position: Position }>();
+      return c.json(await h.typeDefinition(
+        { projectId, ...body },
+        createContext({ signal: c.req.raw.signal }),
+      ));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/folding-ranges', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string }>();
+      return c.json(await h.foldingRanges(
+        { projectId, ...body },
+        createContext({ signal: c.req.raw.signal }),
+      ));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/inlay-hints', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{
+        file: string;
+        range: { start: Position; end: Position };
+      }>();
+      return c.json(await h.inlayHints(
+        { projectId, ...body },
+        createContext({ signal: c.req.raw.signal }),
+      ));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/lsp/:projectId/linked-editing-ranges', async (c) => {
+    try {
+      const projectId = parseIdParam(c, 'projectId');
+      const body = await c.req.json<{ file: string; position: Position }>();
+      return c.json(await h.linkedEditingRanges(
+        { projectId, ...body },
+        createContext({ signal: c.req.raw.signal }),
+      ));
     } catch (err) {
       return mapApiError(c, err);
     }

@@ -1,4 +1,10 @@
-import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
+import {
+  parseRuntimeModelRef,
+  type ProviderSpec,
+  type ResolvedCreds,
+  type ProviderDefinition,
+  type CreateCoderOpts,
+} from '@mcp/provider-sdk';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
 import {
   getClaudeCodeSystemPrefixBlocks,
@@ -60,6 +66,12 @@ function claudeCodeAccountInfo(creds: { extra?: Record<string, unknown> }): Clau
       profileInfo?.rateLimitTier ??
       snakeProfileInfo?.rateLimitTier ??
       null,
+    billingType:
+      (creds.extra?.billingType as string | null | undefined) ??
+      (creds.extra?.billing_type as string | null | undefined) ??
+      profileInfo?.billingType ??
+      snakeProfileInfo?.billingType ??
+      null,
   };
 }
 
@@ -73,10 +85,12 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
   return {
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const accountInfo = claudeCodeAccountInfo(creds);
-      const initial = resolveClaudeCodeModel(model ?? 'default', accountInfo, {
+      const selectedModel = model ?? 'default';
+      const wireModel = parseRuntimeModelRef(selectedModel).id;
+      const initial = resolveClaudeCodeModel(wireModel, accountInfo, {
         includeOAuth: !!creds.authToken,
         thinking: true,
-        effort: readClaudeCodeEffortForModel(opts, model ?? 'default'),
+        effort: readClaudeCodeEffortForModel(opts, selectedModel),
       });
       return new AnthropicChatProvider({
         name: 'claude-code',
@@ -86,20 +100,22 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
         defaultHeaders: claudeCodeMessageHeaders(creds),
         defaultMetadata: creds.extra?.metadata as { user_id?: string } | undefined,
         defaultBetas: initial.betas,
-        defaultTemperature: 1,
         systemPrefixBlocks: creds.authToken ? getClaudeCodeSystemPrefixBlocks() : undefined,
         fetch: creds.fetch,
-        model: model ?? 'default',
+        model: wireModel,
         dangerouslyAllowBrowser: true,
         useBetaMessages: true,
         streamViaCreate: true,
         maxRetries: 0,
         resolveModel: (selectedModel, req) => {
-          const resolved = resolveClaudeCodeModel(selectedModel, accountInfo, {
+          const nativeEffort = CLAUDE_CODE_VALID_EFFORTS.includes(req.reasoningEffort as ClaudeCodeEffort)
+            ? req.reasoningEffort as ClaudeCodeEffort
+            : undefined;
+          const resolved = resolveClaudeCodeModel(parseRuntimeModelRef(selectedModel).id, accountInfo, {
             includeOAuth: !!creds.authToken,
             thinking: true,
             hasTools: (req.tools?.length ?? 0) > 0,
-            effort: readClaudeCodeEffortForModel(opts, selectedModel),
+            effort: nativeEffort ?? readClaudeCodeEffortForModel(opts, selectedModel),
           });
           return {
             apiModel: resolved.apiModel,

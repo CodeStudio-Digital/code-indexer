@@ -10,12 +10,30 @@ import {
   DialogTitle,
 } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
+import { openClaudeCodeAuthorization } from './claude-code-authorization.js';
 import type { ClaudeCodeFlowState } from './types.js';
 
 interface ClaudeCodeConnectionDialogProps {
   providerId?: string;
   onClose: () => void;
   onConnected: (providerId?: string) => Promise<void> | void;
+}
+
+function openClaudeAuthorization(
+  authorizeUrl: string,
+  manualAuthorizeUrl: string | undefined,
+  mode: 'automatic' | 'manual',
+): void {
+  openClaudeCodeAuthorization(
+    { authorizeUrl, manualAuthorizeUrl },
+    mode,
+    {
+      openExternal: window.electronAPI?.openExternal,
+      openWindow: (url) => {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      },
+    },
+  );
 }
 
 export function ClaudeCodeConnectionDialog({
@@ -47,7 +65,7 @@ export function ClaudeCodeConnectionDialog({
           manualAuthorizeUrl: j.manual_authorize_url,
           flowState: j.state,
         });
-        window.open(j.authorize_url, '_blank', 'noopener,noreferrer');
+        openClaudeAuthorization(j.authorize_url, j.manual_authorize_url, 'automatic');
         const poll = async () => {
           if (cancelled) return;
           try {
@@ -126,20 +144,37 @@ export function ClaudeCodeConnectionDialog({
         {flow.state === 'waiting' && (
           <div className="space-y-3 text-sm">
             <p>
-              {t('admin:claudeCode.tabOpened')}<span className="font-mono">claude.com</span>{t('admin:claudeCode.afterAuth')}
+              {t('admin:claudeCode.loginStep')}
             </p>
             <p className="text-xs text-muted-foreground">
-              {t('admin:claudeCode.tabNotOpened')}{' '}
-              <a
-                href={flow.manualAuthorizeUrl ?? flow.authorizeUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline"
-              >
-                {t('admin:claudeCode.clickHere')}
-              </a>
-              .
+              {t('admin:claudeCode.authorizeStep')}
             </p>
+            <Button
+              type="button"
+              className="w-full"
+              onClick={() => openClaudeAuthorization(
+                flow.authorizeUrl,
+                flow.manualAuthorizeUrl,
+                'automatic',
+              )}
+            >
+              {t('admin:claudeCode.openAuthorization')}
+            </Button>
+            {flow.manualAuthorizeUrl && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => openClaudeAuthorization(
+                  flow.authorizeUrl,
+                  flow.manualAuthorizeUrl,
+                  'manual',
+                )}
+              >
+                {t('admin:claudeCode.openManualAuthorization')}
+              </Button>
+            )}
             <div className="space-y-2 rounded-md border border-border p-3">
               <p className="text-xs text-muted-foreground">
                 {t('admin:claudeCode.manualHint')}

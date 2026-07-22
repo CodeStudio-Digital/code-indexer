@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
 import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 
-function makeProvider(captured: { body: string }): AnthropicChatProvider {
+function makeProvider(captured: { body: string }, adaptive = false): AnthropicChatProvider {
   const fakeFetch: typeof fetch = async (_url, init) => {
     captured.body = typeof init?.body === 'string' ? init.body : '';
     const sse = [
@@ -44,7 +44,9 @@ function makeProvider(captured: { body: string }): AnthropicChatProvider {
     model: 'claude-sonnet-4-6',
     useBetaMessages: false,
     streamViaCreate: true,
-    defaultThinking: { type: 'enabled', budget_tokens: 5000 },
+    defaultThinking: adaptive
+      ? { type: 'adaptive' }
+      : { type: 'enabled', budget_tokens: 5000 },
   });
 }
 
@@ -100,5 +102,13 @@ describe('AnthropicChatProvider — per-request thinking budget', () => {
     await drain(provider, { ...baseReq, thinking: true, thinkingBudgetTokens: 0 });
     const sent = JSON.parse(captured.body);
     expect(sent.thinking).toEqual({ type: 'enabled', budget_tokens: 5000 });
+  });
+
+  it('does not attach legacy budget_tokens to adaptive Claude Code thinking', async () => {
+    const captured = { body: '' };
+    const provider = makeProvider(captured, true);
+    await drain(provider, { ...baseReq, thinking: true, thinkingBudgetTokens: 12000 });
+    const sent = JSON.parse(captured.body);
+    expect(sent.thinking).toEqual({ type: 'adaptive' });
   });
 });

@@ -83,6 +83,8 @@ export const FEATURE_TABLES: ManifestEntry[] = [
   { table: 'project_runtime_config', cls: 'FEATURE' },
   // Monaco/editor overrides (223) — travels with the project, never writes repo files.
   { table: 'project_editor_config', cls: 'FEATURE' },
+  // Per-workspace LSP compatibility selection follows the project.
+  { table: 'project_lsp_profile_overrides', cls: 'FEATURE' },
   // SSH client (173) — identities/hosts/snippets are direct; forwards join via host.
   // Order: identities before hosts (host.identity_id), hosts before forwards/db (FK).
   { table: 'ssh_identities', cls: 'FEATURE' },

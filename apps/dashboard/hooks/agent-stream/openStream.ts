@@ -90,6 +90,9 @@ export interface OpenStreamOpts {
   body?: Record<string, unknown>;
   lastEventId?: number;
   reattach?: boolean;
+  /** Existing blocks already covered by `lastEventId`. Cursor reattach must
+   *  continue from these instead of rebuilding an impossible partial turn. */
+  initialBlocks?: StreamBlock[];
 }
 
 export interface OpenStreamDeps {
@@ -123,9 +126,16 @@ export async function openStream(
 ): Promise<void> {
   const { updateSession, abortMap, lastSeenSeqMap } = deps;
 
+  const blocks: StreamBlock[] = opts.initialBlocks ? [...opts.initialBlocks] : [];
+  const toolIndex = new Map<string, number>();
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index];
+    if (block.type === 'tool') toolIndex.set(block.call.id, index);
+  }
+
   updateSession(sid, {
     streaming: true,
-    currentTurn: { blocks: [] },
+    currentTurn: { blocks: [...blocks] },
     doneReason: null,
     error: null,
     runDelta: ZERO_DELTA,
@@ -140,9 +150,6 @@ export async function openStream(
   abortMap.get(sid)?.abort();
   const ctrl = new AbortController();
   abortMap.set(sid, ctrl);
-
-  const blocks: StreamBlock[] = [];
-  const toolIndex = new Map<string, number>();
 
   // Track the most recent SSE id so reconnects resume from the right point.
   let lastSeenSeq = typeof opts.lastEventId === 'number' && opts.lastEventId >= 0
@@ -236,7 +243,11 @@ export async function openStream(
     // of the previous bus still awaiting drain.
     if (ev.event === 'bus_info') {
       try {
-        const info = JSON.parse(ev.data || '{}') as { bus_id?: string };
+        const info = JSON.parse(ev.data || '{}') as {
+          bus_id?: string;
+          first_replay_seq?: number;
+          dropped_replay_events?: number;
+        };
         if (info.bus_id && noteWorkerLogBus(sid, info.bus_id)) {
           // Bus changed under the same stream (a reconnect crossed a run
           // boundary): seq restarted at 0 on the new bus, so zero the
@@ -245,21 +256,53 @@ export async function openStream(
           lastSeenSeq = -1;
           lastSeenSeqMap.delete(sid);
         }
+        // Replay-gap visibility: the pump reports how many buffered events
+        // were evicted before this attach. When our cursor is older than
+        // the retained window, those events are permanently lost to the
+        // live view — surface it instead of silently accepting
+        // non-contiguous seqs. Completed turns are safe (persisted in the
+        // DB transcript); in-flight deltas reconcile at message_complete.
+        const dropped = typeof info.dropped_replay_events === 'number'
+          ? info.dropped_replay_events
+          : 0;
+        if (dropped > 0) {
+          const firstReplay = typeof info.first_replay_seq === 'number' ? info.first_replay_seq : null;
+          const gapOverlap = lastSeenSeq >= 0 && firstReplay !== null && firstReplay > lastSeenSeq + 1;
+          pushWorkerLog(sid, {
+            ts: Date.now(),
+            event: 'replay_gap',
+            level: gapOverlap ? 'warn' : 'info',
+            category: 'lifecycle',
+            message: gapOverlap
+              ? `Replay gap: ${dropped} buffered events were evicted ahead of your cursor (first retained seq ${firstReplay}, cursor at ${lastSeenSeq}). The live view may have missed events; completed turns stay intact via the persisted transcript.`
+              : `Replay buffer evicted ${dropped} events before this attach (fresh replay from seq ${firstReplay ?? 'unknown'}).`,
+            data: info,
+          });
+        }
       } catch { /* malformed preamble — ignore */ }
       return;
     }
-    // Persist the highest id for reattach in a ref (no re-render). This
-    // fires on every event; writing it to React state was a hidden 50+/s
-    // churn source even though nothing renders the value.
-    if (ev.id !== undefined && ev.id > lastSeenSeq) {
-      lastSeenSeq = ev.id;
-      lastSeenSeqMap.set(sid, ev.id);
-    }
-    if (!ev.data) return;
+    // Persist the highest id for reattach in a ref (no re-render). The
+    // cursor marks only FULLY-HANDLED events: it is committed after the
+    // handler runs, so a handler crash leaves the cursor behind and the
+    // next reconnect replays the event instead of losing it. Payload-less
+    // and unparseable events commit immediately — they carry no handler
+    // state, and re-dropping them on every reconnect would be a poison
+    // pill. (React state for the cursor was a hidden 50+/s churn source;
+    // it stays in a ref.)
+    const commitCursor = () => {
+      if (ev.id !== undefined && ev.id > lastSeenSeq) {
+        lastSeenSeq = ev.id;
+        lastSeenSeqMap.set(sid, ev.id);
+      }
+    };
+    if (!ev.data) { commitCursor(); return; }
     let data: Record<string, unknown>;
     try {
       data = JSON.parse(ev.data);
     } catch {
+      console.warn('[agent-stream] dropping malformed event payload', { event: ev.event, id: ev.id });
+      commitCursor();
       return;
     }
     // Capture diagnostic events before dispatch, but do not duplicate raw
@@ -283,6 +326,7 @@ export async function openStream(
     }
     const handler = handlers[ev.event];
     if (handler) handler(data, ev.event);
+    commitCursor();
   };
 
   // Chunked event pump. A reattach replay bursts the whole ring buffer into

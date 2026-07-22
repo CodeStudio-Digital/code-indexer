@@ -1,7 +1,9 @@
 # Plataforma de Debug e plugin JavaScript
 
-Status: implementação inicial em andamento  
-Escopo inicial: JavaScript e TypeScript  
+Status: plugin JavaScript executável; consolidação avançada em andamento
+
+Escopo inicial: JavaScript e TypeScript
+
 Protocolo: Debug Adapter Protocol (DAP)
 
 ## Objetivo

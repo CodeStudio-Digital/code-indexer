@@ -9,6 +9,7 @@ export interface PluginContributions {
   statusBarItems: NonNullable<AppManifest['statusBarItems']>;
   runConfigurations: NonNullable<AppManifest['runConfigurations']>;
   debuggers: NonNullable<AppManifest['debuggers']>;
+  languageServers: NonNullable<AppManifest['languageServers']>;
   modules: NonNullable<AppManifest['modules']>;
   providerRuntime: NonNullable<AppManifest['providerRuntime']> | null;
   debuggerRuntime: NonNullable<AppManifest['debuggerRuntime']> | null;
@@ -34,6 +35,7 @@ export function buildContributions(app: AppManifest | null): PluginContributions
     statusBarItems: app.statusBarItems ?? [],
     runConfigurations: app.runConfigurations ?? [],
     debuggers: app.debuggers ?? [],
+    languageServers: app.languageServers ?? [],
     modules: app.modules ?? [],
     providerRuntime: app.providerRuntime ?? null,
     debuggerRuntime: app.debuggerRuntime ?? null,

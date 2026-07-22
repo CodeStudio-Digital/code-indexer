@@ -17,9 +17,15 @@ export interface BuildResult {
 
 export interface BuildPluginOptions {
   /**
+   * Allow host-only contributions for plugins shipped as part of the app.
+   * Install-time provenance and runtime loaders remain authoritative.
+   */
+  trustFirstParty?: boolean;
+  /**
    * Allow host-only provider capabilities when building plugins shipped as
    * first-party bundled extensions. Third-party builds remain strict by
    * default; callers must opt into this lane explicitly.
+   * @deprecated Use trustFirstParty.
    */
   trustProviders?: boolean;
 }
@@ -106,6 +112,7 @@ export async function buildPlugin(
     statusBarItems: pm.statusBarItems ?? [],
     runConfigurations: pm.runConfigurations ?? [],
     debuggers: pm.debuggers ?? [],
+    ...(pm.languageServers?.length ? { languageServers: pm.languageServers } : {}),
     modules: pm.modules ?? [],
     ...(providerAdapters.length
       ? {
@@ -131,6 +138,7 @@ export async function buildPlugin(
     ...(pm.providers && pm.providers.length ? { providers: pm.providers } : {}),
   };
   const validatedApp = parseAppManifest(app, {
+    trustFirstParty: options.trustFirstParty === true,
     trustProviders: options.trustProviders === true,
   });
   const appJson = join(root, '.app.json');

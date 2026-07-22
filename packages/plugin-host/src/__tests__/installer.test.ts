@@ -19,6 +19,19 @@ let dbPath: string;
 let fixtureDir: string;
 const prevEnv = process.env.MCP_INDEX_DB;
 
+const ANGULAR_LANGUAGE_SERVER = {
+  id: 'angular-language-server',
+  label: 'Angular Language Service',
+  languages: ['typescript', 'html'],
+  activation: { whenFiles: ['angular.json'], whenPackageDep: ['@angular/core'] },
+  install: { kind: 'npm', package: '@angular/language-server', version: '21.2.18' },
+  entryRelPath: 'node_modules/@angular/language-server/index.js',
+  args: [],
+  launchKind: 'angular',
+  routing: { mode: 'overlay', priority: 100 },
+  sizeLabel: '~30 MB',
+};
+
 function writeFixture(root: string): void {
   mkdirSync(join(root, 'skills', 'greeter'), { recursive: true });
   mkdirSync(join(root, 'commands'), { recursive: true });
@@ -135,5 +148,31 @@ describe('installPlugin (local source)', () => {
       overwrite: true,
     });
     expect(again.namespace).toBe(NS);
+  });
+
+  it('rejects language-server declarations from a local plugin', async () => {
+    writeFileSync(
+      join(fixtureDir, '.app.json'),
+      JSON.stringify({ languageServers: [ANGULAR_LANGUAGE_SERVER] }),
+    );
+
+    await expect(
+      installPlugin({ source: { source: 'local', path: fixtureDir } }),
+    ).rejects.toThrow(/trusted first-party bundled plugins/);
+  });
+
+  it('persists a bundled language server in the installed contribution snapshot', async () => {
+    writeFileSync(
+      join(fixtureDir, '.app.json'),
+      JSON.stringify({ languageServers: [ANGULAR_LANGUAGE_SERVER] }),
+    );
+
+    await installPlugin({ source: { source: 'bundled', path: fixtureDir } });
+
+    const pluginStore = new InstalledPluginStore(dbPath);
+    const row = pluginStore.get(NS);
+    pluginStore.close();
+    expect(row?.source).toBe('bundled');
+    expect(row?.contributions?.languageServers).toEqual([ANGULAR_LANGUAGE_SERVER]);
   });
 });

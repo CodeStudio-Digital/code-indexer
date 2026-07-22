@@ -1,8 +1,9 @@
 import type { Context, Hono } from 'hono';
-import { createFilesHandlers, createContext } from '@mcp/api-handlers';
+import { createFilesHandlers, createContext, resolveSafe } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
+import { createMediaFileResponse, createProjectPreviewResponse } from './media-file-response.js';
 
 /**
  * Hono adapters for /api/projects/:id/files/* and /api/symbols/*.
@@ -86,6 +87,63 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
       touchIndexedFile(projectId, filePath, 'view');
       return c.json(result);
     } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  /**
+   * Binary/streaming read for editor previews. Unlike `files.read`, this keeps
+   * bytes intact and honors Range requests used by native audio/video controls.
+   */
+  app.get('/api/projects/:id/file/raw', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const filePath = c.req.query('path');
+      if (!filePath) return c.json({ error: 'path query param required' }, 400);
+      const project = deps.db.getProject(projectId);
+      if (!project) throw new ApiError('not_found', 404, 'project not found');
+      const absolutePath = resolveSafe(project.root_path, filePath);
+      const response = await createMediaFileResponse(absolutePath, c.req.header('range'));
+      touchIndexedFile(projectId, filePath, 'view');
+      return response;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return notFound(c);
+      return mapApiError(c, err);
+    }
+  });
+
+  /**
+   * Path-based project preview. Keeping the file path in the URL lets HTML
+   * pages navigate to sibling documents and load relative styles/media/fonts.
+   */
+  app.get('/api/projects/:id/preview/*', async (c) => {
+    try {
+      const projectId = parseIdParam(c);
+      const filePath = c.req.param('*')?.replace(/^\/+/, '');
+      if (!filePath) return c.json({ error: 'preview file path required' }, 400);
+      const project = deps.db.getProject(projectId);
+      if (!project) throw new ApiError('not_found', 404, 'project not found');
+      const absolutePath = resolveSafe(project.root_path, filePath);
+      const normalized = filePath.replace(/\\/g, '/');
+      const slash = normalized.lastIndexOf('/');
+      const directory = slash >= 0 ? normalized.slice(0, slash + 1) : '';
+      const encodePath = (value: string) => value
+        .split('/')
+        .filter(Boolean)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+      const previewRoot = `/api/projects/${projectId}/preview/`;
+      const baseHref = `${previewRoot}${encodePath(directory)}${directory ? '/' : ''}`;
+      const response = await createProjectPreviewResponse(
+        absolutePath,
+        baseHref,
+        previewRoot,
+        c.req.header('range'),
+      );
+      touchIndexedFile(projectId, filePath, 'view');
+      return response;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return notFound(c);
       return mapApiError(c, err);
     }
   });

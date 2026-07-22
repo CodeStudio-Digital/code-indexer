@@ -5,7 +5,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import { openDoc, changeDoc, changeDocWithSession, getDoc, closeDoc, closeProjectDocs } from '../document-store.js';
-import { publishDiagnostics, publishDiagnosticsBatch, subscribeDiagnostics, hasDiagnosticsSubscribers } from '../diagnostics-hub.js';
+import {
+  clearDiagnosticsSource,
+  hasDiagnosticsSubscribers,
+  publishDiagnostics,
+  publishDiagnosticsBatch,
+  subscribeDiagnostics,
+} from '../diagnostics-hub.js';
 import { wordAt } from '../index-fallback.js';
 import type { DiagnosticsFrame } from '@mcp/api-bus';
 
@@ -128,6 +134,26 @@ describe('diagnostics-hub', () => {
       Array.from({ length: 201 }, (_, i) => `file-${i}.ts`),
     );
     await it.return!();
+  });
+
+  it('clears every remembered file for one retired route source only', async () => {
+    publishDiagnosticsBatch(10, [
+      { ...frame('a.ts', 'legacy-a'), source: 'lsp:angular:route-v12' },
+      { ...frame('b.ts', 'legacy-b'), source: 'lsp:angular:route-v12' },
+      { ...frame('a.ts', 'modern'), source: 'lsp:angular:route-v21' },
+    ]);
+    clearDiagnosticsSource(10, 'lsp:angular:route-v12');
+
+    const iterator = subscribeDiagnostics(10)[Symbol.asyncIterator]();
+    const frames = (await iterator.next()).value.frames as DiagnosticsFrame[];
+    expect(frames.filter((item) => item.source === 'lsp:angular:route-v12'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ file: 'a.ts', diagnostics: [] }),
+        expect.objectContaining({ file: 'b.ts', diagnostics: [] }),
+      ]));
+    expect(frames.find((item) => item.source === 'lsp:angular:route-v21')?.diagnostics[0]?.message)
+      .toBe('modern');
+    await iterator.return!();
   });
 });
 

@@ -48,6 +48,7 @@ const READ_VERBS = new Set<string>([
   'lsp.listServers',
   'lsp.instances',
   'lsp.languageLevels',
+  'lsp.angularProfileOverrides',
 ]);
 
 /**
@@ -142,6 +143,7 @@ const WRITE_VERBS = new Set<string>([
   'lsp.removeServer',
   'lsp.restartServer',
   'lsp.setLanguageLevel',
+  'lsp.setAngularProfileOverride',
 ]);
 
 interface GitExecutionResult {
@@ -468,6 +470,26 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
         url: `/api/lsp/${ip!.projectId}/formatting`,
         init: json({ file: ip!.file, range: ip!.range, options: ip!.options }),
       };
+    case 'lsp.typeDefinition':
+      return {
+        url: `/api/lsp/${ip!.projectId}/type-definition`,
+        init: json({ file: ip!.file, position: ip!.position }),
+      };
+    case 'lsp.foldingRanges':
+      return {
+        url: `/api/lsp/${ip!.projectId}/folding-ranges`,
+        init: json({ file: ip!.file }),
+      };
+    case 'lsp.inlayHints':
+      return {
+        url: `/api/lsp/${ip!.projectId}/inlay-hints`,
+        init: json({ file: ip!.file, range: ip!.range }),
+      };
+    case 'lsp.linkedEditingRanges':
+      return {
+        url: `/api/lsp/${ip!.projectId}/linked-editing-ranges`,
+        init: json({ file: ip!.file, position: ip!.position }),
+      };
     case 'lsp.organizeImports':
       return { url: `/api/lsp/${ip!.projectId}/organize-imports`, init: json({ file: ip!.file }) };
     case 'lsp.codeActions':
@@ -497,9 +519,14 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     case 'lsp.executeCodeAction':
       return { url: `/api/lsp/${ip!.projectId}/execute-code-action`, init: json({ action: ip!.action }) };
     case 'lsp.serverStatus':
-      return { url: `/api/lsp/${ip!.projectId}/server-status`, init: json({ languageId: ip!.languageId }) };
+      return {
+        url: `/api/lsp/${ip!.projectId}/server-status`,
+        init: json({ languageId: ip!.languageId, file: ip!.file }),
+      };
     case 'lsp.listServers':
       return { url: '/api/lsp/servers', init: { method: 'GET' } };
+    case 'lsp.angularProfileOverrides':
+      return { url: `/api/lsp/${ip!.projectId}/angular-profile-overrides`, init: { method: 'GET' } };
     case 'lsp.instances':
       return { url: '/api/lsp/instances', init: { method: 'GET' } };
     case 'editor.complete':
@@ -534,9 +561,21 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
     case 'lsp.removeServer':
       return { url: `/api/lsp/servers/${ip!.serverId}`, init: { method: 'DELETE' } };
     case 'lsp.restartServer':
-      return { url: `/api/lsp/${ip!.projectId}/servers/${ip!.serverId}/restart`, init: json({}) };
+      return {
+        url: `/api/lsp/${ip!.projectId}/servers/${ip!.serverId}/restart`,
+        init: json({ routeId: ip!.routeId, file: ip!.file }),
+      };
     case 'lsp.setLanguageLevel':
       return { url: `/api/lsp/${ip!.projectId}/language-level`, init: json({ languageId: ip!.languageId, level: ip!.level }) };
+    case 'lsp.setAngularProfileOverride':
+      return {
+        url: `/api/lsp/${ip!.projectId}/angular-profile-overrides`,
+        init: {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspacePath: ip!.workspacePath, profileId: ip!.profileId }),
+        },
+      };
     case 'lsp.languageLevels':
       return { url: `/api/lsp/${ip!.projectId}/language-levels`, init: {} };
     default:

@@ -10,41 +10,48 @@ import { Download, Loader2, Settings2, X } from 'lucide-react';
 import { apiCall, apiStream, electronApi } from '../../../lib/api-client.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import type { Project } from '@mcp/shared/types.js';
-import type { DetectedRunners } from '@mcp/api-bus';
+import type { DetectedRunners, LspInstallFrame, LspServerStatus } from '@mcp/api-bus';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { ProjectSettingsModal } from '../../project/settings/ProjectSettingsModal.js';
 import { projectLspLanguages } from './project-lsp-detection.js';
-
-interface ServerStatusDTO {
-  state: 'no-server' | 'not-installed' | 'idle' | 'starting' | 'ready' | 'failed' | 'disabled';
-  server?: { id: string; label: string; version: string; sizeLabel: string };
-  autoPrompt?: boolean;
-  reason?: string;
-  runtime?: { kind: 'java' | 'dotnet'; minMajor: number; satisfied: boolean; version?: string; reason?: string };
-}
-type InstallFrame =
-  | { phase: 'start' }
-  | { phase: 'log'; line: string }
-  | { phase: 'done' }
-  | { phase: 'error'; message: string };
+import { AngularProfilePrompt } from './AngularProfilePrompt.js';
+import { lspRuntimeGate } from './lsp-runtime-gate.js';
 
 const SNOOZE_KEY = 'mcp-ide:lsp-install-snooze';
+const SNOOZE_MS = 7 * 24 * 60 * 60_000;
 
-function snoozed(): Record<string, boolean> {
-  try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? '{}') as Record<string, boolean>; } catch { return {}; }
+function snoozed(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
 }
-function snooze(lang: string): void {
-  localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...snoozed(), [lang]: true }));
+function snooze(key: string): void {
+  localStorage.setItem(SNOOZE_KEY, JSON.stringify({ ...snoozed(), [key]: Date.now() + SNOOZE_MS }));
+}
+function isSnoozed(key: string): boolean {
+  return (snoozed()[key] ?? 0) > Date.now();
+}
+function snoozeKey(projectId: number, language: string, status: LspServerStatus): string {
+  const workspace = status.route?.workspaceId ?? 'project';
+  const family = status.server?.familyId ?? status.server?.id ?? language;
+  const profile = status.route?.profileId ?? status.server?.profileId ?? 'default';
+  return `${projectId}:${workspace}:${family}:${profile}`;
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function LspInstallPrompt({ projectId, language }: { projectId: number; language: string }) {
+export function LspInstallPrompt({
+  projectId,
+  language,
+  file,
+}: {
+  projectId: number;
+  language: string;
+  file?: string;
+}) {
   const { t } = useTranslation('workspace');
-  const [status, setStatus] = useState<ServerStatusDTO | null>(null);
+  const [status, setStatus] = useState<LspServerStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [lastLog, setLastLog] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -60,32 +67,46 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
     setProject(null);
     setRuntimeSettingsOpen(false);
     setOpeningSettings(false);
-    if (language === 'plaintext' || language === 'typescript' || language === 'javascript') return;
-    if (snoozed()[language]) return;
+    // TS/JS normally use the built-in service, but project-scoped overlays
+    // (notably Angular) still need the same explicit install consent flow.
+    if (language === 'plaintext') return;
     let cancelled = false;
-    void apiCall<ServerStatusDTO>('lsp.serverStatus', { projectId, languageId: language })
-      .then((s) => { if (!cancelled) setStatus(s); })
+    void apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId: language, file })
+      .then((s) => { if (!cancelled && !isSnoozed(snoozeKey(projectId, language, s))) setStatus(s); })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [projectId, language]);
-
-  if (!status || dismissed.current) return null;
-  if (status.autoPrompt === false) return null; // admin turned the banner off
-  if (status.state !== 'not-installed' && !installing && !error) return null;
-  if (!status.server) return null;
-  const server = status.server;
-  const missingRuntime = status.runtime?.satisfied === false ? status.runtime : null;
-  const runtimeLabel = missingRuntime
-    ? missingRuntime.kind === 'java' ? `JDK ${missingRuntime.minMajor}+` : `.NET SDK ${missingRuntime.minMajor}+`
-    : '';
+  }, [projectId, language, file]);
 
   const refreshStatus = async (): Promise<void> => {
-    const next = await apiCall<ServerStatusDTO>('lsp.serverStatus', { projectId, languageId: language });
+    const next = await apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId: language, file });
     setStatus(next);
   };
 
+  if (!status || dismissed.current) return null;
+  if (status.autoPrompt === false) return null; // admin turned the banner off
+  const blockedProfile = status.state === 'needs-profile' || status.state === 'unsupported';
+  const runtimeGate = lspRuntimeGate(status);
+  if (status.state !== 'not-installed' && !blockedProfile && !runtimeGate && !installing && !error) return null;
+  if (blockedProfile) {
+    return (
+      <AngularProfilePrompt
+        projectId={projectId}
+        status={status}
+        notNowLabel={t('lspInstall.notNow')}
+        onApplied={refreshStatus}
+        onDismiss={() => {
+          snooze(snoozeKey(projectId, language, status));
+          dismissed.current = true;
+          setStatus(null);
+        }}
+      />
+    );
+  }
+  if (!status.server) return null;
+  const server = status.server;
+
   const openRuntimeSettings = async (): Promise<void> => {
-    if (!missingRuntime || openingSettings) return;
+    if (!runtimeGate || openingSettings) return;
     setOpeningSettings(true);
     setError(null);
     try {
@@ -102,7 +123,7 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
     setStatus((s) => s ? { ...s, state: 'starting' } : s);
     setLastLog(t('lspInstall.starting'));
     for (let i = 0; i < 30; i++) {
-      const next = await apiCall<ServerStatusDTO>('lsp.serverStatus', { projectId, languageId: language });
+      const next = await apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId: language, file });
       setStatus(next);
       if (next.state === 'ready' || (next.state === 'idle' && server.id === 'omnisharp')) return;
       if (next.state === 'failed') {
@@ -118,7 +139,7 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
     setError(null);
     try {
       if (electronApi()) {
-        for await (const frame of apiStream<InstallFrame>('lsp.installServerStream', { serverId: server.id })) {
+        for await (const frame of apiStream<LspInstallFrame>('lsp.installServerStream', { serverId: server.id })) {
           if (frame.phase === 'log') setLastLog(frame.line);
           if (frame.phase === 'error') throw new Error(frame.message);
           if (frame.phase === 'done') break;
@@ -127,7 +148,7 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
         await new Promise<void>((resolve, reject) => {
           const es = new EventSource(`/api/lsp/servers/${server.id}/install/stream`);
           es.addEventListener('install', (ev) => {
-            const frame = JSON.parse((ev as MessageEvent).data) as InstallFrame;
+            const frame = JSON.parse((ev as MessageEvent).data) as LspInstallFrame;
             if (frame.phase === 'log') setLastLog(frame.line);
             if (frame.phase === 'error') { es.close(); reject(new Error(frame.message)); }
             if (frame.phase === 'done') { es.close(); resolve(); }
@@ -152,11 +173,20 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
       <Download className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="text-foreground">
-          {t('lspInstall.question', { server: server.label, size: server.sizeLabel })}
+          {runtimeGate && status.state === 'failed'
+            ? `${server.label} requires ${runtimeGate.label}.`
+            : t('lspInstall.question', { server: server.label, size: server.sizeLabel })}
         </div>
-        {missingRuntime && (
+        {status.route?.projectVersion && (
+          <div className="mt-1 text-muted-foreground text-[11px]">
+            Angular {status.route.projectVersion} · {status.route.workspacePath}
+            {status.route.supportTier === 'best-effort' ? ' · suporte legado' : ''}
+          </div>
+        )}
+        {runtimeGate && (
           <div className="mt-1 text-amber-500 text-[11px]">
-            {t('lspInstall.runtimeRequired', { runtime: runtimeLabel })}
+            {t('lspInstall.runtimeRequired', { runtime: runtimeGate.label })}
+            {runtimeGate.reason ? ` — ${runtimeGate.reason}` : ''}
           </div>
         )}
         {installing && (
@@ -170,17 +200,17 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
           <div className="mt-1.5 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void (missingRuntime ? openRuntimeSettings() : install())}
+              onClick={() => void (runtimeGate ? openRuntimeSettings() : install())}
               disabled={openingSettings}
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary text-primary-foreground text-[11px] hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
             >
               {openingSettings && <Loader2 className="h-3 w-3 animate-spin" />}
-              {!openingSettings && missingRuntime && <Settings2 className="h-3 w-3" />}
-              {missingRuntime ? t('lspInstall.configureRuntime', { runtime: runtimeLabel }) : t('lspInstall.install')}
+              {!openingSettings && runtimeGate && <Settings2 className="h-3 w-3" />}
+              {runtimeGate ? t('lspInstall.configureRuntime', { runtime: runtimeGate.label }) : t('lspInstall.install')}
             </button>
             <button
               type="button"
-              onClick={() => { snooze(language); dismissed.current = true; setStatus(null); }}
+              onClick={() => { snooze(snoozeKey(projectId, language, status)); dismissed.current = true; setStatus(null); }}
               className="px-2 py-0.5 rounded border text-[11px] text-muted-foreground hover:bg-muted/40"
             >
               {t('lspInstall.notNow')}
@@ -197,7 +227,7 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
         <X className="h-3 w-3" />
       </button>
     </div>
-    {project && missingRuntime && (
+    {project && runtimeGate && (
       <ProjectSettingsModal
         project={project}
         open={runtimeSettingsOpen}
@@ -205,7 +235,7 @@ export function LspInstallPrompt({ projectId, language }: { projectId: number; l
           setRuntimeSettingsOpen(open);
           if (!open) void refreshStatus().catch(() => undefined);
         }}
-        initialSection={missingRuntime.kind}
+        initialSection={runtimeGate.kind}
         onSaved={() => {
           void apiCall<Project>('projects.get', { id: projectId }).then(setProject).catch(() => undefined);
           void refreshStatus().catch(() => undefined);
@@ -247,7 +277,12 @@ export function ProjectLspInstallPrompts({ projectId }: { projectId: number }) {
   return (
     <div className="pointer-events-none absolute top-2 right-3 z-20 flex w-[min(28rem,calc(100%-1.5rem))] flex-col gap-2">
       {languages.map((language) => (
-        <LspInstallPrompt key={language} projectId={projectId} language={language} />
+        <LspInstallPrompt
+          key={`${language}:${activeFilePath ?? ''}`}
+          projectId={projectId}
+          language={language}
+          file={activeFilePath && languageIdForPath(activeFilePath) === language ? activeFilePath : undefined}
+        />
       ))}
     </div>
   );

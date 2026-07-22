@@ -15,7 +15,12 @@ import type { LspServerStatus, LspServerStatusFrame } from '@mcp/api-bus';
 
 export type { LspServerStatus };
 
-export function useServerStatus(projectId: number, languageId: string | null): LspServerStatus | null {
+export function useServerStatus(
+  projectId: number,
+  languageId: string | null,
+  file?: string | null,
+  refreshRevision = 0,
+): LspServerStatus | null {
   const [status, setStatus] = useState<LspServerStatus | null>(null);
 
   useEffect(() => {
@@ -26,13 +31,19 @@ export function useServerStatus(projectId: number, languageId: string | null): L
     let closeIterator: (() => void) | null = null;
 
     // First paint. Heavy servers may remain installed and idle.
-    void apiCall<LspServerStatus>('lsp.serverStatus', { projectId, languageId })
+    const refresh = () => apiCall<LspServerStatus>('lsp.serverStatus', {
+      projectId,
+      languageId,
+      file: file ?? undefined,
+    })
       .then((s) => { if (!cancelled) setStatus(s); })
       .catch(() => undefined);
+    void refresh();
 
     const apply = (f: LspServerStatusFrame) => {
       if (cancelled || f.languageId !== languageId) return;
-      setStatus({ state: f.state, server: f.server, reason: f.reason });
+      if (file) void refresh();
+      else setStatus({ state: f.state, server: f.server, route: f.route, reason: f.reason });
     };
 
     if (electronApi()) {
@@ -62,7 +73,7 @@ export function useServerStatus(projectId: number, languageId: string | null): L
       closeIterator?.();
       es?.close();
     };
-  }, [projectId, languageId]);
+  }, [projectId, languageId, file, refreshRevision]);
 
   return status;
 }

@@ -38,6 +38,9 @@ vi.mock('../lsp/signatureHelp.js', () => ({
 vi.mock('../lsp/documentSymbols.js', () => ({
   registerDocumentSymbolProviders: vi.fn(() => [disposer()]),
 }));
+vi.mock('../lsp/advancedLanguageFeatures.js', () => ({
+  registerAdvancedLanguageFeatureProviders: vi.fn(() => [disposer()]),
+}));
 vi.mock('../lsp/symbol-navigation-ui.js', () => ({
   registerSymbolNavigationCodeLensProvider: vi.fn(() => [disposer()]),
 }));
@@ -59,6 +62,7 @@ import { registerCompletionProviders } from '../lsp/completion.js';
 import { registerRenameProviders } from '../lsp/rename.js';
 import { registerSignatureHelpProviders } from '../lsp/signatureHelp.js';
 import { registerDocumentSymbolProviders } from '../lsp/documentSymbols.js';
+import { registerAdvancedLanguageFeatureProviders } from '../lsp/advancedLanguageFeatures.js';
 import { registerSymbolNavigationCodeLensProvider } from '../lsp/symbol-navigation-ui.js';
 import { registerFormattingProviders } from '../lsp/formatting.js';
 import {
@@ -79,6 +83,7 @@ const SUB_PROVIDERS = [
   registerRenameProviders,
   registerSignatureHelpProviders,
   registerDocumentSymbolProviders,
+  registerAdvancedLanguageFeatureProviders,
   registerSymbolNavigationCodeLensProvider,
   registerFormattingProviders,
   registerSemanticTokenProviders,
@@ -122,6 +127,7 @@ describe('lspProvider registry', () => {
     // completion + code actions also receive docSync.flush.
     expect(registerCompletionProviders).toHaveBeenCalledWith(monaco, 1, expect.any(Function));
     expect(registerCodeActionProvider).toHaveBeenCalledWith(monaco, 1, expect.any(Function));
+    expect(registerAdvancedLanguageFeatureProviders).toHaveBeenCalledWith(monaco, 1, expect.any(Function));
   });
 
   it('is idempotent for the same project — no re-registration', () => {

@@ -46,7 +46,10 @@ export function useDebugBreakpointGutter(
       return {
         ...breakpoint,
         actualLine: status?.line,
-        verified: status?.verified,
+        // During an active session, absence of an adapter binding means the
+        // breakpoint is still provisional. Render it hollow until DAP confirms
+        // the source/line instead of implying that it is already effective.
+        verified: session ? (status?.verified ?? false) : undefined,
         verificationMessage: status?.message,
       };
     });

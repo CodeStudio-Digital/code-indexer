@@ -34,6 +34,18 @@ interface TmLanguage {
 /** Languages Monaco ships no tokenizer for — additive only (see header). */
 const TM_LANGUAGES: TmLanguage[] = [
   { id: 'toml', scope: 'source.toml', extensions: ['.toml'], filenames: ['Cargo.lock'], aliases: ['TOML'] },
+  {
+    id: 'jsonl', scope: 'source.json.lines',
+    extensions: ['.jsonl', '.ndjson', '.jsonlines', '.ldjson'], aliases: ['JSON Lines', 'NDJSON'],
+  },
+  { id: 'json5', scope: 'source.json5', extensions: ['.json5'], aliases: ['JSON5'] },
+  { id: 'hjson', scope: 'source.hjson', extensions: ['.hjson'], aliases: ['Hjson'] },
+  { id: 'jsonnet', scope: 'source.jsonnet', extensions: ['.jsonnet', '.libsonnet'], aliases: ['Jsonnet'] },
+  { id: 'dotenv', scope: 'source.dotenv', extensions: ['.env'], filenames: ['.env'], aliases: ['Dotenv'] },
+  { id: 'codeowners', scope: 'text.codeowners', filenames: ['CODEOWNERS'], aliases: ['CODEOWNERS'] },
+  { id: 'log', scope: 'text.log', extensions: ['.log'], aliases: ['Log'] },
+  { id: 'csv', scope: 'text.csv', extensions: ['.csv'], aliases: ['CSV'] },
+  { id: 'tsv', scope: 'text.tsv', extensions: ['.tsv'], aliases: ['TSV'] },
   { id: 'vue', scope: 'text.html.vue', extensions: ['.vue'], aliases: ['Vue'] },
   { id: 'svelte', scope: 'source.svelte', extensions: ['.svelte'], aliases: ['Svelte'] },
   {

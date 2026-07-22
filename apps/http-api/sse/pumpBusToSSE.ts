@@ -43,6 +43,13 @@ export function pumpBusToSSE(
   const rawSince = Number.isFinite(opts.since ?? NaN) ? (opts.since as number) : -1;
   const since = effectiveSince(rawSince, bus.nextSeq);
   const heartbeat = opts.heartbeat ?? true;
+  // Anti-buffering: Hono's streamSSE already sets Content-Type/Cache-Control/
+  // Connection, but proxies (nginx, Vite dev http-proxy, Cloudflare) key off
+  // `X-Accel-Buffering: no` to flush SSE frames immediately instead of
+  // delivering tokens in bursts. Set here once so every pump consumer
+  // (coder attach/messages, company, projects) is covered — same precedent
+  // as docs-agent/index.ts and docs/index.ts (`markUnbuffered`).
+  c.header('X-Accel-Buffering', 'no');
   return streamSSE(c, async (stream) => {
     const ac = new AbortController();
     stream.onAbort(() => ac.abort());

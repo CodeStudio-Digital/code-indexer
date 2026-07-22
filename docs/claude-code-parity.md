@@ -1,12 +1,13 @@
 # Claude Code OAuth Parity
 
-Verified against `@anthropic-ai/claude-code@2.1.126`, downloaded from npm at implementation time.
+Verified against the extracted `@anthropic-ai/claude-code@2.1.215` runtime in
+`D:\Claude-Open` at implementation time.
 Additional desktop parity notes for Claude Desktop `1.8089.1` live in
 [`claude-desktop-electron-notes.md`](./claude-desktop-electron-notes.md).
 
-- Native package: `@anthropic-ai/claude-code-win32-x64@2.1.126`
-- Build time: `2026-04-30T16:01:00Z`
-- Git SHA: `e44c1d97bd39dbf2525164f3fd33be6edbf1661e`
+- Package version: `2.1.215`
+- Build time: `2026-07-19T00:01:04Z`
+- Git SHA: `316ce99628e89900bf0b1328fed3b8fec0c0c92d`
 - OAuth client id: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`
 
 ## Wire Details
@@ -21,7 +22,8 @@ Additional desktop parity notes for Claude Desktop `1.8089.1` live in
 - Model URL: `https://api.anthropic.com/v1/models?beta=true`
 - OAuth beta header: `anthropic-beta: oauth-2025-04-20`
 - Anthropic API version header: `anthropic-version: 2023-06-01`
-- Token exchange/refresh also sends `anthropic-version: 2023-06-01` (confirmed in Claude Desktop `1.8089.1`).
+- Token exchange/refresh sends JSON with `Content-Type: application/json`; the
+  `anthropic-version` header belongs to Anthropic API requests, not the OAuth token endpoint.
 - Claude.ai authorize scopes: `user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload`
 - Console/API-key authorize scopes: `org:create_api_key user:profile`
 - PKCE verifier and OAuth state entropy: `randomBytes(32)` encoded as base64url, matching Claude Code.
@@ -38,25 +40,28 @@ It intentionally does not POST Claude Code telemetry/metrics. The admin displays
 
 ## API Request Parity (Inference)
 
-Verified by extracting strings from `claude.exe` (SEA binary, v2.1.126).
+Verified from the extracted Claude Code 2.1.215 request assembly.
 
 ### Beta headers sent per request
 
-Claude Code's `Gb()` function builds the beta array per model:
+Claude Code's request beta resolver builds the beta array per model:
 
 | Beta | Sent when |
 |------|-----------|
 | `claude-code-20250219` | Non-Haiku models |
 | `oauth-2025-04-20` | OAuth bearer auth |
 | `interleaved-thinking-2025-05-14` | Modern models (not Haiku 4.5, not Claude 3.x) |
-| `context-management-2025-06-27` | Modern first-party models |
+| `context-management-2025-06-27` | First-party models other than Claude 3.x, unless experimental betas are disabled |
 | `context-1m-2025-08-07` | Model has `[1m]` tag |
-| `prompt-caching-scope-2026-01-05` | Modern first-party models only |
+| `prompt-caching-scope-2026-01-05` | First-party requests unless experimental betas are disabled |
 
-These upstream-default betas are always kept for Claude Code parity. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` only disables local optional/non-default betas such as `token-efficient-tools-2025-02-19`; it must not strip `interleaved-thinking`, `context-management`, or `prompt-caching-scope` from 1M Opus/Sonnet requests.
+`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` follows the current client: it strips
+`context-management` and `prompt-caching-scope`. It does not strip the Claude
+Code identity beta, OAuth beta, explicit 1M beta, or interleaved-thinking beta.
+The normal MCP desktop configuration leaves this opt-out disabled.
 
 Betas NOT in the default request set (used selectively elsewhere):
-`redact-thinking-2026-02-12`, `effort-2025-11-24`, `task-budgets-2026-03-13`,
+`redact-thinking-2026-02-12`, `task-budgets-2026-03-13`,
 `fast-mode-2026-02-01`, `afk-mode-2026-01-31`, `advisor-tool-2026-03-01`,
 `cache-diagnosis-2026-04-07`, `structured-outputs-2025-12-15`,
 `web-search-2025-03-05`, `advanced-tool-use-2025-11-20`,
@@ -81,6 +86,18 @@ It does not store authorization headers, cookies, API keys, raw prompts/messages
 
 ### Thinking
 
-- Sends `thinking: {type: "enabled", budget_tokens: N}` for supported models
-- Has fallback: if model rejects `type=enabled`, retries with `type=adaptive`
-- Token counting uses `budget_tokens: 1024`, `max_tokens: 2048`
+- Opus 4.6+, Sonnet 4.6+, and the current Claude 5 families use
+  `thinking: {type: "adaptive"}` plus `output_config.effort`.
+- Explicit `thinkingBudgetTokens` is only applied to legacy
+  `thinking: {type: "enabled"}` requests. Adding `budget_tokens` to adaptive
+  thinking is invalid and is intentionally prevented.
+- Defaults follow the 2.1.215 registry: Opus 4.7 uses `xhigh`; Opus 4.8,
+  Sonnet 5, Opus 4.6, and Sonnet 4.6 use `high`.
+
+### Current model aliases
+
+- `default`: Opus 4.8 with 1M context for Max, Team Max, and usage-based
+  Enterprise accounts; Sonnet 5 otherwise.
+- `opus`: Opus 4.8. `sonnet`: Sonnet 5. `haiku`: Haiku 4.5.
+- Legacy selectable aliases retain Opus 4.7, Opus 4.6, and Sonnet 4.6,
+  including their explicit `[1m]` forms.

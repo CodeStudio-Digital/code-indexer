@@ -14,6 +14,7 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { Eye, FileEdit, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import type { OpenFile } from '../../../state/workspace.js';
 import { cn } from '../../../lib/utils.js';
@@ -87,31 +88,46 @@ export function MarkdownView({ file }: MarkdownViewProps) {
           {file.path.split('/').pop()}
         </span>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden grid" style={gridForMode(mode)}>
-        {mode !== 'preview' && (
-          <Suspense
-            fallback={
-              <div className="grid place-items-center text-[11px] text-muted-foreground gap-1">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading editor…
-              </div>
-            }
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {mode === 'edit' ? (
+          <MarkdownEditorSurface file={file} />
+        ) : mode === 'preview' ? (
+          <MarkdownRender source={file.content ?? ''} />
+        ) : (
+          <PanelGroup
+            direction="horizontal"
+            autoSaveId={`mcp-markdown-split-${file.projectId}-${file.path}`}
+            className="h-full min-w-0"
           >
-            <MonacoMount file={file} />
-          </Suspense>
+            <Panel id="markdown-source" order={1} defaultSize={50} minSize={20} className="min-w-0">
+              <MarkdownEditorSurface file={file} />
+            </Panel>
+            <PanelResizeHandle className="w-1.5 bg-border/70 hover:bg-primary/60 transition-colors cursor-col-resize" />
+            <Panel id="markdown-preview" order={2} defaultSize={50} minSize={20} className="min-w-0">
+              <MarkdownRender source={file.content ?? ''} />
+            </Panel>
+          </PanelGroup>
         )}
-        {mode === 'split' && <div className="border-l" />}
-        {mode !== 'edit' && <MarkdownRender source={file.content ?? ''} />}
       </div>
     </div>
   );
 }
 
-function gridForMode(mode: Mode): React.CSSProperties {
-  if (mode === 'split') {
-    return { gridTemplateColumns: '1fr 1px 1fr', gridTemplateRows: '1fr' };
-  }
-  return { gridTemplateColumns: '1fr', gridTemplateRows: '1fr' };
+function MarkdownEditorSurface({ file }: { file: OpenFile }) {
+  return (
+    <div className="relative h-full min-w-0 min-h-0 overflow-hidden">
+      <Suspense
+        fallback={
+          <div className="absolute inset-0 grid place-items-center text-[11px] text-muted-foreground gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Loading editor…
+          </div>
+        }
+      >
+        <MonacoMount file={file} />
+      </Suspense>
+    </div>
+  );
 }
 
 function ModeButton({

@@ -35,6 +35,58 @@ const apiKeyApp = {
   ],
 };
 
+const angularLanguageServer = {
+  id: 'angular-language-server',
+  label: 'Angular Language Service',
+  languages: ['typescript', 'html'],
+  activation: {
+    whenFiles: ['angular.json'],
+    whenPackageDep: ['@angular/core'],
+  },
+  install: {
+    kind: 'npm' as const,
+    package: '@angular/language-server',
+    version: '21.2.18',
+  },
+  entryRelPath: 'node_modules/@angular/language-server/index.js',
+  args: [],
+  launchKind: 'angular' as const,
+  routing: { mode: 'overlay' as const, priority: 100 },
+  sizeLabel: '~30 MB',
+};
+
+const angularCompatibility = {
+  projectResolver: 'angular-core' as const,
+  profiles: [
+    {
+      id: 'angular-20',
+      projectVersionRange: '>=20.0.0 <21.0.0',
+      supportTier: 'full' as const,
+      serverNodeRange: '^20.19.0 || ^22.12.0',
+      typescriptRange: '>=5.8.0 <6.0.0',
+      languageServiceVersion: '20.3.5',
+      install: {
+        kind: 'npm' as const,
+        package: '@angular/language-server',
+        version: '20.3.0',
+      },
+      entryRelPath: 'node_modules/@angular/language-server/index.js',
+      args: [],
+    },
+    {
+      id: 'angular-21',
+      projectVersionRange: '>=21.0.0 <22.0.0',
+      supportTier: 'full' as const,
+      serverNodeRange: '^20.19.0 || ^22.12.0 || >=24.0.0',
+      typescriptRange: '>=5.9.0 <6.0.0',
+      languageServiceVersion: '21.2.18',
+      install: angularLanguageServer.install,
+      entryRelPath: angularLanguageServer.entryRelPath,
+      args: [],
+    },
+  ],
+};
+
 describe('parseAppManifest — first-party trust lane (C3)', () => {
   it('rejects a host-capability connector by default (third-party gate)', () => {
     expect(() => parseAppManifest(connectorApp)).toThrow();
@@ -57,5 +109,123 @@ describe('parseAppManifest — first-party trust lane (C3)', () => {
     const badProvider = { providers: [{ kind: 'x' }] };
     expect(() => parseAppManifest(badProvider, { trustProviders: true })).toThrow();
     void bad;
+  });
+
+  it('rejects language-server execution metadata in the third-party lane', () => {
+    expect(() => parseAppManifest({ languageServers: [angularLanguageServer] })).toThrow(
+      /trusted first-party bundled plugins/,
+    );
+  });
+
+  it('accepts a pinned npm language server only in the first-party lane', () => {
+    const app = parseAppManifest(
+      { languageServers: [angularLanguageServer] },
+      { trustFirstParty: true },
+    );
+    expect(app.languageServers?.[0]).toMatchObject({
+      id: 'angular-language-server',
+      install: { package: '@angular/language-server', version: '21.2.18' },
+      launchKind: 'angular',
+      routing: { mode: 'overlay', priority: 100 },
+    });
+  });
+
+  it('keeps a single install declaration compatible with optional version profiles', () => {
+    expect(() => parseAppManifest(
+      { languageServers: [{ ...angularLanguageServer, compatibility: angularCompatibility }] },
+      { trustFirstParty: true },
+    )).not.toThrow();
+
+    expect(() => parseAppManifest(
+      { languageServers: [angularLanguageServer] },
+      { trustFirstParty: true },
+    )).not.toThrow();
+  });
+
+  it.each([
+    {
+      name: 'overlap',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [
+          ...angularCompatibility.profiles,
+          {
+            ...angularCompatibility.profiles[1],
+            id: 'angular-21-overlap',
+            projectVersionRange: '>=20.5.0 <21.5.0',
+          },
+        ],
+      },
+    },
+    {
+      name: 'duplicate id',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [
+          angularCompatibility.profiles[0],
+          { ...angularCompatibility.profiles[1], id: 'angular-20' },
+        ],
+      },
+    },
+    {
+      name: 'npm range',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [{
+          ...angularCompatibility.profiles[0],
+          install: { ...angularCompatibility.profiles[0].install, version: '^20.3.0' },
+        }],
+      },
+    },
+    {
+      name: 'unsafe entry',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [{ ...angularCompatibility.profiles[0], entryRelPath: '../index.js' }],
+      },
+    },
+    {
+      name: 'invalid Node range',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [{ ...angularCompatibility.profiles[0], serverNodeRange: 'node 20' }],
+      },
+    },
+    {
+      name: 'non-normalized project range',
+      compatibility: {
+        ...angularCompatibility,
+        profiles: [{ ...angularCompatibility.profiles[0], projectVersionRange: '^20.0.0' }],
+      },
+    },
+    {
+      name: 'unknown resolver',
+      compatibility: { ...angularCompatibility, projectResolver: 'package-json' },
+    },
+  ])('rejects invalid language-server compatibility metadata: $name', ({ compatibility }) => {
+    expect(() => parseAppManifest(
+      { languageServers: [{ ...angularLanguageServer, compatibility }] },
+      { trustFirstParty: true },
+    )).toThrow();
+  });
+
+  it('keeps trustProviders as a backwards-compatible first-party alias', () => {
+    const app = parseAppManifest(
+      { languageServers: [angularLanguageServer] },
+      { trustProviders: true },
+    );
+    expect(app.languageServers?.[0].id).toBe('angular-language-server');
+  });
+
+  it.each([
+    { install: { ...angularLanguageServer.install, version: '^21.2.18' } },
+    { install: { kind: 'binary', package: '@angular/language-server', version: '21.2.18' } },
+    { entryRelPath: '../language-server.js' },
+    { activation: {} },
+  ])('rejects unsafe or unpinned language-server metadata: %o', (override) => {
+    expect(() => parseAppManifest(
+      { languageServers: [{ ...angularLanguageServer, ...override }] },
+      { trustFirstParty: true },
+    )).toThrow();
   });
 });

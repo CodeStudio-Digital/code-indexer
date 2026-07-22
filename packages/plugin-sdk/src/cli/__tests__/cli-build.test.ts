@@ -118,6 +118,35 @@ describe('buildPlugin', () => {
     expect(app.providers[0].discovery).toEqual({ from: 'sdk:bedrock' });
   });
 
+  it('extracts language servers only through the trusted first-party lane', async () => {
+    writeFileSync(
+      join(dir, 'src', 'plugin.ts'),
+      `export default {
+        tools: [], toolWindows: [], commands: [], themes: [], editorActions: [],
+        languageServers: [{
+          id: 'angular-language-server', label: 'Angular Language Service',
+          languages: ['typescript', 'html'],
+          activation: { whenFiles: ['angular.json'], whenPackageDep: ['@angular/core'] },
+          install: { kind: 'npm', package: '@angular/language-server', version: '21.2.18' },
+          entryRelPath: 'node_modules/@angular/language-server/index.js', args: [],
+          launchKind: 'angular', routing: { mode: 'overlay', priority: 100 }, sizeLabel: '~30 MB',
+        }],
+      };\n`,
+    );
+
+    await expect(buildPlugin(dir)).rejects.toThrow(/trusted first-party bundled plugins/);
+    expect(existsSync(join(dir, '.app.json'))).toBe(false);
+
+    const result = await buildPlugin(dir, { trustFirstParty: true });
+    const app = JSON.parse(readFileSync(result.appJson, 'utf8'));
+    expect(app.languageServers[0]).toMatchObject({
+      id: 'angular-language-server',
+      install: { package: '@angular/language-server', version: '21.2.18' },
+      launchKind: 'angular',
+      routing: { mode: 'overlay', priority: 100 },
+    });
+  });
+
   it('supports deferred CommonJS builtin requires from a clean ESM process', async () => {
     const r = await buildPlugin(dir);
     const probe = [

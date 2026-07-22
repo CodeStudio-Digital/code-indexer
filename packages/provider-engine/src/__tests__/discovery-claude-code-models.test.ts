@@ -54,15 +54,15 @@ describe('sdk:claude-code discovery', () => {
     // here, so the ` Not returned by live ...` note fires for some rows and not
     // others — pinning both sides of the `liveNote` ternary.
     const liveList = [
-      { id: 'claude-sonnet-4-6' },
-      { id: 'claude-opus-4-7' },
+      { id: 'claude-sonnet-5' },
+      { id: 'claude-opus-4-8' },
     ];
 
     mockResolveCreds.mockResolvedValue(RESOLVED_CREDS);
     mockFetchModels.mockResolvedValue(liveList);
     const b = await discoverClaudeCodeModels(claudeCodeSpec, CFG, STORE);
 
-    expect(b).toHaveLength(8);
+    expect(b).toHaveLength(12);
     expect(b.every((m) => m.source === 'live')).toBe(true);
     expect(b.every((m) => /Resolved: .+ -> .+\. Betas:/.test(m.description ?? ''))).toBe(true);
   });
@@ -72,7 +72,7 @@ describe('sdk:claude-code discovery', () => {
     mockFetchModels.mockRejectedValue(new Error('network down'));
     const b = await discoverClaudeCodeModels(claudeCodeSpec, CFG, STORE);
 
-    expect(b).toHaveLength(8);
+    expect(b).toHaveLength(12);
     expect(b.some((m) => (m.description ?? '').includes('Not returned by live'))).toBe(false);
   });
 });

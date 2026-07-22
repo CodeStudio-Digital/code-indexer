@@ -7,7 +7,7 @@
  */
 import { z } from 'zod';
 import { thirdPartyProviderSpecSchema, providerSpecSchema } from '@mcp/provider-sdk';
-import { CONTRIB_ID_RE, relPath } from './common.js';
+import { CONTRIB_ID_RE, SEMVER_RE, relPath } from './common.js';
 
 const contribId = z.string().regex(CONTRIB_ID_RE, 'id must be kebab/snake-case');
 
@@ -191,6 +191,145 @@ export const debuggerDeclSchema = z
   })
   .strict();
 
+const npmPackageNameSchema = z
+  .string()
+  .regex(
+    /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/,
+    'package must be a lowercase npm package name',
+  );
+
+export const languageServerInstallDeclSchema = z
+  .object({
+    kind: z.literal('npm'),
+    package: npmPackageNameSchema,
+    version: z.string().regex(SEMVER_RE, 'version must be exact semver'),
+  })
+  .strict();
+
+const semverRangeToken = String.raw`(?:\^|~|>=|<=|>|<)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?`;
+const semverRangePattern = new RegExp(
+  `^${semverRangeToken}(?:\\s+${semverRangeToken})*(?:\\s*\\|\\|\\s*${semverRangeToken}(?:\\s+${semverRangeToken})*)*$`,
+);
+const projectVersionRangePattern = /^>=(\d+)\.(\d+)\.(\d+) <(\d+)\.(\d+)\.(\d+)$/;
+
+type VersionTuple = readonly [number, number, number];
+interface ProjectVersionBounds {
+  lower: VersionTuple;
+  upper: VersionTuple;
+}
+
+function compareVersionTuple(a: VersionTuple, b: VersionTuple): number {
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+function parseProjectVersionBounds(range: string): ProjectVersionBounds | null {
+  const match = projectVersionRangePattern.exec(range);
+  if (!match) return null;
+  return {
+    lower: [Number(match[1]), Number(match[2]), Number(match[3])],
+    upper: [Number(match[4]), Number(match[5]), Number(match[6])],
+  };
+}
+
+const semverRangeSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(semverRangePattern, 'must be a semver range with complete x.y.z versions');
+
+const projectVersionRangeSchema = z
+  .string()
+  .regex(
+    projectVersionRangePattern,
+    'projectVersionRange must be a normalized half-open range such as >=17.0.0 <18.0.0',
+  )
+  .refine((range) => {
+    const bounds = parseProjectVersionBounds(range);
+    return bounds !== null && compareVersionTuple(bounds.lower, bounds.upper) < 0;
+  }, 'projectVersionRange lower bound must be less than its upper bound');
+
+export const languageServerCompatibilityProfileDeclSchema = z
+  .object({
+    id: contribId,
+    projectVersionRange: projectVersionRangeSchema,
+    supportTier: z.enum(['full', 'best-effort', 'unsupported']),
+    serverNodeRange: semverRangeSchema,
+    typescriptRange: semverRangeSchema.optional(),
+    languageServiceVersion: z
+      .string()
+      .regex(SEMVER_RE, 'languageServiceVersion must be exact semver'),
+    install: languageServerInstallDeclSchema,
+    entryRelPath: relPath,
+    args: z.array(z.string().min(1).max(512)).max(32),
+  })
+  .strict();
+
+export const languageServerCompatibilityDeclSchema = z
+  .object({
+    projectResolver: z.literal('angular-core'),
+    profiles: z.array(languageServerCompatibilityProfileDeclSchema).min(1).max(32),
+  })
+  .strict()
+  .superRefine(({ profiles }, ctx) => {
+    const ids = new Set<string>();
+    for (let i = 0; i < profiles.length; i += 1) {
+      const profile = profiles[i];
+      if (ids.has(profile.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['profiles', i, 'id'],
+          message: `duplicate compatibility profile id: ${profile.id}`,
+        });
+      }
+      ids.add(profile.id);
+
+      const current = parseProjectVersionBounds(profile.projectVersionRange);
+      if (!current) continue;
+      for (let j = 0; j < i; j += 1) {
+        const previous = parseProjectVersionBounds(profiles[j].projectVersionRange);
+        if (!previous) continue;
+        const overlaps = compareVersionTuple(current.lower, previous.upper) < 0
+          && compareVersionTuple(previous.lower, current.upper) < 0;
+        if (overlaps) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['profiles', i, 'projectVersionRange'],
+            message: `overlaps compatibility profile ${profiles[j].id}`,
+          });
+        }
+      }
+    }
+  });
+
+export const languageServerRoutingDeclSchema = z
+  .object({
+    mode: z.enum(['primary', 'overlay']),
+    priority: z.number().int().min(-1_000).max(1_000).optional(),
+  })
+  .strict();
+
+export const languageServerDeclSchema = z
+  .object({
+    id: contribId,
+    label: z.string().min(1).max(128),
+    languages: z.array(z.string().min(1).max(64)).min(1).max(32),
+    activation: activationRuleSchema.refine(
+      (rule) => Boolean(rule.whenFiles?.length || rule.whenPackageDep?.length),
+      { message: 'language server activation requires whenFiles or whenPackageDep' },
+    ),
+    install: languageServerInstallDeclSchema,
+    entryRelPath: relPath,
+    args: z.array(z.string().min(1).max(512)).max(32).optional(),
+    launchKind: z.enum(['standard', 'angular']).optional(),
+    compatibility: languageServerCompatibilityDeclSchema.optional(),
+    routing: languageServerRoutingDeclSchema,
+    sizeLabel: z.string().min(1).max(64),
+  })
+  .strict();
+
 export const projectModuleDeclSchema = z.object({
   id: contribId,
   title: z.string().min(1),
@@ -245,7 +384,10 @@ export const permissionsSchema = z
   })
   .strict();
 
-function buildAppManifestSchema(providers: z.ZodTypeAny) {
+function buildAppManifestSchema(
+  providers: z.ZodTypeAny,
+  options: { allowLanguageServers: boolean },
+) {
   return z.object({
     worker: relPath.optional(),
     tools: z.array(pluginToolDeclSchema).optional(),
@@ -256,29 +398,51 @@ function buildAppManifestSchema(providers: z.ZodTypeAny) {
     statusBarItems: z.array(statusBarItemDeclSchema).optional(),
     runConfigurations: z.array(runConfigurationDeclSchema).optional(),
     debuggers: z.array(debuggerDeclSchema).optional(),
+    languageServers: z.array(languageServerDeclSchema).optional(),
     modules: z.array(projectModuleDeclSchema).optional(),
     providerRuntime: providerRuntimeDeclSchema.optional(),
     debuggerRuntime: debuggerRuntimeDeclSchema.optional(),
     permissions: permissionsSchema.optional(),
     // A plugin contributes a provider as a full declarative ProviderSpec (DATA).
     providers: z.array(providers).optional(),
+  }).superRefine((manifest, ctx) => {
+    if (!options.allowLanguageServers && manifest.languageServers !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['languageServers'],
+        message: 'languageServers are restricted to trusted first-party bundled plugins',
+      });
+    }
   });
 }
 
-// Default (third-party) manifest schema: rejects host-only provider capabilities
-// (auth.hooks, sdk:* discovery/test, unknown wires) so a plugin can't claim them.
-export const appManifestSchema = buildAppManifestSchema(thirdPartyProviderSpecSchema);
+// Default (third-party) manifest schema: rejects language-server execution and
+// host-only provider capabilities (auth.hooks, sdk:* discovery/test, unknown
+// wires) so a plugin cannot claim privileged host behavior.
+export const appManifestSchema = buildAppManifestSchema(thirdPartyProviderSpecSchema, {
+  allowLanguageServers: false,
+});
 
 // First-party (bundled) lane: a plugin shipped INSIDE the app (source 'bundled')
-// may carry host capabilities — its providers validate against the FULL schema.
-// The provider LOADER stays the authoritative runtime gate (isFirstPartyBundled),
-// so this only governs whether the install snapshot is allowed to persist them.
-const firstPartyAppManifestSchema = buildAppManifestSchema(providerSpecSchema);
+// may carry host capabilities. Runtime loaders stay authoritative, so this only
+// governs whether the install snapshot is allowed to persist them.
+const firstPartyAppManifestSchema = buildAppManifestSchema(providerSpecSchema, {
+  allowLanguageServers: true,
+});
+
+export interface ParseAppManifestOptions {
+  /** Enables host-only contributions for plugins shipped inside the app. */
+  trustFirstParty?: boolean;
+  /** @deprecated Use trustFirstParty. Retained for bundled-provider callers. */
+  trustProviders?: boolean;
+}
 
 export function parseAppManifest(
   json: unknown,
-  opts?: { trustProviders?: boolean },
+  opts?: ParseAppManifestOptions,
 ): z.infer<typeof appManifestSchema> {
-  const schema = opts?.trustProviders ? firstPartyAppManifestSchema : appManifestSchema;
+  const schema = opts?.trustFirstParty || opts?.trustProviders
+    ? firstPartyAppManifestSchema
+    : appManifestSchema;
   return schema.parse(json) as z.infer<typeof appManifestSchema>;
 }

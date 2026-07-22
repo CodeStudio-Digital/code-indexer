@@ -2,10 +2,9 @@
  * Claude Code OAuth and wire helpers.
  *
  * Source of truth checked at implementation time:
- *   @anthropic-ai/claude-code@2.1.133
- *   build: 2026-05-07T20:19:32Z
- *   git:   cba57ffec4f5d5c279b5f66ea9d7a2544fa410ec
- *   previous: 2.1.126 (build 2026-04-30T16:01:00Z, sha e44c1d9)
+ *   @anthropic-ai/claude-code@2.1.215
+ *   build: 2026-07-19T00:01:04Z
+ *   git:   316ce99628e89900bf0b1328fed3b8fec0c0c92d
  *
  * The official client uses PKCE OAuth and then calls Anthropic's normal
  * `/v1/messages` API with either:
@@ -21,9 +20,9 @@ import nodeFetch, { type RequestInit as NodeFetchRequestInit } from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
-export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.133';
-export const CLAUDE_CODE_BUILD_TIME = '2026-05-07T20:19:32Z';
-export const CLAUDE_CODE_GIT_SHA = 'cba57ffec4f5d5c279b5f66ea9d7a2544fa410ec';
+export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.215';
+export const CLAUDE_CODE_BUILD_TIME = '2026-07-19T00:01:04Z';
+export const CLAUDE_CODE_GIT_SHA = '316ce99628e89900bf0b1328fed3b8fec0c0c92d';
 
 export const CLAUDE_CODE_BASE_URL =
   process.env.CLAUDE_CODE_API_BASE_URL ?? 'https://api.anthropic.com';
@@ -34,20 +33,16 @@ export const CLAUDE_CODE_VERSION =
 export const CLAUDE_CODE_OAUTH_BETA = 'oauth-2025-04-20';
 export const CLAUDE_CODE_CLI_BETA = 'claude-code-20250219';
 export const CLAUDE_CODE_INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14';
-export const CLAUDE_CODE_REDACT_THINKING_BETA = 'redact-thinking-2026-02-12';
 export const CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-27';
 export const CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA = 'prompt-caching-scope-2026-01-05';
 export const CLAUDE_CODE_CONTEXT_1M_BETA = 'context-1m-2025-08-07';
-export const CLAUDE_CODE_EFFORT_BETA = 'effort-2025-11-24';
-export const CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA = 'token-efficient-tools-2025-02-19';
-export const CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 export const CLAUDE_CODE_ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_CODE_SMALL_FAST_MODEL =
   process.env.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-4-5-20251001';
 export const CLAUDE_CODE_DEFAULT_SONNET_MODEL =
-  process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-4-6';
+  process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-5';
 export const CLAUDE_CODE_DEFAULT_OPUS_MODEL =
-  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-4-7';
+  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-4-8';
 export const CLAUDE_CODE_CONFIGURED_REDIRECT_PORT = process.env.CLAUDE_CODE_OAUTH_PORT
   ? Number(process.env.CLAUDE_CODE_OAUTH_PORT)
   : null;
@@ -80,11 +75,15 @@ export const CLAUDE_CODE_ALL_SCOPES = [
 ];
 export const CLAUDE_CODE_DEFAULT_SCOPES = CLAUDE_CODE_AI_SCOPES;
 
-const FLOW_TIMEOUT_MS = 5 * 60 * 1000;
+// Email/SSO login can consume several minutes before Claude returns to the
+// authorization page. Keep the loopback/PKCE state alive long enough for the
+// user to sign in and explicitly reopen consent from the dashboard.
+const FLOW_TIMEOUT_MS = 15 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 const pending = new Map<string, PendingFlow>();
 const proxyAgents = new Map<string, HttpAgent | HttpsAgent>();
+const pendingRefreshes = new Map<string, Promise<string | null>>();
 
 export function disposeClaudeCodeOAuthResources(): void {
   for (const flow of pending.values()) {
@@ -96,6 +95,7 @@ export function disposeClaudeCodeOAuthResources(): void {
     try { agent.destroy(); } catch { /* already closed */ }
   }
   proxyAgents.clear();
+  pendingRefreshes.clear();
 }
 
 type ClaudeCodeFetch = (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -128,6 +128,7 @@ export interface ClaudeCodeTokenResponse {
   access_token: string;
   refresh_token?: string;
   expires_in?: number;
+  refresh_token_expires_in?: number;
   scope?: string;
   token_type?: string;
   account?: { uuid?: string; email_address?: string };
@@ -192,6 +193,7 @@ export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export interface ClaudeCodeAccountInfo {
   subscriptionType?: string | null;
   rateLimitTier?: string | null;
+  billingType?: string | null;
 }
 
 export interface ResolveClaudeCodeModelOptions {
@@ -199,11 +201,7 @@ export interface ResolveClaudeCodeModelOptions {
   thinking?: boolean;
   thinkingDisplay?: string | null;
   effort?: ClaudeCodeEffort | 'auto' | null;
-  /**
-   * True when the request will include tools — gates the
-   * `token-efficient-tools-2025-02-19` beta. The flag has no effect for
-   * tool-less requests since the beta only changes tool-call serialization.
-   */
+  /** Retained for call-site compatibility; current Claude Code betas do not depend on tools. */
   hasTools?: boolean;
 }
 
@@ -332,6 +330,7 @@ export type PollClaudeCodeFlowResult =
     access_token: string;
     refresh_token: string | null;
     expires_at: number;
+    refresh_token_expires_at: number | null;
     scope: string;
     auth_type: 'claude_ai' | 'api_key';
     api_key: string | null;
@@ -404,10 +403,16 @@ export const CLAUDE_CODE_BILLING_SOURCE = 'cli';
  * and `x-app: cli`. Returns empty when CLAUDE_CODE_ATTRIBUTION_HEADER opts out.
  */
 export function buildClaudeCodeBillingHeaderText(): string {
-  if (isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_ATTRIBUTION_HEADER)) {
+  const attribution = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER?.trim().toLowerCase();
+  if (
+    attribution === 'false' ||
+    attribution === 'off' ||
+    attribution === '0' ||
+    isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_ATTRIBUTION_HEADER)
+  ) {
     return '';
   }
-  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? CLAUDE_CODE_BILLING_SOURCE;
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? 'unknown';
   const workload = process.env.CLAUDE_CODE_WORKLOAD
     ? ` cc_workload=${process.env.CLAUDE_CODE_WORKLOAD};`
     : '';
@@ -586,6 +591,10 @@ export function normalizeClaudeCodeModelAlias(model: string | null | undefined):
     case 'haiku':
     case 'opus':
     case 'opus[1m]':
+    case 'sonnet-4-6':
+    case 'sonnet-4-6[1m]':
+    case 'opus-4-7':
+    case 'opus-4-7[1m]':
     case 'opus-4-6':
     case 'opus-4-6[1m]':
       return lower;
@@ -599,9 +608,11 @@ export function isClaudeCodeMaxDefaultAccount(
 ): boolean {
   const subscriptionType = accountInfo?.subscriptionType ?? null;
   const rateLimitTier = accountInfo?.rateLimitTier ?? null;
+  const billingType = accountInfo?.billingType ?? null;
   return (
     subscriptionType === 'max' ||
-    (subscriptionType === 'team' && rateLimitTier === 'default_claude_max_5x')
+    (subscriptionType === 'team' && rateLimitTier === 'default_claude_max_5x') ||
+    (subscriptionType === 'enterprise' && billingType === 'enterprise_usage_based')
   );
 }
 
@@ -625,6 +636,14 @@ export function resolveClaudeCodeRequestedModel(
       return CLAUDE_CODE_DEFAULT_OPUS_MODEL;
     case 'opus[1m]':
       return `${CLAUDE_CODE_DEFAULT_OPUS_MODEL}[1m]`;
+    case 'sonnet-4-6':
+      return 'claude-sonnet-4-6';
+    case 'sonnet-4-6[1m]':
+      return 'claude-sonnet-4-6[1m]';
+    case 'opus-4-7':
+      return 'claude-opus-4-7';
+    case 'opus-4-7[1m]':
+      return 'claude-opus-4-7[1m]';
     case 'opus-4-6':
       return 'claude-opus-4-6';
     case 'opus-4-6[1m]':
@@ -638,21 +657,14 @@ function claudeCodeModelFamily(model: string): string {
   return stripClaudeCodeContextSuffix(model).toLowerCase();
 }
 
-function isClaudeCodeModernFirstPartyModel(model: string): boolean {
+function isClaudeCodeNativeOneMillionModel(model: string): boolean {
   const cleanModel = claudeCodeModelFamily(model);
   return (
-    cleanModel.includes('claude-opus-4') ||
-    cleanModel.includes('claude-sonnet-4') ||
-    cleanModel.includes('claude-haiku-4')
-  );
-}
-
-function supportsClaudeCodeInterleavedThinking(model: string): boolean {
-  const cleanModel = claudeCodeModelFamily(model);
-  return (
-    isClaudeCodeModernFirstPartyModel(model) &&
-    !cleanModel.includes('claude-haiku-4-5') &&
-    !cleanModel.includes('claude-3-')
+    cleanModel.includes('claude-opus-4-8') ||
+    cleanModel.includes('claude-opus-4-7') ||
+    cleanModel.includes('claude-sonnet-5') ||
+    cleanModel.includes('claude-fable-5') ||
+    cleanModel.includes('claude-mythos-5')
   );
 }
 
@@ -660,8 +672,12 @@ export function supportsClaudeCodeAdaptiveThinking(model: string): boolean {
   const cleanModel = claudeCodeModelFamily(model);
   return (
     cleanModel.includes('claude-opus-4-7') ||
+    cleanModel.includes('claude-opus-4-8') ||
     cleanModel.includes('claude-opus-4-6') ||
-    cleanModel.includes('claude-sonnet-4-6')
+    cleanModel.includes('claude-sonnet-4-6') ||
+    cleanModel.includes('claude-sonnet-5') ||
+    cleanModel.includes('claude-fable-5') ||
+    cleanModel.includes('claude-mythos-5')
   );
 }
 
@@ -690,13 +706,26 @@ function getClaudeCodeEffort(
   const configured =
     requestedEffort === 'auto' ? null : requestedEffort ?? parseClaudeCodeEffort(process.env.CLAUDE_CODE_EFFORT_LEVEL);
   const effort = configured ?? (cleanModel.includes('claude-opus-4-7') ? 'xhigh' : 'high');
-  if (effort === 'xhigh' && !cleanModel.includes('claude-opus-4-7')) return 'high';
+  const supportsXHigh =
+    cleanModel.includes('claude-opus-4-8') ||
+    cleanModel.includes('claude-opus-4-7') ||
+    cleanModel.includes('claude-sonnet-5') ||
+    cleanModel.includes('claude-fable-5') ||
+    cleanModel.includes('claude-mythos-5');
+  if (effort === 'xhigh' && !supportsXHigh) return 'high';
   return effort;
 }
 
 export function getClaudeCodeDefaultMaxTokens(model: string): number {
   const cleanModel = claudeCodeModelFamily(model);
-  const defaults = cleanModel.includes('claude-opus-4-7') || cleanModel.includes('claude-opus-4-6')
+  const usesLargeOutput =
+    cleanModel.includes('claude-opus-4-8') ||
+    cleanModel.includes('claude-opus-4-7') ||
+    cleanModel.includes('claude-opus-4-6') ||
+    cleanModel.includes('claude-sonnet-5') ||
+    cleanModel.includes('claude-fable-5') ||
+    cleanModel.includes('claude-mythos-5');
+  const defaults = usesLargeOutput
     ? { value: 64_000, upper: 128_000 }
     : cleanModel.includes('claude-haiku-4-5')
       ? { value: 32_000, upper: 64_000 }
@@ -713,26 +742,28 @@ export function getClaudeCodeDefaultMaxTokens(model: string): number {
 function getClaudeCodeDisplayName(alias: string, requestedModel: string): string {
   const lowerAlias = alias.toLowerCase();
   const cleanModel = claudeCodeModelFamily(requestedModel);
-  if (lowerAlias === 'default' && cleanModel.includes('claude-opus-4-7')) {
-    return 'Default (recommended) - Opus 4.7 with 1M context';
+  if (lowerAlias === 'default' && cleanModel.includes('claude-opus-4-8')) {
+    return 'Default (recommended) - Opus 4.8 with 1M context';
   }
   if (lowerAlias === 'default') {
-    return 'Default (recommended) - Sonnet 4.6';
+    return 'Default (recommended) - Sonnet 5';
   }
   const oneMillion = isClaudeCodeOneMillionContext(requestedModel);
-  if (lowerAlias === 'sonnet[1m]' || (oneMillion && cleanModel.includes('claude-sonnet-4-6'))) {
-    return 'Sonnet (1M context) - Sonnet 4.6 with 1M context';
+  if (lowerAlias === 'sonnet[1m]' || (oneMillion && cleanModel.includes('claude-sonnet-5'))) {
+    return 'Sonnet (1M context) - Sonnet 5 with 1M context';
   }
-  if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-7'))) {
-    return 'Opus (1M context) - Opus 4.7 with 1M context';
+  if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-8'))) {
+    return 'Opus (1M context) - Opus 4.8 with 1M context';
   }
   if (lowerAlias === 'opus-4-6[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-6'))) {
     return 'Opus 4.6 (1M context) - Opus 4.6 with 1M context';
   }
   if (cleanModel.includes('claude-haiku-4-5')) return 'Haiku - Haiku 4.5';
+  if (cleanModel.includes('claude-opus-4-8')) return 'Opus - Opus 4.8';
   if (cleanModel.includes('claude-opus-4-7')) return 'Opus - Opus 4.7';
   if (cleanModel.includes('claude-opus-4-6')) return 'Opus - Opus 4.6';
   if (cleanModel.includes('claude-opus-4-5')) return 'Opus - Opus 4.5';
+  if (cleanModel.includes('claude-sonnet-5')) return 'Sonnet - Sonnet 5';
   if (cleanModel.includes('claude-sonnet-4-6')) return 'Sonnet - Sonnet 4.6';
   if (cleanModel.includes('claude-sonnet-4-5')) return 'Sonnet - Sonnet 4.5';
   return requestedModel;
@@ -748,36 +779,22 @@ export function getClaudeCodeBetasForModel(
   },
 ): string[] {
   const cleanModel = claudeCodeModelFamily(model);
-  const modernFirstPartyModel = isClaudeCodeModernFirstPartyModel(model);
-  const supportsInterleavedThinking = supportsClaudeCodeInterleavedThinking(model);
+  const isHaiku = cleanModel.includes('haiku');
+  const isClaude3 = cleanModel.includes('claude-3-');
+  const supportsInterleaved = !isClaude3 && !cleanModel.includes('claude-haiku-4-5');
+  const experimentalBetasDisabled = isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS);
   const betas: string[] = [];
-  if (!cleanModel.includes('haiku')) betas.push(CLAUDE_CODE_CLI_BETA);
+  if (!isHaiku) betas.push(CLAUDE_CODE_CLI_BETA);
   if (includeOAuth) betas.push(CLAUDE_CODE_OAUTH_BETA);
   if (isClaudeCodeOneMillionContext(model)) betas.push(CLAUDE_CODE_CONTEXT_1M_BETA);
-  if (
-    supportsInterleavedThinking &&
-    !isTruthyEnv(process.env.DISABLE_INTERLEAVED_THINKING)
-  ) {
+  if (supportsInterleaved && !isTruthyEnv(process.env.DISABLE_INTERLEAVED_THINKING)) {
     betas.push(CLAUDE_CODE_INTERLEAVED_THINKING_BETA);
   }
-  if (modernFirstPartyModel) {
+  if (!isClaude3 && !experimentalBetasDisabled) {
     betas.push(CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA);
   }
-  if (modernFirstPartyModel) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
-  if (opts?.hasEffort) betas.push(CLAUDE_CODE_EFFORT_BETA);
-  // token-efficient-tools-2025-02-19 only matters when tools are present and
-  // the request runs against a modern Claude 4+ model. The upstream bundle
-  // registers it but doesn't push it yet (forward-looking); we opt in here
-  // because it shrinks tool-call serialization with no behavioral downside,
-  // gated by an env opt-out.
-  if (
-    !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) &&
-    modernFirstPartyModel &&
-    opts?.hasTools &&
-    !isTruthyEnv(process.env.CLAUDE_CODE_DISABLE_TOKEN_EFFICIENT_TOOLS)
-  ) {
-    betas.push(CLAUDE_CODE_TOKEN_EFFICIENT_TOOLS_BETA);
-  }
+  if (!experimentalBetasDisabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
+  void opts;
   return betas;
 }
 
@@ -801,9 +818,15 @@ export function resolveClaudeCodeModel(
   const supportsEffort = supportsClaudeCodeEffort(apiModel);
   const effort = getClaudeCodeEffort(apiModel, opts?.effort);
   const outputConfig = effort && supportsEffort ? { effort } : undefined;
+  const thinkingDisplay = opts?.thinkingDisplay;
   const thinking = opts?.thinking === false || !supportsAdaptive
     ? undefined
-    : { type: 'adaptive' };
+    : {
+      type: 'adaptive',
+      ...(thinkingDisplay === 'summarized' || thinkingDisplay === 'omitted'
+        ? { display: thinkingDisplay }
+        : {}),
+    };
   const betas = getClaudeCodeBetasForModel(requestedModel, opts?.includeOAuth ?? true, {
     hasEffort: Boolean(outputConfig),
     thinkingDisplay: opts?.thinkingDisplay,
@@ -822,7 +845,8 @@ export function resolveClaudeCodeModel(
     effort,
     supportsEffort,
     supportsAdaptiveThinking: supportsAdaptive,
-    isOneMillionContext: isClaudeCodeOneMillionContext(requestedModel),
+    isOneMillionContext:
+      isClaudeCodeOneMillionContext(requestedModel) || isClaudeCodeNativeOneMillionModel(requestedModel),
   };
 }
 
@@ -954,7 +978,6 @@ export function buildClaudeCodeTokenExchangeRequest(input: {
     url: CLAUDE_CODE_TOKEN_URL,
     method: 'POST',
     headers: {
-      'anthropic-version': CLAUDE_CODE_ANTHROPIC_VERSION,
       'Content-Type': 'application/json',
     },
     body,
@@ -978,7 +1001,6 @@ export function buildClaudeCodeRefreshRequest(input: {
     url: CLAUDE_CODE_TOKEN_URL,
     method: 'POST',
     headers: {
-      'anthropic-version': CLAUDE_CODE_ANTHROPIC_VERSION,
       'Content-Type': 'application/json',
     },
     body,
@@ -1674,6 +1696,7 @@ export async function pollFlow(state: string): Promise<PollClaudeCodeFlowResult>
       flow.isManual,
     );
     pending.delete(state);
+    const authorizedAt = Date.now();
     const expires_in = tok.expires_in ?? 3600;
     const fallbackScope = flow.fallbackScopes.join(' ');
     const scope = tok.scope ?? fallbackScope;
@@ -1689,7 +1712,10 @@ export async function pollFlow(state: string): Promise<PollClaudeCodeFlowResult>
       status: 'authorized',
       access_token: tok.access_token,
       refresh_token: tok.refresh_token ?? null,
-      expires_at: Date.now() + expires_in * 1000,
+      expires_at: authorizedAt + expires_in * 1000,
+      refresh_token_expires_at: tok.refresh_token_expires_in
+        ? authorizedAt + tok.refresh_token_expires_in * 1000
+        : null,
       scope,
       auth_type: authType,
       api_key: apiKey,
@@ -1703,7 +1729,7 @@ export async function pollFlow(state: string): Promise<PollClaudeCodeFlowResult>
   }
 }
 
-export async function refreshIfExpired(
+async function refreshClaudeCodeTokenNow(
   store: ProviderStore,
   providerId: string,
   opts?: { force?: boolean },
@@ -1742,6 +1768,9 @@ export async function refreshIfExpired(
       ...tok.extra,
       auth_type: 'claude_ai',
       client_id: CLAUDE_CODE_CLIENT_ID,
+      refresh_token_expires_at: data.refresh_token_expires_in
+        ? Date.now() + data.refresh_token_expires_in * 1000
+        : tok.extra?.refresh_token_expires_at ?? null,
       account_uuid: profile?.account?.uuid ?? tok.extra?.account_uuid ?? null,
       organization_uuid:
         profile?.organization?.uuid ?? tok.extra?.organization_uuid ?? null,
@@ -1758,6 +1787,34 @@ export async function refreshIfExpired(
     },
   });
   return data.access_token;
+}
+
+/**
+ * Refresh-token rotation is single-flight per provider. Claude's refresh token
+ * may rotate on every exchange, so concurrent agent turns must never redeem the
+ * same old token independently.
+ */
+export async function refreshIfExpired(
+  store: ProviderStore,
+  providerId: string,
+  opts?: { force?: boolean },
+): Promise<string | null> {
+  const tok = store.getOAuth(providerId);
+  if (!tok) return null;
+  const usesClaudeAi = tok.extra?.auth_type === 'claude_ai' || hasInferenceScope(tok.scope);
+  if (!usesClaudeAi) return tok.access_token;
+  const stillValid = tok.expires_at && tok.expires_at - Date.now() > TOKEN_REFRESH_SKEW_MS;
+  if (!opts?.force && stillValid) return tok.access_token;
+  if (!tok.refresh_token) return tok.access_token;
+
+  const existing = pendingRefreshes.get(providerId);
+  if (existing) return existing;
+
+  const refresh = refreshClaudeCodeTokenNow(store, providerId, opts).finally(() => {
+    if (pendingRefreshes.get(providerId) === refresh) pendingRefreshes.delete(providerId);
+  });
+  pendingRefreshes.set(providerId, refresh);
+  return refresh;
 }
 
 async function shouldRetryAfterOAuthFailure(response: Response): Promise<boolean> {

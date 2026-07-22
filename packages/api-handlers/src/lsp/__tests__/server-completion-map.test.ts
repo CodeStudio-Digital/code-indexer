@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { filterServerCompletionItems, mapServerCodeActions, mapServerCompletionItem, mapServerWorkspaceEdit } from '../server-backend.js';
+import {
+  filterServerCompletionItems,
+  isServerCompletionRaw,
+  mapServerCodeActions,
+  mapServerCompletionItem,
+  mapServerWorkspaceEdit,
+} from '../server-backend.js';
 import type { LspCompletionItem } from '@mcp/services/lsp/lsp-protocol.js';
 
 describe('mapServerCompletionItem', () => {
@@ -33,6 +39,17 @@ describe('mapServerCompletionItem', () => {
   it('echoes the original LSP item as raw (resolve round-trip token)', () => {
     const lsp: LspCompletionItem = { label: 'X', data: { importPath: 'App\\X' } };
     expect(mapServerCompletionItem(lsp).raw).toBe(lsp);
+  });
+
+  it('pins resolve to the exact overlay server that produced the item', () => {
+    const lsp: LspCompletionItem = { label: 'ngIf', data: { token: 7 } };
+    const raw = mapServerCompletionItem(lsp, 'angular-language-server').raw;
+    expect(isServerCompletionRaw(raw)).toBe(true);
+    expect(raw).toEqual({
+      kind: 'mcp-lsp-completion',
+      serverId: 'angular-language-server',
+      item: lsp,
+    });
   });
 
   it('leaves additionalTextEdits undefined when the server deferred them', () => {

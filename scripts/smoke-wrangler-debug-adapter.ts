@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { delimiter, join, resolve } from 'node:path';
 import {
   reserveLoopbackPort,
   startDebugAdapter,
@@ -23,13 +22,16 @@ async function main(): Promise<void> {
     throw new Error('MCP_SMOKE_WRANGLER_ENTRY must point to wrangler/bin/wrangler.js');
   }
 
-  const projectRoot = await mkdtemp(join(tmpdir(), 'mcp-wrangler-debug-smoke-'));
+  const smokeRoot = resolve('.codex-tmp');
+  await mkdir(smokeRoot, { recursive: true });
+  const projectRoot = await mkdtemp(join(smokeRoot, 'mcp-wrangler-debug-smoke-'));
   const sourceDir = join(projectRoot, 'src');
   const source = join(sourceDir, 'index.ts');
   const appPort = await reserveLoopbackPort('127.0.0.1');
   const inspectorPort = await reserveLoopbackPort('127.0.0.1');
   const ownedPids = new Set<number>();
   const dapOutput: string[] = [];
+  const childConfigurations: Record<string, unknown>[] = [];
   let breakpointResult: Array<{ verified: boolean; line?: number; message?: string }> = [];
   const breakpointEvents: Array<{ reason?: string; breakpoint?: { verified?: boolean; line?: number; message?: string } }> = [];
   let started: Awaited<ReturnType<typeof startDebugAdapter>> | null = null;
@@ -37,11 +39,14 @@ async function main(): Promise<void> {
   let requestActive = true;
 
   try {
-    const packageBin = join(dirname(dirname(wranglerEntry)), '..', '.bin');
-    const wranglerBinDir = existsSync(join(packageBin, process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler'))
-      ? packageBin
-      : dirname(dirname(dirname(wranglerEntry)));
+    const wranglerBinDir = join(projectRoot, 'node_modules', '.bin');
     await mkdir(sourceDir, { recursive: true });
+    await mkdir(wranglerBinDir, { recursive: true });
+    const wranglerShim = join(wranglerBinDir, process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
+    await writeFile(wranglerShim, process.platform === 'win32'
+      ? `@echo off\r\n"${process.execPath}" "${wranglerEntry}" %*\r\n`
+      : `#!/bin/sh\nexec "${process.execPath}" "${wranglerEntry}" "$@"\n`);
+    if (process.platform !== 'win32') await chmod(wranglerShim, 0o755);
     await writeFile(source, [
       'export default {',
       '  async fetch(): Promise<Response> {',
@@ -122,19 +127,30 @@ async function main(): Promise<void> {
       dap.onRequest('startDebugging', async (args) => {
         const configuration = args.configuration as Record<string, unknown> | undefined;
         if (!configuration) throw new Error('startDebugging omitted configuration');
+        const childConfiguration = {
+          sourceMaps: resolvedConfiguration.configuration.sourceMaps,
+          pauseForSourceMap: resolvedConfiguration.configuration.pauseForSourceMap,
+          mcpPrimeOnFirstDebuggerStatement: resolvedConfiguration.configuration.mcpPrimeOnFirstDebuggerStatement,
+          resolveSourceMapLocations: resolvedConfiguration.configuration.resolveSourceMapLocations,
+          runtimeSourcemapPausePatterns: resolvedConfiguration.configuration.runtimeSourcemapPausePatterns,
+          cwd: resolvedConfiguration.configuration.cwd,
+          attachExistingChildren: resolvedConfiguration.configuration.attachExistingChildren,
+          autoAttachChildProcesses: resolvedConfiguration.configuration.autoAttachChildProcesses,
+          ...configuration,
+        };
+        childConfigurations.push(childConfiguration);
         const child = await started!.connectSession();
         target = child;
         wire(child);
         wireStartDebugging(child);
         const initialized = child.waitForEvent('initialized', 15_000);
         await child.request('initialize', initializeArgs);
-        const request = args.request === 'attach' || configuration.request === 'attach' ? 'attach' : 'launch';
-        const launch = child.request(request, configuration, 60_000);
+        const request = args.request === 'attach' || childConfiguration.request === 'attach' ? 'attach' : 'launch';
+        const launch = child.request(request, childConfiguration, 20_000);
         void launch.catch(() => undefined);
         await initialized;
         await child.request('setBreakpoints', sourceBreakpoints);
         await child.request('configurationDone');
-        await launch;
         return {};
       });
     };
@@ -150,6 +166,8 @@ async function main(): Promise<void> {
         cwd: projectRoot,
         env: {
           PATH: `${wranglerBinDir}${delimiter}${process.env.PATH ?? ''}`,
+          XDG_CONFIG_HOME: join(projectRoot, '.config'),
+          WRANGLER_SEND_METRICS: 'false',
         },
       },
       name: 'MCP Wrangler debugger smoke',
@@ -157,53 +175,37 @@ async function main(): Promise<void> {
     if (!isDebugResolvedConfiguration(resolvedConfiguration) || !resolvedConfiguration.target) {
       throw new Error('Wrangler did not resolve to a host-owned attach target');
     }
+    resolvedConfiguration.configuration.trace = true;
     const initialized = started.dap.waitForEvent('initialized', 15_000);
     await started.dap.request('initialize', initializeArgs);
     await Promise.all([appPort.release(), inspectorPort.release()]);
-    let resolveReady!: () => void;
-    const targetReady = new Promise<void>((resolveTargetReady) => { resolveReady = resolveTargetReady; });
     targetProcess = await startDebugTarget(resolvedConfiguration.target, (_category, output) => {
       dapOutput.push(output);
-      if (output.includes('Ready on http://')) resolveReady();
     });
+    // The production manager follows the same order. Attaching only after
+    // Wrangler is ready ensures the first request can pause instead of merely
+    // publishing the Worker script and binding a provisional breakpoint.
+    await targetProcess.ready;
+    console.error('[smoke] target ready');
     const launch = started.dap.request(
       resolvedConfiguration.dapRequest,
       resolvedConfiguration.configuration,
-      60_000,
+      20_000,
     );
     void launch.catch(() => undefined);
     await initialized;
+    console.error('[smoke] parent initialized');
     const set = await started.dap.request<{ breakpoints: Array<{ verified: boolean; line?: number; message?: string }> }>(
       'setBreakpoints',
       sourceBreakpoints,
     );
     breakpointResult = set.breakpoints;
+    console.error('[smoke] provisional breakpoint sent');
     await started.dap.request('configurationDone');
+    console.error('[smoke] parent configured');
     await launch;
-    await Promise.race([
-      targetReady,
-      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Wrangler target did not become ready')), 30_000)),
-    ]);
-    breakpointResult = (await target.request<{ breakpoints: typeof breakpointResult }>(
-      'setBreakpoints',
-      sourceBreakpoints,
-    )).breakpoints;
-
-    // Workerd publishes the Worker script to CDP lazily on its first request.
-    // That request binds the provisional source breakpoint; the following
-    // request is the first one that can be expected to pause on it.
-    if (!breakpointResult[0]?.verified) {
-      const warmup = await fetch(`http://127.0.0.1:${appPort.port}/`);
-      await warmup.text();
-      const verificationDeadline = Date.now() + 10_000;
-      while (!breakpointEvents.some((event) => event.breakpoint?.verified)) {
-        if (Date.now() >= verificationDeadline) throw new Error('Wrangler breakpoint did not become verified');
-        await new Promise((resolveWait) => setTimeout(resolveWait, 50));
-      }
-      const verified = [...breakpointEvents].reverse().find((event) => event.breakpoint?.verified)?.breakpoint;
-      if (verified) breakpointResult = [{ ...breakpointResult[0], ...verified, verified: true }];
-    }
-
+    console.error('[smoke] parent attached');
+    // This is deliberately the first and only HTTP request before `stopped`.
     const responsePromise = (async () => {
       while (requestActive) {
         try {
@@ -215,10 +217,12 @@ async function main(): Promise<void> {
       throw new Error('Wrangler request cancelled');
     })();
     void responsePromise.catch(() => undefined);
+    console.error('[smoke] first request started');
     const pause = await Promise.race([
       nextStopped(),
-      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Wrangler target did not stop')), 30_000)),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Wrangler target did not stop')), 15_000)),
     ]);
+    console.error(`[smoke] stopped: ${pause.reason}`);
     const stack = await target.request<{ stackFrames: Array<{ id: number; line: number }> }>('stackTrace', {
       threadId: pause.threadId,
       startFrame: 0,
@@ -226,6 +230,8 @@ async function main(): Promise<void> {
     });
     const top = stack.stackFrames[0];
     if (!top || top.line !== 4) throw new Error(`expected to pause on line 4, got ${top?.line ?? 'no frame'}`);
+    const verified = [...breakpointEvents].reverse().find((event) => event.breakpoint?.verified)?.breakpoint;
+    if (verified) breakpointResult = [{ ...breakpointResult[0], ...verified, verified: true }];
     const evaluated = await target.request<{ result: string }>('evaluate', {
       expression: 'base + 1',
       frameId: top.id,
@@ -233,7 +239,12 @@ async function main(): Promise<void> {
     });
     if (evaluated.result !== '42') throw new Error(`expected base + 1 = 42, got ${evaluated.result}`);
     await target.request('continue', { threadId: pause.threadId });
-    const response = await responsePromise;
+    console.error('[smoke] user breakpoint continued');
+    const response = await Promise.race([
+      responsePromise,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Wrangler response did not complete')), 15_000)),
+    ]);
+    console.error('[smoke] response received');
     const body = await response.text();
     if (body !== '42') throw new Error(`expected Worker response 42, got ${body}`);
     await started.dap.request('disconnect', {
@@ -241,19 +252,27 @@ async function main(): Promise<void> {
       terminateDebuggee: true,
       suspendDebuggee: false,
     }, 5_000).catch(() => undefined);
+    console.error('[smoke] adapter disconnected');
 
     console.log(JSON.stringify({
       initialized: true,
       childSession: target !== started!.dap,
       inspectorPort: inspectorPort.port,
       breakpointVerified: breakpointResult[0]?.verified ?? false,
+      firstRequestPaused: true,
       pausedLine: top.line,
       evaluated: evaluated.result,
       response: body,
       disconnected: true,
     }));
   } catch (error) {
-    console.error(JSON.stringify({ dapOutput, breakpointResult, breakpointEvents, diagnostics: started?.diagnostics() }));
+    console.error(JSON.stringify({
+      dapOutput,
+      childConfigurations,
+      breakpointResult,
+      breakpointEvents,
+      diagnostics: started?.diagnostics(),
+    }));
     throw error;
   } finally {
     requestActive = false;

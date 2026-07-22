@@ -191,6 +191,18 @@ export function collectPersistedToolUseIds(messages: PersistedMessage[]): Set<st
   return ids;
 }
 
+/** All tool_result ids already persisted to history. */
+export function collectPersistedToolResultIds(messages: PersistedMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== 'tool') continue;
+    for (const b of m.content) {
+      if (b.type === 'tool_result' && b.tool_use_id) ids.add(b.tool_use_id);
+    }
+  }
+  return ids;
+}
+
 type Dict = Record<string, unknown>;
 
 function asDict(value: unknown): Dict {
@@ -380,6 +392,8 @@ export function visibleLiveBlocks(
   blocks: StreamBlock[],
   persistedIds: Set<string>,
   persistedInteractivePromptSignatures: Set<string> = new Set(),
+  persistedResultIds: Set<string> = new Set(),
+  preferCompleteLiveRun = false,
 ): StreamBlock[] {
   const hasTaskRun = blocks.some((block) => block.type === 'task_run');
   const liveAgentToolUseIds = new Set(
@@ -396,10 +410,23 @@ export function visibleLiveBlocks(
   ) return blocks;
   return blocks.filter((b) => {
     if (b.type === 'agents') {
+      if (b.group.groupId.startsWith('tasks-wave-')) return false;
+      if (preferCompleteLiveRun) return true;
+      const toolUseId = b.group.toolUseId;
+      // Once the completed group and its result are durable, the persisted
+      // AgentsGroupBlock is canonical at the spawn tool's chronological
+      // position. Keeping the accumulated live copy would move it to the very
+      // end of the transcript, potentially below a later plan/card.
+      if (
+        b.group.status === 'completed'
+        && toolUseId
+        && persistedIds.has(toolUseId)
+        && persistedResultIds.has(toolUseId)
+      ) return false;
       // Task waves are already represented by TaskExecutionBlock. For genuine
       // subagents, the rich live card is canonical while it exists, even if
       // the parent tool_use has already checkpointed into history.
-      return !b.group.groupId.startsWith('tasks-wave-');
+      return true;
     }
     if (
       b.type === 'tool'
@@ -409,6 +436,11 @@ export function visibleLiveBlocks(
           && ['spawn_agent', 'spawn_agents', 'resume_agent'].includes(b.call.name))
       )
     ) return false;
+    // When the accumulated live buffer demonstrably covers the persisted
+    // assistant tail, it is the canonical rendering for this in-flight run.
+    // Filtering its persisted tool ids individually would punch holes in the
+    // sequence (tools disappear while their preceding text moves to the end).
+    if (preferCompleteLiveRun) return true;
     const id = liveBlockPersistedId(b);
     if (id && persistedIds.has(id)) return false;
     const signature = liveBlockPersistedSignature(b);
@@ -454,14 +486,24 @@ export function isLiveTurnDuplicatedInHistory(
     .join('\n')
     .trim();
   const persistedInteractivePromptSignatures = collectLatestPersistedInteractivePromptSignatures(messages);
+  const persistedResultIds = collectPersistedToolResultIds(messages);
   let checkedText = false;
   let checkedThinking = false;
 
   for (const block of turn.blocks) {
-    // A rich live agents card remains canonical while present. The persisted
-    // spawn tool_use may already exist, but hiding the whole turn here would
-    // make both copies disappear because PersistedMessages suppresses its card.
-    if (block.type === 'agents') return false;
+    // Running agents remain live-canonical. A completed group whose tool result
+    // is already durable is fully reconstructable in persisted history and
+    // must not keep the accumulated live run appended after newer content.
+    if (block.type === 'agents') {
+      const id = block.group.toolUseId;
+      if (
+        block.group.status === 'completed'
+        && id
+        && persistedIds.has(id)
+        && persistedResultIds.has(id)
+      ) continue;
+      return false;
+    }
     if (block.type === 'text') {
       if (!checkedText) {
         if (!liveText || persistedText !== liveText) return false;
@@ -491,6 +533,95 @@ export function isLiveTurnDuplicatedInHistory(
   }
 
   return true;
+}
+
+function latestVisibleUserIndex(messages: PersistedMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'user' && !message.isMeta && !isToolImagePlumbing(message)) return index;
+  }
+  return -1;
+}
+
+function persistedAssistantRun(messages: PersistedMessage[]): PersistedMessage[] {
+  return messages
+    .slice(latestVisibleUserIndex(messages) + 1)
+    .filter((message) => message.role === 'assistant');
+}
+
+/**
+ * True when `currentTurn` still contains the complete assistant run that the
+ * latest persisted history only checkpoints a prefix of. This is the normal
+ * state after switching away from and back to a busy session: the GET becomes
+ * newer while the per-session live buffer remains complete.
+ */
+export function liveTurnCoversPersistedAssistantRun(
+  turn: AssistantTurn | null,
+  messages: PersistedMessage[],
+): boolean {
+  if (!turn || turn.blocks.length === 0) return false;
+  const assistantRun = persistedAssistantRun(messages);
+  if (assistantRun.length === 0) return false;
+
+  const persistedText = assistantRun
+    .map(getPersistedAssistantText)
+    .filter((text) => text.trim().length > 0)
+    .join('\n')
+    .trim();
+  const persistedThinking = assistantRun
+    .map(getPersistedAssistantThinkingText)
+    .filter((text) => text.trim().length > 0)
+    .join('\n')
+    .trim();
+  const liveText = getCurrentTurnText(turn).trim();
+  const liveThinking = getCurrentTurnThinkingText(turn).trim();
+  if (persistedText && !liveText.startsWith(persistedText)) return false;
+  if (persistedThinking && !liveThinking.startsWith(persistedThinking)) return false;
+
+  const liveIds = new Set<string>();
+  const liveSignatures = new Set<string>();
+  for (const block of turn.blocks) {
+    const id = liveBlockPersistedId(block);
+    if (id) liveIds.add(id);
+    const signature = liveBlockPersistedSignature(block);
+    if (signature) liveSignatures.add(signature);
+  }
+  let persistedToolCount = 0;
+  for (const message of assistantRun) {
+    for (const block of message.content) {
+      if (block.type !== 'tool_use') continue;
+      persistedToolCount++;
+      if (block.id && liveIds.has(block.id)) continue;
+      const signature = persistedInteractivePromptSignature(block.name, block.input);
+      if (signature && liveSignatures.has(signature)) continue;
+      return false;
+    }
+  }
+
+  return Boolean(persistedText || persistedThinking || persistedToolCount > 0);
+}
+
+/**
+ * Hide only the checkpointed assistant groups belonging to the latest visible
+ * user turn. The complete live run is rendered in their place, preserving the
+ * original text/tool order while an active session continues streaming.
+ */
+export function suppressLatestPersistedAssistantRun(groups: VisualGroup[]): VisualGroup[] {
+  let latestUserGroup = -1;
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index];
+    if (
+      group.kind === 'user'
+      && !group.message.isMeta
+      && !isToolImagePlumbing(group.message)
+    ) {
+      latestUserGroup = index;
+      break;
+    }
+  }
+  if (latestUserGroup < 0) return groups;
+  const filtered = groups.filter((group, index) => index <= latestUserGroup || group.kind !== 'assistant');
+  return filtered.length === groups.length ? groups : filtered;
 }
 
 // ─── Visual grouping ────────────────────────────────────────────

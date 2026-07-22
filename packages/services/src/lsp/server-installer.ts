@@ -10,12 +10,20 @@
  * Freemium contract: this NEVER runs without an explicit user action
  * (the editor CTA / admin button call it).
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { lspServersBaseDir } from '@mcp/shared/utils/data-paths.js';
 import { runHostCommand } from '../host-scaffold/run-host-command.js';
 import { installBinaryServer } from './binary-installer.js';
-import { LSP_SERVER_REGISTRY, installDirFor, isInstalled, serverById, type LspServerDef } from './server-registry.js';
+import {
+  allLspServers,
+  installDirFor,
+  isInstalled,
+  serverById,
+  validateNpmServerInstall,
+  type LspServerDef,
+} from './server-registry.js';
 
 export type LspInstallProgress =
   | { phase: 'start'; serverId: string; version: string; targetDir: string }
@@ -25,21 +33,27 @@ export type LspInstallProgress =
 
 export interface InstalledServerInfo {
   id: string;
+  familyId?: string;
+  profileId?: string;
   label: string;
   languages: string[];
   version: string;
   installed: boolean;
   sizeLabel: string;
+  supportTier?: LspServerDef['supportTier'];
 }
 
 export function listServers(baseDir = lspServersBaseDir()): InstalledServerInfo[] {
-  return LSP_SERVER_REGISTRY.map((def) => ({
+  return allLspServers().map((def) => ({
     id: def.id,
+    familyId: def.familyId,
+    profileId: def.profileId,
     label: def.label,
     languages: [...def.languages],
     version: def.install.version,
     installed: isInstalled(baseDir, def),
     sizeLabel: def.sizeLabel,
+    supportTier: def.supportTier,
   }));
 }
 
@@ -62,10 +76,17 @@ export async function* installServer(
     return;
   }
 
+  if (isInstalled(baseDir, def)) {
+    yield { phase: 'done', installDir };
+    return;
+  }
+
+  mkdirSync(baseDir, { recursive: true });
+  const stagingDir = join(baseDir, `.staging-${safeSegment(def.id)}-${process.pid}-${randomUUID()}`);
   try {
-    mkdirSync(installDir, { recursive: true });
+    mkdirSync(stagingDir, { recursive: true });
     // A minimal manifest keeps npm from walking up to a parent package.json.
-    writeFileSync(join(installDir, 'package.json'), JSON.stringify({ name: `lsp-${def.id}`, private: true }, null, 2));
+    writeFileSync(join(stagingDir, 'package.json'), JSON.stringify({ name: `lsp-${safeSegment(def.id)}`, private: true }, null, 2));
   } catch (err) {
     yield { phase: 'error', message: `mkdir failed: ${err instanceof Error ? err.message : err}` };
     return;
@@ -86,7 +107,7 @@ export async function* installServer(
   const run = runHostCommand({
     program: 'npm',
     args: ['install', `${def.install.package}@${def.install.version}`, '--no-audit', '--no-fund', '--omit=dev', '--loglevel=info'],
-    cwd: installDir,
+    cwd: stagingDir,
     env,
     timeoutMs: 5 * 60_000,
     signal: opts.signal,
@@ -107,14 +128,53 @@ export async function* installServer(
 
   const result = await run;
   if (!result.ok) {
+    cleanupStaging(stagingDir);
     yield { phase: 'error', message: `npm install failed (exit ${result.exitCode}${result.reason ? `, ${result.reason}` : ''}): ${result.stderrTail.slice(-400)}` };
     return;
   }
-  if (!isInstalled(baseDir, def)) {
-    yield { phase: 'error', message: 'npm reported success but the package entry was not found' };
+  const validationError = validateNpmServerInstall(stagingDir, def);
+  if (validationError) {
+    cleanupStaging(stagingDir);
+    yield { phase: 'error', message: validationError };
+    return;
+  }
+  writeInstallReceipt(stagingDir, def);
+  try {
+    // A concurrent installer may have won while this staging tree was built.
+    if (validateNpmServerInstall(installDir, def) === null) {
+      cleanupStaging(stagingDir);
+    } else {
+      rmSync(installDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      renameSync(stagingDir, installDir);
+    }
+  } catch (err) {
+    cleanupStaging(stagingDir);
+    yield { phase: 'error', message: `finalize failed: ${err instanceof Error ? err.message : String(err)}` };
     return;
   }
   yield { phase: 'done', installDir };
+}
+
+const RECEIPT_FILE = '.mcp-lsp-install.json';
+
+function safeSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96);
+}
+
+function writeInstallReceipt(root: string, def: LspServerDef): void {
+  writeFileSync(join(root, RECEIPT_FILE), JSON.stringify({
+    schema: 1,
+    serverId: def.id,
+    familyId: def.familyId,
+    profileId: def.profileId,
+    package: def.install.kind === 'npm' ? def.install.package : undefined,
+    version: def.install.version,
+    installedAt: new Date().toISOString(),
+  }, null, 2));
+}
+
+function cleanupStaging(stagingDir: string): void {
+  try { rmSync(stagingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { /* best effort */ }
 }
 
 export function removeServer(serverId: string, baseDir = lspServersBaseDir()): boolean {

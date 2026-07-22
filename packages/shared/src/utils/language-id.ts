@@ -7,10 +7,54 @@
  * keep ids aligned with Monaco's registry, since they double as Monaco
  * `language` props.
  */
+const JSON_CONVENTION_FILES = new Set([
+  '.babelrc',
+  '.bowerrc',
+  '.eslintrc',
+  '.hintrc',
+  '.jshintrc',
+  '.prettierrc',
+  '.stylelintrc',
+  '.swcrc',
+  'composer.lock',
+  'deno.lock',
+  'flake.lock',
+  'package-lock.json',
+  'package.json',
+]);
+
+const INI_CONVENTION_FILES = new Set([
+  '.browserslistrc',
+  '.editorconfig',
+  '.gitconfig',
+  '.gitmodules',
+  '.npmrc',
+  '.pnpmrc',
+  '.yarnrc',
+]);
+
+/** Gitignore-compatible files, including tool-specific `.somethingignore`s. */
+export function isIgnoreFilePath(filePath: string): boolean {
+  const normalized = filePath.toLowerCase().replace(/\\/g, '/');
+  const base = normalized.split('/').pop() ?? '';
+  if (normalized.endsWith('/.git/info/exclude')) return true;
+  if (base === '.git-blame-ignore-revs' || base === '.gitignore-global' || base === '.gitignore_global') return true;
+  if (base === 'gitignore' || base === 'dockerignore' || base === 'ignore') return true;
+  return base === '.ignore'
+    || base.endsWith('.ignore')
+    || (base.startsWith('.') && base.endsWith('ignore'));
+}
+
 export function languageIdForPath(path: string): string {
-  const base = path.toLowerCase().split(/[\\/]/).pop() ?? '';
+  const normalized = path.toLowerCase().replace(/\\/g, '/');
+  const base = normalized.split('/').pop() ?? '';
   // Extensionless launchers and convention-based build files need an explicit
   // mapping: Monaco cannot infer a language from their contents or shebang.
+  if (isIgnoreFilePath(normalized) || base === '.gitattributes') return 'ignore';
+  if (JSON_CONVENTION_FILES.has(base)) return 'json';
+  if (INI_CONVENTION_FILES.has(base)) return 'ini';
+  if (base === 'codeowners') return 'codeowners';
+  if (base === '.env' || base.startsWith('.env.')) return 'dotenv';
   if (base === 'dockerfile' || base.startsWith('dockerfile.')
     || base === 'containerfile' || base.startsWith('containerfile.')) return 'dockerfile';
   if (base === 'gradlew' || base === 'mvnw' || base === 'configure'
@@ -28,7 +72,12 @@ export function languageIdForPath(path: string): string {
     case 'tsx': return 'typescript';
     case 'js': case 'cjs': case 'mjs': return 'javascript';
     case 'jsx': return 'javascript';
-    case 'json': return 'json';
+    case 'json': case 'jsonc': case 'jsonb': case 'geojson': case 'topojson':
+    case 'har': case 'ipynb': case 'webmanifest': case 'code-workspace': return 'json';
+    case 'jsonl': case 'ndjson': case 'jsonlines': case 'ldjson': return 'jsonl';
+    case 'json5': return 'json5';
+    case 'hjson': return 'hjson';
+    case 'jsonnet': case 'libsonnet': return 'jsonnet';
     case 'md': case 'markdown': return 'markdown';
     case 'css': return 'css';
     case 'scss': return 'scss';
@@ -40,6 +89,11 @@ export function languageIdForPath(path: string): string {
     case 'props': case 'targets': case 'nuspec': case 'resx': case 'xaml': return 'xml';
     case 'yaml': case 'yml': return 'yaml';
     case 'toml': return 'toml';
+    case 'ini': case 'cfg': case 'conf': case 'properties': return 'ini';
+    case 'env': return 'dotenv';
+    case 'csv': return 'csv';
+    case 'tsv': return 'tsv';
+    case 'log': return 'log';
     case 'py': return 'python';
     case 'rb': return 'ruby';
     case 'php': return 'php';

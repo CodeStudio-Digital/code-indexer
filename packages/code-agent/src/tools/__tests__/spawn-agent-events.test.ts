@@ -53,6 +53,27 @@ beforeEach(() => {
 });
 
 describe('spawn_agent single-agent live events', () => {
+  it('emits the complete report instead of a 500-character preview', async () => {
+    const report = `# Findings\n\n${'Complete evidence. '.repeat(40)}`;
+    runSingle.mockResolvedValue({
+      reason: 'completed',
+      finalText: report,
+      usage: { input_tokens: 11, output_tokens: 120 },
+      sandboxViolations: [],
+      collected: { memos: [], snapshots: [], boardPosts: [] },
+    });
+
+    const { emit, ctx, tool } = setup();
+    await tool.handler({ agents: [{ task: 'Write a detailed report', label: 'reporter' }] }, ctx);
+
+    const completed = emit.mock.calls
+      .filter(([name]) => name === 'agent_progress')
+      .map(([, payload]) => payload as { event?: string; summary?: string })
+      .find((payload) => payload.event === 'completed');
+    expect(report.length).toBeGreaterThan(500);
+    expect(completed?.summary).toBe(report);
+  });
+
   it('emits the same start/progress/terminal/end lifecycle as a parallel group', async () => {
     runSingle.mockImplementation(async (_parent, spec) => {
       spec.onProgress?.({
@@ -138,6 +159,7 @@ describe('spawn_agent single-agent live events', () => {
   });
 
   it('materializes and completes a live row for cache hits without spawning a child', async () => {
+    const report = `Cached report:\n${'full cached evidence '.repeat(35)}`;
     cacheEnabled.mockReturnValue(true);
     cacheRead.mockReturnValue({
       cached: true,
@@ -145,7 +167,7 @@ describe('spawn_agent single-agent live events', () => {
       hitCount: 3,
       result: {
         header: '[cached]\n\n',
-        body: 'Cached summary',
+        body: report,
         usage: { input_tokens: 8, output_tokens: 2 },
       },
     });
@@ -163,8 +185,9 @@ describe('spawn_agent single-agent live events', () => {
     ]);
     const progress = emit.mock.calls
       .filter(([name]) => name === 'agent_progress')
-      .map(([, payload]) => payload as { event: string; note?: string });
-    expect(progress.at(-1)).toMatchObject({ event: 'completed', note: 'cache hit' });
+      .map(([, payload]) => payload as { event: string; note?: string; summary?: string });
+    expect(progress.at(-1)).toMatchObject({ event: 'completed', note: 'cache hit', summary: report });
     expect(payloadFor(emit, 'agents_group_end')).toMatchObject({ completedCount: 1, failedCount: 0 });
   });
+
 });

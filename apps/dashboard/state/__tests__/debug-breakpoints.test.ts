@@ -61,4 +61,18 @@ describe('debug breakpoints state', () => {
     }]);
     expect(debugBreakpointsForProject(2)[0]?.breakpoints).toEqual([{ line: 9 }]);
   });
+
+  it('returns referentially stable runtime snapshots for React store subscriptions', () => {
+    const empty = selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', undefined);
+    expect(selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', undefined)).toBe(empty);
+    expect(selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', 'missing')).toBe(empty);
+
+    setDebugBreakpointRuntime(2, 'worker.ts', 'session-1', [{ line: 9 }], [{
+      verified: true,
+      line: 9,
+    }]);
+    const runtime = selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', 'session-1');
+    expect(selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', 'session-1')).toBe(runtime);
+    expect(selectDebugBreakpointRuntime(useDebugBreakpoints.getState(), 2, 'worker.ts', 'session-2')).toBe(empty);
+  });
 });

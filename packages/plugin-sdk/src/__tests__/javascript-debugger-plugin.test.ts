@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import plugin, {
   debugAdapter,
+  wranglerDebugWrapperSource,
   wranglerInspectorPort,
 } from '../../../../extensions/javascript-debugger/src/plugin.js';
 
@@ -97,6 +98,48 @@ describe('javascript debugger plugin', () => {
     expect(wranglerInspectorPort('wrangler dev --port 8282')).toBe(9229);
     expect(wranglerInspectorPort('wrangler dev --port 8282', 9411)).toBe(9411);
     expect(wranglerInspectorPort('vite dev')).toBeNull();
+  });
+
+  it('wraps a configured Wrangler entry with one hidden first-handler pause', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-js-debug-wrangler-'));
+    tempDirectories.push(projectRoot);
+    writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({
+      scripts: { dev: 'wrangler dev --port 8787' },
+    }));
+    writeFileSync(join(projectRoot, 'wrangler.jsonc'), JSON.stringify({
+      main: 'src/index.ts',
+      compatibility_date: '2026-07-01',
+    }));
+
+    const resolved = debugAdapter.resolveConfiguration({
+      request: 'launch',
+      projectRoot,
+      targetPort: 9411,
+      runner: { manager: 'npm', script: 'dev' },
+    });
+
+    expect(resolved).toMatchObject({
+      dapRequest: 'attach',
+      configuration: {
+        mcpPrimeOnFirstDebuggerStatement: true,
+        pauseForSourceMap: true,
+      },
+      target: {
+        args: ['run', 'dev', '--', '--inspector-port=9411', expect.stringContaining('.mcp-wrangler-debug-9411.mjs')],
+        preparedFiles: [{
+          path: expect.stringContaining('.mcp-wrangler-debug-9411.mjs'),
+          content: expect.stringContaining('debugger;'),
+        }],
+      },
+    });
+  });
+
+  it('primes only the first wrapped Worker handler invocation', () => {
+    const source = wranglerDebugWrapperSource('./src/index.ts');
+    expect(source).toContain('let primed = false');
+    expect(source.match(/debugger;/g)).toHaveLength(1);
+    expect(source).toContain('handler.apply');
+    expect(source).toContain('export * from "./src/index.ts"');
   });
 
   it.each([

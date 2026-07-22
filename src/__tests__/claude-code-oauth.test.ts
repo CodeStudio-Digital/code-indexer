@@ -6,10 +6,13 @@ import {
   buildClaudeCodeModelsUrl,
   buildClaudeCodeRefreshRequest,
   buildClaudeCodeTokenExchangeRequest,
+  CLAUDE_CODE_PACKAGE_VERSION,
   claudeCodeAuthHeaders,
   createClaudeCodeFetchWithRetry,
   getClaudeCodeBetasForModel,
   parseClaudeCodeRateLimitHeaders,
+  refreshIfExpired,
+  resolveClaudeCodeModel,
 } from '@mcp/services/services/oauth/claude-code.js';
 
 afterEach(() => {
@@ -65,7 +68,6 @@ describe('Claude Code OAuth parity helpers', () => {
       url: 'https://platform.claude.com/v1/oauth/token',
       method: 'POST',
       headers: {
-        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: {
@@ -90,7 +92,6 @@ describe('Claude Code OAuth parity helpers', () => {
       url: 'https://platform.claude.com/v1/oauth/token',
       method: 'POST',
       headers: {
-        'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       },
       body: {
@@ -115,27 +116,59 @@ describe('Claude Code OAuth parity helpers', () => {
     });
   });
 
-  it('keeps official Claude Code default betas even when optional experimental betas are disabled', () => {
-    process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
+  it('matches current Claude Code model and beta behavior', () => {
+    const priorDisableExperimental = process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+    delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
     try {
-      const betas = getClaudeCodeBetasForModel('claude-opus-4-7[1m]', true, {
+      expect(CLAUDE_CODE_PACKAGE_VERSION).toBe('2.1.215');
+      expect(getClaudeCodeBetasForModel('claude-opus-4-8[1m]', true, {
         hasEffort: true,
         hasTools: true,
-      });
-      expect(betas).toEqual([
+      })).toEqual([
         'claude-code-20250219',
         'oauth-2025-04-20',
         'context-1m-2025-08-07',
         'interleaved-thinking-2025-05-14',
         'context-management-2025-06-27',
         'prompt-caching-scope-2026-01-05',
-        'effort-2025-11-24',
       ]);
-      expect(betas).not.toContain('token-efficient-tools-2025-02-19');
-      expect(betas).not.toContain('redact-thinking-2026-02-12');
+      expect(getClaudeCodeBetasForModel('claude-sonnet-4-6[1m]', true)).toEqual([
+        'claude-code-20250219',
+        'oauth-2025-04-20',
+        'context-1m-2025-08-07',
+        'interleaved-thinking-2025-05-14',
+        'context-management-2025-06-27',
+        'prompt-caching-scope-2026-01-05',
+      ]);
     } finally {
-      delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+      if (priorDisableExperimental === undefined) {
+        delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+      } else {
+        process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = priorDisableExperimental;
+      }
     }
+
+    expect(resolveClaudeCodeModel('default', {
+      subscriptionType: 'max',
+    })).toMatchObject({
+      apiModel: 'claude-opus-4-8',
+      maxTokens: 64_000,
+      effort: 'high',
+      thinking: { type: 'adaptive' },
+      isOneMillionContext: true,
+    });
+    expect(resolveClaudeCodeModel('default', {
+      subscriptionType: 'pro',
+    })).toMatchObject({
+      apiModel: 'claude-sonnet-5',
+      maxTokens: 64_000,
+      effort: 'high',
+      isOneMillionContext: true,
+    });
+    expect(resolveClaudeCodeModel('default', {
+      subscriptionType: 'enterprise',
+      billingType: 'enterprise_usage_based',
+    }).apiModel).toBe('claude-opus-4-8');
   });
 });
 
@@ -161,6 +194,53 @@ describe('Claude Code rate-limit diagnostics', () => {
 });
 
 describe('Claude Code OAuth retry', () => {
+  it('serializes concurrent refreshes so a rotating refresh token is redeemed once', async () => {
+    let refreshCalls = 0;
+    const oauthRow: OAuthTokenRow = {
+      provider_id: 'claude-code',
+      access_token: 'expired-access',
+      refresh_token: 'rotating-refresh',
+      expires_at: Date.now() - 1_000,
+      scope: 'user:profile user:inference',
+      extra: { auth_type: 'claude_ai' },
+      updated_at: new Date().toISOString(),
+    };
+    const store = {
+      getOAuth: () => oauthRow,
+      setOAuth: (row: OAuthTokenRow) => Object.assign(oauthRow, row),
+    } as unknown as ProviderStore;
+
+    __setClaudeCodeFetchForTests(async (url) => {
+      const asString = String(url);
+      if (asString.endsWith('/v1/oauth/token')) {
+        refreshCalls += 1;
+        await Promise.resolve();
+        return new Response(JSON.stringify({
+          access_token: 'fresh-access',
+          refresh_token: 'rotated-refresh',
+          expires_in: 3600,
+          refresh_token_expires_in: 7200,
+          scope: 'user:profile user:inference',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const [a, b] = await Promise.all([
+      refreshIfExpired(store, 'claude-code'),
+      refreshIfExpired(store, 'claude-code'),
+    ]);
+
+    expect(a).toBe('fresh-access');
+    expect(b).toBe('fresh-access');
+    expect(refreshCalls).toBe(1);
+    expect(oauthRow.refresh_token).toBe('rotated-refresh');
+    expect(Number(oauthRow.extra?.refresh_token_expires_at)).toBeGreaterThan(Date.now());
+  });
+
   it('refreshes and retries once after a 401', async () => {
     const requests: Array<{ url: string; headers: Headers }> = [];
     const oauthRow: OAuthTokenRow = {

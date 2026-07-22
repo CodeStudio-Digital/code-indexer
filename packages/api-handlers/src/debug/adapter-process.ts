@@ -1,8 +1,9 @@
 import type { DebugAdapterExecutable, DebugTargetLaunch } from '@mcp/plugin-sdk';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { delimiter, extname, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { cmdDoubleQuote } from '../terminal/shell-quote.js';
 import { DapConnection, connectDapTcp } from './dap-connection.js';
@@ -108,14 +109,8 @@ async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<vo
   child.kill('SIGTERM');
   if (await waitForExit(child, 1_500)) return;
   if (process.platform === 'win32' && child.pid) {
-    const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    await new Promise<void>((resolve) => {
-      killer.once('error', () => resolve());
-      killer.once('exit', () => resolve());
-    });
+    await killProcessTree(child.pid, 'SIGKILL');
+    await waitForExit(child, 1_500);
   } else {
     child.kill('SIGKILL');
   }
@@ -143,14 +138,7 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
 export async function terminateDebuggeeTree(pid: number): Promise<void> {
   if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidExists(pid)) return;
   if (process.platform === 'win32') {
-    const killer = spawn('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    await new Promise<void>((resolve) => {
-      killer.once('error', () => resolve());
-      killer.once('exit', () => resolve());
-    });
+    await killProcessTree(pid, 'SIGKILL');
     return;
   }
   try { process.kill(pid, 'SIGTERM'); } catch { return; }
@@ -169,6 +157,8 @@ export interface StartedDebugAdapter {
 
 export interface StartedDebugTarget {
   child: ChildProcessWithoutNullStreams;
+  /** Resolves only when the target is safe for the DAP adapter to attach. */
+  ready: Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -182,6 +172,28 @@ export async function startDebugTarget(
   onOutput: (category: 'stdout' | 'stderr', output: string) => void,
 ): Promise<StartedDebugTarget> {
   if (!target.command.trim()) throw new Error('debug target command is empty');
+
+  const targetCwd = resolve(target.cwd ?? process.cwd());
+  const preparedFiles: string[] = [];
+  const cleanupPreparedFiles = async () => {
+    await Promise.allSettled(preparedFiles.map((path) => rm(path, { force: true })));
+    preparedFiles.length = 0;
+  };
+  try {
+    for (const file of target.preparedFiles ?? []) {
+      const path = resolve(targetCwd, file.path);
+      const rel = relative(targetCwd, path);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+        throw new Error(`debug target prepared file escapes cwd: ${file.path}`);
+      }
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, file.content, { encoding: 'utf8', flag: 'wx' });
+      preparedFiles.push(path);
+    }
+  } catch (error) {
+    await cleanupPreparedFiles();
+    throw error;
+  }
 
   const childEnv: NodeJS.ProcessEnv = { ...process.env };
   delete childEnv.NODE_OPTIONS;
@@ -205,15 +217,46 @@ export async function startDebugTarget(
   }
 
   const child = spawn(command, args, {
-    cwd: target.cwd,
+    cwd: targetCwd,
     env: childEnv,
     windowsHide: true,
     stdio: 'pipe',
     detached: process.platform !== 'win32',
     shell,
   });
-  child.stdout.on('data', (chunk) => onOutput('stdout', chunk.toString()));
-  child.stderr.on('data', (chunk) => onOutput('stderr', chunk.toString()));
+  const readyPattern = target.readyPattern || null;
+  let readinessOutput = '';
+  let readinessSettled = readyPattern === null;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let readinessTimer: NodeJS.Timeout | null = null;
+  const ready = readinessSettled
+    ? Promise.resolve()
+    : new Promise<void>((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+      });
+  // A very fast target may exit before the caller receives the handle. Keep
+  // the rejection observed while preserving it for the caller's await.
+  void ready.catch(() => undefined);
+
+  const finishReadiness = (error?: Error) => {
+    if (readinessSettled) return;
+    readinessSettled = true;
+    if (readinessTimer) clearTimeout(readinessTimer);
+    readinessTimer = null;
+    if (error) rejectReady(error);
+    else resolveReady();
+  };
+  const handleOutput = (category: 'stdout' | 'stderr', chunk: Buffer | string) => {
+    const output = chunk.toString();
+    onOutput(category, output);
+    if (!readyPattern || readinessSettled) return;
+    readinessOutput = appendBounded(readinessOutput, output);
+    if (readinessOutput.includes(readyPattern)) finishReadiness();
+  };
+  child.stdout.on('data', (chunk) => handleOutput('stdout', chunk));
+  child.stderr.on('data', (chunk) => handleOutput('stderr', chunk));
 
   await new Promise<void>((resolve, reject) => {
     const onSpawn = () => {
@@ -226,13 +269,33 @@ export async function startDebugTarget(
     };
     child.once('spawn', onSpawn);
     child.once('error', onError);
+  }).catch(async (error) => {
+    await cleanupPreparedFiles();
+    throw error;
   });
   child.on('error', (error) => onOutput('stderr', `${error.message}\n`));
   const untrack = trackProcessTree(child.pid);
-  child.once('exit', untrack);
+  child.once('exit', (code, signal) => {
+    untrack();
+    if (readyPattern && !readinessSettled) {
+      finishReadiness(new Error(
+        `debug target exited before becoming ready (code ${code ?? 'none'}, signal ${signal ?? 'none'}; waiting for "${readyPattern}")`,
+      ));
+    }
+  });
+  if (readyPattern && !readinessSettled) {
+    const timeoutMs = Math.max(1, target.readyTimeoutMs ?? 30_000);
+    readinessTimer = setTimeout(() => {
+      finishReadiness(new Error(
+        `debug target did not become ready after ${timeoutMs}ms (waiting for "${readyPattern}")`,
+      ));
+    }, timeoutMs);
+    readinessTimer.unref?.();
+  }
 
   return {
     child,
+    ready,
     async dispose() {
       if (child.pid && child.exitCode === null && child.signalCode === null) {
         await killProcessTree(child.pid, 'SIGTERM');
@@ -245,6 +308,7 @@ export async function startDebugTarget(
         }
       }
       untrack();
+      await cleanupPreparedFiles();
     },
   };
 }

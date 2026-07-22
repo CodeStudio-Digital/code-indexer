@@ -33,6 +33,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
+import { isIgnoreFilePath } from '@mcp/shared/utils/language-id.js';
 
 export interface FileIconSpec {
   Icon: LucideIcon;
@@ -49,6 +50,8 @@ export function fileIconFor(path: string): FileIconSpec {
   const ext = name.includes('.') ? name.split('.').pop()! : '';
 
   // ── Special filenames ─────────────────────────────────────
+  if (isIgnoreFilePath(path) || name === '.gitattributes')
+    return { Icon: Hash, colorClass: 'text-orange-400' };
   if (name === 'package.json' || name === 'package-lock.json' || name === 'pnpm-lock.yaml' || name === 'yarn.lock')
     return { Icon: FileJson, colorClass: 'text-rose-400' };
   if (name === 'tsconfig.json' || name.startsWith('tsconfig.') && name.endsWith('.json'))
@@ -56,7 +59,7 @@ export function fileIconFor(path: string): FileIconSpec {
   if (name === 'vite.config.ts' || name === 'vite.config.js')
     return { Icon: Wrench, colorClass: 'text-violet-400' };
   if (name.startsWith('dockerfile')) return { Icon: Wrench, colorClass: 'text-sky-300' };
-  if (name === '.gitignore' || name === '.gitattributes' || name === '.gitmodules')
+  if (name === '.gitmodules')
     return { Icon: Hash, colorClass: 'text-orange-400' };
   if (name === '.env' || name.startsWith('.env.')) return { Icon: Lock, colorClass: 'text-yellow-400' };
   if (name === 'readme.md' || name === 'readme') return { Icon: FileText, colorClass: 'text-blue-300' };
@@ -70,7 +73,10 @@ export function fileIconFor(path: string): FileIconSpec {
     case 'tsx':                         return { Icon: FileCode2, colorClass: 'text-sky-300' };
     case 'js': case 'mjs': case 'cjs': return { Icon: FileCode2, colorClass: 'text-amber-300' };
     case 'jsx':                         return { Icon: FileCode2, colorClass: 'text-amber-200' };
-    case 'json': case 'jsonc':          return { Icon: FileJson, colorClass: 'text-amber-300' };
+    case 'json': case 'jsonc': case 'json5': case 'jsonl': case 'ndjson':
+    case 'jsonlines': case 'ldjson': case 'jsonb': case 'hjson': case 'jsonnet':
+    case 'libsonnet': case 'geojson': case 'topojson': case 'har': case 'ipynb':
+      return { Icon: FileJson, colorClass: 'text-amber-300' };
 
     // Markup / docs
     case 'md': case 'markdown': case 'mdx': return { Icon: FileText, colorClass: 'text-blue-300' };
@@ -88,6 +94,8 @@ export function fileIconFor(path: string): FileIconSpec {
     case 'yaml': case 'yml':  return { Icon: FileSpreadsheet, colorClass: 'text-rose-300' };
     case 'toml':              return { Icon: FileSpreadsheet, colorClass: 'text-rose-300' };
     case 'csv': case 'tsv':   return { Icon: FileSpreadsheet, colorClass: 'text-emerald-300' };
+    case 'env':               return { Icon: Lock, colorClass: 'text-yellow-400' };
+    case 'log':               return { Icon: FileText, colorClass: 'text-zinc-300' };
     case 'sql':               return { Icon: Braces, colorClass: 'text-cyan-300' };
 
     // Backend languages

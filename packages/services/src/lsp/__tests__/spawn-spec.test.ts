@@ -4,7 +4,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { constants as osConstants, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LSP_SERVER_REGISTRY,
@@ -13,6 +13,9 @@ import {
   currentTargetKey,
   installDirFor,
   isInstalled,
+  isLspServerActive,
+  overlayServersForLanguage,
+  replacePluginLanguageServers,
   serverById,
   serverForLanguage,
   spawnSpecFor,
@@ -34,6 +37,25 @@ const npmDef: LspServerDef = {
   args: ['--stdio'],
   sizeLabel: '~1 MB',
 };
+
+function registerAngularOverlay(): LspServerDef {
+  replacePluginLanguageServers([{
+    namespace: 'angular',
+    contribution: {
+      id: 'angular-language-server',
+      label: 'Angular Language Service',
+      languages: ['typescript', 'html'],
+      routing: { mode: 'overlay', priority: 100 },
+      install: { kind: 'npm', package: '@angular/language-server', version: '21.2.18' },
+      entryRelPath: 'node_modules/@angular/language-server/index.js',
+      launchKind: 'angular',
+      args: ['--includeCompletionsForModuleExports', 'true'],
+      activation: { whenFiles: ['angular.json'], whenPackageDep: ['@angular/core'] },
+      sizeLabel: '~13 MB',
+    },
+  }]);
+  return serverById('angular-language-server')!;
+}
 
 /** Same asset on every target so the test passes on any host platform. */
 function binaryDef(perTarget: Partial<Record<LspTargetKey, { binRelPath?: string }>> = {}): LspServerDef {
@@ -82,6 +104,41 @@ describe('spawnSpecFor', () => {
     expect(binaryAssetFor(def, 'win32-x64')?.binRelPath).toBe('fake-bin.exe');
     expect(binaryAssetFor(def, 'linux-x64')?.binRelPath).toBe('fake-bin');
   });
+
+  it('Angular: injects pinned probe locations and launches from the project root', () => {
+    const installDir = join('/base', 'angular-language-server@21.2.18');
+    const projectRoot = join('/workspace', 'angular-app');
+    const def: LspServerDef = {
+      id: 'angular-language-server',
+      label: 'Angular Language Service',
+      languages: ['typescript', 'html'],
+      role: 'overlay',
+      install: { kind: 'npm', package: '@angular/language-server', version: '21.2.18' },
+      entryRelPath: 'node_modules/@angular/language-server/index.js',
+      launchKind: 'angular',
+      args: ['--includeCompletionsForModuleExports', 'true'],
+      sizeLabel: '~13 MB',
+    };
+    const spec = spawnSpecFor(def, installDir, () => ({ command: '/node/bin/node' }), 'typescript', {
+      baseDir: '/base',
+      projectId: 9,
+      projectRoot,
+    });
+    expect(spec.command).toBe('/node/bin/node');
+    expect(spec.cwd).toBe(projectRoot);
+    expect(spec.rootPath).toBe(projectRoot);
+    const probeLocations = [
+      join(projectRoot, 'node_modules'),
+      join(installDir, 'node_modules'),
+    ].join(',');
+    expect(spec.args).toEqual([
+      join(installDir, def.entryRelPath!),
+      '--stdio',
+      '--ngProbeLocations', probeLocations,
+      '--tsProbeLocations', probeLocations,
+      '--includeCompletionsForModuleExports', 'true',
+    ]);
+  });
 });
 
 describe('currentTargetKey', () => {
@@ -89,6 +146,31 @@ describe('currentTargetKey', () => {
     expect(currentTargetKey('win32', 'x64')).toBe('win32-x64');
     expect(currentTargetKey('darwin', 'arm64')).toBe('darwin-arm64');
     expect(currentTargetKey('linux', 'ia32' as NodeJS.Architecture)).toBeNull();
+  });
+});
+
+describe('isInstalled', () => {
+  it('requires the exact npm package identity, version and entrypoint', () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'mcp-npm-install-check-'));
+    try {
+      const installDir = installDirFor(baseDir, npmDef);
+      const manifestPath = join(installDir, 'node_modules', 'fake', 'package.json');
+      const entryPath = join(installDir, npmDef.entryRelPath!);
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, JSON.stringify({ name: 'fake', version: '1.0.0' }));
+
+      expect(isInstalled(baseDir, npmDef)).toBe(false);
+      mkdirSync(dirname(entryPath), { recursive: true });
+      writeFileSync(entryPath, 'server');
+      writeFileSync(manifestPath, JSON.stringify({ name: 'fake', version: '0.9.0' }));
+      expect(isInstalled(baseDir, npmDef)).toBe(false);
+      writeFileSync(manifestPath, JSON.stringify({ name: 'other', version: '1.0.0' }));
+      expect(isInstalled(baseDir, npmDef)).toBe(false);
+      writeFileSync(manifestPath, JSON.stringify({ name: 'fake', version: '1.0.0' }));
+      expect(isInstalled(baseDir, npmDef)).toBe(true);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -101,6 +183,145 @@ describe('registry routing', () => {
 
   it('rust routes to rust-analyzer', () => {
     expect(serverForLanguage('rust')?.id).toBe('rust-analyzer');
+  });
+
+  it('routes a trusted plugin overlay only inside matching Angular projects', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-root-'));
+    try {
+      const def = registerAngularOverlay();
+      expect(isLspServerActive(def, root)).toBe(false);
+      expect(overlayServersForLanguage('typescript', root)).toEqual([]);
+      writeFileSync(join(root, 'angular.json'), '{}');
+      expect(overlayServersForLanguage('typescript', root).map((server) => server.id))
+        .toEqual(['angular-language-server']);
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('activates the Angular overlay for nested monorepo workspaces', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-nested-'));
+    try {
+      const workspace = join(root, 'apps', 'admin', 'client');
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(join(workspace, 'angular.json'), '{}');
+
+      const def = registerAngularOverlay();
+      expect(isLspServerActive(def, root)).toBe(true);
+      expect(overlayServersForLanguage('html', root).map((server) => server.id))
+        .toEqual(['angular-language-server']);
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('activates for a nested @angular/core package at the depth limit', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-package-'));
+    try {
+      const packageRoot = join(root, 'one', 'two', 'three', 'four', 'five', 'six');
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        devDependencies: { '@angular/core': '21.2.0' },
+      }));
+
+      expect(isLspServerActive(registerAngularOverlay(), root)).toBe(true);
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses a nested Angular scan and refreshes it after the cache TTL', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-cache-'));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-21T12:00:00Z'));
+    try {
+      const def = registerAngularOverlay();
+      expect(isLspServerActive(def, root)).toBe(false);
+
+      const workspace = join(root, 'apps', 'created-later');
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(join(workspace, 'angular.json'), '{}');
+      expect(isLspServerActive(def, root)).toBe(false);
+
+      vi.advanceTimersByTime(30_001);
+      expect(isLspServerActive(def, root)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not scan dependency, build, or cache trees for Angular markers', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-blocked-'));
+    try {
+      for (const blocked of ['node_modules', '.git', 'dist', 'build', 'cache']) {
+        const hiddenWorkspace = join(root, blocked, 'nested-app');
+        mkdirSync(hiddenWorkspace, { recursive: true });
+        writeFileSync(join(hiddenWorkspace, 'angular.json'), '{}');
+        writeFileSync(join(hiddenWorkspace, 'package.json'), JSON.stringify({
+          dependencies: { '@angular/core': '21.2.0' },
+        }));
+      }
+
+      expect(isLspServerActive(registerAngularOverlay(), root)).toBe(false);
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not activate for nested non-Angular packages or markers beyond depth six', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-angular-negative-'));
+    try {
+      const packageRoot = join(root, 'packages', 'ui');
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        dependencies: { react: '19.1.0' },
+      }));
+      const tooDeep = join(root, 'one', 'two', 'three', 'four', 'five', 'six', 'seven');
+      mkdirSync(tooDeep, { recursive: true });
+      writeFileSync(join(tooDeep, 'angular.json'), '{}');
+
+      expect(isLspServerActive(registerAngularOverlay(), root)).toBe(false);
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('orders plugin overlays by priority and rejects unsafe persisted entries', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-plugin-lsp-root-'));
+    writeFileSync(join(root, 'angular.json'), '{}');
+    const contribution = (id: string, priority: number, entryRelPath = 'node_modules/pkg/index.js') => ({
+      id,
+      label: id,
+      languages: ['typescript'],
+      routing: { mode: 'overlay', priority },
+      install: { kind: 'npm', package: 'pkg', version: '1.2.3' },
+      entryRelPath,
+      launchKind: 'standard',
+      args: ['--stdio'],
+      activation: { whenFiles: ['angular.json'] },
+      sizeLabel: '~1 MB',
+    });
+    try {
+      const result = replacePluginLanguageServers([
+        { namespace: 'low', contribution: contribution('low-server', 1) },
+        { namespace: 'high', contribution: contribution('high-server', 100) },
+        { namespace: 'unsafe', contribution: contribution('unsafe-server', 999, '../escape.js') },
+      ]);
+      expect(result.active).toEqual(['low-server', 'high-server']);
+      expect(overlayServersForLanguage('typescript', root).map((server) => server.id))
+        .toEqual(['high-server', 'low-server']);
+      expect(serverById('unsafe-server')).toBeUndefined();
+    } finally {
+      replacePluginLanguageServers([]);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('routes Java and C# to their pinned runtime-aware servers', () => {

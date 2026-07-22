@@ -38,4 +38,37 @@ describe('languageIdForPath build and launcher files', () => {
   it('does not override an explicit file extension from a misleading shebang', () => {
     expect(languageIdForDocument('script.rb', '#!/bin/bash\nputs "ok"')).toBe('ruby');
   });
+
+  it.each([
+    ['.gitignore', 'ignore'],
+    ['nested/.dockerignore', 'ignore'],
+    ['.mcpindexignore', 'ignore'],
+    ['.algoignore', 'ignore'],
+    ['config/generated.ignore', 'ignore'],
+    ['repo/.git/info/exclude', 'ignore'],
+    ['.gitattributes', 'ignore'],
+    ['settings.jsonc', 'json'],
+    ['events.jsonl', 'jsonl'],
+    ['events.ndjson', 'jsonl'],
+    ['payload.jsonb', 'json'],
+    ['config.json5', 'json5'],
+    ['config.hjson', 'hjson'],
+    ['policy.jsonnet', 'jsonnet'],
+    ['map.geojson', 'json'],
+    ['trace.har', 'json'],
+    ['notebook.ipynb', 'json'],
+    ['workspace.code-workspace', 'json'],
+    ['.eslintrc', 'json'],
+    ['composer.lock', 'json'],
+    ['.env.local', 'dotenv'],
+    ['service.env', 'dotenv'],
+    ['.editorconfig', 'ini'],
+    ['app.properties', 'ini'],
+    ['.github/CODEOWNERS', 'codeowners'],
+    ['server.log', 'log'],
+    ['data.csv', 'csv'],
+    ['data.tsv', 'tsv'],
+  ])('recognizes atypical file %s as %s', (path, expected) => {
+    expect(languageIdForPath(path)).toBe(expected);
+  });
 });

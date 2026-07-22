@@ -84,5 +84,11 @@ function claudeCodeAccountInfo(extra: Record<string, unknown> | undefined): Clau
       profileInfo?.rateLimitTier ??
       snakeProfileInfo?.rateLimitTier ??
       null,
+    billingType:
+      (extra?.billingType as string | null | undefined) ??
+      (extra?.billing_type as string | null | undefined) ??
+      profileInfo?.billingType ??
+      snakeProfileInfo?.billingType ??
+      null,
   };
 }

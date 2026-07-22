@@ -344,7 +344,7 @@ async function runSingleEphemeral(
         status: 'completed',
         toolCallCount: 0,
         usage: hit.result.usage,
-        summary: hit.result.body.slice(0, 500),
+        summary: hit.result.body,
         note: 'cache hit',
       });
       emitEnd(hit.result.usage, 'completed');
@@ -455,9 +455,9 @@ async function runSingleEphemeral(
     status: terminal.status,
     toolCallCount,
     usage: result.usage,
-    summary: result.finalText.slice(0, 500),
+    summary: result.finalText,
     error: terminal.status === 'error' || terminal.status === 'timed_out' || terminal.status === 'aborted'
-      ? (result.failureDetail ?? result.finalText).slice(0, 500)
+      ? (result.failureDetail ?? result.finalText)
       : undefined,
   });
 

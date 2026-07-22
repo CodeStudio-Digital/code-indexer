@@ -34,6 +34,8 @@ import { defineEditorThemes } from '../features/workspace/editor/themes/index.js
 import { enrichPhpHighlighting, registerPhpConstructHover } from '../features/workspace/editor/php-highlight.js';
 import { registerGroovyHighlighting } from '../features/workspace/editor/groovy-highlight.js';
 import { enrichJavaCsharpHighlighting } from '../features/workspace/editor/java-csharp-highlight.js';
+import { registerIgnoreHighlighting } from '../features/workspace/editor/ignore-highlight.js';
+import { registerJsonlSupport } from '../features/workspace/editor/jsonl-support.js';
 import { applyLanguageConfigOverlays } from '../features/workspace/editor/language-configs/index.js';
 import { createMonacoClipboardService } from './monaco-clipboard-service.js';
 import { createWorkspaceTextModelService } from './monaco-workspace-text-model-service.js';
@@ -106,11 +108,20 @@ export function setupMonaco(): void {
   // in plaintext even when their path is recognized correctly.
   registerGroovyHighlighting(monaco);
 
+  // Gitignore-compatible convention files (`.gitignore`, `.dockerignore`,
+  // `.algoignore`, …) share glob/comment/negation highlighting.
+  registerIgnoreHighlighting(monaco);
+
   // TextMate-grade highlighting for languages Monaco has NO tokenizer for
-  // (Vue/Svelte SFC, TOML, Makefile, diff, Zig, Prisma, Nix, Haskell, CMake).
+  // (Vue/Svelte, TOML, JSONL/JSON5/Hjson/Jsonnet, dotenv, CODEOWNERS,
+  // CSV/TSV/logs, Makefile, diff, Zig, Prisma, Nix, Haskell, CMake).
   // Additive only — never overrides a language with a Monarch/LSP story.
   // Grammars + oniguruma WASM lazy-load on each language's first model.
   registerTextMateHighlighting(monaco);
+
+  // JSONL/NDJSON is a stream of independent JSON values. Monaco's JSON worker
+  // would reject every record after the first, so validate and format by line.
+  registerJsonlSupport(monaco);
 
   // Java/C# bundled grammars flatten most symbols to `identifier`; keep a rich
   // syntax fallback while their language servers warm up semantic tokens.

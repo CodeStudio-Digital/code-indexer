@@ -35,6 +35,32 @@ import {
 import type { DapConnection } from './dap-connection.js';
 
 const OUTPUT_LIMIT = 200;
+const CHILD_CONFIGURATION_KEYS = [
+  'sourceMaps',
+  'pauseForSourceMap',
+  'mcpPrimeOnFirstDebuggerStatement',
+  'resolveSourceMapLocations',
+  'runtimeSourcemapPausePatterns',
+  'sourceMapPathOverrides',
+  'rootPath',
+  'outFiles',
+  'skipFiles',
+  'smartStep',
+  'enableContentValidation',
+  'localRoot',
+  'remoteRoot',
+  'cwd',
+  'autoAttachChildProcesses',
+  'attachExistingChildren',
+] as const;
+
+function childConfigurationDefaults(configuration: Record<string, unknown>): Record<string, unknown> {
+  const defaults: Record<string, unknown> = {};
+  for (const key of CHILD_CONFIGURATION_KEYS) {
+    if (configuration[key] !== undefined) defaults[key] = configuration[key];
+  }
+  return defaults;
+}
 
 interface DebugSessionRecord {
   summary: DebugSessionSummary;
@@ -47,6 +73,7 @@ interface DebugSessionRecord {
   initialBreakpoints: DebugSourceBreakpoints[];
   request: 'launch' | 'attach';
   dapRequest: 'launch' | 'attach';
+  childConfigurationDefaults: Record<string, unknown>;
   ownedProcessIds: Set<number>;
   breakpointBindings: Map<number, { path: string; requestedLine: number }>;
 }
@@ -147,6 +174,7 @@ export class DebugSessionManager {
       initialBreakpoints: input.breakpoints ?? [],
       request: input.request ?? 'launch',
       dapRequest: input.request ?? 'launch',
+      childConfigurationDefaults: {},
       ownedProcessIds: new Set(),
       breakpointBindings: new Map(),
     };
@@ -181,6 +209,7 @@ export class DebugSessionManager {
       const resolved = loaded.runtime.resolveConfiguration(configurationInput);
       const configuration = isDebugResolvedConfiguration(resolved) ? resolved.configuration : resolved;
       record.dapRequest = isDebugResolvedConfiguration(resolved) ? resolved.dapRequest : record.request;
+      record.childConfigurationDefaults = childConfigurationDefaults(configuration);
       const adapter = await startDebugAdapter(executable);
       record.adapter = adapter;
       record.controlDap = adapter.dap;
@@ -217,6 +246,11 @@ export class DebugSessionManager {
         record.target = await startDebugTarget(resolved.target, (category, output) => {
           this.appendOutput(record, { category, output, timestamp: Date.now() });
         });
+        // Wrangler opens the inspector before Workerd has published the Worker
+        // target. Attaching earlier leaves breakpoints provisional until the
+        // first request, so that request cannot pause. Wait for explicit target
+        // readiness and attach only after the runtime is fully available.
+        await record.target.ready;
       }
       const launch = adapter.dap.request(record.dapRequest, configuration, 60_000);
       void launch.catch(() => undefined);
@@ -474,11 +508,19 @@ export class DebugSessionManager {
     args: Record<string, unknown>,
   ): Promise<Record<string, never>> {
     if (!record.adapter || !record.initializeArgs) throw new Error('parent debug session is not initialized');
-    const configuration = args.configuration;
-    if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
+    const requestedConfiguration = args.configuration;
+    if (!requestedConfiguration || typeof requestedConfiguration !== 'object' || Array.isArray(requestedConfiguration)) {
       throw new Error('startDebugging requires a configuration object');
     }
-    const request = args.request === 'attach' || (configuration as Record<string, unknown>).request === 'attach'
+    // js-debug's Workerd handoff contains only the pending target identity.
+    // VS Code normally resolves/inherits the parent launch settings before it
+    // opens this child session. Since MCP is the DAP client, carry the safe
+    // source-map and breakpoint settings across that boundary ourselves.
+    const configuration = {
+      ...record.childConfigurationDefaults,
+      ...(requestedConfiguration as Record<string, unknown>),
+    };
+    const request = args.request === 'attach' || configuration.request === 'attach'
       ? 'attach'
       : 'launch';
     const child = await record.adapter.connectSession();
@@ -488,16 +530,33 @@ export class DebugSessionManager {
 
     const initialized = child.waitForEvent('initialized', 15_000);
     await child.request('initialize', record.initializeArgs);
-    const launch = child.request(request, configuration as Record<string, unknown>, 60_000);
-    void launch.catch(() => undefined);
+    const launch = child.request(request, configuration, 60_000);
+    void launch.catch((error) => this.handleAsyncLaunchFailure(record, child, error));
     await initialized;
     for (const source of record.initialBreakpoints) {
       const path = projectPath(record.projectRoot, source.path, record.projectRoot);
       await this.sendBreakpoints(record, child, path, source);
     }
     await child.request('configurationDone', {});
-    await launch;
+    // A Workerd target is materialized by the first HTTP request. Waiting for
+    // the child attach here prevents js-debug from answering the parent's
+    // `startDebugging` request, which in turn prevents the session from ever
+    // reaching the running state where that HTTP request can be made.
     return {};
+  }
+
+  private handleAsyncLaunchFailure(record: DebugSessionRecord, dap: DapConnection, error: unknown): void {
+    if (record.controlDap !== dap || ['terminated', 'terminating', 'error'].includes(record.summary.state)) return;
+    const adapter = record.adapter;
+    this.appendAdapterDiagnostics(record);
+    record.summary.state = 'error';
+    record.summary.error = error instanceof Error ? error.message : String(error);
+    this.emit();
+    void adapter?.dispose().catch(() => undefined).finally(() => {
+      if (record.adapter === adapter) record.adapter = null;
+      void this.cleanupTarget(record);
+      void this.cleanupOwnedProcesses(record);
+    });
   }
 
   private emit(): void {

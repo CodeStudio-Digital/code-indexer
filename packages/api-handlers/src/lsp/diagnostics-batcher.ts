@@ -24,7 +24,9 @@ const FLUSH_MS = (() => {
 const MAX_PENDING_FILES = 500;
 
 interface PendingFile {
+  absPath: string;
   serverId: string;
+  routeId?: string;
   diagnostics: LspDiagnostic[];
 }
 
@@ -37,9 +39,17 @@ export interface ServerDiagnosticsBatcherDeps {
 }
 
 export interface ServerDiagnosticsBatcher {
-  enqueue(projectId: number, absPath: string, serverId: string, diagnostics: LspDiagnostic[]): void;
+  enqueue(
+    projectId: number,
+    absPath: string,
+    serverId: string,
+    diagnostics: LspDiagnostic[],
+    routeId?: string,
+  ): void;
   /** Flush now (one project, or all) — for tests and shutdown paths. */
   flush(projectId?: number): void;
+  /** Drop queued frames from a route that can no longer own diagnostics. */
+  discardRoute(projectId: number, serverId: string, routeId: string): void;
 }
 
 function rangeFrom(r?: LspRange0): DiagnosticsFrame['diagnostics'][number]['range'] {
@@ -65,7 +75,7 @@ export function createServerDiagnosticsBatcher(deps: ServerDiagnosticsBatcherDep
     const root = deps.resolveRoot(projectId);
     if (!root) return; // project gone — drop silently
     const frames: DiagnosticsFrame[] = [];
-    for (const [absPath, { serverId, diagnostics }] of files) {
+    for (const { absPath, serverId, routeId, diagnostics } of files.values()) {
       const rel = absToRel(root, absPath);
       if (!rel || deps.includeFile?.(projectId, rel, serverId) === false) continue;
       // Clear the tree-sitter syntax layer for the file — the server's answer
@@ -73,7 +83,7 @@ export function createServerDiagnosticsBatcher(deps: ServerDiagnosticsBatcherDep
       frames.push({ file: rel, source: 'syntax', diagnostics: [] });
       frames.push({
         file: rel,
-        source: `lsp:${serverId}`,
+        source: routeId ? `lsp:${serverId}:${routeId}` : `lsp:${serverId}`,
         diagnostics: diagnostics.map((d) => ({
           file: rel,
           range: rangeFrom(d.range),
@@ -88,13 +98,13 @@ export function createServerDiagnosticsBatcher(deps: ServerDiagnosticsBatcherDep
   };
 
   return {
-    enqueue(projectId, absPath, serverId, diagnostics) {
+    enqueue(projectId, absPath, serverId, diagnostics, routeId) {
       let files = pending.get(projectId);
       if (!files) {
         files = new Map();
         pending.set(projectId, files);
       }
-      files.set(absPath, { serverId, diagnostics });
+      files.set(`${absPath}\0${serverId}\0${routeId ?? ''}`, { absPath, serverId, routeId, diagnostics });
       if (files.size >= MAX_PENDING_FILES || FLUSH_MS === 0) {
         flushProject(projectId);
         return;
@@ -111,6 +121,18 @@ export function createServerDiagnosticsBatcher(deps: ServerDiagnosticsBatcherDep
         return;
       }
       for (const id of [...pending.keys()]) flushProject(id);
+    },
+    discardRoute(projectId, serverId, routeId) {
+      const files = pending.get(projectId);
+      if (!files) return;
+      for (const [key, file] of files) {
+        if (file.serverId === serverId && file.routeId === routeId) files.delete(key);
+      }
+      if (files.size > 0) return;
+      pending.delete(projectId);
+      const timer = timers.get(projectId);
+      if (timer) clearTimeout(timer);
+      timers.delete(projectId);
     },
   };
 }

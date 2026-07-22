@@ -77,6 +77,12 @@ function claudeCodeAccountInfo(creds: { extra?: Record<string, unknown> }): Clau
       profileInfo?.rateLimitTier ??
       snakeProfileInfo?.rateLimitTier ??
       null,
+    billingType:
+      (creds.extra?.billingType as string | null | undefined) ??
+      (creds.extra?.billing_type as string | null | undefined) ??
+      profileInfo?.billingType ??
+      snakeProfileInfo?.billingType ??
+      null,
   };
 }
 
@@ -106,7 +112,6 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
         defaultHeaders: claudeCodeMessageHeaders(creds),
         defaultMetadata: creds.extra?.metadata as { user_id?: string } | undefined,
         defaultBetas: initial.betas,
-        defaultTemperature: 1,
         systemPrefixBlocks: creds.authToken ? getClaudeCodeSystemPrefixBlocks() : undefined,
         fetch: creds.fetch,
         model: wireModel,

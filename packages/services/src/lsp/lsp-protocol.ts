@@ -49,6 +49,38 @@ export interface LspTextEdit {
   newText: string;
 }
 
+export interface LspFoldingRange {
+  startLine: number;
+  endLine: number;
+  startCharacter?: number;
+  endCharacter?: number;
+  kind?: string;
+  collapsedText?: string;
+}
+
+export interface LspInlayHintLabelPart {
+  value: string;
+  tooltip?: string | { kind?: string; value: string };
+  location?: { uri: string; range: LspRange0 };
+  command?: { title: string; command: string; arguments?: unknown[] };
+}
+
+export interface LspInlayHint {
+  position: LspPosition0;
+  label: string | LspInlayHintLabelPart[];
+  kind?: 1 | 2;
+  textEdits?: LspTextEdit[];
+  tooltip?: string | { kind?: string; value: string };
+  paddingLeft?: boolean;
+  paddingRight?: boolean;
+  data?: unknown;
+}
+
+export interface LspLinkedEditingRanges {
+  ranges: LspRange0[];
+  wordPattern?: string;
+}
+
 export interface LspTextDocumentEdit {
   textDocument: { uri: string; version?: number | null };
   edits: LspTextEdit[];
@@ -126,6 +158,10 @@ export interface ServerCapabilities {
   textDocumentSync?: number | { change?: number };
   positionEncoding?: string;
   codeActionProvider?: boolean | { codeActionKinds?: string[]; resolveProvider?: boolean };
+  typeDefinitionProvider?: boolean | Record<string, unknown>;
+  foldingRangeProvider?: boolean | Record<string, unknown>;
+  inlayHintProvider?: boolean | { resolveProvider?: boolean };
+  linkedEditingRangeProvider?: boolean | Record<string, unknown>;
   executeCommandProvider?: { commands?: string[] };
   semanticTokensProvider?: {
     legend: SemanticTokensLegend;

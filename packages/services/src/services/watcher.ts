@@ -10,6 +10,7 @@ import {
   shouldIgnoreProjectPath,
   type ProjectIgnoreRules,
 } from '@mcp/shared/utils/project-ignore.js';
+import { invalidateAngularWorkspaceForPath } from '../lsp/angular-workspace-index.js';
 
 export interface WatcherFileEvent {
   /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
@@ -305,6 +306,7 @@ export class FileWatcherService {
     this.events.set(projectId, events);
 
     const handleChange = (kind: WatcherFileEvent['kind'], isDir = false) => (filePath: string) => {
+      if (!isDir) invalidateAngularWorkspaceForPath(options.rootPath, filePath);
       if (isDir || isProjectDiscoveryMarker(filePath)) {
         invalidateProjectDiscoveryCache(options.rootPath);
       }

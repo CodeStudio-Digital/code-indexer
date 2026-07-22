@@ -42,6 +42,8 @@ export interface CodeActionDTO {
   command?: { command: string; arguments?: unknown[] };
   /** Exact server that produced the opaque action; resolve/execute are pinned to it. */
   originServerId?: string;
+  /** Opaque route that produced the action (needed for multi-workspace servers). */
+  originRouteId?: string;
   raw?: unknown;
   needsResolve?: boolean;
 }
@@ -74,6 +76,40 @@ export interface DocumentSymbolDTO {
   range: { start: Position; end: Position };
   selectionRange: { start: Position; end: Position };
   children?: DocumentSymbolDTO[];
+}
+
+/** One document folding region. Lines are 1-based, like every public LSP DTO. */
+export interface FoldingRangeDTO {
+  startLine: number;
+  endLine: number;
+  /** Standard values are `comment`, `imports`, and `region`; custom LSP kinds survive. */
+  kind?: string;
+}
+
+export interface InlayHintLabelPartDTO {
+  label: string;
+  tooltip?: string;
+  location?: LspLocation;
+  command?: { title: string; command: string; arguments?: unknown[] };
+}
+
+/** LSP 3.17 inlay hint with 1-based positions/ranges and Monaco-safe fields. */
+export interface InlayHintDTO {
+  position: Position;
+  label: string | InlayHintLabelPartDTO[];
+  /** LSP InlayHintKind: 1 = type, 2 = parameter. */
+  kind?: 1 | 2;
+  tooltip?: string;
+  textEdits?: TextEditDTO[];
+  paddingLeft?: boolean;
+  paddingRight?: boolean;
+}
+
+/** Ranges whose contents are edited together. All ranges are 1-based. */
+export interface LinkedEditingRangesDTO {
+  ranges: Array<{ start: Position; end: Position }>;
+  /** LSP regex source (no delimiters); the renderer compiles it defensively. */
+  wordPattern?: string;
 }
 
 export interface CompletionItem {
@@ -178,11 +214,48 @@ export interface DiagnosticsBatch {
 
 // ─── External LSP servers (tier 1: PHP / Python / JSON-CSS-HTML) ───
 
-export type LspServerState = 'no-server' | 'not-installed' | 'idle' | 'starting' | 'ready' | 'failed' | 'disabled';
+export type LspServerState =
+  | 'no-server'
+  | 'not-installed'
+  | 'idle'
+  | 'starting'
+  | 'ready'
+  | 'failed'
+  | 'disabled'
+  | 'needs-profile'
+  | 'unsupported';
+
+export interface LspServerRouteInfo {
+  routeId?: string;
+  familyId?: string;
+  workspaceId: string;
+  /** Project-relative display path; absolute host paths never cross the API. */
+  workspacePath: string;
+  profileId?: string;
+  projectVersion?: string;
+  projectMajor?: number;
+  versionSource?: 'installed' | 'package-lock' | 'pnpm-lock' | 'yarn-lock' | 'package-json' | 'override' | 'unknown';
+  confidence?: 'high' | 'medium' | 'none';
+  supportTier?: 'full' | 'best-effort' | 'unsupported';
+}
+
+export interface AngularProfileOverrideInfo {
+  workspacePath: string;
+  profileId: string;
+}
 
 export interface LspServerStatus {
   state: LspServerState;
-  server?: { id: string; label: string; version: string; sizeLabel: string };
+  server?: {
+    id: string;
+    familyId?: string;
+    profileId?: string;
+    label: string;
+    version: string;
+    sizeLabel: string;
+    supportTier?: 'full' | 'best-effort' | 'unsupported';
+  };
+  route?: LspServerRouteInfo;
   /** MCP_LSP_AUTO_PROMPT — whether the editor should offer the install banner. */
   autoPrompt?: boolean;
   /** Short human-readable cause when state==='failed' (stderr tail / timeout). */
@@ -192,6 +265,13 @@ export interface LspServerStatus {
     kind: 'java' | 'dotnet';
     minMajor: number;
     satisfied: boolean;
+    version?: string;
+    reason?: string;
+  };
+  nodeRuntime?: {
+    range: string;
+    satisfied: boolean;
+    source?: 'project' | 'app';
     version?: string;
     reason?: string;
   };
@@ -207,17 +287,21 @@ export interface LspServerStatus {
 export interface LspServerStatusFrame {
   languageId: string;
   state: LspServerState;
-  server?: { id: string; label: string; version: string; sizeLabel: string };
+  server?: LspServerStatus['server'];
+  route?: LspServerRouteInfo;
   reason?: string;
 }
 
 export interface LspServerInfo {
   id: string;
+  familyId?: string;
+  profileId?: string;
   label: string;
   languages: string[];
   version: string;
   installed: boolean;
   sizeLabel: string;
+  supportTier?: 'full' | 'best-effort' | 'unsupported';
 }
 
 export type LspInstallFrame =
@@ -302,6 +386,30 @@ export interface LspApi {
     ctx: ApiContext,
   ): Promise<LspLocation[]>;
 
+  /** Go to the definition of the symbol's type. */
+  typeDefinition(
+    input: { projectId: number; file: string; position: Position },
+    ctx: ApiContext,
+  ): Promise<LspLocation[]>;
+
+  /** Document folding regions (1-based lines). */
+  foldingRanges(
+    input: { projectId: number; file: string },
+    ctx: ApiContext,
+  ): Promise<FoldingRangeDTO[]>;
+
+  /** Inlay hints intersecting the requested 1-based visible range. */
+  inlayHints(
+    input: { projectId: number; file: string; range: { start: Position; end: Position } },
+    ctx: ApiContext,
+  ): Promise<InlayHintDTO[]>;
+
+  /** Ranges linked to the symbol at the requested 1-based position. */
+  linkedEditingRanges(
+    input: { projectId: number; file: string; position: Position },
+    ctx: ApiContext,
+  ): Promise<LinkedEditingRangesDTO | null>;
+
   references(
     input: { projectId: number; file: string; position: Position; content?: string },
     ctx: ApiContext,
@@ -335,7 +443,7 @@ export interface LspApi {
 
   /** Is there a (tier-1) server for this language, and is it installed/running? */
   serverStatus(
-    input: { projectId: number; languageId: string },
+    input: { projectId: number; languageId: string; file?: string },
     ctx: ApiContext,
   ): Promise<LspServerStatus>;
 
@@ -358,6 +466,12 @@ export interface LspApi {
   instances(input: void, ctx: ApiContext): Promise<Array<{
     projectId: number;
     serverId: string;
+    /** Opaque identity for a workspace/profile-specific server instance. */
+    routeId?: string;
+    /** Server family shared by its compatibility profiles. */
+    familyId?: string;
+    /** Compatibility profile selected for this instance. */
+    profileId?: string;
     state: string;
     /** Last failure reason (stderr tail / timeout) when the server crashed. */
     lastExitReason?: string;
@@ -383,7 +497,20 @@ export interface LspApi {
 
   removeServer(input: { serverId: string }, ctx: ApiContext): Promise<{ ok: boolean }>;
 
-  restartServer(input: { projectId: number; serverId: string }, ctx: ApiContext): Promise<{ ok: true }>;
+  restartServer(
+    input: { projectId: number; serverId: string; routeId?: string; file?: string },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
+
+  angularProfileOverrides(
+    input: { projectId: number },
+    ctx: ApiContext,
+  ): Promise<AngularProfileOverrideInfo[]>;
+
+  setAngularProfileOverride(
+    input: { projectId: number; workspacePath: string; profileId: string | null },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
 
   /**
    * Define a versão da linguagem (language level) do projeto e reinicia o server

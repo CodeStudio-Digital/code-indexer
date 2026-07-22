@@ -94,6 +94,42 @@ describe('createServerDiagnosticsBatcher', () => {
     expect(frames.flatMap((frame) => frame.diagnostics).map((item) => item.message)).not.toContain('open');
   });
 
+  it('keeps diagnostics from two Angular workspace routes isolated', () => {
+    const publish = vi.fn<(projectId: number, frames: DiagnosticsFrame[]) => void>();
+    const batcher = createServerDiagnosticsBatcher({
+      resolveRoot: () => 'D:/repo',
+      publish,
+    });
+
+    batcher.enqueue(41, 'D:/repo/src/app.ts', 'angular', [diagnostic('legacy')], 'route-v12');
+    batcher.enqueue(41, 'D:/repo/src/app.ts', 'angular', [diagnostic('modern')], 'route-v21');
+    batcher.flush(41);
+
+    const frames = publish.mock.calls[0]?.[1] ?? [];
+    expect(frames.find((frame) => frame.source === 'lsp:angular:route-v12')?.diagnostics[0]?.message)
+      .toBe('legacy');
+    expect(frames.find((frame) => frame.source === 'lsp:angular:route-v21')?.diagnostics[0]?.message)
+      .toBe('modern');
+  });
+
+  it('discards queued diagnostics for a retired route without touching siblings', () => {
+    const publish = vi.fn();
+    const batcher = createServerDiagnosticsBatcher({
+      resolveRoot: () => 'D:/repo',
+      publish,
+    });
+    batcher.enqueue(41, 'D:/repo/src/app.ts', 'angular', [diagnostic('legacy')], 'route-v12');
+    batcher.enqueue(41, 'D:/repo/src/app.ts', 'angular', [diagnostic('modern')], 'route-v21');
+
+    batcher.discardRoute(41, 'angular', 'route-v12');
+    batcher.flush(41);
+
+    const frames = publish.mock.calls[0]?.[1] as DiagnosticsFrame[];
+    expect(frames.some((frame) => frame.source === 'lsp:angular:route-v12')).toBe(false);
+    expect(frames.find((frame) => frame.source === 'lsp:angular:route-v21')?.diagnostics[0]?.message)
+      .toBe('modern');
+  });
+
   it('flushes immediately at 500 pending files and cancels the scheduled timer', () => {
     const resolveRoot = vi.fn(() => 'D:/repo');
     const publish = vi.fn<(projectId: number, frames: DiagnosticsFrame[]) => void>();

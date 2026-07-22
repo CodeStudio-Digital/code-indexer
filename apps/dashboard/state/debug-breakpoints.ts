@@ -15,6 +15,8 @@ export interface DebugBreakpointRuntimeStatus {
   message?: string;
 }
 
+const EMPTY_BREAKPOINT_RUNTIME: DebugBreakpointRuntimeStatus[] = [];
+
 type RuntimeByProject = Record<string, Record<string, DebugBreakpointRuntimeStatus[]>>;
 
 interface DebugBreakpointsState {
@@ -86,9 +88,12 @@ export function selectDebugBreakpointRuntime(
   path: string,
   sessionId: string | undefined,
 ): DebugBreakpointRuntimeStatus[] {
-  if (!sessionId) return [];
-  return (state.runtimeByProject[String(projectId)]?.[normalizedPath(path)] ?? [])
-    .filter((status) => status.sessionId === sessionId);
+  if (!sessionId) return EMPTY_BREAKPOINT_RUNTIME;
+  const statuses = state.runtimeByProject[String(projectId)]?.[normalizedPath(path)];
+  // setDebugBreakpointRuntime replaces the whole file entry, and every status
+  // in that entry belongs to the same session. Return that store-owned array so
+  // Zustand's useSyncExternalStore snapshot remains referentially stable.
+  return statuses?.[0]?.sessionId === sessionId ? statuses : EMPTY_BREAKPOINT_RUNTIME;
 }
 
 export function replaceDebugBreakpoints(

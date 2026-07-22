@@ -62,6 +62,10 @@ por plugin first-party confiável, executado com ambiente limpo e encerrado como
 - Wrangler detectado pelo comando real do script.
 - Wrangler iniciado pelo host com `--inspector-port`; js-debug conecta com um
   `attach` normal ao Workerd.
+- Wrapper temporário do entrypoint Wrangler preserva exports default/nomeados e
+  cria uma pausa técnica invisível antes do primeiro handler.
+- A sessão filha instala source maps e breakpoints durante essa pausa e só então
+  retoma o Workerd, permitindo parar já na primeira requisição.
 - Tratamento de sessões filhas de js-debug sem considerar o fechamento da
   conexão bootstrap como falha.
 - Preservação da mensagem de erro real e inclusão dos diagnósticos do adapter.
@@ -71,10 +75,13 @@ por plugin first-party confiável, executado com ambiente limpo e encerrado como
 
 ### Particularidade do Workerd
 
-O script do Worker aparece no Inspector apenas na primeira requisição. Até esse
-momento o breakpoint é provisório/unbound. O DAP então emite `breakpoint changed`
-com `verified: true`; a UI reflete essa transição e as requisições seguintes
-param normalmente.
+O script do Worker aparece no Inspector apenas quando a primeira requisição
+materializa o target. O plugin inicia essa chamada por um wrapper temporário com
+uma pausa de primeira instrução, seguindo o mesmo princípio observado no
+WebStorm. Essa pausa não chega à UI: o host abre a sessão DAP filha, aplica os
+breakpoints da fonte TypeScript, espera a confirmação e retoma internamente.
+Assim, a própria primeira requisição para no breakpoint do usuário. O wrapper é
+removido ao encerrar e não altera arquivos-fonte do projeto.
 
 ## Próximas fases
 

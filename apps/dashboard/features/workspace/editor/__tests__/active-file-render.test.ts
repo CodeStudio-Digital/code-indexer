@@ -29,6 +29,20 @@ describe('activeFileRenderEqual', () => {
     )).toBe(false);
   });
 
+  it('does not suppress live preview updates for editable SVG files', () => {
+    expect(activeFileRenderEqual(
+      file({ path: 'logo.svg', content: '<svg />' }),
+      file({ path: 'logo.svg', content: '<svg><path /></svg>' }),
+    )).toBe(false);
+  });
+
+  it('does not suppress live preview updates for editable HTML files', () => {
+    expect(activeFileRenderEqual(
+      file({ path: 'index.html', content: '<h1>Before</h1>' }),
+      file({ path: 'index.html', content: '<h1>After</h1>' }),
+    )).toBe(false);
+  });
+
   it('keeps tab chrome stable while only the live buffer changes', () => {
     expect(tabBarFileEqual(file({ content: 'before' }), file({ content: 'after' }))).toBe(true);
     expect(tabBarFileEqual(file({ dirty: false }), file({ dirty: true }))).toBe(false);

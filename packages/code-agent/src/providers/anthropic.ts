@@ -183,12 +183,15 @@ export class AnthropicChatProvider implements ChatProvider {
 
     const resolvedModel = this.resolveModel?.(this.model, req);
     let thinking = resolvedModel?.thinking ?? (req.thinking ? this.defaultThinking : undefined);
-    // Per-request budget override (Phase E follow-up): when the request
-    // carries an explicit `thinkingBudgetTokens`, replace whatever
-    // budget the model/default carried with the caller's number. The
-    // shape stays `{ type: 'enabled', budget_tokens: N }` so the
-    // downstream `budgetTokens` extraction below picks it up.
-    if (thinking && typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens > 0) {
+    // Explicit budgets belong only to legacy `{ type: 'enabled' }` thinking.
+    // Current Claude Code models use `{ type: 'adaptive' }`, where sending a
+    // `budget_tokens` sibling is rejected by Anthropic's request schema.
+    if (
+      thinking &&
+      (thinking as { type?: string }).type === 'enabled' &&
+      typeof req.thinkingBudgetTokens === 'number' &&
+      req.thinkingBudgetTokens > 0
+    ) {
       thinking = { ...(thinking as Record<string, unknown>), budget_tokens: req.thinkingBudgetTokens };
     }
     const outputConfig = resolvedModel?.outputConfig ?? this.defaultOutputConfig;

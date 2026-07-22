@@ -71,6 +71,19 @@ export interface DebugTargetLaunch {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** Files materialized by the host immediately before launching the target. */
+  preparedFiles?: Array<{
+    /** Absolute path, or a path relative to cwd. Must remain inside cwd. */
+    path: string;
+    content: string;
+  }>;
+  /**
+   * Literal output emitted by the target when its inspector is ready for the
+   * adapter to attach. Output from both stdout and stderr is observed.
+   */
+  readyPattern?: string;
+  /** Maximum time to wait for readyPattern. Defaults to 30 seconds. */
+  readyTimeoutMs?: number;
 }
 
 /**

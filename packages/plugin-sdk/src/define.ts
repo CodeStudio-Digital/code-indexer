@@ -20,6 +20,7 @@ export { contributeEditorAction } from './contributions/editor-action.js';
 export { contributeStatusBarItem } from './contributions/status-bar.js';
 export { contributeRunConfiguration } from './contributions/run-configuration.js';
 export { contributeDebugger } from './contributions/debugger.js';
+export { contributeLanguageServer } from './contributions/language-server.js';
 export { contributeProjectModule } from './contributions/project-module.js';
 export { definePlugin } from './define-plugin.js';
 export type { DefinePluginSpec } from './define-plugin.js';

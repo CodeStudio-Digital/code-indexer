@@ -58,6 +58,14 @@ export function publishDiagnosticsBatch(projectId: number, frames: DiagnosticsFr
   }
 }
 
+/** Clear every remembered file for one exact routed diagnostics source. */
+export function clearDiagnosticsSource(projectId: number, source: string): void {
+  const frames = [...(latest.get(projectId)?.values() ?? [])]
+    .filter((frame) => frame.source === source)
+    .map((frame) => ({ ...frame, diagnostics: [] }));
+  publishDiagnosticsBatch(projectId, frames);
+}
+
 /** True when at least one stream is attached (producers may skip work). */
 export function hasDiagnosticsSubscribers(projectId: number): boolean {
   return (subscribers.get(projectId)?.size ?? 0) > 0;

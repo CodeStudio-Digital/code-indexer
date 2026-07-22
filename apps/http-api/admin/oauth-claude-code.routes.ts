@@ -86,9 +86,8 @@ export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
       }
 
       const baseURL = CLAUDE_CODE_BASE_URL;
-      const credentialMirror =
-        result.auth_type === 'claude_ai' ? result.access_token : result.api_key;
-      if (!credentialMirror) {
+      const providerApiKey = result.auth_type === 'api_key' ? result.api_key : null;
+      if (result.auth_type === 'api_key' && !providerApiKey) {
         return c.json({ status: 'error', error: 'Claude Code did not return usable credentials' }, 502);
       }
 
@@ -111,6 +110,7 @@ export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
         billing_type: profileInfo?.billingType ?? org?.billing_type ?? null,
         has_extra_usage_enabled:
           profileInfo?.hasExtraUsageEnabled ?? org?.has_extra_usage_enabled ?? null,
+        refresh_token_expires_at: result.refresh_token_expires_at,
       };
 
       const existing = store.getProvider(providerId);
@@ -120,7 +120,7 @@ export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
           name: 'Claude Code (OAuth)',
           kind: 'claude-code',
           base_url: baseURL,
-          api_key: credentialMirror,
+          api_key: providerApiKey,
           auth_mode: 'oauth',
           enabled: true,
           use_for_coder: true,
@@ -133,7 +133,7 @@ export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
           ...existing,
           kind: 'claude-code',
           base_url: baseURL,
-          api_key: credentialMirror,
+          api_key: providerApiKey,
           auth_mode: 'oauth',
           extra: {
             ...existing.extra,
@@ -166,6 +166,16 @@ export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
         models = CLAUDE_CODE_SEED_MODELS.map((m) => ({
           model_id: m.model_id,
           name: m.name,
+          display_name: m.display_name,
+          description: m.description,
+          context_window: m.context_window,
+          default_max_tokens: m.default_max_tokens,
+          can_reason: m.can_reason,
+          supports_attachments: m.supports_attachments,
+          default_reasoning_level: m.default_reasoning_level,
+          supported_reasoning_levels: m.supported_reasoning_levels
+            ? [...m.supported_reasoning_levels]
+            : null,
           source: 'live' as const,
         }));
       }

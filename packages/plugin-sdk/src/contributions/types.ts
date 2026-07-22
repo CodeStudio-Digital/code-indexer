@@ -235,6 +235,72 @@ export interface ContributedDebugger {
   activation?: ActivationRule;
 }
 
+export type LanguageServerSupportTier = 'full' | 'best-effort' | 'unsupported';
+
+export interface LanguageServerInstall {
+  kind: 'npm';
+  package: string;
+  /** Exact semver only; ranges and tags are intentionally unsupported. */
+  version: string;
+}
+
+/**
+ * One host-selectable server build for a bounded range of project versions.
+ * Profiles remain data-only: the host owns version resolution, installation,
+ * runtime selection and process launch.
+ */
+export interface LanguageServerCompatibilityProfile {
+  id: string;
+  /** Normalized half-open range, e.g. `>=17.0.0 <18.0.0`. */
+  projectVersionRange: string;
+  supportTier: LanguageServerSupportTier;
+  /** Node.js range accepted by both the server and its bundled backend. */
+  serverNodeRange: string;
+  /** TypeScript versions accepted by the corresponding Angular compiler. */
+  typescriptRange?: string;
+  /** Exact @angular/language-service version carried by the server package. */
+  languageServiceVersion: string;
+  install: LanguageServerInstall;
+  entryRelPath: string;
+  args: string[];
+}
+
+export interface LanguageServerCompatibility {
+  /** Host-owned project version resolver. No plugin code is executed. */
+  projectResolver: 'angular-core';
+  profiles: LanguageServerCompatibilityProfile[];
+}
+
+/**
+ * A pinned npm package installed and launched by the host as a language
+ * server. This is a privileged first-party contribution: the normal plugin
+ * install lane rejects it before the declaration reaches the runtime.
+ */
+export interface ContributedLanguageServer {
+  id: string;
+  label: string;
+  /** Monaco/shared language ids this server can answer. */
+  languages: string[];
+  /** Language servers must always be scoped to a detected project. */
+  activation: ActivationRule;
+  /** Backwards-compatible default used by hosts that do not resolve profiles. */
+  install: LanguageServerInstall;
+  /** JavaScript entry relative to the host-managed server install directory. */
+  entryRelPath: string;
+  /** Static argv appended after the entry point. Spawn remains shell-free. */
+  args?: string[];
+  /** Selects a host-owned launch builder; plugins cannot contribute code here. */
+  launchKind?: 'standard' | 'angular';
+  /** Optional version-aware catalog for hosts that support profile routing. */
+  compatibility?: LanguageServerCompatibility;
+  routing: {
+    mode: 'primary' | 'overlay';
+    priority?: number;
+  };
+  /** Honest install-size hint shown by the host before downloading the server. */
+  sizeLabel: string;
+}
+
 /**
  * A project module/facet in the IntelliJ sense: a detected slice of a project
  * with its own actions, run configs and UI. Tool handlers still live in the
@@ -262,6 +328,7 @@ export interface PluginModule {
   statusBarItems: ContributedStatusBarItem[];
   runConfigurations: ContributedRunConfiguration[];
   debuggers: ContributedDebugger[];
+  languageServers: ContributedLanguageServer[];
   modules: ContributedProjectModule[];
   /** Capabilities the plugin requires (fs/exec/storage). Extracted to .app.json. */
   permissions?: PluginPermissions;

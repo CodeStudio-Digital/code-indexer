@@ -8,7 +8,7 @@ interface ProjectCatalog {
 
 interface LspRefreshManager {
   status(projectId: number, languageId: string): { state: string };
-  restart(projectId: number, serverId: string): Promise<void>;
+  restart(projectId: number, serverId: string): Promise<void | boolean>;
 }
 
 /** Projects whose selected host runtime is exactly this managed PHP build. */

@@ -136,4 +136,41 @@ describe('ReconnectingSSEClient', () => {
     ).rejects.toMatchObject({ status: 409, httpBody: { code: 'INTERACTION_PENDING' } });
     expect(n).toBe(1);
   });
+
+  it('forwards malformed blocks to a custom onParseError and keeps valid events', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+      'garbage block\n\nevent: text\ndata: {"a":1}\n\nevent: done\ndata: {}\n\n',
+    ])));
+    const errors: string[] = [];
+    const events: string[] = [];
+    await new ReconnectingSSEClient({
+      url: 'http://x/api',
+      method: 'GET',
+      signal: new AbortController().signal,
+      onEvent: (ev) => events.push(ev.event),
+      onParseError: (err) => errors.push(err.raw),
+      backoff: NO_BACKOFF,
+    }).run();
+    expect(events).toEqual(['text', 'done']);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('garbage block');
+  });
+
+  it('defaults to a console.warn diagnostic when no onParseError is given', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+      'garbage block\n\nevent: done\ndata: {}\n\n',
+    ])));
+    await new ReconnectingSSEClient({
+      url: 'http://x/api',
+      method: 'GET',
+      signal: new AbortController().signal,
+      onEvent: () => {},
+      backoff: NO_BACKOFF,
+    }).run();
+    expect(warn).toHaveBeenCalledWith(
+      '[sse] dropping malformed event block',
+      expect.stringContaining('garbage block'),
+    );
+  });
 });

@@ -1,7 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parsePluginManifest, parseAppManifest } from '@mcp/plugin-sdk';
-import type { PluginManifest, AppManifest } from '@mcp/plugin-sdk';
+import type {
+  PluginManifest,
+  AppManifest,
+  ParseAppManifestOptions,
+} from '@mcp/plugin-sdk';
 
 export interface LoadedManifest {
   manifest: PluginManifest;
@@ -19,13 +23,13 @@ async function readJson(path: string): Promise<unknown | null> {
 
 /**
  * Read + validate plugin.json (required) and .app.json (optional) from a dir.
- * `trustProviders` validates contributed providers against the FULL provider
- * schema (host capabilities allowed) — used only for first-party bundled
- * installs; the provider loader remains the authoritative runtime gate.
+ * `trustFirstParty` enables host-only declarations — used only for bundled
+ * installs. `trustProviders` remains as a backwards-compatible alias. Runtime
+ * loaders still enforce bundled provenance before executing anything.
  */
 export async function loadManifest(
   dir: string,
-  opts?: { trustProviders?: boolean },
+  opts?: ParseAppManifestOptions,
 ): Promise<LoadedManifest> {
   const raw = await readJson(join(dir, 'plugin.json'));
   if (raw === null) throw new Error(`No plugin.json found in ${dir}`);

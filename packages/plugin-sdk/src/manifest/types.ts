@@ -19,6 +19,9 @@ import type {
   runConfigurationDeclSchema,
   debuggerCapabilitiesDeclSchema,
   debuggerDeclSchema,
+  languageServerInstallDeclSchema,
+  languageServerRoutingDeclSchema,
+  languageServerDeclSchema,
   projectModuleDeclSchema,
   providerRuntimeDeclSchema,
   debuggerRuntimeDeclSchema,
@@ -45,6 +48,9 @@ export type StatusBarItemDecl = z.infer<typeof statusBarItemDeclSchema>;
 export type RunConfigurationDecl = z.infer<typeof runConfigurationDeclSchema>;
 export type DebuggerCapabilitiesDecl = z.infer<typeof debuggerCapabilitiesDeclSchema>;
 export type DebuggerDecl = z.infer<typeof debuggerDeclSchema>;
+export type LanguageServerInstallDecl = z.infer<typeof languageServerInstallDeclSchema>;
+export type LanguageServerRoutingDecl = z.infer<typeof languageServerRoutingDeclSchema>;
+export type LanguageServerDecl = z.infer<typeof languageServerDeclSchema>;
 export type ProjectModuleDecl = z.infer<typeof projectModuleDeclSchema>;
 export type ProviderRuntimeDecl = z.infer<typeof providerRuntimeDeclSchema>;
 export type DebuggerRuntimeDecl = z.infer<typeof debuggerRuntimeDeclSchema>;

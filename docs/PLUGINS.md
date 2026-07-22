@@ -10,6 +10,7 @@ capabilities to the agent and the workspace. A plugin can contribute:
 - **Editor/project modules** — editor actions, status-bar items, run configurations, and detected
   project modules/facets that activate only for matching projects.
 - **LLM providers** — provider metadata plus optional executable V2 adapters owned by the plugin.
+- **Language servers** — pinned, host-launched LSP overlays from bundled first-party plugins.
 
 Plugins install by **namespace** (the `plugin.json` `name`) from a local folder, a GitHub repo, or
 the hosted **Market**. Everything a plugin adds is tracked under its namespace, so uninstall is clean.
@@ -100,7 +101,21 @@ contributions snapshot lives in `installed_plugins`).
 | `contributeStatusBarItem` | IDE status bar | Lightweight project/module indicator; optional click-through to `runsTool`. |
 | `contributeRunConfiguration` | Project run config | Declarative command/args/kind metadata for project and module runners. |
 | `contributeProvider` | LLM provider metadata | Declares the provider shape for Admin/seed/pricing. Bundled first-party providers can also export `providerAdapter` for V2 owned runtime. |
+| `contributeLanguageServer` | Project-scoped language server | Declares a pinned npm server, activation rule and primary/overlay routing. Restricted to bundled first-party plugins. |
 | `.mcp.json` / `skills/` | Agent MCP servers / skills | Registered on install (Claude Code convention). |
+
+Language-server declarations are privileged because the host installs and executes their pinned npm
+package. They are available only to product plugins shipped inside the app; ordinary local, GitHub
+and Market plugins cannot request this capability. Installation requires explicit user consent, the
+launch command is assembled by host-owned code without a shell, and both installation provenance and
+the runtime loader re-check `source: 'bundled'` before starting a server.
+
+A bundled declaration may add a data-only `compatibility` catalog. Each profile pins a disjoint
+project-version range, server package, entrypoint, Node range, TypeScript range and support tier.
+The host—not plugin code—resolves the active workspace, installs profiles side by side and binds
+requests/diagnostics to an opaque route. An unresolved or unsupported project version is surfaced
+explicitly; the host never falls forward to a newer profile. See `extensions/angular/README.md` for
+the Angular 9–22 catalog and legacy policy.
 
 Project/module contributions use the same declarative `activation` rules as tool windows. The host
 evaluates them without running plugin code, so a plugin can behave like several small IDE modules:

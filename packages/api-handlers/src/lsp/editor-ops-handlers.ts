@@ -17,7 +17,9 @@ import { ApiError, type LspApi } from '@mcp/api-bus';
 import { isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
 import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import { relToAbsCanonical } from '@mcp/shared/utils/fs-canonical.js';
-import { serverForLanguage } from '@mcp/services/lsp/server-registry.js';
+import {
+  serverForLanguage,
+} from '@mcp/services/lsp/server-registry.js';
 import type { HandlerDeps } from '../types.js';
 import { getDoc } from './document-store.js';
 import {
@@ -32,6 +34,13 @@ import { fallbackSignatureHelp } from './fallback-signature.js';
 import { fallbackDocumentSymbols } from './fallback-document-symbols.js';
 import { fallbackImplementation } from './fallback-implementation.js';
 import type { LspBackendExecutor, LspOpCtx } from './executor-types.js';
+import {
+  shouldUseAngularInteractiveOverlay,
+} from './angular-overlay-routing.js';
+import {
+  angularProfileTarget,
+  type AngularProfileTarget,
+} from './angular-profile-routing.js';
 
 /** Closures shared with createLspHandlers (index.ts) — no duplicated logic. */
 export interface EditorOpsHelpers {
@@ -58,13 +67,46 @@ export function createEditorOpsHandlers(
     try { return readFileSync(relToAbsCanonical(root, file), 'utf-8'); } catch { return null; }
   };
 
+  const angularOverlay = (
+    projectId: number,
+    root: string,
+    file: string,
+    languageId: string,
+  ): AngularProfileTarget | undefined => angularProfileTarget(db, projectId, root, file, languageId);
+
+  const angularOverlayAt = (
+    projectId: number,
+    root: string,
+    file: string,
+    languageId: string,
+    position: { line: number; column: number },
+  ): AngularProfileTarget | undefined => {
+    const overlay = angularOverlay(projectId, root, file, languageId);
+    if (!overlay) return undefined;
+    return shouldUseAngularInteractiveOverlay({
+      projectId,
+      file,
+      languageId,
+      content: contentFor(projectId, root, file),
+      position,
+    }) ? overlay : undefined;
+  };
+
   return {
     async signatureHelp({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      if (angular) {
+        const viaAngular = await serverSignatureHelp(
+          db, projectId, root, file, lang, position, ctx.signal, angular.target,
+        );
+        if (ctx.signal.aborted) return null;
+        if (viaAngular) return viaAngular;
+      }
       if (isTsFile(file)) {
         return helpers.exec().tsSignatureHelp(helpers.opCtx(projectId, root, file, position));
       }
-      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
         const viaServer = await serverSignatureHelp(db, projectId, root, file, lang, position, ctx.signal);
         if (ctx.signal.aborted) return null;
@@ -76,10 +118,18 @@ export function createEditorOpsHandlers(
 
     async documentSymbols({ projectId, file }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      const angular = angularOverlay(projectId, root, file, lang);
+      if (angular) {
+        const viaAngular = await serverDocumentSymbols(
+          db, projectId, root, file, lang, ctx.signal, angular.target,
+        );
+        if (ctx.signal.aborted) return [];
+        if (viaAngular && viaAngular.length > 0) return viaAngular;
+      }
       if (isTsFile(file)) {
         return helpers.exec().tsDocumentSymbols(helpers.opCtx(projectId, root, file));
       }
-      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
         const viaServer = await serverDocumentSymbols(db, projectId, root, file, lang, ctx.signal);
         if (ctx.signal.aborted) return [];
@@ -98,6 +148,22 @@ export function createEditorOpsHandlers(
       if (!trimmed) throw new ApiError('invalid_input', 400, 'newName must be a non-empty string');
       const root = helpers.requireProjectRoot(projectId);
 
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      if (angular) {
+        const edit = await serverRename(
+          db, projectId, root, file, lang, position, trimmed, ctx.signal, angular.target,
+        );
+        if (ctx.signal.aborted) return { edits: [] };
+        if (edit && Object.keys(edit.changes).length > 0) {
+          return {
+            edits: Object.entries(edit.changes).flatMap(([f, fileEdits]) =>
+              fileEdits.map((e) => ({ file: f, range: e.range, newText: e.newText })),
+            ),
+          };
+        }
+      }
+
       // TS/JS → in-process TS service via the executor (worker-backed when wired).
       if (isTsFile(file)) {
         const edits = await helpers.exec().tsRename({
@@ -108,7 +174,6 @@ export function createEditorOpsHandlers(
       }
 
       // Languages with a real server (php/python/json/css/html) → textDocument/rename.
-      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
         const edit = await serverRename(db, projectId, root, file, lang, position, trimmed, ctx.signal);
         if (!edit) {
@@ -195,6 +260,15 @@ export function createEditorOpsHandlers(
 
     async implementation({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
+      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
+      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      if (angular) {
+        const viaAngular = await serverImplementation(
+          db, projectId, root, file, lang, position, ctx.signal, angular.target,
+        );
+        if (ctx.signal.aborted) return [];
+        if (viaAngular && viaAngular.length > 0) return viaAngular;
+      }
       if (isTsFile(file)) {
         const { targets } = await helpers.exec().tsImplementation(
           helpers.opCtx(projectId, root, file, position),
@@ -204,7 +278,6 @@ export function createEditorOpsHandlers(
           range: { start: { line: t.line, column: t.column }, end: { line: t.line, column: t.column } },
         }));
       }
-      const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
       if (serverForLanguage(lang)) {
         const viaServer = await serverImplementation(db, projectId, root, file, lang, position, ctx.signal);
         if (ctx.signal.aborted) return [];

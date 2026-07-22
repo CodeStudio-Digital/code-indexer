@@ -2,7 +2,7 @@ import type { OpenTab } from '../../../state/workspace.js';
 
 function isRegularCodeFile(file: OpenTab): boolean {
   if (file.kind && file.kind !== 'file') return false;
-  return !/\.(?:md|markdown|mdx|drawio)$/i.test(file.path);
+  return !/\.(?:md|markdown|mdx|drawio|svg|html?|xhtml)$/i.test(file.path);
 }
 
 /**

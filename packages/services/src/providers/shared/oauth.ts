@@ -168,6 +168,7 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
         authType: 'env_oauth',
         subscriptionType: process.env.CLAUDE_CODE_SUBSCRIPTION_TYPE ?? null,
         rateLimitTier: process.env.CLAUDE_CODE_RATE_LIMIT_TIER ?? null,
+        billingType: process.env.CLAUDE_CODE_BILLING_TYPE ?? null,
         metadata,
       },
     };
@@ -182,23 +183,32 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
 
   const baseURL = (cfg.base_url ?? CLAUDE_CODE_BASE_URL).replace(/\/$/, '');
   if (usesClaudeAi) {
-    // Source-of-truth for the OAuth Bearer is oauth_tokens.access_token.
-    // cfg.api_key is a mirror that older console-flow connections may have
-    // contaminated with an sk-ant-* API key; trust oauth_tokens first.
+    // Source-of-truth for the OAuth Bearer is oauth_tokens.access_token. The
+    // provider api_key column belongs exclusively to console managed keys.
     let token = tok?.access_token ?? cfg.api_key ?? '';
+    let resolvedTok = tok;
+    if (cfg.api_key) {
+      store.upsertProvider({ ...cfg, api_key: null });
+    }
+    const storedTokenExpired = Boolean(tok?.expires_at && tok.expires_at <= Date.now());
     try {
       const fresh = await refreshClaudeCodeToken(store, cfg.id);
       if (fresh) {
         token = fresh;
-        if (fresh !== cfg.api_key) {
-          store.upsertProvider({ ...cfg, api_key: fresh });
-        }
+      }
+      const latest = store.getOAuth(cfg.id);
+      resolvedTok = latest ?? tok;
+      if (latest?.expires_at && latest.expires_at <= Date.now()) {
+        throw new Error('stored OAuth access token is expired and could not be refreshed');
       }
     } catch (e) {
       const err = e as Error;
       console.error(
         `[claude-code] refresh FAILED for provider=${cfg.id} expires_at=${tok?.expires_at ?? 'null'} class=${err.constructor.name}: ${err.message}`,
       );
+      if (storedTokenExpired) {
+        throw new Error(`Claude Code OAuth expired; reconnect the provider (${err.message})`);
+      }
     }
     if (!token) throw new Error('no Claude Code access token stored - re-connect');
 
@@ -212,9 +222,12 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
       fetch: createClaudeCodeFetchWithRetry(store, cfg.id),
       extra: {
         authType: 'claude_ai',
-        profile: tok?.extra?.profile,
-        profileInfo: tok?.extra?.profile_info,
-        roles: tok?.extra?.roles,
+        profile: resolvedTok?.extra?.profile,
+        profileInfo: resolvedTok?.extra?.profile_info,
+        roles: resolvedTok?.extra?.roles,
+        subscriptionType: resolvedTok?.extra?.subscription_type ?? null,
+        rateLimitTier: resolvedTok?.extra?.rate_limit_tier ?? null,
+        billingType: resolvedTok?.extra?.billing_type ?? null,
         metadata,
       },
     };
@@ -231,7 +244,11 @@ export async function resolveClaudeCodeCreds(cfg: ProviderConfig): Promise<Resol
     extra: {
       authType: 'api_key',
       profile: tok?.extra?.profile,
+      profileInfo: tok?.extra?.profile_info,
       roles: tok?.extra?.roles,
+      subscriptionType: tok?.extra?.subscription_type ?? null,
+      rateLimitTier: tok?.extra?.rate_limit_tier ?? null,
+      billingType: tok?.extra?.billing_type ?? null,
       metadata,
     },
   };

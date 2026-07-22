@@ -16,7 +16,7 @@
  * Throws only for non-recoverable errors after backoff is exhausted.
  */
 
-import { parseSSEChunk, type SSEEvent } from './SSEFramer.js';
+import { parseSSEChunk, type SSEEvent, type SSEFrameErrorHandler } from './SSEFramer.js';
 import { ExponentialBackoff, sleep, type BackoffStrategy } from './BackoffStrategy.js';
 
 /**
@@ -60,20 +60,31 @@ export interface ReconnectingSSEOpts {
   isTerminal?: (ev: SSEEvent) => boolean;
   /** Extra request headers. */
   headers?: Record<string, string>;
+  /**
+   * Called when the framer drops a malformed event block. Defaults to a
+   * console.warn diagnostic — corrupt frames used to vanish silently.
+   */
+  onParseError?: SSEFrameErrorHandler;
 }
 
 const defaultIsTerminal = (ev: SSEEvent) => ev.event === 'done';
+
+const defaultParseErrorDiagnostic: SSEFrameErrorHandler = (err) => {
+  console.warn('[sse] dropping malformed event block', err.raw);
+};
 
 export class ReconnectingSSEClient {
   private readonly opts: ReconnectingSSEOpts;
   private readonly backoff: BackoffStrategy;
   private readonly isTerminal: (ev: SSEEvent) => boolean;
+  private readonly parseErrorHandler: SSEFrameErrorHandler;
   private terminalSeen = false;
 
   constructor(opts: ReconnectingSSEOpts) {
     this.opts = opts;
     this.backoff = opts.backoff ?? new ExponentialBackoff();
     this.isTerminal = opts.isTerminal ?? defaultIsTerminal;
+    this.parseErrorHandler = opts.onParseError ?? defaultParseErrorDiagnostic;
   }
 
   /**
@@ -173,7 +184,7 @@ export class ReconnectingSSEClient {
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      const { events, rest } = parseSSEChunk(buffer);
+      const { events, rest } = parseSSEChunk(buffer, this.parseErrorHandler);
       buffer = rest;
 
       for (const ev of events) {

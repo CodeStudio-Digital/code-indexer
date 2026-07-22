@@ -29,6 +29,8 @@ import type { PluginSource } from '@mcp/plugin-sdk';
 import { MarketClient } from '@mcp/plugin-market-client';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { PluginStorageStore } from '@mcp/store/plugin-storage-store.js';
+import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
+import { syncPluginLanguageServers } from '@mcp/services/lsp/server-registry.js';
 import type { HandlerDeps } from '../types.js';
 import {
   runPluginAssistant,
@@ -42,6 +44,15 @@ function marketClient(): MarketClient {
     throw new ApiError('market_not_configured', 503, 'hosted market not configured (set MCP_MARKET_URL)');
   }
   return new MarketClient(url);
+}
+
+async function syncLanguageServerContributions(): Promise<void> {
+  const { removed, changed } = syncPluginLanguageServers();
+  const manager = getLspServerManager();
+  const stale = [...new Set([...removed, ...changed])];
+  if (manager && stale.length > 0) {
+    await Promise.allSettled(stale.map((serverId) => manager.stopServer(serverId)));
+  }
 }
 
 function declaredPermissions(p: InstalledPlugin | null): PluginPermissionsShape | null {
@@ -148,6 +159,7 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
         });
         // Register any declarative provider the plugin contributes, live.
         deps.syncPluginProviders();
+        await syncLanguageServerContributions();
         return {
           namespace: r.namespace,
           name: r.name,
@@ -168,12 +180,14 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
     async uninstall({ namespace }) {
       const r = await uninstallPlugin(namespace);
       deps.syncPluginProviders();
+      await syncLanguageServerContributions();
       return { ok: true as const, skillsRemoved: r.skillsRemoved, mcpRemoved: r.mcpRemoved };
     },
 
     async setEnabled({ namespace, enabled }) {
       setPluginEnabled(namespace, enabled);
       deps.syncPluginProviders();
+      await syncLanguageServerContributions();
       return { ok: true as const };
     },
 

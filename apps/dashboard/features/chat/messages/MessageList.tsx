@@ -7,9 +7,12 @@ import { LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
 import {
   collectLatestPersistedInteractivePromptSignatures,
+  collectPersistedToolResultIds,
   groupMessages,
+  liveTurnCoversPersistedAssistantRun,
   liveTurnContinuesPersistedAssistant,
   mergeConsecutiveAssistantGroups,
+  suppressLatestPersistedAssistantRun,
   suppressPersistedAgentDuplicates,
   visibleLiveBlocks,
 } from '../utils.js';
@@ -89,6 +92,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   onLoadEarlier,
   onChapterNavigate,
   liveAgentIdentityKey,
+  suppressLatestAssistantRun,
 }: {
   sessionData: SessionData;
   handlers: PromptHandlers;
@@ -99,6 +103,8 @@ const PersistedMessages = React.memo(function PersistedMessages({
   onChapterNavigate?: () => void;
   /** Stable primitive so token deltas do not invalidate the persisted tree. */
   liveAgentIdentityKey: string;
+  /** The complete live run replaces the checkpointed assistant tail. */
+  suppressLatestAssistantRun: boolean;
 }) {
   // Build tool-result map once per sessionData change. Tool-produced images
   // (preview_screenshot / view_image) are rendered as their own image bubble
@@ -184,11 +190,17 @@ const PersistedMessages = React.memo(function PersistedMessages({
     () => (liveAgentIdentityKey ? JSON.parse(liveAgentIdentityKey) : []),
     [liveAgentIdentityKey],
   );
+  const chronologicalGroups = useMemo(
+    () => suppressLatestAssistantRun
+      ? suppressLatestPersistedAssistantRun(cappedGroups)
+      : cappedGroups,
+    [cappedGroups, suppressLatestAssistantRun],
+  );
   const displayGroups = useMemo(
     () => mergeConsecutiveAssistantGroups(
-      suppressPersistedAgentDuplicates(cappedGroups, liveAgentIdentities, resultsById),
+      suppressPersistedAgentDuplicates(chronologicalGroups, liveAgentIdentities, resultsById),
     ),
-    [cappedGroups, liveAgentIdentities, resultsById],
+    [chronologicalGroups, liveAgentIdentities, resultsById],
   );
   // True while already-loaded groups are hidden by the cap — drives the
   // "load earlier" affordance even when the backend has nothing more.
@@ -567,6 +579,8 @@ const LiveTurn = React.memo(function LiveTurn({
   hidden,
   persistedToolUseIds,
   persistedInteractivePromptSignatures,
+  persistedToolResultIds,
+  preferCompleteLiveRun,
   continuation,
 }: {
   currentTurn: AssistantTurn | null;
@@ -577,12 +591,20 @@ const LiveTurn = React.memo(function LiveTurn({
   hidden: boolean;
   persistedToolUseIds: Set<string>;
   persistedInteractivePromptSignatures: Set<string>;
+  persistedToolResultIds: Set<string>;
+  preferCompleteLiveRun: boolean;
   continuation: boolean;
 }) {
   // Drop live blocks already rendered by the persisted history (gate cards on a
   // paused turn, or a tool call the refetch landed before currentTurn cleared).
   const allBlocks = currentTurn?.blocks ?? [];
-  const visible = visibleLiveBlocks(allBlocks, persistedToolUseIds, persistedInteractivePromptSignatures);
+  const visible = visibleLiveBlocks(
+    allBlocks,
+    persistedToolUseIds,
+    persistedInteractivePromptSignatures,
+    persistedToolResultIds,
+    preferCompleteLiveRun,
+  );
   const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
     return (
@@ -720,17 +742,34 @@ export const MessageList = React.memo(function MessageList({
     () => collectLatestPersistedInteractivePromptSignatures(sessionData?.messages ?? []),
     [sessionData],
   );
+  const persistedToolResultIds = useMemo(
+    () => collectPersistedToolResultIds(sessionData?.messages ?? []),
+    [sessionData],
+  );
   const liveContinuation = useMemo(
     () => liveTurnContinuesPersistedAssistant(sessionData?.messages ?? []),
     [sessionData],
   );
+  const preferCompleteLiveRun = useMemo(
+    () => !liveTurnDuplicatedInHistory && liveTurnCoversPersistedAssistantRun(
+      currentTurn,
+      sessionData?.messages ?? [],
+    ),
+    [currentTurn, liveTurnDuplicatedInHistory, sessionData],
+  );
   const liveAgentIdentityKey = useMemo(() => JSON.stringify(
     (currentTurn?.blocks ?? []).flatMap((block) => (
-      block.type === 'agents' && !block.group.groupId.startsWith('tasks-wave-')
+      block.type === 'agents'
+        && !block.group.groupId.startsWith('tasks-wave-')
+        && !(
+          block.group.status === 'completed'
+          && block.group.toolUseId
+          && persistedToolResultIds.has(block.group.toolUseId)
+        )
         ? [{ toolUseId: block.group.toolUseId, groupId: block.group.groupId }]
         : []
     )),
-  ), [currentTurn]);
+  ), [currentTurn, persistedToolResultIds]);
 
   // Files edited by the live turn, for its completion summary. Shown only once
   // the turn ended AND before it's mirrored into persisted history (the same
@@ -780,6 +819,7 @@ export const MessageList = React.memo(function MessageList({
             onLoadEarlier={onLoadEarlier}
             onChapterNavigate={handleChapterNavigate}
             liveAgentIdentityKey={liveAgentIdentityKey}
+            suppressLatestAssistantRun={preferCompleteLiveRun}
           />
         )}
 
@@ -792,7 +832,9 @@ export const MessageList = React.memo(function MessageList({
           hidden={liveTurnDuplicatedInHistory}
           persistedToolUseIds={persistedToolUseIds}
           persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
-          continuation={liveContinuation}
+          persistedToolResultIds={persistedToolResultIds}
+          preferCompleteLiveRun={preferCompleteLiveRun}
+          continuation={preferCompleteLiveRun ? false : liveContinuation}
         />
 
         {showLiveSummary && (

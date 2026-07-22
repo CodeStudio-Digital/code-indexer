@@ -256,6 +256,9 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
   const reattach = useCallback(
     async (sid: number, onMessageComplete?: () => void) => {
       const lastSeq = lastSeenSeqRef.current.get(sid) ?? -1;
+      const initialBlocks = lastSeq >= 0
+        ? stateMapRef.current[sid]?.currentTurn?.blocks
+        : undefined;
       await runStream(
         sid,
         {
@@ -263,6 +266,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
           method: 'GET',
           lastEventId: lastSeq,
           reattach: true,
+          initialBlocks,
         },
         onMessageComplete,
       );

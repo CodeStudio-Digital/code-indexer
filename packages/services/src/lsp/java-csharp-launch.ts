@@ -6,8 +6,8 @@ import { binaryAssetFor, JDTLS_LOMBOK_RELPATH, type LspDynamicSpawnContext, type
 import { resolveCsharpWorkspace } from './csharp-workspace.js';
 
 function requireRuntime(ctx: LspDynamicSpawnContext): { command: string; env?: Record<string, string> } {
-  if (!ctx.runtime.satisfied || !ctx.runtime.command) {
-    throw new Error(ctx.runtime.reason ?? `${ctx.runtime.kind} runtime is unavailable`);
+  if (!ctx.runtime?.satisfied || !ctx.runtime.command) {
+    throw new Error(ctx.runtime?.reason ?? `${ctx.def.runtime?.kind ?? 'required'} runtime is unavailable`);
   }
   return { command: ctx.runtime.command, env: ctx.runtime.env };
 }

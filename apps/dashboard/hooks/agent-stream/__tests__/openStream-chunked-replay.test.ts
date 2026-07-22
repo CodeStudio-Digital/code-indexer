@@ -27,6 +27,13 @@ const busInfoFrame = (busId: string): string =>
 const workerLogFrame = (id: number, message: string): string =>
   `id: ${id}\nevent: worker_log\ndata: ${JSON.stringify({ ts: 1, level: 'info', category: 'runner', message })}\n\n`;
 
+const toolResultFrame = (id: number, toolUseId: string): string =>
+  `id: ${id}\nevent: tool_call_result\ndata: ${JSON.stringify({
+    id: toolUseId,
+    result: { content: 'done', isError: false },
+    duration_ms: 12,
+  })}\n\n`;
+
 const doneFrame = (id: number): string => `id: ${id}\nevent: done\ndata: {}\n\n`;
 
 function deps(): OpenStreamDeps {
@@ -127,6 +134,36 @@ describe('openStream chunked replay pump', () => {
     expect(peekWorkerLog(1).map((e) => e.message)).toEqual([
       'r1-0', 'r1-1', 'r1-2', 'done', 'r2-new', 'done',
     ]);
+  });
+
+  it('seeds cursor reattach with blocks already covered by Last-Event-ID', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+      toolResultFrame(6, 'read-1'),
+      doneFrame(7),
+    ])));
+    const d = deps();
+    const p = openStream(1, {
+      ...attachOpts,
+      lastEventId: 5,
+      initialBlocks: [{
+        type: 'tool',
+        call: { id: 'read-1', name: 'read_file', status: 'running' },
+      }],
+    }, d);
+
+    await vi.runAllTimersAsync();
+    await p;
+
+    const turnPatches = vi.mocked(d.updateSession).mock.calls
+      .map(([, patch]) => patch)
+      .filter((patch) => typeof patch !== 'function' && patch.currentTurn)
+      .map((patch) => typeof patch === 'function' ? null : patch.currentTurn);
+    const finalTurn = turnPatches[turnPatches.length - 1];
+    expect(finalTurn?.blocks).toHaveLength(1);
+    expect(finalTurn?.blocks[0]).toMatchObject({
+      type: 'tool',
+      call: { id: 'read-1', status: 'done', result: { content: 'done' } },
+    });
   });
 
   it('discards the pending queue when the stream is aborted before the drain runs', async () => {

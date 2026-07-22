@@ -32,6 +32,15 @@ export { INITIAL, type IGrammar, type StateStack };
  */
 const GRAMMAR_LOADERS: Record<string, () => Promise<{ default: unknown }>> = {
   'source.toml': () => import('tm-grammars/grammars/toml.json'),
+  'source.json.lines': () => import('tm-grammars/grammars/jsonl.json'),
+  'source.json5': () => import('tm-grammars/grammars/json5.json'),
+  'source.hjson': () => import('tm-grammars/grammars/hjson.json'),
+  'source.jsonnet': () => import('tm-grammars/grammars/jsonnet.json'),
+  'source.dotenv': () => import('tm-grammars/grammars/dotenv.json'),
+  'text.codeowners': () => import('tm-grammars/grammars/codeowners.json'),
+  'text.log': () => import('tm-grammars/grammars/log.json'),
+  'text.csv': () => import('tm-grammars/grammars/csv.json'),
+  'text.tsv': () => import('tm-grammars/grammars/tsv.json'),
   'text.html.vue': () => import('tm-grammars/grammars/vue.json'),
   'source.svelte': () => import('tm-grammars/grammars/svelte.json'),
   'source.makefile': () => import('tm-grammars/grammars/make.json'),

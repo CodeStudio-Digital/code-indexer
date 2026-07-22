@@ -1545,9 +1545,9 @@ export async function runParallelAgents(
         status: terminal.status,
         toolCallCount,
         usage: runResult.usage,
-        summary: finalText.slice(0, 500),
+        summary: finalText,
         error: terminal.status === 'error' || terminal.status === 'timed_out' || terminal.status === 'aborted'
-          ? finalText.slice(0, 500)
+          ? finalText
           : undefined,
       });
       return agentResult;

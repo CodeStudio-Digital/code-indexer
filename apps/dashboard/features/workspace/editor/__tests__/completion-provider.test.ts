@@ -5,6 +5,11 @@ vi.mock('../../../../lib/api-client.js', () => ({ apiCall }));
 vi.mock('../lsp-log.js', () => ({ logLsp: vi.fn(), incrementLspCounter: vi.fn() }));
 
 import { registerCompletionProviders } from '../lsp/completion.js';
+import {
+  ANGULAR_COMPLETION_TRIGGERS,
+  COMPLETION_TRIGGERS,
+  mergeCompletionTriggers,
+} from '../lsp/dto.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -12,8 +17,140 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+interface Registration {
+  language: string;
+  triggerCharacters?: string[];
+  dispose: ReturnType<typeof vi.fn>;
+}
+
+function completionMonaco(registrations: Registration[]) {
+  return {
+    Range: class {},
+    languages: {
+      CompletionItemInsertTextRules: { InsertAsSnippet: 4 },
+      CompletionItemTag: { Deprecated: 1 },
+      CompletionItemKind: new Proxy({}, { get: () => 1 }),
+      registerCompletionItemProvider: (language: string, provider: { triggerCharacters?: string[] }) => {
+        const dispose = vi.fn();
+        registrations.push({ language, triggerCharacters: provider.triggerCharacters, dispose });
+        return { dispose };
+      },
+    },
+  } as never;
+}
+
+async function settleServerStatus() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('completion provider fidelity', () => {
-  beforeEach(() => apiCall.mockReset());
+  beforeEach(() => {
+    apiCall.mockReset();
+  });
+
+  it('keeps base TS/JS triggers and no HTML provider outside Angular projects', async () => {
+    apiCall.mockResolvedValueOnce({ state: 'no-server' });
+    const registrations: Registration[] = [];
+
+    registerCompletionProviders(completionMonaco(registrations), 1, async () => undefined);
+    await settleServerStatus();
+
+    expect(apiCall).toHaveBeenCalledTimes(1);
+    expect(apiCall).toHaveBeenCalledWith('lsp.serverStatus', {
+      projectId: 1,
+      languageId: 'typescript',
+    });
+    expect(registrations.filter((entry) => entry.language === 'typescript')).toHaveLength(1);
+    expect(registrations.find((entry) => entry.language === 'typescript')?.triggerCharacters)
+      .toEqual(COMPLETION_TRIGGERS.typescript);
+    expect(registrations.filter((entry) => entry.language === 'javascript')).toHaveLength(1);
+    expect(registrations.find((entry) => entry.language === 'javascript')?.triggerCharacters)
+      .toEqual(COMPLETION_TRIGGERS.javascript);
+    expect(registrations.some((entry) => entry.language === 'html')).toBe(false);
+    for (const language of ['typescript', 'javascript']) {
+      const triggers = registrations.find((entry) => entry.language === language)?.triggerCharacters ?? [];
+      for (const angularOnlyTrigger of ['*', '[', '(', '$', '|']) {
+        expect(triggers).not.toContain(angularOnlyTrigger);
+      }
+    }
+  });
+
+  it('promotes only TS and HTML to Angular triggers without duplicates', async () => {
+    apiCall.mockResolvedValueOnce({
+      state: 'not-installed',
+      server: {
+        id: 'angular-language-server--angular-12',
+        familyId: 'angular-language-server',
+        profileId: 'angular-12',
+        label: 'Angular Language Server',
+      },
+    });
+    const registrations: Registration[] = [];
+    const disposers = registerCompletionProviders(
+      completionMonaco(registrations),
+      7,
+      async () => undefined,
+    );
+    await settleServerStatus();
+
+    expect(apiCall).toHaveBeenCalledTimes(1);
+    expect(apiCall).toHaveBeenCalledWith('lsp.serverStatus', {
+      projectId: 7,
+      languageId: 'typescript',
+    });
+
+    const typescript = registrations.filter((entry) => entry.language === 'typescript');
+    expect(typescript).toHaveLength(2);
+    expect(typescript[0]?.dispose).toHaveBeenCalledTimes(1);
+    expect(typescript[1]?.triggerCharacters).toEqual(mergeCompletionTriggers(
+      COMPLETION_TRIGGERS.typescript,
+      ANGULAR_COMPLETION_TRIGGERS,
+    ));
+    expect(new Set(typescript[1]?.triggerCharacters).size)
+      .toBe(typescript[1]?.triggerCharacters?.length);
+
+    const javascript = registrations.filter((entry) => entry.language === 'javascript');
+    expect(javascript).toHaveLength(1);
+    expect(javascript[0]?.triggerCharacters).toEqual(COMPLETION_TRIGGERS.javascript);
+    for (const angularOnlyTrigger of ['*', '[', '(', '$', '|']) {
+      expect(javascript[0]?.triggerCharacters).not.toContain(angularOnlyTrigger);
+    }
+
+    const html = registrations.filter((entry) => entry.language === 'html');
+    expect(html).toHaveLength(1);
+    expect(html[0]?.triggerCharacters).toEqual([...ANGULAR_COMPLETION_TRIGGERS]);
+
+    for (const disposer of disposers) disposer.dispose();
+    expect(typescript[1]?.dispose).toHaveBeenCalledTimes(1);
+    expect(html[0]?.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a late Angular status after provider teardown', async () => {
+    const status = deferred<{
+      state: string;
+      server: { id: string; label: string };
+    }>();
+    apiCall.mockReturnValueOnce(status.promise);
+    const registrations: Registration[] = [];
+    const disposers = registerCompletionProviders(
+      completionMonaco(registrations),
+      1,
+      async () => undefined,
+    );
+    const registrationCountAtTeardown = registrations.length;
+
+    for (const disposer of disposers) disposer.dispose();
+    status.resolve({
+      state: 'ready',
+      server: { id: 'angular-language-server', label: 'Angular Language Server' },
+    });
+    await settleServerStatus();
+
+    expect(registrations).toHaveLength(registrationCountAtTeardown);
+    expect(registrations.some((entry) => entry.language === 'html')).toBe(false);
+    expect(registrations.every((entry) => entry.dispose.mock.calls.length === 1)).toBe(true);
+  });
 
   it('preserves server isIncomplete and discards obsolete responses', async () => {
     const providers: Array<{ provideCompletionItems: Function }> = [];
@@ -29,6 +166,7 @@ describe('completion provider fidelity', () => {
         },
       },
     } as never;
+    apiCall.mockResolvedValueOnce({ state: 'no-server' });
     registerCompletionProviders(monaco, 1, async () => undefined);
     const provider = providers[0]!;
     const model = {
@@ -77,6 +215,7 @@ describe('completion provider fidelity', () => {
         },
       },
     } as never;
+    apiCall.mockResolvedValueOnce({ state: 'no-server' });
     registerCompletionProviders(monaco, 1, async () => undefined);
     const model = (name: string) => ({
       getLanguageId: () => 'typescript', isDisposed: () => false,

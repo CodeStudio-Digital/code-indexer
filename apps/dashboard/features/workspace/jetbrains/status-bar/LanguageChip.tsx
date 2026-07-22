@@ -15,6 +15,7 @@ import { languageIdForPath } from '@mcp/shared/utils/language-id.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../../components/ui/tooltip.js';
 import { cn } from '../../../../lib/utils.js';
 import { useServerStatus } from './useServerStatus.js';
+import { AngularProfileControl } from './AngularProfileControl.js';
 
 /** Languages the structural index understands (tree-sitter grammars). */
 const INDEXED_LANGS = new Set([
@@ -29,19 +30,30 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
   const { t } = useTranslation('workspace');
   const language = activeFilePath ? languageIdForPath(activeFilePath) : null;
   const builtin = language === 'typescript' || language === 'javascript';
-  const server = useServerStatus(projectId, !language || builtin || language === 'plaintext' ? null : language);
+  const [statusRefresh, setStatusRefresh] = useState(0);
+  // TypeScript/JavaScript can also have a project-scoped overlay (Angular).
+  // Query the effective route even though the built-in TS service remains the
+  // fallback when that overlay is absent or not installed.
+  const server = useServerStatus(
+    projectId,
+    !language || language === 'plaintext' ? null : language,
+    activeFilePath,
+    statusRefresh,
+  );
   const [retrying, setRetrying] = useState(false);
 
   if (!language) {
     return <span className="text-muted-foreground">No file</span>;
   }
 
-  const tier: Tier = builtin || server?.state === 'ready'
+  const tier: Tier = server?.state === 'ready'
     ? 'lsp'
     : server?.state === 'idle'
       ? 'idle'
       : server?.state === 'failed'
         ? 'failed'
+        : builtin
+          ? 'lsp'
         : INDEXED_LANGS.has(language)
           ? 'index'
           : 'syntax';
@@ -52,13 +64,19 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
       : tier === 'idle' || tier === 'index' ? 'text-sky-400/90'
         : 'text-amber-500/80'; // failed + syntax
   const Icon = tier === 'lsp' ? Activity : tier === 'idle' || tier === 'index' ? Database : tier === 'failed' ? TriangleAlert : LanguagesIcon;
-  const suffix = tier === 'lsp' ? ' · LSP' : tier === 'idle' ? ` · ${t('lspStatus.onDemandSuffix')}` : tier === 'index' ? ' · index' : tier === 'failed' ? ' · LSP falhou' : ' · syntax only';
+  const angularSuffix = server?.route?.projectMajor ? ` Angular ${server.route.projectMajor}` : '';
+  const suffix = tier === 'lsp' ? ` · LSP${angularSuffix}` : tier === 'idle' ? ` · ${t('lspStatus.onDemandSuffix')}${angularSuffix}` : tier === 'index' ? ' · index' : tier === 'failed' ? ' · LSP falhou' : ' · syntax only';
 
   const retry = async () => {
     if (!server?.server) return;
     setRetrying(true);
     try {
-      await apiCall('lsp.restartServer', { projectId, serverId: server.server.id });
+      await apiCall('lsp.restartServer', {
+        projectId,
+        serverId: server.server.id,
+        routeId: server.route?.routeId,
+        file: activeFilePath ?? undefined,
+      });
       // The status stream re-emits starting→ready; no manual refresh needed.
     } catch { /* surfaced by the stream staying on failed */ }
     finally { setRetrying(false); }
@@ -73,10 +91,13 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-[300px]">
+        <div>
         {tier === 'lsp' ? (
           <span>
             Full IntelliSense — completion · hover · Ctrl+Click · diagnostics
-            {server?.server ? ` (via ${server.server.label}).` : ' (built-in TypeScript service).'}
+            {server?.state === 'ready' && server.server
+              ? ` (via ${server.server.label}${server.route?.profileId ? `, ${server.route.profileId}` : ''}).`
+              : ' (built-in TypeScript service).'}
           </span>
         ) : tier === 'idle' ? (
           <span>{t('lspStatus.idleDescription', { server: server?.server?.label ?? 'LSP' })}</span>
@@ -107,6 +128,14 @@ export function LanguageChip({ projectId, activeFilePath }: { projectId: number;
         ) : (
           <span>Syntax highlight only — no grammar/index coverage for this file type.</span>
         )}
+        {server && (
+          <AngularProfileControl
+            projectId={projectId}
+            status={server}
+            onApplied={() => setStatusRefresh((value) => value + 1)}
+          />
+        )}
+        </div>
       </TooltipContent>
     </Tooltip>
   );
