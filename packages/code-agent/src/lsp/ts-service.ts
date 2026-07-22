@@ -1544,6 +1544,50 @@ export function getTsService(projectRoot: string): TsLanguageService {
   return entry.svc;
 }
 
+export interface TsLinkedWorkspaceProject {
+  slug: string;
+}
+
+/**
+ * Select the configured TypeScript project that owns a file in a global
+ * (multi-project) workspace.
+ *
+ * Global workspace roots contain one junction/symlink per real project, so
+ * the synthetic root intentionally has neither a tsconfig nor node_modules.
+ * Keying the language service by that synthetic root makes TypeScript fall
+ * back to inferred compiler options. Routing to the owning link keeps paths
+ * inside the union workspace while allowing normal tsconfig and node_modules
+ * discovery below `<workspace>/<slug>`.
+ */
+export function getTsServiceForFile(
+  workspaceRoot: string,
+  filePath: string,
+  linkedProjects?: ReadonlyArray<TsLinkedWorkspaceProject>,
+): TsLanguageService {
+  const root = tsCanonical(workspaceRoot);
+  const file = tsCanonical(
+    isAbsolute(filePath) || /^\/[a-zA-Z]:[\\/]/.test(filePath)
+      ? filePath
+      : resolve(workspaceRoot, filePath),
+  );
+  const comparableFile = ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase();
+
+  for (const project of linkedProjects ?? []) {
+    const projectRoot = tsCanonical(resolve(workspaceRoot, project.slug));
+    const comparableRoot = ts.sys.useCaseSensitiveFileNames
+      ? projectRoot
+      : projectRoot.toLowerCase();
+    if (
+      comparableFile === comparableRoot ||
+      comparableFile.startsWith(`${comparableRoot}/`)
+    ) {
+      return getTsService(projectRoot);
+    }
+  }
+
+  return getTsService(root);
+}
+
 /** Dispose all cached services (for graceful shutdown). */
 export function disposeAllTsServices(): void {
   for (const [key, entry] of services) {

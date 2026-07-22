@@ -1,6 +1,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { getTsService, isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
+import { getTsServiceForFile, isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
 import { getGlobalAgentLspBackend, type AgentLspLocation } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 import { resolveProjectFile as resolveProjectFilePath } from '@mcp/code-agent/tools/paths.js';
 
@@ -89,8 +89,8 @@ const lspDefinition: CoderTool = {
       return ok(formatLocations('definition', locs, 'language server / structural index'));
     }
     try {
-      const svc = getTsService(ctx.cwd);
-      const result = svc.getDefinition(resolved.rel, line, column);
+      const svc = getTsServiceForFile(ctx.cwd, resolved.abs, ctx.globalWorkspace?.projects);
+      const result = svc.getDefinition(resolved.abs, line, column);
       if (result.targets.length === 0) {
         return ok(`No definition found at ${resolved.rel}:${line}:${column}`);
       }
@@ -140,8 +140,8 @@ const lspReferences: CoderTool = {
       return ok(formatLocations('reference', locs, 'language server / structural index'));
     }
     try {
-      const svc = getTsService(ctx.cwd);
-      const result = svc.getReferences(resolved.rel, line, column);
+      const svc = getTsServiceForFile(ctx.cwd, resolved.abs, ctx.globalWorkspace?.projects);
+      const result = svc.getReferences(resolved.abs, line, column);
       if (result.references.length === 0) {
         return ok(`No references found for symbol at ${resolved.rel}:${line}:${column}`);
       }
@@ -196,8 +196,8 @@ const lspHover: CoderTool = {
       return ok(hover.contents);
     }
     try {
-      const svc = getTsService(ctx.cwd);
-      const info = svc.getHover(resolved.rel, line, column);
+      const svc = getTsServiceForFile(ctx.cwd, resolved.abs, ctx.globalWorkspace?.projects);
+      const info = svc.getHover(resolved.abs, line, column);
       if (!info) return ok(`No symbol info at ${resolved.rel}:${line}:${column}`);
       const parts: string[] = [`kind: ${info.kind}`, '', info.displayString];
       if (info.documentation) {
@@ -239,8 +239,8 @@ const lspDiagnostics: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     try {
-      const svc = getTsService(ctx.cwd);
-      const diags = svc.getDiagnostics(resolved.rel);
+      const svc = getTsServiceForFile(ctx.cwd, resolved.abs, ctx.globalWorkspace?.projects);
+      const diags = svc.getDiagnostics(resolved.abs);
       if (diags.length === 0) return ok(`No diagnostics for ${resolved.rel}.`);
       const lines = diags.map(
         (d) => `${d.file}:${d.line}:${d.column}  [${d.severity}] TS${d.code}: ${d.message}`,
