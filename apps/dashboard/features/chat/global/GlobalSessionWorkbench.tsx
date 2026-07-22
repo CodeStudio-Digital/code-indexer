@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import {
   WorkbenchResizeHandle,
@@ -13,14 +13,39 @@ interface GlobalSessionWorkbenchProps {
 }
 
 /**
+ * Publish a portal host after refs have been committed.
+ *
+ * Using a state dispatcher directly as a callback ref makes React schedule an
+ * update from commitAttachRef. React 19 can replay that ref while revealing a
+ * suspended tree, recursively scheduling the same update until it hits the
+ * maximum update depth. An object ref is inert during attachment; the layout
+ * effect publishes only a genuinely different host.
+ */
+function usePortalHost<T extends HTMLElement>() {
+  const hostRef = useRef<T>(null);
+  const publishedHostRef = useRef<T | null>(null);
+  const [host, setHost] = useState<T | null>(null);
+
+  useLayoutEffect(() => {
+    const nextHost = hostRef.current;
+    if (publishedHostRef.current === nextHost) return;
+
+    publishedHostRef.current = nextHost;
+    setHost(nextHost);
+  });
+
+  return [hostRef, host] as const;
+}
+
+/**
  * Focused global-sessions workspace using the same container grammar as a
  * project: session list on the left, conversation in the center, contextual
  * panel on the right and the session activity rail at the outer edge.
  */
 export function GlobalSessionWorkbench({ initialSessionId }: GlobalSessionWorkbenchProps) {
-  const [sessionsHost, setSessionsHost] = useState<HTMLDivElement | null>(null);
-  const [rightPanelHost, setRightPanelHost] = useState<HTMLDivElement | null>(null);
-  const [rightRailHost, setRightRailHost] = useState<HTMLDivElement | null>(null);
+  const [sessionsHostRef, sessionsHost] = usePortalHost<HTMLDivElement>();
+  const [rightPanelHostRef, rightPanelHost] = usePortalHost<HTMLDivElement>();
+  const [rightRailHostRef, rightRailHost] = usePortalHost<HTMLDivElement>();
   const [sessionState, setSessionState] = useState({
     hasSession: initialSessionId != null,
     rightPanelOpen: false,
@@ -46,7 +71,7 @@ export function GlobalSessionWorkbench({ initialSessionId }: GlobalSessionWorkbe
           <PanelGroup direction="horizontal" autoSaveId="mcp-global-sessions-workbench">
             <Panel id="global-sessions-list" order={1} defaultSize={20} minSize={14} maxSize={34} className="min-w-0">
               <WorkbenchSurface className="h-full">
-                <div ref={setSessionsHost} className="h-full min-h-0 overflow-hidden" />
+                <div ref={sessionsHostRef} className="h-full min-h-0 overflow-hidden" />
               </WorkbenchSurface>
             </Panel>
             <WorkbenchResizeHandle direction="horizontal" />
@@ -60,14 +85,14 @@ export function GlobalSessionWorkbench({ initialSessionId }: GlobalSessionWorkbe
                 <WorkbenchResizeHandle direction="horizontal" />
                 <Panel id="global-session-context" order={3} defaultSize={24} minSize={18} maxSize={42} className="min-w-0">
                   <WorkbenchSurface className="h-full">
-                    <div ref={setRightPanelHost} className="h-full min-h-0 overflow-hidden" />
+                    <div ref={rightPanelHostRef} className="h-full min-h-0 overflow-hidden" />
                   </WorkbenchSurface>
                 </Panel>
               </>
             )}
           </PanelGroup>
         </div>
-        {sessionState.hasSession && <div ref={setRightRailHost} className="contents" />}
+        {sessionState.hasSession && <div ref={rightRailHostRef} className="contents" />}
       </div>
     </WorkbenchShell>
   );
