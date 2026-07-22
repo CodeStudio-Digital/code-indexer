@@ -13,6 +13,16 @@ import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
 import { SubagentTargetSelect } from './providers/SubagentTargetSelect.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
 
+const CLAUDE_CODE_MODEL_ORDER = new Map([
+  ['fable', 0],
+  ['opus', 1],
+  ['sonnet', 2],
+  ['haiku', 3],
+  ['opus-4-7', 4],
+  ['opus-4-6', 5],
+  ['sonnet-4-6', 6],
+]);
+
 interface ProviderCardProps {
   provider: AdminProvider;
   allProviders: AdminProvider[];
@@ -89,6 +99,13 @@ export function ProviderCard({
   const enabledSubagentProviderOptions = allProviders.filter((candidate) => (
     candidate.id !== p.id && candidate.enabled && candidate.use_for_coder
   ));
+  const displayedModels = p.kind === 'claude-code'
+    ? [...models].sort((a, b) => {
+        const rankA = CLAUDE_CODE_MODEL_ORDER.get(a.model_id) ?? Number.MAX_SAFE_INTEGER;
+        const rankB = CLAUDE_CODE_MODEL_ORDER.get(b.model_id) ?? Number.MAX_SAFE_INTEGER;
+        return rankA - rankB || a.name.localeCompare(b.name);
+      })
+    : models;
 
   return (
     // `provider-card-shell` is a sentinel class that the new
@@ -160,18 +177,19 @@ export function ProviderCard({
             </div>
           ) : (
             <div className="divide-y">
-              {models.map((m) => (
+              {displayedModels.map((m) => (
                 <div
                   key={`${m.model_id}:${m.mode}`}
                   className="flex items-center justify-between py-2 text-sm"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono truncate">{m.model_id}</span>
+                    <span className="font-medium truncate" title={m.model_id}>
+                      {m.name || m.model_id}
+                    </span>
                     {m.mode && <Badge variant="outline">{m.mode}</Badge>}
                     <Badge variant="secondary" className="text-[10px]">
                       {m.source}
                     </Badge>
-                    <span className="text-xs text-muted-foreground truncate">{m.name}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {m.supported_reasoning_levels &&

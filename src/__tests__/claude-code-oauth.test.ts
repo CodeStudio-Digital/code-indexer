@@ -169,6 +169,14 @@ describe('Claude Code OAuth parity helpers', () => {
       subscriptionType: 'enterprise',
       billingType: 'enterprise_usage_based',
     }).apiModel).toBe('claude-opus-4-8');
+    expect(resolveClaudeCodeModel('fable')).toMatchObject({
+      apiModel: 'claude-fable-5',
+      displayName: 'Fable 5',
+      maxTokens: 64_000,
+      effort: 'high',
+      thinking: { type: 'adaptive' },
+      isOneMillionContext: true,
+    });
   });
 });
 

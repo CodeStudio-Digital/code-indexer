@@ -25,6 +25,7 @@ describe('Claude Code host/plugin wire-helper parity', () => {
           },
         },
         { model: 'sonnet-4-6[1m]', account: null },
+        { model: 'fable', account: null },
         { model: 'opus-4-7', account: null },
         { model: 'haiku', account: null },
       ] as const;

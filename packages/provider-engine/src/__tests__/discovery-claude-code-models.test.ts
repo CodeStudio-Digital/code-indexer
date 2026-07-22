@@ -56,13 +56,25 @@ describe('sdk:claude-code discovery', () => {
     const liveList = [
       { id: 'claude-sonnet-5' },
       { id: 'claude-opus-4-8' },
+      { id: 'claude-fable-5' },
     ];
 
     mockResolveCreds.mockResolvedValue(RESOLVED_CREDS);
     mockFetchModels.mockResolvedValue(liveList);
     const b = await discoverClaudeCodeModels(claudeCodeSpec, CFG, STORE);
 
-    expect(b).toHaveLength(12);
+    expect(b.map((model) => model.model_id)).toEqual([
+      'fable',
+      'sonnet',
+      'sonnet-4-6',
+      'haiku',
+      'opus',
+      'opus-4-7',
+      'opus-4-6',
+    ]);
+    expect(b.find((model) => model.model_id === 'fable')?.name).toBe('Fable 5');
+    expect(b.some((model) => model.model_id === 'default')).toBe(false);
+    expect(b.some((model) => model.model_id.includes('[1m]'))).toBe(false);
     expect(b.every((m) => m.source === 'live')).toBe(true);
     expect(b.every((m) => /Resolved: .+ -> .+\. Betas:/.test(m.description ?? ''))).toBe(true);
   });
@@ -72,7 +84,7 @@ describe('sdk:claude-code discovery', () => {
     mockFetchModels.mockRejectedValue(new Error('network down'));
     const b = await discoverClaudeCodeModels(claudeCodeSpec, CFG, STORE);
 
-    expect(b).toHaveLength(12);
+    expect(b).toHaveLength(7);
     expect(b.some((m) => (m.description ?? '').includes('Not returned by live'))).toBe(false);
   });
 });

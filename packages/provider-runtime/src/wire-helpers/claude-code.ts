@@ -16,6 +16,8 @@ export const CLAUDE_CODE_DEFAULT_SONNET_MODEL =
   process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-5';
 export const CLAUDE_CODE_DEFAULT_OPUS_MODEL =
   process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-4-8';
+export const CLAUDE_CODE_DEFAULT_FABLE_MODEL =
+  process.env.ANTHROPIC_DEFAULT_FABLE_MODEL ?? 'claude-fable-5';
 
 export interface ClaudeCodeProfileInfo {
   subscriptionType: 'max' | 'pro' | 'enterprise' | 'team' | null;
@@ -30,6 +32,7 @@ export type ClaudeCodeModelAlias =
   | 'sonnet'
   | 'sonnet[1m]'
   | 'haiku'
+  | 'fable'
   | 'opus'
   | 'opus[1m]'
   | string;
@@ -154,6 +157,7 @@ export function normalizeClaudeCodeModelAlias(model: string | null | undefined):
     case 'sonnet':
     case 'sonnet[1m]':
     case 'haiku':
+    case 'fable':
     case 'opus':
     case 'opus[1m]':
     case 'sonnet-4-6':
@@ -197,6 +201,8 @@ export function resolveClaudeCodeRequestedModel(
       return `${CLAUDE_CODE_DEFAULT_SONNET_MODEL}[1m]`;
     case 'haiku':
       return CLAUDE_CODE_SMALL_FAST_MODEL;
+    case 'fable':
+      return CLAUDE_CODE_DEFAULT_FABLE_MODEL;
     case 'opus':
       return CLAUDE_CODE_DEFAULT_OPUS_MODEL;
     case 'opus[1m]':
@@ -308,29 +314,30 @@ function getClaudeCodeDisplayName(alias: string, requestedModel: string): string
   const lowerAlias = alias.toLowerCase();
   const cleanModel = claudeCodeModelFamily(requestedModel);
   if (lowerAlias === 'default' && cleanModel.includes('claude-opus-4-8')) {
-    return 'Default (recommended) - Opus 4.8 with 1M context';
+    return 'Opus 4.8 (automatic, 1M context)';
   }
   if (lowerAlias === 'default') {
-    return 'Default (recommended) - Sonnet 5';
+    return 'Sonnet 5 (automatic)';
   }
   const oneMillion = isClaudeCodeOneMillionContext(requestedModel);
   if (lowerAlias === 'sonnet[1m]' || (oneMillion && cleanModel.includes('claude-sonnet-5'))) {
-    return 'Sonnet (1M context) - Sonnet 5 with 1M context';
+    return 'Sonnet 5 (1M context)';
   }
   if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-8'))) {
-    return 'Opus (1M context) - Opus 4.8 with 1M context';
+    return 'Opus 4.8 (1M context)';
   }
   if (lowerAlias === 'opus-4-6[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-6'))) {
-    return 'Opus 4.6 (1M context) - Opus 4.6 with 1M context';
+    return 'Opus 4.6 (1M context)';
   }
-  if (cleanModel.includes('claude-haiku-4-5')) return 'Haiku - Haiku 4.5';
-  if (cleanModel.includes('claude-opus-4-8')) return 'Opus - Opus 4.8';
-  if (cleanModel.includes('claude-opus-4-7')) return 'Opus - Opus 4.7';
-  if (cleanModel.includes('claude-opus-4-6')) return 'Opus - Opus 4.6';
-  if (cleanModel.includes('claude-opus-4-5')) return 'Opus - Opus 4.5';
-  if (cleanModel.includes('claude-sonnet-5')) return 'Sonnet - Sonnet 5';
-  if (cleanModel.includes('claude-sonnet-4-6')) return 'Sonnet - Sonnet 4.6';
-  if (cleanModel.includes('claude-sonnet-4-5')) return 'Sonnet - Sonnet 4.5';
+  if (cleanModel.includes('claude-haiku-4-5')) return 'Haiku 4.5';
+  if (cleanModel.includes('claude-fable-5')) return 'Fable 5';
+  if (cleanModel.includes('claude-opus-4-8')) return 'Opus 4.8';
+  if (cleanModel.includes('claude-opus-4-7')) return 'Opus 4.7';
+  if (cleanModel.includes('claude-opus-4-6')) return 'Opus 4.6';
+  if (cleanModel.includes('claude-opus-4-5')) return 'Opus 4.5';
+  if (cleanModel.includes('claude-sonnet-5')) return 'Sonnet 5';
+  if (cleanModel.includes('claude-sonnet-4-6')) return 'Sonnet 4.6';
+  if (cleanModel.includes('claude-sonnet-4-5')) return 'Sonnet 4.5';
   return requestedModel;
 }
 

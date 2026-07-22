@@ -91,13 +91,12 @@ It does not store authorization headers, cookies, API keys, raw prompts/messages
 - Explicit `thinkingBudgetTokens` is only applied to legacy
   `thinking: {type: "enabled"}` requests. Adding `budget_tokens` to adaptive
   thinking is invalid and is intentionally prevented.
-- Defaults follow the 2.1.215 registry: Opus 4.7 uses `xhigh`; Opus 4.8,
-  Sonnet 5, Opus 4.6, and Sonnet 4.6 use `high`.
+- Defaults follow the 2.1.215 registry: Opus 4.7 uses `xhigh`; Fable 5,
+  Opus 4.8, Sonnet 5, Opus 4.6, and Sonnet 4.6 use `high`.
 
-### Current model aliases
+### Current model catalog
 
-- `default`: Opus 4.8 with 1M context for Max, Team Max, and usage-based
-  Enterprise accounts; Sonnet 5 otherwise.
-- `opus`: Opus 4.8. `sonnet`: Sonnet 5. `haiku`: Haiku 4.5.
-- Legacy selectable aliases retain Opus 4.7, Opus 4.6, and Sonnet 4.6,
-  including their explicit `[1m]` forms.
+- Primary models: Fable 5, Opus 4.8, Sonnet 5, and Haiku 4.5.
+- Previous models: Opus 4.7, Opus 4.6, and Sonnet 4.6.
+- Native 1M context is model metadata, not a duplicated selectable `[1m]`
+  entry. The runtime continues to understand legacy aliases for compatibility.
