@@ -9,6 +9,26 @@
  * In headless / non-Electron runs nothing is wired → tools degrade.
  */
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import {
+  assertMutationFence,
+  MutationFenceError,
+} from '@mcp/code-agent/core/mutation-fence.js';
+
+const PREVIEW_EFFECT_METHODS = new Set<PreviewInvoke['method']>([
+  'open',
+  'close',
+  'navigate',
+  'viewport',
+  'eval',
+  'click',
+  'type',
+  'fill',
+  'press',
+  'scroll',
+  'hover',
+  'double_click',
+  'right_click',
+]);
 
 /** A single agent→devtools request. `key` scopes the window per agent. */
 export interface PreviewInvoke {
@@ -111,6 +131,19 @@ export async function invokePreview(
   const key = previewKey(ctx);
   const requestId = `preview-${key}-${Date.now().toString(36)}-${(++previewRequestSeq).toString(36)}`;
   if (ctx.signal?.aborted) throw new Error('Preview operation aborted.');
+  if (PREVIEW_EFFECT_METHODS.has(method)) {
+    if (ctx.mutationFence?.mode === 'enforce' && typeof backend.cancel !== 'function') {
+      throw new MutationFenceError(
+        'unsupported_port',
+        `preview.${method} backend does not expose request cancellation`,
+      );
+    }
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: `preview.${method}`,
+      resource: key,
+    });
+  }
   const pending = backend.invoke({ key, method, args, requestId });
   if (!ctx.signal) return pending;
   return new Promise((resolve, reject) => {

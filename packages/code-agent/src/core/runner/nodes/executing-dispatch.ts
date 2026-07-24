@@ -22,6 +22,8 @@ import type {
   CoderTool,
   GuardVerdict,
   ToolSourceTruncation,
+  CapabilityLifecycleHooks,
+  CapabilityPolicyPort,
 } from '@mcp/code-agent/core/tool.js';
 import type { DetailedReduction, ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
@@ -41,7 +43,7 @@ import {
 } from '../guards/failure-streak.js';
 import type { DupCallEntry } from '../machine/types.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
-import { resolveToolMetadata } from '../../policy.js';
+import { resolveToolInvocationMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
 import { asAbortSignal } from '../../abort-signal.js';
@@ -125,7 +127,10 @@ export interface DispatchArgs {
    * BEFORE the tuple-hash check so a blocked call doesn't pollute the
    * dedup counter.
    */
-  toolGate?: (toolName: string, input: unknown) => string | null;
+  toolGate?: (
+    toolName: string,
+    input: unknown,
+  ) => string | null | Promise<string | null>;
   /**
    * Pre-read enforcement — refuse re-reads of the same path+slice that
    * a prior turn already produced. Runs AFTER `toolGate` and BEFORE the
@@ -143,6 +148,18 @@ export interface DispatchArgs {
    * dedup counter side-effect.
    */
   enforceTaskMode?: (toolName: string, toolMutates: boolean) => string | null;
+  /**
+   * Fase 2 Policy Engine shadow port (default-off). When present AND its
+   * flags are enabled, it evaluates a shadow PolicyDecision, records the
+   * comparison vs. the legacy gate, and — only when `CODER_POLICY_ENGINE_ENFORCE`
+   * is set (dormant) — may itself refuse a call. When absent, the dispatch path
+   * is byte-identical to the pre-Fase-2 behavior. It runs immediately BEFORE the
+   * permission gate so its enforcement, if ever enabled, precedes the legacy
+   * approval prompt.
+   */
+  policyShadow?: CapabilityPolicyPort;
+  /** Ordered lifecycle observation around every requested capability. */
+  capabilityHooks?: CapabilityLifecycleHooks;
   /** Smart-reducer applied to the raw result content before push. */
   reduceToolResult?: (
     toolName: string,
@@ -332,8 +349,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
 
   for (const tu of args.toolUses) {
     const tool = lookupTool(args.registry, tu.name);
-    const resolvedMetadata = tool ? resolveToolMetadata(tool) : null;
     const normalizedInput = normalizeGuardInput(tool, tu.input);
+    const resolvedMetadata = tool
+      ? resolveToolInvocationMetadata(tool, normalizedInput)
+      : null;
     const isRepeatable = resolvedMetadata
       ? resolvedMetadata.repeatPolicy === 'pollable'
       : false;
@@ -342,6 +361,26 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // submit_tasks, submit_spec, master variants) declare `interactive` in
     // `policy.ts`'s BUILTIN_CLASSIFICATION, not on their CoderTool.
     const interactive = resolvedMetadata?.interactive ?? false;
+    const hookBase = {
+      toolUseId: tu.id,
+      toolName: tu.name,
+      turn: args.turn,
+      known: tool !== null,
+    };
+    let hookResult: DispatchedToolResult | undefined;
+    if (args.capabilityHooks) {
+      try {
+        await args.capabilityHooks.before(hookBase);
+      } catch {
+        // Observation hooks never alter capability execution.
+      }
+    }
+    const pushResult = async (result: DispatchedToolResult): Promise<void> => {
+      results.push(result);
+      hookResult = result;
+    };
+
+    try {
 
     // Hidden-call handling (pin mechanism). A registered tool can be absent
     // from the model's visible list (tier-hidden or cap-cut) yet still be
@@ -350,10 +389,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // with redirection; everything else flows through ALL the gates below,
     // executes, and is pinned at the result tail.
     const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
-    if (!pinDisabled && tool && args.isToolBlocked) {
+    // Disabled/policy-blocked capabilities are a security boundary, not a
+    // pinning feature. The pin kill switch may suppress hidden-tool discovery,
+    // but it must never make a blocked registered tool executable.
+    if (tool && args.isToolBlocked) {
       const blockedText = args.isToolBlocked(tu.name);
       if (blockedText !== null) {
-        results.push({
+        await pushResult({
           toolUseId: tu.id,
           name: tu.name,
           content: blockedText,
@@ -378,7 +420,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       // that gate, so refuse with the correct redirection instead.
       const goal = args.toolContext.getGoalState?.();
       if (goal && goal.status === 'in_progress') {
-        results.push({
+        await pushResult({
           toolUseId: tu.id,
           name: tu.name,
           content:
@@ -396,9 +438,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
     // happened from the agent's POV.
-    const gateRefusal = args.toolGate?.(tu.name, tu.input) ?? null;
+    const gateRefusal = await args.toolGate?.(tu.name, normalizedInput) ?? null;
     if (gateRefusal !== null) {
-      results.push({
+      await pushResult({
         toolUseId: tu.id,
         name: tu.name,
         content: gateRefusal,
@@ -414,7 +456,12 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Pre-read enforcement (Row 32 from agent-research comparisons).
     // Refuses re-reads BEFORE the dedup check so the dedup counter
     // stays meaningful only for non-read tools.
-    const preReadRefusal = args.enforcePreRead?.(tu.name, tu.input, args.turn, tu.id) ?? null;
+    const preReadRefusal = args.enforcePreRead?.(
+      tu.name,
+      normalizedInput,
+      args.turn,
+      tu.id,
+    ) ?? null;
     // Hybrid/observe never turn a historical read into a hard error. Preserve
     // the mtime/coverage-aware non-error pointer, but ignore the legacy string
     // refusal and fetch fresh content. `force_reread:true` already makes the
@@ -445,7 +492,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
             originToolUseId: tu.id,
             stateEpoch: invocationGuard.stateEpoch,
           };
-      results.push({
+      await pushResult({
         toolUseId: tu.id,
         name: tu.name,
         content,
@@ -466,10 +513,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // a write that would have been pre-read-refused stays on that
     // (clearer) error path, and BEFORE the tuple-hash so the dedup
     // counter isn't polluted by gate-blocked calls.
-    const toolMutates = tool?.mutates ?? (tool?.source === 'mcp_external');
+    const toolMutates = resolvedMetadata?.mutates ?? false;
     const taskModeRefusal = args.enforceTaskMode?.(tu.name, !!toolMutates) ?? null;
     if (taskModeRefusal !== null) {
-      results.push({
+      await pushResult({
         toolUseId: tu.id,
         name: tu.name,
         content: taskModeRefusal,
@@ -484,7 +531,37 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
 
     // Telemetry: signal start BEFORE invoking so the dashboard can render
     // "tool in flight" the moment the call is dispatched.
-    args.onToolCallStart?.(tu.id, tu.name, tu.input);
+    args.onToolCallStart?.(tu.id, tu.name, normalizedInput);
+
+    // Fase 2 Policy Engine shadow (default-off). Runs BEFORE the legacy
+    // permission gate so that, if enforcement is ever enabled (dormant here),
+    // its decision precedes the legacy approval prompt. When the port is
+    // absent — the default — this block is skipped entirely and the path is
+    // byte-identical to the pre-Fase-2 behavior. In shadow mode the port
+    // records its comparison and returns `{ refuse: false }`, so nothing
+    // changes; only with CODER_POLICY_ENGINE_ENFORCE can it refuse.
+    if (args.policyShadow) {
+      const shadow = await args.policyShadow({
+        tool,
+        toolUseId: tu.id,
+        toolName: tu.name,
+        toolInput: normalizedInput,
+        turn: args.turn,
+      });
+      if (shadow?.refuse) {
+        await pushResult({
+          toolUseId: tu.id,
+          name: tu.name,
+          content: shadow.refusalText,
+          isError: true,
+          durationMs: 0,
+          wasRefusedByDedup: false,
+          refusalKind: 'user_denied',
+          stateEpoch: invocationGuard.stateEpoch,
+        });
+        continue;
+      }
+    }
 
     // Permission gate (modes 'ask'/'auto') — may pause awaiting user
     // approval. Sits AFTER onToolCallStart (the dashboard block must exist
@@ -497,13 +574,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       const decision = await permissionGate.check({
         toolUseId: tu.id,
         toolName: tu.name,
-        input: tu.input,
+        input: normalizedInput,
         tool: tool ?? undefined,
         parentToolUseId: args.toolContext.approvalAnchorId,
         turn: args.turn,
       });
       if (!decision.allowed) {
-        results.push({
+        await pushResult({
           toolUseId: tu.id,
           name: tu.name,
           content: decision.refusalText,
@@ -519,7 +596,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
 
     const verdict = checkDupCall({
       name: tu.name,
-      input: tu.input,
+      input: normalizedInput,
       normalizedInput,
       isRepeatable,
       repeatPolicy: resolvedMetadata?.repeatPolicy,
@@ -528,7 +605,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       dupCalls: args.dupCalls,
       invocationState: invocationGuard,
       stateEpoch: invocationGuard.stateEpoch,
-      forceReread: tu.input.force_reread === true,
+      forceReread: normalizedInput.force_reread === true,
     });
 
     const noProgressRefusal = args.toolContext.toolCallLedger?.checkRepeat({
@@ -549,7 +626,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         originToolUseId: tu.id,
         stateEpoch: invocationGuard.stateEpoch,
       };
-      results.push({
+      await pushResult({
         toolUseId: tu.id,
         name: tu.name,
         content: `[no-progress REFUSED: \`${tu.name}\` repeated without new results. Switch strategy before retrying.]`,
@@ -567,7 +644,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     }
 
     if (verdict.action === 'block') {
-      results.push({
+      await pushResult({
         toolUseId: tu.id,
         name: tu.name,
         content: verdict.refuseText,
@@ -589,7 +666,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       resolvedMetadata?.repeatPolicy === 'stable' &&
       resolvedMetadata.executionClass === 'read' &&
       !interactive &&
-      tu.input.force_reread !== true
+      normalizedInput.force_reread !== true
         ? reusableResults.get(`${verdict.key}|epoch:${invocationGuard.stateEpoch}`)
         : undefined;
     if (reusable && !reusable.result.isError && !reusable.result.extraUserBlocks) {
@@ -615,7 +692,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         guardVerdict: reuseVerdict,
       };
       args.onToolCallFinalized?.(tu.id, reused.content.length);
-      results.push(reused);
+      await pushResult(reused);
       continue;
     }
 
@@ -626,6 +703,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let invocationIsError = false;
     let invocationContentFormat: 'text' | 'markdown' | 'json' = 'text';
     let invocationStructuredChars: number | null = null;
+    let invocationStructuredData: unknown;
     let invocationExtraBlocks: ContentBlock[] | undefined;
     let invocationGuardVerdict: GuardVerdict | undefined;
     let invocationSourceTruncations: ToolSourceTruncation[] = [];
@@ -649,7 +727,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // return Infinity (interactive/explicit only) — map that to 0
     // ("no timeout"), because `withAbortAndTimeout` treats ms<=0 as a no-op
     // whereas passing Infinity to setTimeout would fire almost immediately.
-    const resolvedTimeout = tool ? resolveToolTimeoutMs(tool, tu.input) : NORMAL_TIMEOUT_MS;
+    const resolvedTimeout = tool ? resolveToolTimeoutMs(tool, normalizedInput) : NORMAL_TIMEOUT_MS;
     const toolTimeoutMs = (interactive || !Number.isFinite(resolvedTimeout)) ? 0 : resolvedTimeout;
     // ToolContext is a runtime boundary: worker structured cloning can turn an
     // AbortSignal into a truthy plain object. Ignore malformed values instead
@@ -680,6 +758,77 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         currentToolUseId: tu.id,
         parentToolUseId: tu.id,
         nestedToolObserver: args.makeNestedObserver?.(tu.id, tu.name),
+        nestedCapabilityDispatch: {
+          turn: args.turn,
+          preflight: async (input) => {
+            const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
+            if (input.tool && args.isToolBlocked) {
+              const blockedText = args.isToolBlocked(input.toolName);
+              if (blockedText !== null) {
+                return {
+                  content: blockedText,
+                  isError: true,
+                  refusalKind: 'gate',
+                };
+              }
+            }
+            const hiddenFromModel =
+              !pinDisabled
+              && !!input.tool
+              && !!args.visibleToolNames
+              && !args.visibleToolNames.has(input.toolName)
+              && !args.pinnedTools?.has(input.toolName);
+            if (hiddenFromModel && input.toolName === 'create_goal') {
+              const goal = args.toolContext.getGoalState?.();
+              if (goal?.status === 'in_progress') {
+                return {
+                  content:
+                    '[goal-gate] a goal is already in_progress — call update_goal to progress or complete it instead of creating a new one.',
+                  isError: true,
+                  refusalKind: 'gate',
+                };
+              }
+            }
+            const gateRefusal = await args.toolGate?.(input.toolName, input.toolInput) ?? null;
+            if (gateRefusal !== null) {
+              return { content: gateRefusal, isError: true, refusalKind: 'gate' };
+            }
+            const preReadRefusal = args.enforcePreRead?.(
+              input.toolName,
+              input.toolInput,
+              input.turn,
+              input.toolUseId,
+            ) ?? null;
+            const enforcePreReadResult =
+              preReadRefusal !== null
+              && (typeof preReadRefusal !== 'string' || dedupPolicyMode() === 'legacy');
+            if (enforcePreReadResult) {
+              const content = typeof preReadRefusal === 'string'
+                ? preReadRefusal
+                : preReadRefusal.content;
+              const isError = typeof preReadRefusal === 'string'
+                ? true
+                : preReadRefusal.isError ?? true;
+              return {
+                content,
+                isError,
+                ...(isError ? { refusalKind: 'pre-read' } : {}),
+              };
+            }
+            const taskModeRefusal =
+              args.enforceTaskMode?.(input.toolName, input.toolMutates) ?? null;
+            if (taskModeRefusal !== null) {
+              return {
+                content: taskModeRefusal,
+                isError: true,
+                refusalKind: 'task-mode',
+              };
+            }
+            return null;
+          },
+          policyShadow: args.policyShadow,
+          capabilityHooks: args.capabilityHooks,
+        },
         signal: invocationAbort?.signal ?? parentSignal,
         reportProgress: (note: string) => {
           const trimmed = typeof note === 'string'
@@ -711,7 +860,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       const remainingToolTimeoutMs = toolTimeoutMs > 0
         ? Math.max(1, toolTimeoutMs - (Date.now() - t0))
         : 0;
-      const rawInvocation = args.registry.invoke(tu.name, tu.input, callContext);
+      const rawInvocation = args.registry.invoke(tu.name, normalizedInput, callContext);
       if (releaseUnsafe) {
         releaseOwnedByInvocation = true;
         void rawInvocation.then(releaseUnsafe, releaseUnsafe);
@@ -727,6 +876,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
       invocationContentFormat = result.contentFormat ?? 'text';
+      invocationStructuredData = result.structuredData;
       if (result.structuredData !== undefined) {
         try {
           invocationStructuredChars = JSON.stringify(result.structuredData)?.length ?? null;
@@ -791,7 +941,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let reductionReport: ReductionReport | undefined;
     try {
       const reduced = args.reduceToolResult?.(tu.name, invocationContent, {
-        input: tu.input,
+        input: normalizedInput,
         isError: invocationIsError,
         contentFormat: invocationContentFormat,
       }) ?? invocationContent;
@@ -808,7 +958,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       const postProcessed = args.postProcessToolResult?.({
         toolUseId: tu.id,
         name: tu.name,
-        input: tu.input,
+        input: normalizedInput,
         rawContent: invocationContent,
         content: shapedContent,
         isError: invocationIsError,
@@ -950,8 +1100,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       args: normalizedInput,
       content: finalShaped,
       isError: finalIsError,
+      structuredData: invocationStructuredData,
       refusalKind,
       mutates: resolvedMetadata?.mutates ?? false,
+      riskLevel: resolvedMetadata?.riskLevel,
       durationMs,
       executionClass: resolvedMetadata?.executionClass,
       repeatPolicy: resolvedMetadata?.repeatPolicy,
@@ -962,7 +1114,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // only its own safety count so a third repeated mutation can still stop.
     const stateChangingSuccess =
       !finalIsError &&
-      (resolvedMetadata?.executionClass === 'write' || resolvedMetadata?.executionClass === 'execute');
+      (
+        resolvedMetadata?.repeatPolicy === 'mutating'
+        || resolvedMetadata?.executionClass === 'write'
+        || resolvedMetadata?.executionClass === 'execute'
+      );
     if (stateChangingSuccess) {
       const sharedEpochBefore = args.noProgressTracker?.stateEpoch;
       args.noProgressTracker?.noteStateChange();
@@ -1036,7 +1192,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       ...(finalGuardVerdict ? { guardVerdict: finalGuardVerdict } : {}),
       stateEpoch: invocationGuard.stateEpoch,
     };
-    results.push(dispatched);
+    await pushResult(dispatched);
 
     if (
       !dispatched.isError &&
@@ -1044,12 +1200,26 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       resolvedMetadata?.repeatPolicy === 'stable' &&
       resolvedMetadata.executionClass === 'read' &&
       !interactive &&
-      tu.input.force_reread !== true
+      normalizedInput.force_reread !== true
     ) {
       reusableResults.set(
         `${verdict.key}|epoch:${invocationGuard.stateEpoch}`,
         { result: dispatched, count: 1 },
       );
+    }
+    } finally {
+      if (args.capabilityHooks) {
+        try {
+          await args.capabilityHooks.after({
+            ...hookBase,
+            isError: hookResult?.isError ?? true,
+            refused: hookResult?.refusalKind !== undefined,
+            durationMs: hookResult?.durationMs ?? 0,
+          });
+        } catch {
+          // Observation hooks never alter capability execution.
+        }
+      }
     }
   }
 
@@ -1060,14 +1230,18 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     if (result.ledgerEntry) continue;
     const toolUse = args.toolUses.find((candidate) => candidate.id === result.toolUseId);
     const tool = lookupTool(args.registry, result.name);
-    const metadata = tool ? resolveToolMetadata(tool) : null;
+    const normalizedInput = normalizeGuardInput(tool, toolUse?.input ?? {});
+    const metadata = tool
+      ? resolveToolInvocationMetadata(tool, normalizedInput)
+      : null;
     const entry = args.toolContext.toolCallLedger?.record({
       name: result.name,
-      args: normalizeGuardInput(tool, toolUse?.input ?? {}),
+      args: normalizedInput,
       content: result.content,
       isError: result.isError,
       refusalKind: result.refusalKind,
       mutates: metadata?.mutates ?? false,
+      riskLevel: metadata?.riskLevel,
       durationMs: result.durationMs,
       executionClass: metadata?.executionClass,
       repeatPolicy: metadata?.repeatPolicy,

@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { PersistedGoalMutation } from '@mcp/code-agent/sessions/store/goal-mutations.js';
 import type { RecordTurnTelemetryInput } from '@mcp/code-agent/sessions/store/telemetry-record.js';
 
 export type { RecordTurnTelemetryInput };
@@ -74,6 +75,8 @@ export interface PersistAssistantTurnPayload {
    * an `awaiting_input` checkpoint); reuse it instead of inserting a duplicate.
    */
   existing_message_id?: number;
+  /** Ordered goal mutations paired atomically with their successful tool rows. */
+  goal_mutations?: PersistedGoalMutation[];
 }
 
 export type DbWriteReq =

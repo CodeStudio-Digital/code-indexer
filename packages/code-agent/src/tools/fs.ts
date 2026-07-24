@@ -115,6 +115,7 @@ function markOverlay(ctx: ToolContext, projectId: number | undefined, path: stri
 
 const writeFile: CoderTool = {
   name: 'write_file',
+  effectBoundary: 'filesystem',
   description: maybeTerse(WRITE_FILE_DESC),
   source: 'native',
   // Phase 2 hardening: explicit metadata co-located with the tool. The
@@ -156,6 +157,7 @@ const writeFile: CoderTool = {
 
 const createFile: CoderTool = {
   name: 'create_file',
+  effectBoundary: 'filesystem',
   description: maybeTerse(CREATE_FILE_DESC),
   source: 'native',
   parameters: {
@@ -370,6 +372,7 @@ function findFuzzyHint(content: string, oldStr: string): string | null {
 
 const editFile: CoderTool = {
   name: 'edit_file',
+  effectBoundary: 'filesystem',
   description: maybeTerse(EDIT_FILE_DESC),
   source: 'native',
   parameters: {
@@ -768,6 +771,7 @@ function performSingleEdit(
 
 export const multiEdit: CoderTool = {
   name: 'multi_edit',
+  effectBoundary: 'filesystem',
   description: maybeTerse(MULTI_EDIT_DESC),
   source: 'native',
   parameters: {

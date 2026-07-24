@@ -5,7 +5,7 @@
  *
  * The outer border/colour is derived from `notification.severity`
  * (info=blue, warning=amber, error=red) and the per-kind body is delegated:
- * tool-loop → `LoopBody`; run/quality → inline bodies here.
+ * tool-loop → `LoopBody`; other notices → inline bodies here.
  */
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,7 +14,6 @@ import {
   Bot,
   CheckCircle2,
   RotateCcw,
-  ShieldAlert,
   X as XIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -40,8 +39,6 @@ const SEVERITY_CLASS: Record<NotificationSeverity, string> = {
 
 function iconFor(n: SessionNotification): LucideIcon {
   switch (n.payload.kind) {
-    case 'quality-alert':
-      return ShieldAlert;
     case 'run-done':
       return n.severity === 'error' ? AlertTriangle : CheckCircle2;
     case 'run-error':
@@ -129,19 +126,6 @@ function NotificationBody({ notification }: { notification: SessionNotification 
               {p.error}
             </p>
           )}
-        </>
-      );
-    case 'quality-alert':
-      return (
-        <>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">Quality watchdog</span>
-            <span className="text-[10px] opacity-70">turn {p.turn}</span>
-            <span className="ml-auto text-[10px] uppercase opacity-70">{p.verdict}</span>
-          </div>
-          <p className="mt-0.5 leading-snug">
-            {p.suspectTool && <span className="font-mono">{p.suspectTool}</span>} {p.reason}
-          </p>
         </>
       );
     case 'background-agents-done':

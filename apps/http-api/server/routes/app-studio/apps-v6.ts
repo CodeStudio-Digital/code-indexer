@@ -6,7 +6,11 @@ import { parseAppPlan, type AppFitnessReport, type AppPlanV1 } from '@mcp/app-st
 import type { AppStudioWorkItem, UpsertAppStudioWorkItemInput } from '@mcp/store/app-studio-store.js';
 import { getAppTeamSession } from '@mcp/api-handlers/app-studio/app-team-session.js';
 import { dispatchReadyAppWork } from '@mcp/company/tools/app-studio/company-dispatch.js';
-import { getOrSpawnCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
+import {
+  evictCompanyOrchestrator,
+  getOrSpawnCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { abortCompanyRuntime } from '../company/runtime-lifecycle.js';
 import { stopCompanySessionRuntime } from '../company/session-delete.js';
 import { notFound, parseIdParam, parseJsonBody } from '../_helpers.js';
@@ -311,6 +315,17 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           source: 'manual',
           maxItems: 2,
         });
+        if (dispatchResults.some((result) => result.code === 'OUTCOME_UNKNOWN')) {
+          await evictCompanyOrchestrator(session.company_session_id);
+          return c.json({
+            ...appState(deps, id, { includeRecentEvents: true }),
+            dispatch_results: dispatchResults,
+            error:
+              'One or more specialist dispatches have an unknown outcome. ' +
+              'Their claimed attempts were fenced and were not spawned again.',
+            code: 'OUTCOME_UNKNOWN',
+          }, 500);
+        }
         return c.json({
           ...appState(deps, id, { includeRecentEvents: true }),
           dispatch_results: dispatchResults,
@@ -339,23 +354,63 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       }
       try {
         const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
-        await orchestrator.sendMessageToMaster(
+        const delivery = await orchestrator.sendMessageToMaster(
           `[App Studio] Decisão respondida. Pergunta: ${decision.question}\n` +
           `Resposta: ${decision.answer ?? body.answer.trim()}\n` +
           'Atualize o plano e os cards afetados conforme a resposta. Não despache trabalho; o scheduler é o único dispatcher automático.',
         );
+        if (!delivery.ok) {
+          const error = delivery.pending === 'interactive_wait'
+            ? 'Master is waiting for another interactive answer'
+            : 'Master did not accept the coordination message';
+          const code = delivery.pending === 'interactive_wait'
+            ? 'INTERACTION_PENDING'
+            : 'MASTER_MESSAGE_NOT_ACCEPTED';
+          try {
+            deps.appStudioStore.appendEvent(
+              id,
+              'decision.coordination_failed',
+              'decision',
+              String(decision.id),
+              JSON.stringify({
+                error,
+                code,
+              }),
+            );
+          } catch { /* The durable decision remains authoritative. */ }
+          return c.json({
+            decision,
+            coordination_resumed: false,
+            warning: coordinationWarning,
+            code,
+          });
+        }
         return c.json({ decision, coordination_resumed: true });
       } catch (error) {
+        const outcomeUnknown = isMutationOutcomeUnknownError(error);
+        if (outcomeUnknown) {
+          await evictCompanyOrchestrator(session.company_session_id);
+        }
         try {
           deps.appStudioStore.appendEvent(
             id,
             'decision.coordination_failed',
             'decision',
             String(decision.id),
-            JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+            JSON.stringify({
+              error: error instanceof Error ? error.message : String(error),
+              ...(outcomeUnknown ? { code: 'OUTCOME_UNKNOWN' } : {}),
+            }),
           );
         } catch { /* The durable decision remains authoritative. */ }
-        return c.json({ decision, coordination_resumed: false, warning: coordinationWarning });
+        return c.json({
+          decision,
+          coordination_resumed: false,
+          warning: outcomeUnknown
+            ? 'Decision saved, but App coordination delivery has an unknown outcome and was not replayed.'
+            : coordinationWarning,
+          code: outcomeUnknown ? 'OUTCOME_UNKNOWN' : 'MASTER_COORDINATION_FAILED',
+        });
       }
     }
     if (body.action === 'run_checks') {
@@ -365,7 +420,13 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
     }
     if (body.action === 'pause') {
       if (session.company_session_id) {
-        abortCompanyRuntime(session.company_session_id);
+        const abortResult = await abortCompanyRuntime(session.company_session_id);
+        if (!abortResult.ok && abortResult.reason === 'outcome_unknown') {
+          return c.json({
+            error: abortResult.error,
+            code: abortResult.code,
+          }, 500);
+        }
         deps.companyStore.updateCompanySessionStatus(session.company_session_id, 'paused');
       }
       deps.appStudioStore.appendEvent(id, 'build.paused', 'app', String(id));
@@ -373,14 +434,36 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
     }
     if (body.action === 'resume') {
       if (!session.company_session_id) return c.json({ error: 'The App team is unavailable.' }, 409);
-      const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
       const revision = deps.appStudioStore.getLatestPlanRevision(id);
       const hasOpenDecision = deps.appStudioStore.listDecisions(id).some((decision) => decision.status === 'open');
       const needsMasterCoordination = revision?.status !== 'approved' || hasOpenDecision;
-      if (needsMasterCoordination) {
-        await orchestrator.sendMessageToMaster(
-          '[App Studio] Retome a coordenação do plano e das decisões abertas. O scheduler cuida do despacho automático.',
-        );
+      try {
+        const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
+        if (needsMasterCoordination) {
+          const delivery = await orchestrator.sendMessageToMaster(
+            '[App Studio] Retome a coordenação do plano e das decisões abertas. O scheduler cuida do despacho automático.',
+          );
+          if (!delivery.ok) {
+            const interactionPending = delivery.pending === 'interactive_wait';
+            return c.json({
+              error: interactionPending
+                ? 'Master is waiting for an interactive answer'
+                : 'Master did not accept the coordination message',
+              code: interactionPending
+                ? 'INTERACTION_PENDING'
+                : 'MASTER_MESSAGE_NOT_ACCEPTED',
+            }, interactionPending ? 409 : 503);
+          }
+        }
+      } catch (error) {
+        const outcomeUnknown = isMutationOutcomeUnknownError(error);
+        if (outcomeUnknown) {
+          await evictCompanyOrchestrator(session.company_session_id);
+        }
+        return c.json({
+          error: error instanceof Error ? error.message : String(error),
+          code: outcomeUnknown ? 'OUTCOME_UNKNOWN' : 'MASTER_COORDINATION_FAILED',
+        }, outcomeUnknown ? 500 : 502);
       }
       deps.appStudioStore.appendEvent(
         id,
@@ -392,7 +475,15 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ ok: true });
     }
     if (body.action === 'cancel') {
-      if (session.company_session_id) abortCompanyRuntime(session.company_session_id);
+      if (session.company_session_id) {
+        const abortResult = await abortCompanyRuntime(session.company_session_id);
+        if (!abortResult.ok && abortResult.reason === 'outcome_unknown') {
+          return c.json({
+            error: abortResult.error,
+            code: abortResult.code,
+          }, 500);
+        }
+      }
       for (const item of deps.appStudioStore.listWorkItems(id)) {
         if (!['done', 'cancelled'].includes(item.status)) deps.appStudioStore.setWorkItemStatus(id, item.id, 'cancelled');
       }

@@ -17,7 +17,11 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
-import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
+import {
+  evictCompanyOrchestrator,
+  getCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import {
   isExternalProjectRuntime,
   resolveExternalProjectSpec,
@@ -127,7 +131,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
     const orch = getCompanyOrchestrator(id);
     try {
       if (orch) {
-        const binding = await orch.sandboxService.addService({
+        const binding = await orch.addSandboxService({
           serviceId: body.service_id,
           stack: body.stack as BuilderStack,
           name: body.name,
@@ -166,6 +170,22 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
         201,
       );
     } catch (e) {
+      if (orch && isMutationOutcomeUnknownError(e)) {
+        // Provisioning may have created the container before the worker's ACK
+        // was lost. Rolling back the linked project/workdir here would corrupt
+        // that possibly-live service, so preserve all durable inputs, fence the
+        // stale worker, and require explicit reconciliation by the operator.
+        await evictCompanyOrchestrator(id);
+        return c.json({
+          error:
+            'Service provisioning outcome is unknown because its worker ' +
+            'acknowledgement was lost; no destructive rollback was performed.',
+          code: 'OUTCOME_UNKNOWN',
+          service_id: body.service_id,
+          project_id: projectId,
+          root_path: rootPath,
+        }, 500);
+      }
       // Rollback: unlink FIRST (no FK cascade toward projects means a
       // bare deleteProject would leave an orphan row that the UI
       // renders as `project-<id>` in the sidebar forever), then drop

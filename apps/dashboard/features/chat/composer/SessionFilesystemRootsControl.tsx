@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, FolderKey, FolderOpen, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Eye, FileText, FolderKey, FolderOpen, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../../components/ui/button.js';
 import {
@@ -19,6 +19,7 @@ interface SessionFilesystemRoot {
   id: number;
   root_path: string;
   access: FilesystemAccess;
+  kind?: 'directory' | 'file';
 }
 
 interface RootsResponse {
@@ -177,24 +178,30 @@ export function SessionFilesystemRootsControl({
                 <div className="divide-y">
                   {roots.map((root) => (
                     <div key={root.id} className="flex min-w-0 items-center gap-2 px-2.5 py-2">
-                      {root.access === 'write'
+                      {root.kind === 'file'
+                        ? <FileText className="h-4 w-4 shrink-0 text-blue-500" />
+                        : root.access === 'write'
                         ? <Pencil className="h-4 w-4 shrink-0 text-amber-500" />
                         : <Eye className="h-4 w-4 shrink-0 text-blue-500" />}
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-mono text-xs" title={root.root_path}>{root.root_path}</div>
                         <div className="text-[10px] text-muted-foreground">
-                          {root.access === 'write' ? t('filesystemRoots.write') : t('filesystemRoots.read')}
+                          {root.kind === 'file'
+                            ? `${t('filesystemRoots.read')} · attachment`
+                            : root.access === 'write' ? t('filesystemRoots.write') : t('filesystemRoots.read')}
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy != null || streaming}
-                        onClick={() => void save(root.root_path, root.access === 'write' ? 'read' : 'write')}
-                      >
-                        {root.access === 'write' ? t('filesystemRoots.makeRead') : t('filesystemRoots.allowWrite')}
-                      </Button>
+                      {root.kind !== 'file' && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy != null || streaming}
+                          onClick={() => void save(root.root_path, root.access === 'write' ? 'read' : 'write')}
+                        >
+                          {root.access === 'write' ? t('filesystemRoots.makeRead') : t('filesystemRoots.allowWrite')}
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         size="icon"

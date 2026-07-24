@@ -538,7 +538,7 @@ export function mountCompanySessionRoutes(app: Hono, deps: ServerDeps): void {
     const orch = getCompanyOrchestrator(id);
     if (orch) {
       try {
-        orch.applyConfigPatch({
+        await orch.applyConfigPatch({
           role_assignments: normalizedRoleAssignments,
           skills: body.skills,
           allowed_models: body.allowed_models,

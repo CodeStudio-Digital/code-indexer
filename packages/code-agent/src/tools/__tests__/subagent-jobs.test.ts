@@ -3,7 +3,7 @@
  * cap, settle idempotence, event-driven waitAny (already-terminal, settle
  * wakeup, timeout, abort, empty, not_found), abortSession, and activity/TTL.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import { SubagentJobManager, type BackgroundAgentSlot } from '@mcp/code-agent/tools/subagent-jobs.js';
 
@@ -16,6 +16,10 @@ function slots(n = 1): BackgroundAgentSlot[] {
 let mgr: SubagentJobManager;
 let SID = 0;
 beforeEach(() => { mgr = new SubagentJobManager(); SID += 1; });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 function mk(jobId: string) {
   return mgr.create({ sessionId: SID, jobId, groupId: jobId, provider: 'p', model: 'm', agents: slots() });
@@ -56,6 +60,36 @@ describe('SubagentJobManager', () => {
     mgr.settle(j, 'second', { input_tokens: 9, output_tokens: 9 }, 'aborted');
     expect(j.status).toBe('done');
     expect(j.resultText).toBe('first');
+  });
+
+  it('keeps terminal jobs unresolved until their full result is collected', () => {
+    const j = mk('j1');
+    if ('error' in j) throw new Error('unexpected');
+    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(false);
+    mgr.settle(j, 'full result', usage, 'done');
+    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
+    mgr.markDelivery(j, 'notified');
+    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
+    mgr.markDelivery(j, 'collected');
+    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(false);
+  });
+
+  it('expires only collected terminals, never notified-but-uncollected results', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    vi.stubEnv('CODER_BACKGROUND_JOB_TTL_MS', '1000');
+    const notified = mk('notified');
+    const collected = mk('collected');
+    if ('error' in notified || 'error' in collected) throw new Error('unexpected');
+    mgr.settle(notified, 'full notified result', usage, 'done');
+    mgr.markDelivery(notified, 'notified');
+    mgr.settle(collected, 'full collected result', usage, 'done');
+    mgr.markDelivery(collected, 'collected');
+
+    vi.advanceTimersByTime(1001);
+    expect(mgr.get(SID, 'notified')).toBe(notified);
+    expect(mgr.get(SID, 'collected')).toBeNull();
+    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
   });
 
   it('waitAny returns immediately for an already-terminal job', async () => {

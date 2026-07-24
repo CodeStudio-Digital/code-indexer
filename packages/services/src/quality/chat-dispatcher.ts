@@ -1,6 +1,6 @@
 /**
  * pickChatFn — dispatches to the right chat adapter based on the
- * provider kind. Lets `LLMClassifier` stay provider-agnostic.
+ * provider kind so helper pipelines remain provider-agnostic.
  *
  * Mapping:
  *   - 'anthropic' / 'claude-code'  → anthropicChat (native Messages API)

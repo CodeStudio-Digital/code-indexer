@@ -4,11 +4,16 @@ import {
   asAgentRunAttemptId,
   asAgentRunId,
   asCorrelationId,
+  asRuntimeEventId,
   asSessionCommandId,
   asSessionId,
+  classifyCoderTerminalOutcome,
+  runtimeEventClass,
   type AgentRunId,
+  type ControlPlaneEventType,
   type SessionCommand,
   type SessionCommandKind,
+  type SessionCommandStatus,
 } from '@mcp/agent-runtime-contracts';
 import {
   hashControlPlanePayload,
@@ -30,9 +35,13 @@ export interface CoderControlPlaneShadowMetrics {
   leaseRenewals: number;
   writeErrors: number;
   lifecycleErrors: number;
+  divergences: number;
+  mirroredByClass: Record<string, number>;
+  appendLatency: { p50: number; p95: number; p99: number; samples: number };
+  queue: { depth: number; highWatermark: number; dropped: number };
 }
 
-const metrics: CoderControlPlaneShadowMetrics = {
+const metrics = {
   accepted: 0,
   existing: 0,
   payloadConflicts: 0,
@@ -43,10 +52,146 @@ const metrics: CoderControlPlaneShadowMetrics = {
   leaseRenewals: 0,
   writeErrors: 0,
   lifecycleErrors: 0,
+  divergences: 0,
+  queueHighWatermark: 0,
+  queueDropped: 0,
 };
 
+const mirroredByClass: Record<string, number> = {};
+const appendLatencies: number[] = [];
+const APPEND_LATENCY_BUFFER = 512;
+const DEFAULT_SHADOW_WRITE_QUEUE_CAP = 2_048;
+
+interface ShadowWriteJob {
+  label: string;
+  write: () => void;
+  resolve: () => void;
+}
+
+const shadowWriteQueue: ShadowWriteJob[] = [];
+const shadowDrainWaiters: Array<() => void> = [];
+let shadowWriteScheduled = false;
+let shadowWriteRunning = false;
+
+function shadowWriteQueueCap(): number {
+  const parsed = Number(process.env.CODER_RUNTIME_JOURNAL_QUEUE_CAP);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(32, Math.floor(parsed))
+    : DEFAULT_SHADOW_WRITE_QUEUE_CAP;
+}
+
+function resolveShadowDrainWaiters(): void {
+  if (shadowWriteRunning || shadowWriteQueue.length > 0) return;
+  while (shadowDrainWaiters.length > 0) shadowDrainWaiters.shift()?.();
+}
+
+function runNextShadowWrite(): void {
+  shadowWriteScheduled = false;
+  const job = shadowWriteQueue.shift();
+  if (!job) {
+    shadowWriteRunning = false;
+    resolveShadowDrainWaiters();
+    return;
+  }
+  shadowWriteRunning = true;
+  executeShadowWriteJob(job);
+  // One synchronous SQLite job per event-loop turn. This preserves FIFO while
+  // yielding between writes so worker bus publication/IPC is never trapped
+  // behind a large shadow-journal burst.
+  shadowWriteScheduled = true;
+  setImmediate(runNextShadowWrite);
+}
+
+function executeShadowWriteJob(job: ShadowWriteJob): void {
+  try {
+    measureAppend(job.write);
+  } catch (error) {
+    metrics.lifecycleErrors += 1;
+    console.warn(
+      `[control-plane-shadow] queued ${job.label} failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    job.resolve();
+  }
+}
+
+function scheduleShadowWritePump(): void {
+  if (shadowWriteScheduled || shadowWriteRunning) return;
+  shadowWriteScheduled = true;
+  setImmediate(runNextShadowWrite);
+}
+
+function enqueueShadowWrite(
+  label: string,
+  write: () => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const cap = shadowWriteQueueCap();
+    if (shadowWriteQueue.length >= cap) {
+      // Only observational journal projections enter this queue. Authority
+      // (claim/start/lease/terminal) is committed synchronously, so overload
+      // can safely shed this newest observation without unbounded growth.
+      metrics.queueDropped += 1;
+      resolve();
+      return;
+    }
+    shadowWriteQueue.push({ label, write, resolve });
+    metrics.queueHighWatermark = Math.max(metrics.queueHighWatermark, shadowWriteQueue.length);
+    scheduleShadowWritePump();
+  });
+}
+
+/** Wait until every write queued before this call has settled. */
+export function drainLocalCoderShadowWrites(): Promise<void> {
+  if (!shadowWriteRunning && shadowWriteQueue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => shadowDrainWaiters.push(resolve));
+}
+
+function recordAppendLatency(ms: number): void {
+  appendLatencies.push(ms);
+  if (appendLatencies.length > APPEND_LATENCY_BUFFER) {
+    appendLatencies.splice(0, appendLatencies.length - APPEND_LATENCY_BUFFER);
+  }
+}
+
+function measureAppend<T>(write: () => T): T {
+  const startedAt = performance.now();
+  try {
+    return write();
+  } finally {
+    recordAppendLatency(performance.now() - startedAt);
+  }
+}
+
+function appendLatencyPercentiles(): { p50: number; p95: number; p99: number; samples: number } {
+  const samples = appendLatencies.length;
+  if (samples === 0) return { p50: 0, p95: 0, p99: 0, samples: 0 };
+  const sorted = [...appendLatencies].sort((a, b) => a - b);
+  const pick = (p: number): number =>
+    sorted[Math.min(samples - 1, Math.max(0, Math.ceil((p / 100) * samples) - 1))];
+  return { p50: pick(50), p95: pick(95), p99: pick(99), samples };
+}
+
+function recordMirrored(eventClass: string, count = 1): void {
+  mirroredByClass[eventClass] = (mirroredByClass[eventClass] ?? 0) + count;
+}
+
+export function recordLocalCoderShadowDivergences(count: number): void {
+  metrics.divergences += count;
+}
+
 export function coderControlPlaneShadowEnabled(): boolean {
-  return process.env.CODER_CONTROL_PLANE_SHADOW === '1';
+  // Compatibility name: this now controls only the optional root AgentRun
+  // projection. SessionCommand acceptance/terminal state is always authoritative
+  // whenever the HTTP server's ControlPlaneStore is available.
+  // Child AgentRun enforcement requires the root run to be established
+  // synchronously with command acceptance. Opting into ENFORCE therefore
+  // enables this projection even when the audit-only root flag is omitted.
+  // The child shadow also needs a root parent row; treating it as an alias
+  // prevents every child spawn from degrading on a missing parent.
+  return process.env.CODER_CONTROL_PLANE_SHADOW === '1'
+    || process.env.CODER_AGENT_RUN_STORE_SHADOW === '1'
+    || process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
 }
 
 export function coderRuntimeJournalShadowEnabled(): boolean {
@@ -54,11 +199,27 @@ export function coderRuntimeJournalShadowEnabled(): boolean {
 }
 
 export function snapshotCoderControlPlaneShadowMetrics(): CoderControlPlaneShadowMetrics {
-  return { ...metrics };
+  const {
+    queueHighWatermark,
+    queueDropped,
+    ...baseMetrics
+  } = metrics;
+  return {
+    ...baseMetrics,
+    mirroredByClass: { ...mirroredByClass },
+    appendLatency: appendLatencyPercentiles(),
+    queue: {
+      depth: shadowWriteQueue.length + (shadowWriteRunning ? 1 : 0),
+      highWatermark: queueHighWatermark,
+      dropped: queueDropped,
+    },
+  };
 }
 
 export function resetCoderControlPlaneShadowMetricsForTests(): void {
-  for (const key of Object.keys(metrics) as Array<keyof CoderControlPlaneShadowMetrics>) metrics[key] = 0;
+  for (const key of Object.keys(metrics) as Array<keyof typeof metrics>) metrics[key] = 0;
+  for (const key of Object.keys(mirroredByClass)) delete mirroredByClass[key];
+  appendLatencies.length = 0;
 }
 
 function digest(value: string): string {
@@ -94,7 +255,7 @@ function stableCommandKey(input: {
 
 export interface LocalCoderMessageFingerprintInput {
   content?: string;
-  attachments?: Array<{ name: string; mediaType: string; base64?: string; text?: string }>;
+  attachments?: Array<{ name: string; mediaType: string; path?: string; base64?: string; text?: string }>;
   resume?: boolean;
   agent?: string | null;
   profile?: string | null;
@@ -111,6 +272,7 @@ export function fingerprintLocalCoderMessage(input: LocalCoderMessageFingerprint
     attachments: (input.attachments ?? []).map((attachment) => ({
       name: attachment.name,
       mediaType: attachment.mediaType,
+      pathHash: attachment.path ? digest(attachment.path) : null,
       contentHash: digest(attachment.base64 ?? attachment.text ?? ''),
       encodedChars: attachment.base64?.length ?? attachment.text?.length ?? 0,
     })),
@@ -123,6 +285,26 @@ export function fingerprintLocalCoderMessage(input: LocalCoderMessageFingerprint
     worktree: input.worktree
       ? { name: input.worktree.name ?? null, branch: input.worktree.branch ?? null }
       : null,
+  };
+}
+
+export function fingerprintLocalCompanyCommand(input: {
+  message: string;
+  attachments?: Array<{ name: string; mediaType: string; base64?: string; text?: string }>;
+  thinking?: boolean;
+  maxTurns?: number;
+}): Record<string, unknown> {
+  return {
+    messageHash: digest(input.message),
+    messageChars: input.message.length,
+    attachments: (input.attachments ?? []).map((attachment) => ({
+      nameHash: digest(attachment.name),
+      mediaType: attachment.mediaType,
+      contentHash: digest(attachment.base64 ?? attachment.text ?? ''),
+      encodedChars: attachment.base64?.length ?? attachment.text?.length ?? 0,
+    })),
+    thinking: input.thinking === true,
+    maxTurns: input.maxTurns ?? null,
   };
 }
 
@@ -146,14 +328,29 @@ export interface AcceptLocalCoderCommandInput {
 
 export interface LocalCoderShadowAcceptance {
   outcome: 'accepted' | 'existing' | 'payload_conflict' | 'version_conflict';
+  commandStatus?: SessionCommandStatus;
+  /** Durable terminal reason, used to replay typed outcomes such as ACK loss. */
+  commandReasonCode?: string;
+  /** Durable correlation used to prove that a live worker bus owns this command. */
+  agentRunId?: AgentRunId;
+  executionBusId?: string;
   commandContext?: ControlPlaneCommandContext;
   runContext?: ControlPlaneRunContext;
+}
+
+function commandExecutionBusId(command: { result?: unknown }): string | undefined {
+  if (!command.result || typeof command.result !== 'object') return undefined;
+  const busId = (command.result as { busId?: unknown }).busId;
+  return typeof busId === 'string' && busId.length > 0 ? busId : undefined;
 }
 
 export function acceptLocalCoderCommand(
   input: AcceptLocalCoderCommandInput,
 ): LocalCoderShadowAcceptance | null {
-  if (!coderControlPlaneShadowEnabled() || !input.store) return null;
+  // The command ledger is the idempotency authority, independently from the
+  // diagnostic shadow flags. Journal/AgentRun projections remain separately
+  // gated by their callers and ControlPlaneStore.journalEnabled.
+  if (!input.store) return null;
 
   const requestedAt = input.requestedAt ?? new Date().toISOString();
   const identity = stableCommandKey(input);
@@ -180,10 +377,15 @@ export function acceptLocalCoderCommand(
   const attemptId = asAgentRunAttemptId(`agent-run-attempt:coder:${identity.digest}:1`);
 
   try {
-    const result = input.store.acceptCommand({
+    const result = measureAppend(() => input.store!.acceptCommand({
       command,
       payloadHash: hashControlPlanePayload(command.payload),
       legacySessionId: input.legacySessionId,
+      // Before this contract was stabilized, the first POST /messages was
+      // persisted as `start` and later messages as `send_message`. Canonical
+      // non-resume requests are now always `send_message`, but an old first
+      // message must still win the same idempotency key during rolling upgrade.
+      idempotencyKindAliases: input.kind === 'send_message' ? ['start'] : undefined,
       linkedAgentRunId: input.linkedAgentRunId,
       run: input.createRun
         ? {
@@ -201,28 +403,48 @@ export function acceptLocalCoderCommand(
             executorExpiresAt: new Date(Date.parse(requestedAt) + EXECUTOR_LEASE_MS).toISOString(),
           }
         : undefined,
-    });
+    }));
 
-    if (result.kind === 'accepted') metrics.accepted += 1;
+    if (result.kind === 'accepted') {
+      metrics.accepted += 1;
+      recordMirrored('A', input.createRun ? 2 : 1);
+    }
     else if (result.kind === 'existing') metrics.existing += 1;
     else if (result.kind === 'payload_conflict') metrics.payloadConflicts += 1;
     else metrics.versionConflicts += 1;
 
     if (result.kind === 'payload_conflict' || result.kind === 'version_conflict') {
-      console.warn('[control-plane-shadow] command divergence', {
+      console.warn('[control-plane] command rejected', {
         sessionId: input.legacySessionId,
         kind: input.kind,
         outcome: result.kind,
       });
-      return { outcome: result.kind };
+      return {
+        outcome: result.kind,
+        ...('command' in result ? { commandStatus: result.command.status } : {}),
+        ...('command' in result && result.command.reasonCode
+          ? { commandReasonCode: result.command.reasonCode }
+          : {}),
+        ...('command' in result && result.command.agentRunId
+          ? { agentRunId: result.command.agentRunId }
+          : {}),
+        ...('command' in result && commandExecutionBusId(result.command)
+          ? { executionBusId: commandExecutionBusId(result.command) }
+          : {}),
+      };
     }
 
+    // A compatibility alias may return an older `start` row whose generated
+    // command/correlation ids differ from the new `send_message` identity.
+    // Every follow-up write must target the persisted winner, never the
+    // uninserted canonical candidate.
+    const persistedCommand = result.command;
     const commandContext: ControlPlaneCommandContext = {
-      sessionId,
-      legacySessionId: input.legacySessionId,
-      commandId,
-      correlationId,
-      actor,
+      sessionId: persistedCommand.sessionId,
+      legacySessionId: persistedCommand.legacySessionId ?? input.legacySessionId,
+      commandId: persistedCommand.commandId,
+      correlationId: persistedCommand.correlationId,
+      actor: persistedCommand.actor,
     };
     const runContext = input.createRun
       && result.agentRun
@@ -237,13 +459,113 @@ export function acceptLocalCoderCommand(
           fencingEpoch: result.attempt.executorLease.fencingEpoch,
         }
       : undefined;
-    return { outcome: result.kind, commandContext, runContext };
+    return {
+      outcome: result.kind,
+      commandStatus: result.command.status,
+      ...(result.command.reasonCode ? { commandReasonCode: result.command.reasonCode } : {}),
+      ...(result.command.agentRunId ? { agentRunId: result.command.agentRunId } : {}),
+      ...(commandExecutionBusId(result.command)
+        ? { executionBusId: commandExecutionBusId(result.command) }
+        : {}),
+      commandContext,
+      runContext,
+    };
   } catch (error) {
     metrics.writeErrors += 1;
     console.warn(
-      `[control-plane-shadow] command mirror failed session=${input.legacySessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane] command accept failed session=${input.legacySessionId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
+  }
+}
+
+export function acceptLocalCompanyCommand(input: {
+  store?: ControlPlaneStore | null;
+  companySessionId: number;
+  kind: Extract<SessionCommandKind, 'start' | 'resume'>;
+  idempotencyKey?: string | null;
+  fingerprint: Record<string, unknown>;
+  requestedAt?: string;
+}): LocalCoderShadowAcceptance | null {
+  if (!input.store) return null;
+  const requestedAt = input.requestedAt ?? new Date().toISOString();
+  const key = input.idempotencyKey ?? `server:${randomUUID()}`;
+  const identity = digest(`company:${input.companySessionId}:${input.kind}:${key}`);
+  const sessionId = asSessionId(`session:company:${input.companySessionId}`);
+  const commandId = asSessionCommandId(`command:company:${identity}`);
+  const correlationId = asCorrelationId(`correlation:company:${identity}`);
+  const actor = {
+    actorId: 'local-user',
+    actorType: 'user' as const,
+    source: 'company' as const,
+  };
+  const command: SessionCommand<Record<string, unknown>> = {
+    schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
+    commandId,
+    idempotencyKey: key,
+    kind: input.kind,
+    sessionId,
+    actor,
+    requestedAt,
+    correlationId,
+    payload: input.fingerprint,
+  };
+  try {
+    // Deliberately omit legacySessionId: company ids are not coder-session FKs.
+    const result = measureAppend(() => input.store!.acceptCommand({
+      command,
+      payloadHash: hashControlPlanePayload(command.payload),
+    }));
+    if (result.kind === 'payload_conflict' || result.kind === 'version_conflict') {
+      return {
+        outcome: result.kind,
+        ...('command' in result ? { commandStatus: result.command.status } : {}),
+        ...('command' in result && result.command.reasonCode
+          ? { commandReasonCode: result.command.reasonCode }
+          : {}),
+      };
+    }
+    const commandContext: ControlPlaneCommandContext = {
+      sessionId,
+      commandId,
+      correlationId,
+      actor,
+    };
+    return {
+      outcome: result.kind,
+      commandStatus: result.command.status,
+      ...(result.command.reasonCode ? { commandReasonCode: result.command.reasonCode } : {}),
+      ...(commandExecutionBusId(result.command)
+        ? { executionBusId: commandExecutionBusId(result.command) }
+        : {}),
+      commandContext,
+    };
+  } catch (error) {
+    metrics.writeErrors += 1;
+    console.warn(
+      `[control-plane] company command accept failed session=${input.companySessionId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
+}
+
+export function bindLocalCommandBus(
+  store: ControlPlaneStore | null | undefined,
+  acceptance: LocalCoderShadowAcceptance | null,
+  busId: string,
+): boolean {
+  if (!store || !acceptance?.commandContext) return false;
+  try {
+    measureAppend(() => store.bindCommandExecution(acceptance.commandContext!, busId));
+    acceptance.commandStatus = 'running';
+    acceptance.executionBusId = busId;
+    return true;
+  } catch (error) {
+    metrics.writeErrors += 1;
+    console.warn(
+      `[control-plane] command bus binding failed command=${acceptance.commandContext.commandId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
   }
 }
 
@@ -252,18 +574,24 @@ export function terminalizeLocalCoderCommand(
   acceptance: LocalCoderShadowAcceptance | null,
   input: { status: 'succeeded' | 'failed' | 'cancelled'; reason: string; errorRef?: string },
 ): void {
+  // Command terminal state is part of idempotency authority, not a shadow
+  // projection. Keep it synchronous so a racing retry observes the terminal
+  // result before any in-memory fallback can re-enter the side-effect path.
   if (!store || !acceptance?.commandContext) return;
   try {
-    store.terminalizeCommand({
-      context: acceptance.commandContext,
+    measureAppend(() => store.terminalizeCommand({
+      context: acceptance.commandContext!,
       status: input.status,
       reason: input.reason,
       errorRef: input.errorRef,
-    });
+    }));
+    acceptance.commandStatus = input.status;
+    acceptance.commandReasonCode = input.reason;
+    recordMirrored('A');
   } catch (error) {
     metrics.lifecycleErrors += 1;
     console.warn(
-      `[control-plane-shadow] command terminal mirror failed command=${acceptance.commandContext.commandId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane] command terminalization failed command=${acceptance.commandContext.commandId}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -274,13 +602,17 @@ export function markLocalCoderRunStarted(
   runnerRunId?: string,
 ): void {
   if (!store || !context) return;
+  // This transition establishes runner_run_id → AgentRun resolution used by
+  // child fencing. It is authority, not observational journal traffic, so it
+  // must be committed before a following tool/subagent event can overtake it.
   try {
-    store.markRunStarted(context, runnerRunId);
+    measureAppend(() => store.markRunStarted(context, runnerRunId));
     metrics.runsStarted += 1;
+    recordMirrored('C');
   } catch (error) {
     metrics.lifecycleErrors += 1;
     console.warn(
-      `[control-plane-shadow] run-start mirror failed run=${context.agentRunId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane-agent-run] start failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -289,20 +621,22 @@ export function renewLocalCoderRunLease(
   store: ControlPlaneStore | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   at = new Date().toISOString(),
-): void {
-  if (!store || !context) return;
+): boolean {
+  if (!store || !context) return false;
   try {
-    store.runs.renewAttemptLease(
-      context,
-      new Date(Date.parse(at) + EXECUTOR_LEASE_MS).toISOString(),
-      at,
-    );
+    measureAppend(() => store.runs.renewAttemptLease(
+        context,
+        new Date(Date.parse(at) + EXECUTOR_LEASE_MS).toISOString(),
+        at,
+      ));
     metrics.leaseRenewals += 1;
+    return true;
   } catch (error) {
     metrics.lifecycleErrors += 1;
     console.warn(
-      `[control-plane-shadow] lease renewal failed run=${context.agentRunId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane-agent-run] lease renewal failed: ${error instanceof Error ? error.message : String(error)}`,
     );
+    return false;
   }
 }
 
@@ -316,32 +650,82 @@ export function mirrorLocalCoderToolBoundary(
     value?: unknown;
     durationMs?: number;
   },
-): void {
-  if (!store || !context || !coderRuntimeJournalShadowEnabled()) return;
-  try {
+): Promise<void> {
+  if (!store || !context || !coderRuntimeJournalShadowEnabled()) return Promise.resolve();
+  // Reduce before enqueueing: the backlog must never retain raw tool input or
+  // result objects, even transiently. This mirrors ClaudeOpen's hook/event
+  // boundary, where transport carries metadata rather than capability data.
+  const valueHash = opaqueValueHash(input.value);
+  const durationMs = input.durationMs ?? null;
+  const phase = input.phase;
+  const toolUseId = input.toolUseId;
+  const toolName = input.toolName;
+  return enqueueShadowWrite(`tool-${input.phase}`, () => {
     store.appendToolBoundary({
       context,
-      toolUseId: input.toolUseId,
-      toolName: input.toolName,
-      phase: input.phase,
+      toolUseId,
+      toolName,
+      phase,
       payload: {
-        valueHash: opaqueValueHash(input.value),
-        durationMs: input.durationMs ?? null,
+        valueHash,
+        durationMs,
       },
     });
     metrics.toolBoundaries += 1;
-  } catch (error) {
-    metrics.lifecycleErrors += 1;
-    console.warn(
-      `[control-plane-shadow] tool boundary mirror failed run=${context.agentRunId} tool=${input.toolName}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+    recordMirrored('B');
+  });
+}
+
+/**
+ * Generic lifecycle mirror for the extended A–C runner vocabulary (approvals,
+ * interactions, provider/compaction transitions, workflow/agents/worktree).
+ * Payloads must already be reduced to ids/hashes/counts by the caller — the
+ * redaction metadata records exactly which keys were projected.
+ */
+export function mirrorLocalCoderLifecycleEvent(
+  store: ControlPlaneStore | null | undefined,
+  context: ControlPlaneRunContext | null | undefined,
+  input: {
+    type: ControlPlaneEventType;
+    payload: Record<string, unknown>;
+    idempotencyKey?: string;
+    occurredAt?: string;
+  },
+): Promise<void> {
+  if (!store || !context || !coderRuntimeJournalShadowEnabled()) return Promise.resolve();
+  // Compute hashes before enqueueing so the closure holds only the redacted,
+  // bounded projection and stable identity — never the raw worker payload.
+  const occurredAt = input.occurredAt ?? new Date().toISOString();
+  const eventClass = runtimeEventClass(input.type);
+  const eventKey = input.idempotencyKey ?? opaqueValueHash(input.payload);
+  return enqueueShadowWrite(`lifecycle:${input.type}`, () => {
+    store.journal.append({
+        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
+        eventId: asRuntimeEventId(`evt:${context.agentRunId}:${input.type}:${eventKey}`),
+        eventClass,
+        partitionKey: context.sessionId,
+        sessionId: context.sessionId,
+        legacySessionId: context.legacySessionId,
+        commandId: context.commandId,
+        agentRunId: context.agentRunId,
+        attemptId: context.attemptId,
+        causationId: context.commandId,
+        correlationId: context.correlationId,
+        type: input.type,
+        occurredAt,
+        actor: context.actor,
+        payload: input.payload,
+        idempotencyKey: `lifecycle:${context.agentRunId}:${input.type}:${eventKey}`,
+        redaction: { policyVersion: 'control-plane-shadow-v1', fields: Object.keys(input.payload), secretRefs: [] },
+    });
+    recordMirrored(eventClass);
+  });
 }
 
 function terminalStatus(input: {
   event: 'done' | 'error';
   data: unknown;
-  mode?: 'normal' | 'worker_crash' | 'worker_start_failure' | 'evicted';
+  mode?: 'normal' | 'worker_crash' | 'worker_start_failure' | 'evicted' | 'authority_lost';
 }): {
   runStatus: 'completed' | 'failed' | 'aborted' | 'interrupted';
   commandStatus: 'succeeded' | 'failed' | 'cancelled';
@@ -358,11 +742,13 @@ function terminalStatus(input: {
       ? 'worker-crashed'
       : input.mode === 'worker_start_failure'
         ? 'worker-runFresh-failed'
-        : input.mode === 'evicted'
-          ? 'worker-evicted'
-          : input.event === 'error'
-            ? 'error'
-            : 'completed';
+      : input.mode === 'evicted'
+        ? 'worker-evicted'
+        : input.mode === 'authority_lost'
+          ? 'control-plane-authority-lost'
+        : input.event === 'error'
+          ? 'error'
+          : 'completed';
   const rawError = typeof data.error === 'string'
     ? data.error
     : typeof data.message === 'string'
@@ -374,17 +760,26 @@ function terminalStatus(input: {
     input.mode === 'worker_crash'
     || input.mode === 'worker_start_failure'
     || input.mode === 'evicted'
+    || input.mode === 'authority_lost'
   ) {
     return { runStatus: 'interrupted', commandStatus: 'failed', reason, errorRef, leaseStatus: 'fenced' };
   }
-  if (reason === 'aborted') {
+  const terminal = classifyCoderTerminalOutcome({
+    event: input.event,
+    reason,
+    error: data.error,
+    message: data.message,
+  });
+  if (terminal.classification === 'cancelled') {
     return { runStatus: 'aborted', commandStatus: 'cancelled', reason, errorRef, leaseStatus: 'released' };
   }
-  const failed = input.event === 'error'
-    || ['error', 'recovery_capped', 'doom_loop', 'compact_failure', 'compact_exhausted'].includes(reason);
-  return failed
-    ? { runStatus: 'failed', commandStatus: 'failed', reason, errorRef, leaseStatus: 'released' }
-    : { runStatus: 'completed', commandStatus: 'succeeded', reason, errorRef, leaseStatus: 'released' };
+  if (terminal.classification === 'interrupted') {
+    return { runStatus: 'interrupted', commandStatus: 'failed', reason, errorRef, leaseStatus: 'released' };
+  }
+  if (terminal.classification === 'failed') {
+    return { runStatus: 'failed', commandStatus: 'failed', reason, errorRef, leaseStatus: 'released' };
+  }
+  return { runStatus: 'completed', commandStatus: 'succeeded', reason, errorRef, leaseStatus: 'released' };
 }
 
 export function terminalizeLocalCoderRun(
@@ -393,34 +788,42 @@ export function terminalizeLocalCoderRun(
   input: {
     event: 'done' | 'error';
     data: unknown;
-    mode?: 'normal' | 'worker_crash' | 'worker_start_failure' | 'evicted';
+    mode?: 'normal' | 'worker_crash' | 'worker_start_failure' | 'evicted' | 'authority_lost';
   },
 ): void {
   if (!store || !context) return;
   const terminal = terminalStatus(input);
-  try {
-    const terminalInput = {
+  const terminalInput = {
       context,
       status: terminal.runStatus,
       commandStatus: terminal.commandStatus,
       reason: terminal.reason,
       errorRef: terminal.errorRef,
       attemptLeaseStatus: terminal.leaseStatus,
-    };
-    if (
-      input.mode === 'worker_crash'
-      || input.mode === 'worker_start_failure'
-      || input.mode === 'evicted'
-    ) {
-      store.interruptRun(terminalInput);
-    } else {
-      store.terminalizeRun(terminalInput);
-    }
+  };
+  // Run + command terminal state is idempotency authority. CoderWorkerPool
+  // marks/publishes the bus terminal first, then calls this synchronously so a
+  // retry in the next turn cannot observe stale `running`.
+  try {
+    measureAppend(() => {
+      if (
+        input.mode === 'worker_crash'
+        || input.mode === 'worker_start_failure'
+        || input.mode === 'evicted'
+        || input.mode === 'authority_lost'
+      ) {
+        store.interruptRun(terminalInput);
+      } else {
+        store.terminalizeRun(terminalInput);
+      }
+    });
     metrics.runsTerminalized += 1;
+    recordMirrored('A');
+    recordMirrored('C');
   } catch (error) {
     metrics.lifecycleErrors += 1;
     console.warn(
-      `[control-plane-shadow] run terminal mirror failed run=${context.agentRunId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane-agent-run] terminalization failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

@@ -15,7 +15,7 @@ import { cn } from '../../lib/utils.js';
  */
 interface GoalSummary {
   text: string;
-  status: 'in_progress' | 'complete';
+  status: 'in_progress' | 'complete' | 'superseded';
   budget_tokens: number | null;
   completion_note: string | null;
   created_at: string;
@@ -77,7 +77,14 @@ export function SessionStateBanner({ sessionId, refreshKey, onActiveTaskChange }
     <div className="border-b bg-muted/30 px-3 sm:px-5 py-2 flex flex-col gap-1.5 text-xs">
       {goal && (
         <div className="flex items-start gap-2">
-          <Target className={cn('h-3.5 w-3.5 shrink-0 mt-0.5', goal.status === 'complete' ? 'text-success' : 'text-warning')} />
+          <Target className={cn(
+            'h-3.5 w-3.5 shrink-0 mt-0.5',
+            goal.status === 'complete'
+              ? 'text-success'
+              : goal.status === 'superseded'
+                ? 'text-muted-foreground'
+                : 'text-warning',
+          )} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-semibold uppercase tracking-wider text-muted-foreground">
@@ -88,10 +95,16 @@ export function SessionStateBanner({ sessionId, refreshKey, onActiveTaskChange }
                   'px-1.5 py-0.5 rounded text-[10px] font-medium',
                   goal.status === 'complete'
                     ? 'bg-success/15 text-success'
-                    : 'bg-warning/15 text-warning',
+                    : goal.status === 'superseded'
+                      ? 'bg-muted text-muted-foreground'
+                      : 'bg-warning/15 text-warning',
                 )}
               >
-                {goal.status === 'complete' ? t('chat:state.goalDone') : t('chat:state.goalActive')}
+                {goal.status === 'complete'
+                  ? t('chat:state.goalDone')
+                  : goal.status === 'superseded'
+                    ? t('chat:state.goalSuperseded')
+                    : t('chat:state.goalActive')}
               </span>
               {goal.budget_tokens != null && (
                 <span className="text-muted-foreground">

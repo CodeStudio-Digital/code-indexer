@@ -13,6 +13,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { AsyncOperationRegistry } from '../../operations.js';
 import { NoProgressTracker } from '../../guards/no-progress.js';
+import type { HookBus } from '@mcp/code-agent/core/hook-bus.js';
 
 export interface RecordedEvent<E extends keyof RunnerEvents = keyof RunnerEvents> {
   event: E;
@@ -41,6 +42,7 @@ export interface MakeCtxOverrides {
   registry?: ToolRegistry;
   /** Inject a ToolContext — overrides the default empty stub. */
   toolContext?: ToolContext;
+  hookBus?: HookBus;
 }
 
 function makeMockProvider(name: string, model: string): ChatProvider {
@@ -75,6 +77,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       registry: overrides.registry ?? ({} as never),
       systemPrompt: 'sys',
       toolContext: overrides.toolContext ?? ({} as never),
+      hookBus: overrides.hookBus,
     } as never,
     emit,
     messages: [],
@@ -89,14 +92,30 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     pinnedTools: new Set<string>(),
     terseDescriptionsLock: null,
     recovery: new Map(),
+    transientRetriesThisTurn: 0,
+    providerAttempts: 0,
+    consecutiveLargePromptCacheMisses: 0,
+    cacheMissGuardError: null,
     dupCalls: new Map(),
     noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
     planNudges: 0,
+    goalLifecycle: {
+      ledgerStartSeq: overrides.toolContext?.toolCallLedger?.lastSeq ?? 0,
+      createdGoalInRun: false,
+      missingNudges: 0,
+      inProgressNudges: 0,
+      preDispatchPending: new Map<string, number>(),
+    },
+    verification: {
+      ledgerStartSeq: overrides.toolContext?.toolCallLedger?.lastSeq ?? 0,
+      nudges: 0,
+    },
     lastStrategyNudgeTurnByKey: new Map(),
     goalVerifyAttempts: 0,
+    goalVerifyEvidenceFingerprint: null,
     estimateCalibration: null,
     // Perf W1 — precompute/memo slots start empty like production context.
     summaryPrecompute: null,

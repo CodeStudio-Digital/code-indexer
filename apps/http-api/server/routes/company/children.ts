@@ -21,8 +21,12 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import {
+  evictCompanyOrchestrator,
+  getCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { publish as busPublish } from '../../../coder-bus.js';
 
 interface CreateChildBody { name: string }
@@ -59,9 +63,25 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     // Prefer the live orchestrator so the metaBus event is published to
     // any open SSE consumers; fall back to direct store when dormant.
     const orch = getCompanyOrchestrator(id);
-    const child = orch
-      ? orch.createChildSession(name)
-      : companyStore.createChildSession({ parent_session_id: id, name });
+    let child: ReturnType<typeof companyStore.createChildSession>;
+    if (orch) {
+      try {
+        child = await orch.createChildSession(name);
+      } catch (error) {
+        if (isMutationOutcomeUnknownError(error)) {
+          await evictCompanyOrchestrator(id);
+          return c.json({
+            error:
+              'Sub-session creation outcome is unknown because its worker ' +
+              'acknowledgement was lost; the mutation was not replayed.',
+            code: 'OUTCOME_UNKNOWN',
+          }, 500);
+        }
+        throw error;
+      }
+    } else {
+      child = companyStore.createChildSession({ parent_session_id: id, name });
+    }
     return c.json(child, 201);
   });
 
@@ -78,8 +98,24 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     if (!name) return c.json({ error: 'name is required' }, 400);
 
     const orch = getCompanyOrchestrator(id);
-    if (orch) orch.renameChildSession(childId, name);
-    else companyStore.renameCompanySession(childId, name);
+    if (orch) {
+      try {
+        await orch.renameChildSession(childId, name);
+      } catch (error) {
+        if (isMutationOutcomeUnknownError(error)) {
+          await evictCompanyOrchestrator(id);
+          return c.json({
+            error:
+              'Sub-session rename outcome is unknown because its worker ' +
+              'acknowledgement was lost.',
+            code: 'OUTCOME_UNKNOWN',
+          }, 500);
+        }
+        throw error;
+      }
+    } else {
+      companyStore.renameCompanySession(childId, name);
+    }
 
     return c.json(companyStore.getCompanySession(childId));
   });
@@ -100,11 +136,11 @@ export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
     const childOrch = getCompanyOrchestrator(childId);
     if (childOrch) {
       try {
-        childOrch.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
+        await childOrch.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
       } catch (e) {
         console.warn(`[company/children] abortAll failed for ${childId}:`, e instanceof Error ? e.message : String(e));
       }
-      deleteCompanyOrchestrator(childId);
+      await evictCompanyOrchestrator(childId);
     }
     try {
       companyStore.archiveCompanySession(childId, {

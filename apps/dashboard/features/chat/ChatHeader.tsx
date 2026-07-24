@@ -5,6 +5,7 @@ import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/us
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
+import { promptCacheHitRatio, promptInputTokens } from './prompt-cache-metrics.js';
 import { providerAccent, providerLabel, projectColor, workspaceColor } from './constants.js';
 import type { CoderSession, CoderSessionStats, LinkedProject } from './types.js';
 import { formatDuration } from './utils.js';
@@ -332,7 +333,14 @@ function StatsTooltip({
   const totalOut = session.total_output_tokens;
   const totalCR = session.total_cache_read_tokens ?? 0;
   const totalCW = session.total_cache_creation_tokens ?? 0;
-  const hitRate = totalIn > 0 ? Math.round((totalCR / totalIn) * 100) : 0;
+  const usage = {
+    provider: session.provider,
+    inputTokens: totalIn,
+    cacheReadTokens: totalCR,
+    cacheCreationTokens: totalCW,
+  };
+  const promptInput = promptInputTokens(usage);
+  const hitRate = Math.round((promptCacheHitRatio(usage) ?? 0) * 100);
   const savedTokens = Math.round(totalCR * 0.5);
   const { t } = useTranslation('chat');
   return (
@@ -369,7 +377,7 @@ function StatsTooltip({
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
         <span>{t('header.totalInput')}</span>
-        <span className="text-right">{totalIn.toLocaleString()}</span>
+        <span className="text-right">{promptInput.toLocaleString()}</span>
         <span>{t('header.output')}</span>
         <span className="text-right">{totalOut.toLocaleString()}</span>
         <span>{t('header.cacheRead')}</span>

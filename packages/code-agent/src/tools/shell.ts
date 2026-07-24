@@ -145,6 +145,7 @@ function isReadOnlyCommand(cmd: string): { ok: true } | { ok: false; reason: str
 
 const runCommandTool: CoderTool = {
   name: 'run_command',
+  effectBoundary: 'shell',
   description: maybeTerse(RUN_COMMAND_DESC),
   source: 'native',
   outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },

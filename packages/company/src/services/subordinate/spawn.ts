@@ -474,6 +474,9 @@ export async function spawnSubordinate(
   };
   deps.subordinates.set(agentRun.id, subordinateHandle);
 
+  // Complete the two-phase meta-bus wiring now that transcriptFlushed exists.
+  // MetaBusWirer dedupes the live listeners installed by onRunnerReady.
+  deps.wirer.wire(handle, spec.role, agentRun.id);
   attachSubordinateCompletionHandler(handle, agentRun.id, spec.role, false, deps.completionDeps);
 
   // Phase 2.1 — ensure the supervisor's runner-event listeners are

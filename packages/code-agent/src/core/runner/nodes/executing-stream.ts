@@ -139,6 +139,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   // Until the first delta arrives, use the generous first-byte budget; after
   // that, the tighter inter-delta idle budget governs gaps.
   let receivedAny = false;
+  let receivedTerminal = false;
 
   while (true) {
     if (args.signal?.aborted) {
@@ -252,6 +253,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
 
       case 'done':
         lastNonThinkingAt = Date.now();
+        receivedTerminal = true;
         stopReason = delta.stop_reason ?? 'unknown';
         break;
 
@@ -267,8 +269,30 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     }
   }
 
-  // Flush trailing buffers in case the stream ended without an explicit
-  // boundary (some providers don't emit `done` cleanly).
+  // EOF is not a successful provider response by itself. Accepting partial
+  // text/tool deltas without the protocol terminal made connection drops look
+  // like completed turns and could dispatch an incomplete tool call. Claude's
+  // runtime likewise classifies a stream that ends without its result event as
+  // `stream_ended_no_result`.
+  if (!receivedTerminal) {
+    const error = new Error(
+      'provider stream ended before the terminal result event (stream_ended_no_result)',
+    );
+    error.name = 'ProviderStreamProtocolError';
+    Object.assign(error, {
+      status: 502,
+      code: 'stream_ended_no_result',
+      reason: 'stream_ended_no_result',
+      // Sanitized transport metadata may still prove the physical HTTP status
+      // and request id even though the application-level result was missing.
+      responseMeta,
+      generationId: responseId,
+    });
+    throw error;
+  }
+
+  // Flush trailing buffers after the provider has explicitly committed the
+  // response with `done`.
   if (currentText) textBlocks.push(currentText);
   if (currentThinking) thinkingBlocks.push(currentThinking);
 

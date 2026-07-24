@@ -18,6 +18,10 @@ export async function mirrorSpecToCompanyDrive(
 ): Promise<{ mirrored: boolean; drivePath?: string; scopeKey?: string }> {
   const company = ctx.companyContext;
   if (!company) return { mirrored: false };
+  // The company drive is a second physical boundary that does not yet expose
+  // lease-aware writes. Under AgentRun enforcement, keep the repo artifact as
+  // the sole source of truth instead of performing an unfenced mirror.
+  if (ctx.mutationFence?.mode === 'enforce') return { mirrored: false };
   try {
     const drive = company.orchestrator.driveStore;
     const scopeKey = drive.resolveScopeKey();

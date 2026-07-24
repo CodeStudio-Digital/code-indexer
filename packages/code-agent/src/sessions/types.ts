@@ -15,7 +15,7 @@ export type CoderExecutionMode = 'standard' | 'ultra';
 
 export type SessionFilesystemAccess = 'read' | 'write';
 
-/** A host directory explicitly authorized for one coder session. */
+/** A host directory, or exact read-only attached file, authorized for one coder session. */
 export interface SessionFilesystemRoot {
   id: number;
   session_id: number;
@@ -150,8 +150,11 @@ export interface CoderSession {
    * Cached task-preflight seed (migration 180), JSON of `PreflightSeed`. Set by
    * the http-api on a FRESH session's first POST and reused on subsequent fresh
    * POSTs so the pre-analysis runs at most once while the agent still receives
-   * the `<preflight>` hint. NULL when no preflight ran. Obsolete once the
-   * session has its first persisted message.
+   * the `<preflight>` hint. New envelopes may also carry a versioned
+   * goal-lifecycle authority marker so an interrupted first objective can be
+   * resumed safely. NULL when no preflight ran. Profile/pins/hints become
+   * obsolete after the first persisted message; only a marked taskKind may be
+   * rehydrated while the original goal remains pending.
    */
   preflight_seed_json: string | null;
   /**

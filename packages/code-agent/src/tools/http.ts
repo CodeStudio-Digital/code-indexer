@@ -12,6 +12,10 @@
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import {
+  assertMutationFence,
+  combinedMutationSignal,
+} from '@mcp/code-agent/core/mutation-fence.js';
 import { READ_CAP, type CookieJar, createJar, isLoopbackHost, sendHttp } from '@mcp/shared/utils/http-engine.js';
 
 const MAX_HTTP_READ_BYTES = 5 * 1024 * 1024;
@@ -36,6 +40,7 @@ function jarFor(ctx: ToolContext): CookieJar {
 
 export const httpRequestTool: CoderTool = {
   name: 'http_request',
+  effectBoundary: 'network',
   description:
     'Make a real HTTP/HTTPS request to a LIVE backend (localhost OR remote) to test an API — method + headers + JSON/body, returns status, headers and body. ' +
     'Keeps a per-session COOKIE JAR so login flows work: POST /login then GET /me stays authenticated without re-sending the cookie. ' +
@@ -72,7 +77,6 @@ export const httpRequestTool: CoderTool = {
 
     const method = String(args.method ?? 'GET').toUpperCase();
     const jar = jarFor(ctx);
-    if (args.resetCookies) jar.delete(url.host);
 
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries((args.headers as Record<string, unknown>) ?? {})) headers[k] = String(v);
@@ -86,6 +90,12 @@ export const httpRequestTool: CoderTool = {
       const maxBytes = Number.isFinite(requestedMaxBytes)
         ? Math.min(MAX_HTTP_READ_BYTES, Math.max(1024, Math.floor(requestedMaxBytes)))
         : READ_CAP;
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'network',
+        operation: method,
+        resource: url.href,
+      });
+      if (args.resetCookies) jar.delete(url.host);
       res = await sendHttp({
         url,
         method,
@@ -96,7 +106,7 @@ export const httpRequestTool: CoderTool = {
         timeoutMs: Number(args.timeoutMs ?? 30_000),
         maxBytes,
         jar,
-        signal: ctx.signal,
+        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
       });
     } catch (e) {
       return err(`http_request failed: ${e instanceof Error ? e.message : String(e)}`);

@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { SemanticStore } from '@mcp/store/semantic-store.js';
 import { createDurableSemanticMutationSink } from '@mcp/services/semantic-mutation-sink.js';
-import { runTerminalQualityAssessment } from '@mcp/code-agent/terminal-quality.js';
 import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { coderToolOutputsBaseDir } from '@mcp/shared/utils/data-paths.js';
@@ -13,7 +12,13 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
+import {
+  hasLegacyMissingGoalCompletionAttempt,
+  markGoalLifecycleIntentCache,
+  resolveGoalLifecycleAuthority,
+} from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
 import type {
   CompactionCheckpoint,
   CompactionCheckpointResult,
@@ -30,6 +35,10 @@ import {
   type SessionExecutionPolicy,
 } from '@mcp/code-agent/sessions/execution-mode.js';
 import { recordSessionEvent } from '@mcp/code-agent/sessions/store/events-recorder.js';
+import type {
+  PersistedGoalMutation,
+  PersistedGoalSnapshot,
+} from '@mcp/code-agent/sessions/store/goal-mutations.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import {
   persistChapterCheckpoint,
@@ -49,6 +58,8 @@ import {
 } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
+import { buildVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
+import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import { canonicalizeExternalRoot } from '@mcp/code-agent/tools/paths.js';
@@ -87,7 +98,15 @@ import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
 import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js';
 import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
-import { runVerifyCompletionSubagent } from '@mcp/code-agent/tools/verify-completion-subagent.js';
+import {
+  resolveGoalVerificationScope,
+  runVerifyCompletionSubagent,
+  shouldEnableGoalCompletionVerifier,
+} from '@mcp/code-agent/tools/verify-completion-subagent.js';
+import {
+  formatVerificationReadiness,
+  type VerificationReadiness,
+} from '@mcp/code-agent/core/runner/nodes/executing-verification-gate.js';
 import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
 import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
@@ -126,6 +145,7 @@ import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
 import { withCompanyToolsMetadata } from '@mcp/company/tools/metadata.js';
 import { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
 import { registerCompanyHooks } from '@mcp/code-agent/core/company-hooks.js';
+import { createRuntimeHookBus } from '@mcp/code-agent/core/hook-bus.js';
 import {
   contextualTiersForRuntime,
   profileToTiers,
@@ -145,6 +165,7 @@ import {
 } from '@mcp/code-agent/core/runner/assembly/union-memory.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
+import { classifyIntent } from '@mcp/code-agent/agents/task-intent.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
@@ -1301,6 +1322,50 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try { return registry.get(name)?.repeatable === true; } catch { return false; }
     },
   });
+  type DurableGoalState = NonNullable<ReturnType<SessionStore['getSessionGoal']>>;
+  const toPersistedGoalSnapshot = (goal: DurableGoalState): PersistedGoalSnapshot => ({
+    text: goal.text,
+    status: goal.status,
+    budget_tokens: goal.budgetTokens,
+    completion_note: goal.completionNote,
+    created_at: goal.createdAt,
+    updated_at: goal.updatedAt,
+  });
+  // Every create/update is staged until the assistant/tool-result turn is
+  // persisted. The store applies the ordered mutations with their successful
+  // tool rows in one SQLite transaction. This also makes the canonical pivot
+  // batch (supersede old + create replacement) one crash-safe state change.
+  const stagedGoalMutations = new Map<
+    string,
+    { goal: DurableGoalState; mutation: PersistedGoalMutation }
+  >();
+  let flushChain: Promise<void> = Promise.resolve();
+  let criticalGoalPersistenceError: Error | null = null;
+  const latestStagedGoal = (): DurableGoalState | null => {
+    let latest: DurableGoalState | null = null;
+    for (const staged of stagedGoalMutations.values()) latest = staged.goal;
+    return latest;
+  };
+  const onGoalDurablyPersisted = (goal: DurableGoalState): void => {
+    if (autoCapture.onGoalUpserted(goal)) {
+      runnerRef?.requestMilestoneCompaction('milestone:goal-completed');
+    }
+    if (goal.status !== 'in_progress') return;
+    try {
+      const clearedCache = markGoalLifecycleIntentCache(
+        session.preflight_seed_json,
+        undefined,
+        { required: false },
+      );
+      if (clearedCache !== session.preflight_seed_json) {
+        store.setSessionPreflightSeed(session.id, clearedCache);
+        session = { ...session, preflight_seed_json: clearedCache };
+      }
+    } catch {
+      // Best-effort cleanup. The marker also records its timestamp, so a
+      // persisted goal created afterward proves it was satisfied.
+    }
+  };
 
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
@@ -1460,22 +1525,45 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     getGoalState: () => {
+      const staged = latestStagedGoal();
+      if (staged) return staged;
       try {
         return store.getSessionGoal(session.id);
       } catch (e) {
         console.warn(`[coder] getSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
-        return null;
+        throw e;
       }
     },
-    upsertGoalState: (goal) => {
-      try {
-        store.upsertSessionGoal(session.id, goal);
-        if (autoCapture.onGoalUpserted(goal)) {
-          runnerRef?.requestMilestoneCompaction('milestone:goal-completed');
-        }
-      } catch (e) {
-        console.warn(`[coder] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
+    upsertGoalState: async (goal, attribution) => {
+      const durableGoal: DurableGoalState = {
+        ...goal,
+        budgetTokens: goal.budgetTokens ?? null,
+        completionNote: goal.completionNote ?? null,
+      };
+      const goalToolUseId = attribution.toolUseId;
+      if (!goalToolUseId) {
+        throw new Error(
+          'goal persistence requires a direct attributed tool_use id',
+        );
       }
+      let previousGoal = latestStagedGoal();
+      if (!previousGoal) {
+        try {
+          previousGoal = store.getSessionGoal(session.id);
+        } catch (e) {
+          console.warn(`[coder] getSessionGoal before mutation failed: ${e instanceof Error ? e.message : String(e)}`);
+          throw e;
+        }
+      }
+      stagedGoalMutations.set(goalToolUseId, {
+        goal: durableGoal,
+        mutation: {
+          tool_use_id: goalToolUseId,
+          tool_name: attribution.toolName,
+          expected: previousGoal ? toPersistedGoalSnapshot(previousGoal) : null,
+          next: toPersistedGoalSnapshot(durableGoal),
+        },
+      });
     },
     getTasksState: () => {
       try {
@@ -1582,6 +1670,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     companyContext: opts.companyContext,
     // Coder session id — keys per-agent resources (preview/devtools window).
     sessionId: session.id,
+    // Host-established opaque AgentRun identity. It exists before the worker
+    // emits run_started, so an immediate child spawn never races that mirror.
+    controlPlaneParentAgentRunId: opts.controlPlaneParentAgentRunId,
     // Project id — lets project-aware tools (rag_search_docs scoping,
     // <indexed-docs> hint) resolve linked doc collections.
     projectId: project.id,
@@ -1642,6 +1733,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     currentAgent: effectiveAgentId,
     hasHistory: hasHistory0,
   };
+  const currentTurnIntent = classifyIntent(opts.userMessage ?? '');
   const agentDecisionGuidance = (
     opts.agentDecisionGuidanceEnabled ||
     opts.agentDecisionSoftGuardrail ||
@@ -1658,6 +1750,55 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // seed's profile beats the turn-1 keyword heuristic but loses to any
   // explicit choice (opts.profile / CODER_PROFILE / agentDef).
   const preflightSeed = !hasHistory0 ? opts.preflight : undefined;
+  let persistedGoal: ReturnType<NonNullable<ToolContext['getGoalState']>> = null;
+  if (hasHistory0) {
+    try {
+      persistedGoal = store.getSessionGoal(session.id);
+    } catch {
+      // Goal persistence failures are surfaced by the runtime lifecycle gate.
+      // Runner construction remains available during store recovery; a
+      // versioned pending-intent cache can still conservatively require the
+      // lifecycle when present.
+    }
+  }
+  const goalLifecycleAuthority = resolveGoalLifecycleAuthority({
+    hasHistory: hasHistory0,
+    freshTaskKind: preflightSeed?.taskKind,
+    cachedPreflightSeedJson: session.preflight_seed_json,
+    persistedGoalStatus: persistedGoal?.status ?? null,
+    persistedGoalCreatedAt: persistedGoal?.createdAt ?? null,
+    currentTurnIntent: currentTurnIntent.intent,
+    currentTurnConfidence: currentTurnIntent.confidence,
+    currentTurnMessage: opts.userMessage ?? '',
+    legacyMissingGoalCompletionAttempt:
+      hasLegacyMissingGoalCompletionAttempt(initialMessagesEarly),
+  });
+  const goalLifecycleIntent = goalLifecycleAuthority.intent;
+  toolContext.goalLifecycleIntent = goalLifecycleIntent;
+  toolContext.goalLifecyclePivotGoalCreatedAt =
+    goalLifecycleAuthority.pivotGoalCreatedAt ?? undefined;
+  if (
+    goalLifecycleIntent === 'required_fresh'
+    || goalLifecycleIntent === 'required_pivot'
+  ) {
+    try {
+      const markedCache = markGoalLifecycleIntentCache(
+        session.preflight_seed_json,
+        preflightSeed?.taskKind,
+        {
+          required: true,
+          pivotGoalCreatedAt: goalLifecycleAuthority.pivotGoalCreatedAt,
+        },
+      );
+      if (markedCache !== session.preflight_seed_json) {
+        store.setSessionPreflightSeed(session.id, markedCache);
+        session = { ...session, preflight_seed_json: markedCache };
+      }
+    } catch {
+      // Best-effort continuity marker. The current fresh run still has the
+      // validated in-memory intent and remains protected by the finish gate.
+    }
+  }
   // Runtime guidance may render as a preflight reminder even when the host did
   // not provide a real preflight seed. Keep it separate so guidance-only does
   // not accidentally activate seeded tool caps, profile hints, or pinned tools.
@@ -1868,7 +2009,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     console.warn(`[coder] config-lock check failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const availableTools = new Set(registry.list().map((tool) => tool.name));
+  const availableTools = new Set(
+    registry
+      .list()
+      .map((tool) => tool.name)
+      .filter(
+        (name) =>
+          !globalDisabledTools?.has(name)
+          && !sessionDisabledTools.has(name),
+      ),
+  );
   const effectiveMcpAvailable = [...availableTools].some((name) => name.startsWith('mcp__'));
   let systemPrompt = buildSystemPrompt({
     projectName: project.name,
@@ -2300,24 +2450,38 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  // ─── A1: independent goal-completion verifier (CODER_GOAL_VERIFY) ─────
-  // At a text-only finish the runner asks this to confirm the ORIGINAL goal is
-  // actually met before ending — the "stop-condition verifier" half of Claude
-  // Code's two-agent split. It spawns a READ-ONLY verifier subagent on a CLEAN
-  // context (never sees this run's transcript); the verifier runs `git_diff`
-  // itself (REVIEW_ALLOWLIST) and reads files to confirm. Cross-model when a
+  // ─── A1: independent goal-completion verifier ─────────────────────────
+  // Before update_goal can persist complete, the runner asks this to confirm
+  // the ORIGINAL goal is actually met — the "stop-condition verifier" half of
+  // Claude Code's two-agent split. It spawns a READ-ONLY verifier on a CLEAN
+  // context (never sees this run's transcript) and reads the project/evidence
+  // to confirm. This includes substantive no-diff goals. Cross-model when a
   // `goal_verification` pipeline binding is set, else it reuses the parent
-  // provider (still clean-context independent). Fail-open + bounded by the BT
-  // (ctx.goalVerifyAttempts) — it can never block or loop the run. Off by
-  // default, enabled automatically by Ultra, and skipped for company
-  // subordinates (the master gates those).
+  // provider (still clean-context independent). It is baseline for top-level
+  // runs, but the Executing gate only invokes it for an in-progress goal's
+  // update_goal(complete), so trivial conversation is unaffected. Fail-open +
+  // bounded by the BT (ctx.goalVerifyAttempts); company runs remain master-gated.
+  const verificationEvidenceEnabled =
+    !opts.companyContext && rolloutEnabled(
+      'CODER_FINISH_EVIDENCE_ROLLOUT_PERCENT',
+      `session:${session.id}`,
+      100,
+    );
+
   const verifyGoalCompletion =
-    (process.env.CODER_GOAL_VERIFY === '1' || ultraExecutionEnabled) && !opts.companyContext
-      ? async (): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
+    shouldEnableGoalCompletionVerifier(
+      process.env.CODER_GOAL_VERIFY,
+      opts.companyContext != null,
+    )
+      ? async (evidence?: VerificationReadiness): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
           try {
             const state = store.getSessionStateData(session.id);
-            const goalText = state?.goal?.text?.trim();
-            if (!state || !goalText || state.filesChanged.length === 0) return null;
+            // create_goal may be earlier in the same assistant batch. Its
+            // mutation is intentionally not durable until the turn commits,
+            // but the completion verifier must still evaluate that staged
+            // objective rather than treating the batch as goal-less.
+            const scope = resolveGoalVerificationScope(state, latestStagedGoal());
+            if (!scope) return null;
             let verifier: ChatProvider | null = null;
             try {
               const resolver = new PipelineProviderResolver(
@@ -2341,13 +2505,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
                 agentLoopV2: agentLoopV2EnvFlag,
               },
               {
-                goal: goalText,
+                goal: scope.goal,
                 plan: state.activePlan?.text ?? null,
                 diff: '',
-                testSummary: null,
-                files: state.filesChanged,
+                testSummary: evidence
+                  ? formatVerificationReadiness(evidence)
+                  : 'Verification readiness was not available at the completion boundary.',
+                files: scope.files,
               },
-              { defaultMaxTurns: ultraExecutionEnabled ? 12 : 0 },
             );
             return { goalMet: result.goalMet, gaps: result.gaps };
           } catch {
@@ -2456,12 +2621,66 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   }
 
+  // Fase 2.5 — Policy Engine shadow composition. Returns null when every
+  // CODER_* policy flag is off, so the port is absent and dispatch stays
+  // byte-identical to legacy. The legacy context is read LIVE through
+  // `runnerRef` (assigned right after construction) so mid-run plan/spec
+  // approval applies to the next shadow evaluation.
+  // ClaudeOpen exposes one ordered lifecycle registry spanning provider,
+  // tool/capability and session boundaries. Keep the same lifecycle cohesion
+  // here while preserving our worker transport: one bus per run, absent when
+  // the kill switch is off, and optionally injectable by trusted in-process
+  // callers/tests.
+  const runtimeHookBus = process.env.CODER_HOOK_BUS_V1 === '1'
+    ? (opts.hookBus ?? createRuntimeHookBus())
+    : null;
+  const policyShadowComposition = createPolicyShadowPort({
+    db: db.raw(),
+    registry,
+    sessionContext: {
+      getLegacyContext: () => ({
+        planMode: !!opts.planMode,
+        planApproved: runnerRef?.isPlanApproved() ?? false,
+        specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
+        specApproved: runnerRef?.isSpecApproved() ?? false,
+        // Read the same live inline-task boundary as the legacy gate. Shadow
+        // comparisons must evaluate the effective scope, otherwise task-scoped
+        // allows are misclassified as policy divergences.
+        taskScope: runnerRef?.currentTaskScopeId()
+          ? {
+              id: runnerRef.currentTaskScopeId()!,
+              files: runnerRef.currentTaskScopeFiles() ?? [],
+            }
+          : null,
+      }),
+      background: false,
+      sessionId: `session:coder:${session.id}`,
+      // HTTP/main passes the opaque control-plane identity before the runner
+      // id mirror exists; keep root policy decisions correlated to AgentRun.
+      agentRunId: opts.controlPlaneParentAgentRunId,
+    },
+    hookBus: runtimeHookBus,
+    log: (level, msg) => {
+      if (level === 'warn') console.warn(msg);
+      else console.log(msg);
+    },
+  });
+
   const runner = new CoderRunner({
     provider,
     compactionProvider,
     contextWindow: sessionContextWindow,
     compactionSummaryOptions,
     registry,
+    ...(runtimeHookBus ? { hookBus: runtimeHookBus } : {}),
+    // The Executing node emits `turn_start` before awaiting this callback.
+    // Our listener below enqueues the previous turn into `flushChain`
+    // synchronously, so this is a real write barrier: a goal transaction must
+    // commit before another provider/tool turn may begin.
+    awaitTurnPersistence: async () => {
+      await flushChain;
+      if (criticalGoalPersistenceError) throw criticalGoalPersistenceError;
+    },
     systemPrompt,
     toolContext,
     initialMessages,
@@ -2642,6 +2861,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
     maxTurns: opts.maxTurns ?? 50,
     planMode: opts.planMode,
+    // Fase 2.5 — shadow port (absent when flags off → zero behavior change).
+    ...(policyShadowComposition ? { policyShadow: policyShadowComposition.port } : {}),
+    ...(policyShadowComposition
+      ? { policyShadowScopeFactory: policyShadowComposition.createScopedPort }
+      : {}),
     // Mirror the same resolution used for the system-prompt's plan-depth block
     // so the runner's decision-gate nudge can skip `simple` tasks.
     planDepth:
@@ -2674,8 +2898,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           } catch { /* best-effort */ }
         }
       : undefined,
-    preflightHint: preflightHintSeed ? renderPreflightHint(preflightHintSeed) : undefined,
+    preflightHint: preflightHintSeed
+      ? renderPreflightHint(preflightHintSeed, { bugWorkflow: process.env.CODER_BUG_WORKFLOW !== '0' })
+      : undefined,
     sessionToolCap,
+    goalLifecycleIntent,
     agentDecisionGuidance,
     agentDecisionTelemetry,
     agentDecisionSoftGuardrail: opts.agentDecisionSoftGuardrail,
@@ -2686,6 +2913,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     externalToolTiers: runtimeToolTiers,
     fallbackChain,
     createProvider: createProviderForFallback,
+    verificationEvidenceEnabled,
+    collectVerifyEvidence: verificationEvidenceEnabled
+      ? () => buildVerifyEvidence(store.getDb(), session.id)
+      : undefined,
     verifyGoalCompletion,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
     context_window: sessionContextWindow,
@@ -3001,7 +3232,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
   let pendingTurn: PendingTurn | null = null;
-  let flushChain: Promise<void> = Promise.resolve();
 
   const flushPendingTurn = (): Promise<void> => {
     // Detach the buffer synchronously. EventEmitter callers intentionally do
@@ -3010,12 +3240,72 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (!pendingTurn) return flushChain;
     const turn = pendingTurn;
     pendingTurn = null;
+    // Capture this turn's ordered mutations with the detached turn, before a
+    // subsequent provider turn can add another lifecycle operation.
+    const durableCalls = [...turn.toolCalls, ...turn.nestedToolCalls];
+    const stagedGoalMutationsReferencedByTurn = [...stagedGoalMutations.values()].filter(
+      (staged) => durableCalls.some(
+        (tc) =>
+          tc.tool_use_id === staged.mutation.tool_use_id
+          && tc.tool_name === staged.mutation.tool_name,
+      ),
+    );
+    const stagedGoalMutationsForTurn = stagedGoalMutationsReferencedByTurn.filter(
+      (staged) => durableCalls.some(
+        (tc) =>
+          tc.tool_use_id === staged.mutation.tool_use_id
+          && tc.tool_name === staged.mutation.tool_name
+          && !tc.is_error,
+      ),
+    );
+    const goalMutations = stagedGoalMutationsForTurn.map((staged) => staged.mutation);
+    const successfulGoalToolUseIds = durableCalls
+      .filter(
+        (tc) =>
+          (tc.tool_name === 'create_goal' || tc.tool_name === 'update_goal')
+          && !tc.is_error,
+      )
+      .map((tc) => tc.tool_use_id);
+    const stagedGoalToolUseIds = new Set(
+      goalMutations.map((mutation) => mutation.tool_use_id),
+    );
+    const missingGoalMutationIds = successfulGoalToolUseIds.filter(
+      (toolUseId) => !stagedGoalToolUseIds.has(toolUseId),
+    );
+    const successfulGoalToolUseIdSet = new Set(successfulGoalToolUseIds);
+    const failedStagedGoalMutationIds = stagedGoalMutationsReferencedByTurn
+      .map((staged) => staged.mutation.tool_use_id)
+      .filter((toolUseId) => !successfulGoalToolUseIdSet.has(toolUseId));
     // Captured synchronously so a later turn's telemetry can't cross-stamp
     // this one. With the async writer (dbWriter) the id may still be in
     // flight — the promise is awaited inside `persist` below.
     const telemetryId = runner.lastTurnTelemetryId;
     const telemetryIdPromise = runner.lastTurnTelemetryIdPromise;
     const persist = async (): Promise<void> => {
+    if (
+      missingGoalMutationIds.length > 0
+      || failedStagedGoalMutationIds.length > 0
+    ) {
+      const details = [
+        ...(missingGoalMutationIds.length > 0
+          ? [`successful goal tool(s) have no staged mutation: ${missingGoalMutationIds.join(', ')}`]
+          : []),
+        ...(failedStagedGoalMutationIds.length > 0
+          ? [`staged goal mutation(s) have no successful tool evidence: ${failedStagedGoalMutationIds.join(', ')}`]
+          : []),
+      ].join('; ');
+      const failure = new Error(
+        `Goal persistence invariant failed: ${details}`,
+      );
+      criticalGoalPersistenceError ??= failure;
+      if (successfulGoalToolUseIds.length > 0) {
+        runner.emit('goal_mutations_persistence_failed', {
+          toolUseIds: successfulGoalToolUseIds,
+          message: failure.message,
+        });
+      }
+      throw failure;
+    }
     // If this turn was checkpointed while awaiting input (see `awaiting_input`),
     // wait for that write to settle and reuse its row id so we COMPLETE (not
     // duplicate) the assistant message. State lives on `turn`, so a later turn's
@@ -3043,6 +3333,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       tool_calls: turn.toolCalls,
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
+      goal_mutations: goalMutations.length > 0 ? goalMutations : undefined,
       // Reuse the checkpointed assistant row (if the write succeeded) so the
       // tool rows + paired tool message attach to it rather than a duplicate.
       existing_message_id: turn.checkpoint?.messageId ?? undefined,
@@ -3064,10 +3355,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       } else {
         store.persistAssistantTurn(payload);
       }
+      for (const staged of stagedGoalMutationsForTurn) {
+        stagedGoalMutations.delete(staged.mutation.tool_use_id);
+        onGoalDurablyPersisted(staged.goal);
+      }
+      if (successfulGoalToolUseIds.length > 0) {
+        runner.emit('goal_mutations_persisted', {
+          toolUseIds: successfulGoalToolUseIds,
+        });
+      }
     } catch (err) {
       // Non-fatal: the agent loop continues. The bus log is the authoritative
       // transcript and can be reconstructed if persistence fails for one turn.
       console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, err);
+      if (successfulGoalToolUseIds.length > 0) {
+        const failure = err instanceof Error ? err : new Error(String(err));
+        criticalGoalPersistenceError ??= failure;
+        runner.emit('goal_mutations_persistence_failed', {
+          toolUseIds: successfulGoalToolUseIds,
+          message: failure.message,
+        });
+        throw failure;
+      }
     }
     };
     // Preserve assistant/tool row order and let a compaction checkpoint await
@@ -3503,6 +3812,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .run()
     .then(async (res) => {
       await flushPendingTurn();
+      if (criticalGoalPersistenceError) throw criticalGoalPersistenceError;
+      if (stagedGoalMutations.size > 0) {
+        throw new Error(
+          `Goal persistence invariant failed: ${stagedGoalMutations.size} mutation(s) have no durable successful goal-tool result`,
+        );
+      }
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       const outcome: RunOutcome = {
         reason: res.reason,
@@ -3514,43 +3829,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // after a transcript refetch is guaranteed to see the terminal turn.
       resolveTranscriptFlushed(outcome);
       await checkpointCoordinator.retry(runner.turn, true);
-      // Terminal Quality runs after the runner emitted `done` (the response is
-      // already visible) but before this handle resolves and the worker is
-      // released. Exactly one provider attempt; no subagent/abort/error calls.
-      try {
-        const roundMessageId = runner.roundMessageId;
-        const terminal = runner.getTerminalQualityContext();
-        const changedFiles = roundMessageId == null
-          ? []
-          : snapshotStore
-              .listRoundSnapshots('coder', session.id, roundMessageId, { includeClosed: true })
-              .map((row) => row.file_path);
-        await runTerminalQualityAssessment({
-          reason: res.reason,
-          isSubagent: runner.isSubagent,
-          sessionId: session.id,
-          companySessionId: opts.companyContext?.companySessionId ?? null,
-          agentRunId: opts.companyContext?.agentRunId ?? null,
-          coderRunId: runner.runId,
-          roundMessageId,
-          taskText: terminal.taskText || opts.userMessage,
-          outputText: terminal.outputText,
-          changedFiles,
-          toolSummary: terminal.toolSummary,
-          guardActions: terminal.guardActions,
-          validationSignals: terminal.validationSignals,
-        });
-      } catch (error) {
-        console.warn(`[quality] terminal assessment skipped: ${error instanceof Error ? error.message : String(error)}`);
-      }
       return outcome;
     })
     .catch(async (e) => {
-      await flushPendingTurn();
-      store.updateSessionStatus(session.id, 'error');
-      rejectTranscriptFlushed(e);
+      // A provider/runner failure may arrive while the final assistant turn is
+      // still buffered. If that flush also fails, persistence is the stronger
+      // terminal error; either way the public durability promise MUST settle
+      // so deferred SSE/Company consumers cannot hang forever.
+      let terminalError: unknown = e;
+      try {
+        await flushPendingTurn();
+      } catch (persistError) {
+        terminalError = persistError;
+      }
+      try {
+        store.updateSessionStatus(session.id, 'error');
+      } catch (statusError) {
+        console.error(
+          `[coder] failed to mark session ${session.id} as error:`,
+          statusError,
+        );
+      }
+      rejectTranscriptFlushed(terminalError);
       await checkpointCoordinator.retry(runner.turn, true);
-      throw e;
+      throw terminalError;
     })
     .finally(async () => {
       // Drain any pending async writes for THIS session before closing the

@@ -22,7 +22,11 @@ import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.j
 import { events } from '../machine/events.js';
 import { bumpRecovery } from '../machine/context.js';
 import { backoffDelayMs, isContextOverflowError } from '../provider-retry.js';
-import { recoveryCap, type RecoveryKind } from '../recovery-config.js';
+import {
+  recoveryCap,
+  transientRetryMaxPerTurn,
+  type RecoveryKind,
+} from '../recovery-config.js';
 
 export class RecoveringNode implements BehaviorNode {
   readonly state = 'Recovering' as const;
@@ -75,6 +79,32 @@ export class RecoveringNode implements BehaviorNode {
     const kind = classifyKind(lastEvent.status, lastEvent.code);
     const attempts = bumpRecovery(ctx, kind);
     const cap = recoveryCap(kind);
+
+    // R5's per-logical-call bound used to exist only as an unused config
+    // function. Enforce it before the much larger run-lifetime circuit breaker
+    // so one persistent 429 cannot consume the entire cap in a single turn.
+    if (kind === 'provider-transient-retry') {
+      ctx.transientRetriesThisTurn += 1;
+      const turnCap = transientRetryMaxPerTurn();
+      if (ctx.transientRetriesThisTurn > turnCap) {
+        ctx.emit('recovery_aborted', {
+          kind,
+          attempts: ctx.transientRetriesThisTurn,
+          cap: turnCap,
+          contextHint:
+            `per-turn status=${lastEvent.status}` +
+            `${lastEvent.message ? ` message=${lastEvent.message}` : ''}`,
+        });
+        ctx.stopReason = 'recovery_capped';
+        ctx.transition = classifyTransition(lastEvent.status, lastEvent.code);
+        ctx.error = new Error(
+          `Per-turn transient retry cap exceeded ` +
+          `(${ctx.transientRetriesThisTurn}/${turnCap}): ` +
+          (lastEvent.message ?? `status ${lastEvent.status}`),
+        );
+        return events.aborted();
+      }
+    }
 
     if (attempts > cap) {
       ctx.emit('recovery_aborted', {

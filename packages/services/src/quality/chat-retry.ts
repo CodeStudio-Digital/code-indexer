@@ -1,21 +1,15 @@
 /**
- * Retry wrapper for classifier chat calls.
+ * Retry wrapper for single-shot pipeline chat calls.
  *
- * The 5 quality classifiers each make a single chat completion. Under a
- * shared provider rate-limit (z.ai `code 1302` / HTTP 429) a burst of the
- * 5 parallel calls gets throttled and the verdict comes back as `error`,
- * which pollutes BOTH the verdict distribution AND the effectiveness
- * metric (an errored follow-up turn is otherwise scored as "unchanged").
- * A bounded retry with exponential backoff + jitter, honoring
- * `Retry-After`, recovers the transient rate-limit family without
- * amplifying load.
+ * LLM-backed helper pipelines each make a single chat completion. Under a
+ * shared provider rate-limit (z.ai `code 1302` / HTTP 429), bounded retry
+ * with exponential backoff + jitter, honoring `Retry-After`, recovers the
+ * transient family without amplifying load.
  *
  * Scope — we ONLY retry the rate-limit family (HTTP 429/408/5xx, or a body
  * carrying z.ai's `1302` / "rate limit"). Network/abort/timeout errors are
  * deliberately NOT retried: those mean the provider is overloaded or the
- * model is too slow, and the right levers are a faster classifier model,
- * the per-turn concurrency cap, and the shorter classifier timeout — not
- * hammering a struggling endpoint with more requests.
+ * model is too slow; retrying would only hammer a struggling endpoint.
  */
 import type { ChatCallResult } from './llm-chat.js';
 
@@ -96,8 +90,8 @@ function isAbortOrTimeout(body: string): boolean {
 
 /**
  * Exp+jitter backoff. A server-supplied `Retry-After` always wins (plus a
- * touch of upward jitter so the 5 concurrent classifier retries don't
- * re-synchronize on the exact boundary). Mirrors the curve in
+ * touch of upward jitter so concurrent retries do not re-synchronize on the
+ * exact boundary). Mirrors the curve in
  * `code-agent/.../provider-retry.ts` (kept local to avoid a
  * services→code-agent import).
  */

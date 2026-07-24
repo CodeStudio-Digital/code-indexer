@@ -30,6 +30,12 @@ export interface VerifyEvidence {
   verifyCount: number;
   /** Files edited AFTER the last verify run (evidence staleness). */
   filesEditedAfter: string[];
+  /**
+   * Files edited in the SAME SQLite second as the last verify. The persisted
+   * timestamps cannot prove ordering inside that second, so completion logic
+   * must treat this as ambiguous rather than silently fresh.
+   */
+  filesEditedAtSameTime?: string[];
 }
 
 /** Commands that count as verification (test/typecheck/lint/build/check). */
@@ -88,21 +94,31 @@ export function buildVerifyEvidence(db: DB, sessionId: number): VerifyEvidence |
     const lastVerify = verifies[0] ?? null;
 
     let filesEditedAfter: string[] = [];
+    let filesEditedAtSameTime: string[] = [];
     if (lastVerify) {
-      filesEditedAfter = (
-        db
-          .prepare(
-            `SELECT DISTINCT b.file_path
-               FROM session_file_edits e
-               JOIN session_file_baselines b ON b.id = e.baseline_id
-              WHERE b.session_kind = 'coder' AND b.session_id = ? AND e.applied_at > ?
-              ORDER BY b.file_path
-              LIMIT ${MAX_EDITED_FILES + 1}`,
-          )
-          .all(sessionId, lastVerify.at) as Array<{ file_path: string }>
-      ).map((r) => r.file_path);
+      const edits = db
+        .prepare(
+          `SELECT DISTINCT b.file_path, e.applied_at
+             FROM session_file_edits e
+             JOIN session_file_baselines b ON b.id = e.baseline_id
+            WHERE b.session_kind = 'coder' AND b.session_id = ? AND e.applied_at >= ?
+            ORDER BY b.file_path
+            LIMIT ${MAX_EDITED_FILES + 1}`,
+        )
+        .all(sessionId, lastVerify.at) as Array<{ file_path: string; applied_at: string }>;
+      filesEditedAfter = edits
+        .filter((row) => row.applied_at > lastVerify.at)
+        .map((row) => row.file_path);
+      filesEditedAtSameTime = edits
+        .filter((row) => row.applied_at === lastVerify.at)
+        .map((row) => row.file_path);
     }
-    return { lastVerify, verifyCount: verifies.length, filesEditedAfter };
+    return {
+      lastVerify,
+      verifyCount: verifies.length,
+      filesEditedAfter,
+      filesEditedAtSameTime,
+    };
   } catch {
     return null;
   }
@@ -128,6 +144,12 @@ export function formatVerifyEvidence(e: VerifyEvidence): string {
     const more = e.filesEditedAfter.length > MAX_EDITED_FILES ? ' (+more)' : '';
     lines.push(
       `STALE: edited AFTER that run — ${shown.join(', ')}${more}. The recorded result does not cover these edits.`,
+    );
+  } else if ((e.filesEditedAtSameTime?.length ?? 0) > 0) {
+    const shown = e.filesEditedAtSameTime!.slice(0, MAX_EDITED_FILES);
+    const more = e.filesEditedAtSameTime!.length > MAX_EDITED_FILES ? ' (+more)' : '';
+    lines.push(
+      `AMBIGUOUS: edited in the SAME persisted second — ${shown.join(', ')}${more}. Ordering cannot be proven; rerun verification.`,
     );
   } else {
     lines.push('No edits recorded after that run — the result covers the current state.');

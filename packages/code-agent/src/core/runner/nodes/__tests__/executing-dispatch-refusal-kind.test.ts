@@ -45,6 +45,27 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].refusalKind).toBe('gate');
   });
 
+  it('awaits an asynchronous toolGate before invoking the handler', async () => {
+    const registry = new ToolRegistry();
+    let invoked = false;
+    registry.register(makeTool('some_tool', {
+      handler: async () => {
+        invoked = true;
+        return { content: 'should not execute' };
+      },
+    }));
+    const r = await dispatchTools(baseArgs(registry, {
+      toolGate: async () => '[goal-verifier: completion rejected]',
+    }));
+
+    expect(invoked).toBe(false);
+    expect(r.results[0]).toMatchObject({
+      isError: true,
+      refusalKind: 'gate',
+      content: '[goal-verifier: completion rejected]',
+    });
+  });
+
   it('toolGate refusals happen before tuple-hash dedup accounting', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool'));

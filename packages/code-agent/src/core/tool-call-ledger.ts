@@ -1,5 +1,6 @@
 /** Shared, behavior-neutral accounting for direct and nested tool calls. */
 import { stableArgsKey } from './runner/dup-utils.js';
+import type { ToolRiskLevel } from './tool.js';
 
 export interface ToolCallLedgerEntry {
   seq: number;
@@ -13,6 +14,9 @@ export interface ToolCallLedgerEntry {
   resultFingerprint: string;
   outcome: 'success' | 'tool_error' | 'refusal' | 'timeout' | 'cancelled';
   durationMs: number;
+  /** Sanitized invocation classification; raw arguments are never retained. */
+  mutates?: boolean;
+  riskLevel?: ToolRiskLevel;
   executionClass?: string;
   repeatPolicy?: string;
   readCoverage?: { path: string; start: number | null; end: number | null };
@@ -20,6 +24,20 @@ export interface ToolCallLedgerEntry {
   coverageNovel: boolean;
   /** Allowlisted validation command/tool label; never a raw command line. */
   validationSignal?: string;
+  /**
+   * Hashed, allowlisted recovery identity for resumable orchestration.
+   * This lets `resume_agent` / resumed `workflow` success resolve the exact
+   * earlier partial operation without retaining raw prompts or tool input.
+   */
+  recoveryOperationId?: string;
+  /**
+   * Structured user authority emitted only when the selected ask_user option
+   * explicitly accepts already-observed validation drift as out of scope.
+   * The ledger never retains the question, option text, or answer itself.
+   */
+  goalLifecycleResolution?:
+    | 'accept_out_of_scope_validation'
+    | 'supersede_previous_goal';
 }
 
 const CONTINUATION_KEYS = new Set([
@@ -138,8 +156,11 @@ export class ToolCallLedger {
     args: unknown;
     content: string;
     isError: boolean;
+    /** Canonical internal payload; only allowlisted opaque ids are extracted. */
+    structuredData?: unknown;
     refusalKind?: string;
     mutates?: boolean;
+    riskLevel?: ToolRiskLevel;
     durationMs?: number;
     executionClass?: string;
     repeatPolicy?: string;
@@ -178,6 +199,17 @@ export class ToolCallLedger {
           ? 'refusal'
           : input.isError ? 'tool_error' : 'success';
     const validationSignal = extractValidationSignal(input.name, argRecord);
+    const recoveryOperationId = extractRecoveryOperationId(
+      input.name,
+      argRecord,
+      input.structuredData,
+    );
+    const goalLifecycleResolution = extractGoalLifecycleResolution(
+      input.name,
+      argRecord,
+      input.content,
+      outcome,
+    );
     const entry: ToolCallLedgerEntry = {
       seq: ++this.seq,
       timestampMs: Date.now(),
@@ -189,12 +221,16 @@ export class ToolCallLedger {
       resultFingerprint: fingerprint,
       outcome,
       durationMs: Math.max(0, input.durationMs ?? 0),
+      ...(input.mutates !== undefined ? { mutates: input.mutates } : {}),
+      ...(input.riskLevel ? { riskLevel: input.riskLevel } : {}),
       ...(input.executionClass ? { executionClass: input.executionClass } : {}),
       ...(input.repeatPolicy ? { repeatPolicy: input.repeatPolicy } : {}),
       ...(readCoverage ? { readCoverage } : {}),
       resultNovel: novel,
       coverageNovel,
       ...(validationSignal ? { validationSignal } : {}),
+      ...(recoveryOperationId ? { recoveryOperationId } : {}),
+      ...(goalLifecycleResolution ? { goalLifecycleResolution } : {}),
     };
     this.entries.push(entry);
     while (this.entries.length > 500) this.entries.shift();
@@ -209,13 +245,77 @@ export class ToolCallLedger {
   }
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Extract only opaque control-plane ids from known first-party orchestration
+ * results. The ledger stores their hash, never the raw id or arbitrary
+ * structured output. Tool-name checks prevent a plugin from forging a
+ * recovery relationship with an unrelated result shape.
+ */
+function extractRecoveryOperationId(
+  name: string,
+  args: Record<string, unknown>,
+  structuredData: unknown,
+): string | undefined {
+  const data =
+    structuredData && typeof structuredData === 'object' && !Array.isArray(structuredData)
+      ? structuredData as Record<string, unknown>
+      : null;
+  const kind = nonEmptyString(data?.kind);
+
+  if (name === 'spawn_agent') {
+    const spawnId = kind === 'spawn_agent_result' || kind === 'spawn_agent_background_result'
+      ? nonEmptyString(data?.spawnId)
+      : null;
+    return spawnId ? `subagent:${fnv1a(spawnId)}` : undefined;
+  }
+
+  if (name === 'resume_agent') {
+    const structuredSpawnId = kind === 'resume_agent_result'
+      ? nonEmptyString(data?.spawnId)
+      : null;
+    const spawnId = structuredSpawnId ?? nonEmptyString(args.spawn_id);
+    return spawnId ? `subagent:${fnv1a(spawnId)}` : undefined;
+  }
+
+  if (name === 'collect_agents') {
+    const spawnId = kind === 'collect_agents_result'
+      ? nonEmptyString(data?.spawnId)
+      : null;
+    return spawnId ? `subagent:${fnv1a(spawnId)}` : undefined;
+  }
+
+  if (name === 'workflow') {
+    const structuredWorkflowId = kind === 'workflow_result'
+      ? nonEmptyString(data?.workflowId)
+      : null;
+    const workflowId = structuredWorkflowId ?? nonEmptyString(args.resume_workflow_id);
+    return workflowId ? `workflow:${fnv1a(workflowId)}` : undefined;
+  }
+
+  return undefined;
+}
+
 function extractValidationSignal(name: string, args: Record<string, unknown>): string | undefined {
   const command = [args.command, args.cmd, args.script].find((value): value is string => typeof value === 'string');
   if (command) {
     const normalized = command.replace(/\s+/g, ' ').trim().toLowerCase();
+    const packageScript = normalized.match(
+      /\b((?:npm|pnpm|yarn|bun)(?: run)?) ([a-z0-9][a-z0-9:_-]*)\b/,
+    );
+    if (
+      packageScript
+      && /(?:^|[:_-])(?:test|typecheck|lint|build|check|audit)(?:$|[:_-])/.test(packageScript[2]!)
+    ) {
+      // Keep the exact validation script (for example check:loc vs.
+      // audit:env:check) without retaining flags, paths, or secrets.
+      return `${packageScript[1]} ${packageScript[2]}`;
+    }
     const patterns: Array<[RegExp, string]> = [
       [/\bgit diff --check\b/, 'git diff --check'],
-      [/\b(?:npm|pnpm|yarn|bun) (?:run )?(?:test|typecheck|lint|build|check)\b/, 'package validation'],
       [/\bvitest(?: run)?\b/, 'vitest run'],
       [/\bjest\b/, 'jest'],
       [/\bpytest\b/, 'pytest'],
@@ -228,9 +328,51 @@ function extractValidationSignal(name: string, args: Record<string, unknown>): s
     ];
     for (const [pattern, label] of patterns) {
       const match = normalized.match(pattern);
-      if (match) return label === 'package validation' ? match[0] : label;
+      if (match) return label;
     }
   }
   if (/(?:^|[_-])(?:test|typecheck|lint|diagnostic|build)(?:$|[_-])/i.test(name)) return name;
   return undefined;
+}
+
+function extractGoalLifecycleResolution(
+  name: string,
+  args: Record<string, unknown>,
+  content: string,
+  outcome: ToolCallLedgerEntry['outcome'],
+): ToolCallLedgerEntry['goalLifecycleResolution'] {
+  if (
+    name === 'update_goal'
+    && outcome === 'success'
+    && args.status === 'superseded'
+  ) {
+    return 'supersede_previous_goal';
+  }
+  if (name !== 'ask_user' || outcome !== 'success') return undefined;
+  const prefix = 'User answered: ';
+  if (!content.startsWith(prefix)) return undefined;
+  const answer = content.slice(prefix.length).split(/\r?\n/, 1)[0]?.trim();
+  if (!answer || !Array.isArray(args.options)) return undefined;
+
+  const selected = args.options.find((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+    return String((candidate as Record<string, unknown>).value ?? '') === answer;
+  });
+  if (!selected || typeof selected !== 'object' || Array.isArray(selected)) return undefined;
+  const option = selected as Record<string, unknown>;
+  if (option.goal_lifecycle_resolution === 'accept_out_of_scope_validation') {
+    return 'accept_out_of_scope_validation';
+  }
+
+  // Backward compatibility for the option value already used by released
+  // agents before the structured field existed. Require visible scope wording
+  // so an unrelated option with the same value cannot silently waive a gate.
+  if (answer !== 'complete_out_of_scope') return undefined;
+  const visibleText = `${String(args.question ?? '')} ${String(option.label ?? '')}`
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase();
+  return /\b(?:out[- ]of[- ]scope|fora (?:do|de) escopo)\b/.test(visibleText)
+    ? 'accept_out_of_scope_validation'
+    : undefined;
 }

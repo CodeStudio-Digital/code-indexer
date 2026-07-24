@@ -102,7 +102,12 @@ export class CodeIndexDB {
 
   constructor(
     dbPath: string,
-    opts: { checkpointOwner?: boolean; externalCheckpointer?: boolean } = {},
+    opts: {
+      checkpointOwner?: boolean;
+      externalCheckpointer?: boolean;
+      /** Fire-and-forget project DB checkpoint scheduler owned by a worker. */
+      projectDbCheckpoint?: (dbPath: string) => void;
+    } = {},
   ) {
     this.centralDbPath = dbPath;
     this.checkpointOwner = !!opts.checkpointOwner;
@@ -140,6 +145,7 @@ export class CodeIndexDB {
       maxOpen: this.pdbFlags.maxOpen,
       idleTtlMs: this.pdbFlags.idleMs,
       resolve: (projectId) => ({ dbPath: this.resolveProjectDbPath(projectId) }),
+      onCheckpoint: (_projectId, projectDbPath) => opts.projectDbCheckpoint?.(projectDbPath),
       // When a project's DB handle is LRU/idle-evicted, drop the sibling
       // per-project caches keyed by the same id so they don't linger for
       // projects beyond the pool's cap (each rebuilds lazily on next access;
@@ -154,6 +160,23 @@ export class CodeIndexDB {
   getSchemaVersion(): number { return getSchemaVersion(this.db); }
   /** better-sqlite3 handle for stores that need direct prepared-statement access. */
   raw(): DB { return this.db; }
+
+  /**
+   * Temporarily override this connection's busy ceiling for one synchronous
+   * operation. Electron-main callers use zero and move contention waits to an
+   * async retry queue; worker connections retain the normal five-second wait.
+   */
+  withBusyTimeout<T>(busyTimeoutMs: number, operation: () => T): T {
+    const timeout = Math.max(0, Math.trunc(busyTimeoutMs));
+    const previous = Number(this.db.pragma('busy_timeout', { simple: true }));
+    if (previous === timeout) return operation();
+    this.db.pragma(`busy_timeout = ${timeout}`);
+    try {
+      return operation();
+    } finally {
+      this.db.pragma(`busy_timeout = ${previous}`);
+    }
+  }
 
   /**
    * Fallback for `externalCheckpointer` setups: when the db-maintenance
@@ -418,6 +441,13 @@ export class CodeIndexDB {
   getProject(id: number): Project | undefined {
     const project = projects.get(this.db, id);
     return project ? this.overlayEditorConfig(this.overlayRuntimeConfig(project, id), id) : project;
+  }
+  /**
+   * Read only the catalog root. Unlike getProject(), this never opens a
+   * per-project DB to overlay runtime/editor settings.
+   */
+  getProjectRootPath(id: number): string | undefined {
+    return projects.getRootPath(this.db, id);
   }
   getProjectByName(name: string): Project | undefined { return projects.getByName(this.db, name); }
   getProjectByPath(rootPath: string): Project | undefined { return projects.getByPath(this.db, rootPath); }

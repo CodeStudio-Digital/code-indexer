@@ -22,7 +22,10 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import {
+  evictCompanyOrchestrator,
+  getCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import {
   appOwnedControlPlaneConflict,
@@ -57,14 +60,14 @@ export function mountCompanyArchiveRoutes(app: Hono, deps: ServerDeps): void {
     const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
       try {
-        orchestrator.abortAll({ teardownSandbox, finalStatus: 'idle' });
+        await orchestrator.abortAll({ teardownSandbox, finalStatus: 'idle' });
       } catch (e) {
         console.warn(
           `[company/reset] abortAll failed for session ${id}:`,
           e instanceof Error ? e.message : String(e),
         );
       }
-      deleteCompanyOrchestrator(id);
+      await evictCompanyOrchestrator(id);
     }
 
     // Step 2 — archive active conversation state + idle the session.

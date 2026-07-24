@@ -140,6 +140,7 @@ export const ASK_USER_DESC =
   'PREFER: 2–8 mutually-exclusive `options` so the user clicks instead of types. Buttons render in a 2-column grid. Free-form is for open answers only.\n' +
   'MULTI: set `multi_select: true` when several options can legitimately be combined ("select all that apply" — e.g. which screens, what data to store, which login methods). The answer returns the chosen values joined by ", ".\n' +
   'PREFER: if one option is your recommendation, list it FIRST and end its label with " (Recommended)" so the user sees the default at a glance.\n' +
+  'AUTHORITY: when a known failed validation is unrelated baseline drift and only the user can accept it as out of scope, set `goal_lifecycle_resolution: "accept_out_of_scope_validation"` on that approval option only. Never set it on retry, repair, or stop options.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
   "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +
@@ -176,6 +177,7 @@ export const TASK_LIST_DESC =
   'There is ONE list per session: a track checklist and an approve list cannot coexist. Picking gate:approve formalizes a checklist into a gated plan; ' +
   'do NOT keep a parallel checklist alongside an approved task list — drive the approved list with execute_tasks / update_task.\n' +
   "USE gate:'track' for multi-step work you're doing yourself (3+ steps). USE gate:'approve' when work decomposes into 2+ independent units worth approving + delegating to subagents.\n" +
+  'DECOMPOSE by verifiable behavior / vertical slice, not by technical layer — each task should keep its `files` scope minimal and independently reviewable, not "all repositories" then "all services".\n' +
   "DON'T re-write the whole list to flip a status — use `updates`. DON'T pad a list with trivial items.";
 
 export const SUBMIT_TASKS_DESC =
@@ -184,6 +186,7 @@ export const SUBMIT_TASKS_DESC =
   'REQUIRES tasks.length >= 2 — single-task submissions are rejected. Use submit_plan for linear work.\n' +
   "USE: when the work decomposes into 2+ independent items (refactors touching many files, multi-area fixes, migrations, analysis-with-followup-actions).\n" +
   "USE: when per-task context curation pays off — each task declares its files, references, and dependencies.\n" +
+  'PREFER vertical slices (endpoint + minimal rule + persistence + a test) over horizontal layer batches; keep each task\'s `files` scope tight so mutation-fence + task_complete can enforce it and the reviewer catches scope creep.\n' +
   "DON'T: use for linear single-action work. Use submit_plan — it's lighter and faster to approve.\n" +
   "DON'T: pad a task list with trivial items to look thorough. 3 meaningful tasks > 8 micro-tasks.\n" +
   "DON'T: submit tasks without concrete files/references per item — the user can't approve vague scope.";

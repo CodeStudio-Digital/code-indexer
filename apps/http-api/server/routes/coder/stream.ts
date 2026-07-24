@@ -1,13 +1,20 @@
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import {
+  classifyCoderTerminalOutcome,
+  normalizeCoderTerminalSignal,
+} from '@mcp/agent-runtime-contracts';
+import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
+import { markGoalLifecycleIntentCache } from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
 import {
   emitWorkerLog,
   type CoderRunBus,
@@ -18,7 +25,12 @@ import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { parseIdParam, notFound } from '../_helpers.js';
-import { normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
+import {
+  normalizeDedupeKey,
+  syntheticDoneSSE,
+  syntheticTerminalSSE,
+  type RecentMessageLookup,
+} from '../recent-message-keys.js';
 import { withSessionLock } from './sessionLock.js';
 import {
   binaryDocumentsHandledNatively,
@@ -43,6 +55,7 @@ import {
 } from '../../../custom-agents.js';
 import {
   acceptLocalCoderCommand,
+  bindLocalCommandBus,
   coderControlPlaneShadowEnabled,
   fingerprintLocalCoderMessage,
   terminalizeLocalCoderCommand,
@@ -156,6 +169,373 @@ export function mountCoderStreamRoutes(
   const workerPool = getCoderWorkerPool();
   const controlPlaneStore = deps.controlPlaneStore ?? null;
   const semanticBusLeases = new WeakMap<CoderRunBus, () => void>();
+
+  type EarlyCommandClaim =
+    | {
+        kind: 'owner';
+        acceptance: LocalCoderShadowAcceptance | null;
+        claimGuard?: { token: symbol; fingerprintHash: string };
+      }
+    | { kind: 'pending'; settled: Promise<RecentMessageLookup<CoderRunBus>> }
+    | { kind: 'replay'; bus: CoderRunBus; since: number }
+    | { kind: 'terminal'; event: 'done' | 'error'; data: Record<string, unknown> }
+    | {
+        kind: 'reject';
+        status: 409 | 503;
+        body: { error: string; code: string; retry_after_ms?: number };
+        retryAfterMs?: number;
+      };
+
+  function terminalForPersistedCommand(
+    acceptance: LocalCoderShadowAcceptance,
+  ): { event: 'done' | 'error'; data: Record<string, unknown> } | null {
+    const status = acceptance.commandStatus;
+    if (status === 'succeeded') {
+      return { event: 'done', data: { reason: 'completed', duplicate: true, persisted: true } };
+    }
+    if (status === 'failed' || status === 'cancelled' || status === 'rejected') {
+      return {
+        event: 'error',
+        data: { reason: `command-${status}`, duplicate: true, persisted: true },
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Claim the durable command before attachment extraction, index gates,
+   * preflight, append, push or worker spawn. The in-memory pending settlement
+   * handles same-process races; ControlPlaneStore is the restart-safe
+   * authority whenever it is available.
+   */
+  function claimCoderCommand(input: {
+    sessionId: number;
+    kind: 'start' | 'send_message' | 'resume';
+    dedupeKey?: string;
+    fingerprint: Record<string, unknown>;
+    createRun: boolean;
+    linkedAgentRunId?: Parameters<typeof acceptLocalCoderCommand>[0]['linkedAgentRunId'];
+    role: string;
+    agentDefinitionId: string;
+    requestedProvider?: string;
+    requestedModel?: string;
+    requestedReasoningEffort?: string;
+    requestedPreset?: string;
+    requestedCapabilityProfile: string;
+    lastEventId: number;
+  }): EarlyCommandClaim {
+    const fingerprintHash = hashControlPlanePayload(input.fingerprint);
+    const memoryClaim = input.dedupeKey
+      ? recentMessageKeys.claim(input.sessionId, input.dedupeKey, fingerprintHash)
+      : null;
+    const claimGuard = memoryClaim?.kind === 'owner'
+      ? { token: memoryClaim.token, fingerprintHash }
+      : undefined;
+
+    // Capacity is a pre-acceptance admission decision. Never create a durable
+    // accepted command unless this process can retain its live owner token.
+    if (memoryClaim?.kind === 'capacity_exhausted') {
+      return {
+        kind: 'reject',
+        status: 503,
+        body: {
+          error: 'idempotency owner capacity exhausted; retry later',
+          code: 'IDEMPOTENCY_CAPACITY_EXHAUSTED',
+          retry_after_ms: memoryClaim.retryAfterMs,
+        },
+        retryAfterMs: memoryClaim.retryAfterMs,
+      };
+    }
+
+    // The in-process owner already bound this key to an exact fingerprint.
+    // A same-process duplicate must wait BEFORE touching the durable ledger:
+    // otherwise it can win durable acceptance, then make the real owner see an
+    // `existing` command with no bus and falsely terminalize it as interrupted.
+    if (memoryClaim?.kind === 'payload_conflict') {
+      return {
+        kind: 'reject',
+        status: 409,
+        body: {
+          error: 'client_msg_id is already bound to a different payload',
+          code: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+        },
+      };
+    }
+    if (memoryClaim?.kind === 'existing') {
+      return { kind: 'pending', settled: memoryClaim.settled };
+    }
+
+    const acceptance = acceptLocalCoderCommand({
+      store: controlPlaneStore,
+      legacySessionId: input.sessionId,
+      kind: input.kind,
+      idempotencyKey: input.dedupeKey,
+      fingerprint: input.fingerprint,
+      createRun: input.createRun,
+      linkedAgentRunId: input.linkedAgentRunId,
+      role: input.role,
+      agentDefinitionId: input.agentDefinitionId,
+      requestedProvider: input.requestedProvider,
+      requestedModel: input.requestedModel,
+      requestedReasoningEffort: input.requestedReasoningEffort,
+      requestedPreset: input.requestedPreset,
+      requestedCapabilityProfile: input.requestedCapabilityProfile,
+    });
+
+    if (
+      acceptance?.outcome === 'payload_conflict'
+    ) {
+      if (input.dedupeKey && memoryClaim?.kind === 'owner') {
+        recentMessageKeys.rejectClaim(input.sessionId, input.dedupeKey, memoryClaim.token, fingerprintHash, {
+          event: 'error',
+          data: { reason: 'payload_conflict', duplicate: true },
+        });
+      }
+      return {
+        kind: 'reject',
+        status: 409,
+        body: {
+          error: 'client_msg_id is already bound to a different payload',
+          code: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+        },
+      };
+    }
+
+    // Production always supplies the store. If it is temporarily unavailable,
+    // every command fails closed: even callers without a client key receive a
+    // server-generated durable key, so there is no non-authoritative execution
+    // path hiding behind the legacy request shape.
+    if (!acceptance) {
+      if (input.dedupeKey) {
+        recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, {
+          event: 'error',
+          data: { reason: 'idempotency-authority-unavailable', duplicate: false },
+        }, -1, claimGuard);
+      }
+      return {
+        kind: 'reject',
+        status: 503,
+        body: {
+          error: 'idempotency authority unavailable; request was not executed',
+          code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
+        },
+      };
+    }
+
+    if (acceptance.outcome === 'version_conflict') {
+      if (input.dedupeKey) {
+        recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, {
+          event: 'error',
+          data: { reason: acceptance.outcome, duplicate: true },
+        }, -1, claimGuard);
+      }
+      return {
+        kind: 'reject',
+        status: 409,
+        body: {
+          error: 'session version changed while accepting the command',
+          code: 'COMMAND_VERSION_CONFLICT',
+        },
+      };
+    }
+
+    if (acceptance.outcome === 'existing') {
+      const terminal = terminalForPersistedCommand(acceptance);
+      if (terminal) {
+        if (input.dedupeKey) {
+          recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, terminal, -1, claimGuard);
+        }
+        return { kind: 'terminal', ...terminal };
+      }
+
+      const live = workerPool.getBus(input.sessionId);
+      const liveContext = workerPool.getControlPlaneRunContext?.(input.sessionId);
+      const correlatedLive = live
+        && !live.ended
+        && (
+          (acceptance.agentRunId && liveContext?.agentRunId === acceptance.agentRunId)
+          || acceptance.executionBusId === live.busId
+        )
+        ? live
+        : null;
+      if (correlatedLive) {
+        // Durable recovery must honor the caller cursor. Advancing to the
+        // current tail would silently skip buffered events after cache loss.
+        const sinceHint = input.lastEventId;
+        if (input.dedupeKey) {
+          recentMessageKeys.record(
+            input.sessionId,
+            input.dedupeKey,
+            correlatedLive,
+            sinceHint,
+            claimGuard,
+          );
+        }
+        return {
+          kind: 'replay',
+          bus: correlatedLive,
+          since: input.lastEventId,
+        };
+      }
+
+      // An accepted/running command without its executor bus cannot safely be
+      // replayed. Persist interruption and return a terminal; never attempt the
+      // append/provider side effects again after a process restart.
+      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+        status: 'failed',
+        reason: 'executor-bus-unavailable',
+        errorRef: 'error:executor-bus-unavailable',
+      });
+      const interrupted = {
+        event: 'error' as const,
+        data: {
+          reason: 'executor-bus-unavailable',
+          duplicate: true,
+          persisted: true,
+        },
+      };
+      if (input.dedupeKey) {
+        recentMessageKeys.recordTerminal(
+          input.sessionId,
+          input.dedupeKey,
+          interrupted,
+          -1,
+          claimGuard,
+        );
+      }
+      return { kind: 'terminal', ...interrupted };
+    }
+
+    return { kind: 'owner', acceptance, ...(claimGuard ? { claimGuard } : {}) };
+  }
+
+  /**
+   * A fresh command represents the whole run, not merely worker admission.
+   * Keep it non-terminal while its exact bus is live, then persist the actual
+   * bus outcome. This prevents a retry from seeing synthetic success while
+   * the provider/tools are still running.
+   */
+  function bindFreshCommandCompletion(
+    sessionId: number,
+    dedupeKey: string | undefined,
+    acceptance: LocalCoderShadowAcceptance | null,
+    bus: CoderRunBus,
+    claimGuard?: { token: symbol; fingerprintHash: string },
+  ): void {
+    // AgentRun-backed commands are terminalized centrally by CoderWorkerPool.
+    // This listener covers the always-on ledger when the optional AgentRun
+    // shadow projection is disabled.
+    if (!acceptance?.commandContext || acceptance.runContext) return;
+    let settled = false;
+    const settle = (): void => {
+      if (settled || !bus.ended) return;
+      if (
+        acceptance.commandStatus === 'succeeded'
+        || acceptance.commandStatus === 'failed'
+        || acceptance.commandStatus === 'cancelled'
+        || acceptance.commandStatus === 'rejected'
+      ) {
+        settled = true;
+        return;
+      }
+      settled = true;
+      const end = bus.endReason ?? {
+        event: 'error' as const,
+        data: { reason: 'missing-bus-outcome' },
+      };
+      const data = end.data && typeof end.data === 'object'
+        ? end.data as Record<string, unknown>
+        : {};
+      const normalized = normalizeCoderTerminalSignal(end.event, data);
+      const terminal = classifyCoderTerminalOutcome({
+        event: normalized.event,
+        reason: normalized.data.reason,
+        error: normalized.data.error,
+        message: normalized.data.message,
+      });
+      const status = terminal.classification === 'completed'
+        ? 'succeeded'
+        : terminal.classification === 'cancelled'
+          ? 'cancelled'
+          : 'failed';
+      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+        status,
+        reason: terminal.reason,
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(sessionId, dedupeKey, {
+          event: normalized.event,
+          data: {
+            ...normalized.data,
+            reason: terminal.reason,
+            duplicate: true,
+            persisted: true,
+          },
+        }, -1, claimGuard);
+      }
+    };
+    if (bus.ended) settle();
+    else bus.endListeners.add(settle);
+  }
+
+  function materializePendingAgentTransition(sessionId: number): void {
+    const transition = sessionStore.consumePendingAgentTransition?.(sessionId) ?? null;
+    if (!transition) return;
+
+    const from = transition.fromAgent ?? 'session-default';
+    const to = transition.toAgent ?? 'session-default';
+    const reminder =
+      `<system-reminder>Agent transition: ${from} → ${to}. ` +
+      `The active agent is now ${to}. Follow the current system prompt, behavior, ` +
+      `tool rules, and mutation policy for this new agent. Earlier assistant claims ` +
+      `about the active agent or mode are stale.</system-reminder>`;
+    sessionStore.appendMessage(sessionId, {
+      role: 'user',
+      content: [{ type: 'text', text: reminder }],
+      isMeta: true,
+    });
+    sessionStore.recordSessionInput({
+      session_id: sessionId,
+      kind: 'system_reminder',
+      source_label: 'reminder:agent-transition',
+      content: reminder,
+    });
+  }
+
+  function contains(root: string, candidate: string): boolean {
+    const rel = relative(resolve(root), candidate);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  }
+
+  /**
+   * Persist the narrowest possible grant for a path-backed attachment. A
+   * reference inside the active project/worktree needs no extra grant; an
+   * external reference authorizes that exact file (never its parent folder).
+   */
+  function authorizeAttachmentReferences(
+    sessionId: number,
+    paths: readonly string[],
+    enteringWorktree: boolean,
+  ): string | null {
+    if (paths.length === 0) return null;
+    const session = sessionStore.getSession(sessionId);
+    if (!session) return 'session not found';
+    const projectRoot = enteringWorktree
+      ? null
+      : session.worktree_path ?? deps.db.getProject(session.project_id)?.root_path ?? null;
+    const existing = sessionStore.listSessionFilesystemRoots(sessionId);
+
+    for (const path of new Set(paths)) {
+      if (projectRoot && contains(projectRoot, path)) continue;
+      if (existing.some((root) => contains(root.root_path, path))) continue;
+      if (existing.length >= 16) {
+        return 'session filesystem reference limit reached (16); remove an old filesystem grant first';
+      }
+      const row = sessionStore.upsertSessionFilesystemRoot(sessionId, path, 'read');
+      existing.push(row);
+    }
+    return null;
+  }
 
   function keepSemanticProjectAlive(sessionId: number, bus: CoderRunBus): void {
     if (bus.ended || semanticBusLeases.has(bus)) return;
@@ -354,8 +734,19 @@ export function mountCoderStreamRoutes(
       // content-mismatched cache → clear + recompute.
       if (session.preflight_seed_json) {
         try {
-          const cached = JSON.parse(session.preflight_seed_json) as { h?: string; seed?: PreflightSeed };
+          const cached = JSON.parse(session.preflight_seed_json) as {
+            h?: string;
+            seed?: PreflightSeed;
+            goalLifecycleIntentVersion?: number;
+          };
           if (cached && cached.seed && cached.h === cacheHash) {
+            const markedCache = markGoalLifecycleIntentCache(
+              session.preflight_seed_json,
+              cached.seed.taskKind,
+            );
+            if (markedCache !== session.preflight_seed_json) {
+              try { sessionStore.setSessionPreflightSeed(id, markedCache); } catch { /* best-effort */ }
+            }
             applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
             return cached.seed;
           }
@@ -378,7 +769,7 @@ export function mountCoderStreamRoutes(
           kind: 'preflight',
           source_label: 'turn-start',
           content: result.status === 'ok' && result.seed
-            ? renderPreflightHint(result.seed)
+            ? renderPreflightHint(result.seed, { bugWorkflow: process.env.CODER_BUG_WORKFLOW !== '0' })
             : (result.error ?? result.status),
           meta: {
             status: result.status,
@@ -406,7 +797,10 @@ export function mountCoderStreamRoutes(
         try {
           sessionStore.setSessionPreflightSeed(
             id,
-            JSON.stringify({ h: cacheHash, seed: result.seed }),
+            markGoalLifecycleIntentCache(
+              JSON.stringify({ h: cacheHash, seed: result.seed }),
+              result.seed.taskKind,
+            ),
           );
         } catch { /* cache is best-effort */ }
       }
@@ -506,7 +900,7 @@ export function mountCoderStreamRoutes(
   app.post('/api/coder/sessions/:id/messages', attachmentBodyLimit, async (c) => {
     const id = parseIdParam(c);
     const body = await c.req.json<SendMessageBody>();
-    const attachmentsCheck = validateAttachments(body.attachments);
+    const attachmentsCheck = validateAttachments(body.attachments, { allowFileReferences: true });
     if (!attachmentsCheck.ok) {
       return c.json(
         { error: attachmentsCheck.error, code: attachmentsCheck.code },
@@ -514,6 +908,9 @@ export function mountCoderStreamRoutes(
       );
     }
     body.attachments = attachmentsCheck.value;
+    const attachmentReferencePaths = body.attachments
+      ?.flatMap((attachment) => attachment.path ? [attachment.path] : [])
+      ?? [];
     if (!body.resume && !body.content?.trim() && body.attachments?.length) {
       body.content = DEFAULT_ATTACHMENT_PROMPT;
     }
@@ -559,6 +956,116 @@ export function mountCoderStreamRoutes(
       return unique.length > 0 ? unique : undefined;
     })();
 
+    const claimSession = sessionStore.getSession(id);
+    const liveAtClaim = workerPool.getBus(id);
+    // Command identity cannot depend on mutable transcript state: after the
+    // first append, a retry must still resolve the same durable row. Historical
+    // first-message `start` rows are handled transactionally as an alias by the
+    // control-plane adapter.
+    const commandKind = body.resume ? 'resume' as const : 'send_message' as const;
+    let earlyClaim = await withSessionLock(id, async () => claimCoderCommand({
+      sessionId: id,
+      kind: commandKind,
+      dedupeKey,
+      fingerprint: fingerprintLocalCoderMessage({
+        content: body.content,
+        attachments: body.attachments,
+        resume: body.resume,
+        agent: agentSelectionId ?? runAgent,
+        profile: body.profile,
+        planMode: body.plan_mode,
+        maxTurns: body.max_turns,
+        selectedSkillIds,
+        worktree: body.worktree,
+      }),
+      // AgentRun is still a default-off shadow projection. The command ledger,
+      // however, is always authoritative for keyed retries.
+      createRun: coderControlPlaneShadowEnabled() && !(liveAtClaim && !liveAtClaim.ended),
+      linkedAgentRunId: liveAtClaim && !liveAtClaim.ended
+        ? workerPool.getControlPlaneRunContext?.(id)?.agentRunId
+        : undefined,
+      role: runAgent ?? 'explore',
+      agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
+      requestedProvider: claimSession?.provider,
+      requestedModel: claimSession?.model,
+      requestedReasoningEffort: claimSession?.reasoning_effort_override ?? undefined,
+      requestedPreset: agentSelectionId ?? runAgent,
+      requestedCapabilityProfile: body.profile ?? claimSession?.tool_profile ?? 'auto',
+      lastEventId: parseLastEventId(c),
+    }));
+
+    // A duplicate that arrived while the owner was still normalizing/indexing
+    // waits outside the session lock. The owner later settles this promise with
+    // a bus or explicit terminal, so no request can deadlock the owner's final
+    // run/attach decision.
+    if (earlyClaim.kind === 'pending') {
+      const settled = await earlyClaim.settled;
+      if (settled.retryLater) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(settled.retryLater.retryAfterMs / 1_000))),
+        );
+        return c.json({
+          error: 'the original request is still being admitted; retry later',
+          code: 'IDEMPOTENCY_RETRY_LATER',
+          retry_after_ms: settled.retryLater.retryAfterMs,
+        }, 503);
+      }
+      if (settled.terminal) {
+        return syntheticTerminalSSE(c, settled.terminal.event, settled.terminal.data);
+      }
+      if (settled.bus && (settled.bus.ended || settled.bus === workerPool.getBus(id))) {
+        return pumpBusToSSE(c, settled.bus, {
+          // The reconnecting client owns the replay cursor. `sinceHint` only
+          // describes where the original request attached and must not advance
+          // a retry past buffered events it has not acknowledged.
+          since: parseLastEventId(c),
+          trimReplay: true,
+        });
+      }
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+    }
+    if (earlyClaim.kind === 'replay') {
+      return pumpBusToSSE(c, earlyClaim.bus, { since: earlyClaim.since, trimReplay: true });
+    }
+    if (earlyClaim.kind === 'terminal') {
+      return syntheticTerminalSSE(c, earlyClaim.event, earlyClaim.data);
+    }
+    if (earlyClaim.kind === 'reject') {
+      if (earlyClaim.retryAfterMs !== undefined) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(earlyClaim.retryAfterMs / 1_000))),
+        );
+      }
+      return c.json(earlyClaim.body, earlyClaim.status);
+    }
+    const claimAcceptance = earlyClaim.acceptance;
+    const claimGuard = earlyClaim.claimGuard;
+    let commandSettled = false;
+    const settleClaimFailure = (
+      reason: string,
+      error?: unknown,
+      status: 'failed' | 'cancelled' = 'failed',
+    ): void => {
+      if (commandSettled) return;
+      commandSettled = true;
+      terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
+        status,
+        reason,
+        ...(error
+          ? { errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown' }
+          : {}),
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(id, dedupeKey, {
+          event: 'error',
+          data: { reason, duplicate: false },
+        }, -1, claimGuard);
+      }
+    };
+
+    try {
     // Office/OpenDocument files stay native on general file-input transports
     // (OpenAI/Codex/OpenRouter) and use a portable local text extraction path
     // elsewhere. PDFs similarly follow the declarative transport/model
@@ -602,6 +1109,7 @@ export function mountCoderStreamRoutes(
             c.req.raw.signal,
           );
           if (readiness.status === 'aborted') {
+            settleClaimFailure('index-wait-aborted', undefined, 'cancelled');
             return c.json({ code: 'INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
           }
           if (readiness.status !== 'ready') {
@@ -652,6 +1160,13 @@ export function mountCoderStreamRoutes(
       const pool = workerPool;
       const existingBus = pool.getBus(id);
       if (existingBus && !existingBus.ended) {
+        if (
+          claimAcceptance?.commandContext
+          && !bindLocalCommandBus(controlPlaneStore, claimAcceptance, existingBus.busId)
+        ) {
+          settleClaimFailure('command-bus-binding-failed');
+          throw new Error('failed to bind command to the live coder bus');
+        }
         if (body.attachments && body.attachments.length > 0) {
           return {
             kind: 'reject',
@@ -676,35 +1191,6 @@ export function mountCoderStreamRoutes(
           }
           await pool.interruptWait(id).catch(() => undefined);
         }
-        const shadowEnabled = coderControlPlaneShadowEnabled();
-        const runContext = shadowEnabled ? pool.getControlPlaneRunContext?.(id) ?? null : null;
-        const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
-        const acceptance = shadowEnabled
-          ? acceptLocalCoderCommand({
-              store: controlPlaneStore,
-              legacySessionId: id,
-              kind: 'send_message',
-              idempotencyKey: dedupeKey,
-              fingerprint: fingerprintLocalCoderMessage({
-                content: body.content,
-                resume: false,
-                agent: agentSelectionId ?? runAgent,
-                profile: body.profile,
-                planMode: body.plan_mode,
-                maxTurns: body.max_turns,
-                selectedSkillIds,
-              }),
-              createRun: false,
-              linkedAgentRunId: runContext?.agentRunId,
-              role: runAgent ?? 'explore',
-              agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
-              requestedProvider: shadowSession?.provider,
-              requestedModel: shadowSession?.model,
-              requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
-              requestedPreset: agentSelectionId ?? runAgent,
-              requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
-            })
-          : null;
         try {
           const userMsg: AgentMessage = {
             role: 'user',
@@ -713,56 +1199,32 @@ export function mountCoderStreamRoutes(
           };
           const roundMessageId = sessionStore.appendMessage(id, userMsg);
           await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
-          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+          terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
             status: 'succeeded',
             reason: 'message-enqueued',
           });
+          commandSettled = true;
           return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
         } catch (error) {
-          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
-            status: 'failed',
-            reason: 'message-enqueue-failed',
-            errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown',
-          });
+          settleClaimFailure('message-enqueue-failed', error);
           throw error;
         }
       }
       // `runFresh` spawns the worker if needed and returns the main-side
       // mirrored bus. All model-facing options are forwarded unchanged.
-      const shadowEnabled = coderControlPlaneShadowEnabled();
-      const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
-      const commandKind = body.resume
-        ? 'resume'
-        : shadowEnabled && sessionStore.getMessageCount(id) === 0
-          ? 'start'
-          : 'send_message';
-      const acceptance: LocalCoderShadowAcceptance | null = shadowEnabled
-        ? acceptLocalCoderCommand({
-            store: controlPlaneStore,
-            legacySessionId: id,
-            kind: commandKind,
-            idempotencyKey: dedupeKey,
-            fingerprint: fingerprintLocalCoderMessage({
-              content: body.content,
-              attachments: body.attachments,
-              resume: body.resume,
-              agent: agentSelectionId ?? runAgent,
-              profile: body.profile,
-              planMode: body.plan_mode,
-              maxTurns: body.max_turns,
-              selectedSkillIds,
-              worktree: body.worktree,
-            }),
-            createRun: true,
-            role: runAgent ?? 'explore',
-            agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
-            requestedProvider: shadowSession?.provider,
-            requestedModel: shadowSession?.model,
-            requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
-            requestedPreset: agentSelectionId ?? runAgent,
-            requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
-          })
-        : null;
+      const referenceError = authorizeAttachmentReferences(
+        id,
+        attachmentReferencePaths,
+        body.worktree != null,
+      );
+      if (referenceError) {
+        return {
+          kind: 'reject',
+          status: 409,
+          body: { error: referenceError, code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED' },
+        };
+      }
+      materializePendingAgentTransition(id);
       const freshBus = await pool.runFresh(id, {
         userMessage: body.content,
         attachments: body.attachments,
@@ -787,58 +1249,41 @@ export function mountCoderStreamRoutes(
         // in history. runCoder({resume:true}) picks up from there
         // without pushing a new user turn.
         resume: body.resume,
-        controlPlaneRunContext: acceptance?.runContext,
+        controlPlaneRunContext: claimAcceptance?.runContext,
       });
+      if (
+        claimAcceptance?.commandContext
+        && !bindLocalCommandBus(controlPlaneStore, claimAcceptance, freshBus.busId)
+      ) {
+        freshBus.ctrl.abort(new Error('command-bus-binding-failed'));
+        settleClaimFailure('command-bus-binding-failed');
+        throw new Error('failed to bind command to the fresh coder bus');
+      }
+      bindFreshCommandCompletion(id, dedupeKey, claimAcceptance, freshBus, claimGuard);
+      commandSettled = true;
       return { kind: 'fresh', bus: freshBus };
     };
 
-    const decision = await withSessionLock(id, async (): Promise<
-      | Awaited<ReturnType<typeof decide>>
-      | { kind: 'replay'; bus: CoderRunBus; since: number }
-      | { kind: 'gone' }
-    > => {
-      // Idempotency: a `ReconnectingSSEClient` retry re-POSTs this body. If the
-      // same client_msg_id was seen and the original run's bus is still
-      // reachable, replay it (a bus already ended is always safe to replay; a
-      // live bus must be the currently-registered one, else waitEnded would
-      // hang) instead of re-running the append/push/spawn side effects. Runs
-      // BEFORE the isWaitingForInput check so a retry never triggers a spurious
-      // 409 interrupt handshake.
-      if (dedupeKey) {
-        const hit = recentMessageKeys.lookup(id, dedupeKey);
-        if (hit) {
-          emitWorkerLog(hit.bus, 'info', 'route', 'POST /messages deduped (retry replay)', {
-            client_msg_id: dedupeKey,
-            bus_gone: !hit.bus,
-          });
-          return hit.bus && (hit.bus.ended || hit.bus === workerPool.getBus(id))
-            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
-            : { kind: 'gone' };
-        }
-      }
+    const decision = await withSessionLock(id, async (): Promise<Awaited<ReturnType<typeof decide>>> => {
       const d = await decide();
-      // Record AFTER a successful decision, still inside the lock so a racing
-      // retry observes it. If `decide()` threw (e.g. a worker RPC failed after
-      // appendMessage) the key is intentionally NOT recorded, so the retry
-      // reprocesses rather than replaying a run that never took hold — the
-      // narrow cost being a possible duplicate append in that rare window.
+      // Settle the pre-side-effect claim while still inside the lock. A retry
+      // has either been waiting on this settlement or will observe the ready
+      // bus; it never re-enters append/push/spawn.
       if (dedupeKey && (d.kind === 'attach' || d.kind === 'fresh')) {
-        recentMessageKeys.record(id, dedupeKey, d.bus, d.kind === 'attach' ? d.tailFrom : -1);
+        recentMessageKeys.record(
+          id,
+          dedupeKey,
+          d.bus,
+          d.kind === 'attach' ? d.tailFrom : -1,
+          claimGuard,
+        );
       }
       return d;
     });
 
     if (decision.kind === 'reject') {
+      settleClaimFailure(decision.body.code.toLowerCase());
       return c.json(decision.body, decision.status);
-    }
-    if (decision.kind === 'replay') {
-      return pumpBusToSSE(c, decision.bus, { since: decision.since, trimReplay: true });
-    }
-    if (decision.kind === 'gone') {
-      // The retry's original run finished and its bus was evicted. Emit a
-      // synthetic terminal so the client resolves cleanly and refetches the
-      // persisted history (which already holds the run's output).
-      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
     if (decision.kind === 'attach') {
       keepSemanticProjectAlive(id, decision.bus);
@@ -853,6 +1298,10 @@ export function mountCoderStreamRoutes(
     // `runFresh()` already started `runCoder()` inside the worker. The route
     // only mirrors its bus to SSE; there is deliberately no in-process path.
     return pumpBusToSSE(c, decision.bus);
+    } catch (error) {
+      settleClaimFailure('request-setup-failed', error);
+      throw error;
+    }
   });
 
   /**
@@ -886,88 +1335,173 @@ export function mountCoderStreamRoutes(
     // here because no bus exists yet — but the route-entry hit will
     // appear via the fresh bus's `run_started` event seq=0.
 
+    const continueSession = sessionStore.getSession(id);
+    const liveAtContinueClaim = workerPool.getBus(id);
+    const continueEarlyClaim = await withSessionLock(id, async () => claimCoderCommand({
+      sessionId: id,
+      kind: 'resume',
+      dedupeKey,
+      fingerprint: fingerprintLocalCoderMessage({
+        content: '',
+        resume: true,
+        agent: agentSelectionId ?? runAgent,
+        profile: body.profile,
+        planMode: body.plan_mode,
+        maxTurns: body.max_turns,
+      }),
+      createRun: coderControlPlaneShadowEnabled()
+        && !(liveAtContinueClaim && !liveAtContinueClaim.ended),
+      linkedAgentRunId: liveAtContinueClaim && !liveAtContinueClaim.ended
+        ? workerPool.getControlPlaneRunContext?.(id)?.agentRunId
+        : undefined,
+      role: runAgent ?? 'explore',
+      agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
+      requestedProvider: continueSession?.provider,
+      requestedModel: continueSession?.model,
+      requestedReasoningEffort: continueSession?.reasoning_effort_override ?? undefined,
+      requestedPreset: agentSelectionId ?? runAgent,
+      requestedCapabilityProfile: body.profile ?? continueSession?.tool_profile ?? 'auto',
+      lastEventId: parseLastEventId(c),
+    }));
+
+    if (continueEarlyClaim.kind === 'pending') {
+      const settled = await continueEarlyClaim.settled;
+      if (settled.retryLater) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(settled.retryLater.retryAfterMs / 1_000))),
+        );
+        return c.json({
+          error: 'the original request is still being admitted; retry later',
+          code: 'IDEMPOTENCY_RETRY_LATER',
+          retry_after_ms: settled.retryLater.retryAfterMs,
+        }, 503);
+      }
+      if (settled.terminal) {
+        return syntheticTerminalSSE(c, settled.terminal.event, settled.terminal.data);
+      }
+      if (settled.bus && (settled.bus.ended || settled.bus === workerPool.getBus(id))) {
+        return pumpBusToSSE(c, settled.bus, {
+          since: parseLastEventId(c),
+          trimReplay: true,
+        });
+      }
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+    }
+    if (continueEarlyClaim.kind === 'replay') {
+      return pumpBusToSSE(c, continueEarlyClaim.bus, {
+        since: continueEarlyClaim.since,
+        trimReplay: true,
+      });
+    }
+    if (continueEarlyClaim.kind === 'terminal') {
+      return syntheticTerminalSSE(c, continueEarlyClaim.event, continueEarlyClaim.data);
+    }
+    if (continueEarlyClaim.kind === 'reject') {
+      if (continueEarlyClaim.retryAfterMs !== undefined) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(continueEarlyClaim.retryAfterMs / 1_000))),
+        );
+      }
+      return c.json(continueEarlyClaim.body, continueEarlyClaim.status);
+    }
+    const continueAcceptance = continueEarlyClaim.acceptance;
+    const continueClaimGuard = continueEarlyClaim.claimGuard;
+    let continueSettled = false;
+    const settleContinueFailure = (reason: string, error?: unknown): void => {
+      if (continueSettled) return;
+      continueSettled = true;
+      terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
+        status: 'failed',
+        reason,
+        ...(error
+          ? { errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown' }
+          : {}),
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(id, dedupeKey, {
+          event: 'error',
+          data: { reason, duplicate: false },
+        }, -1, continueClaimGuard);
+      }
+    };
+
     // Take the lock so a /continue racing with a /messages can't both spin
     // up runCoder for the same session. We hold it only across the
     // synchronous setup; the SSE pump runs outside the lock.
-    const decision = await withSessionLock(id, async (): Promise<
-      | { kind: 'replay'; bus: CoderRunBus; since: number }
-      | { kind: 'gone' }
+    let decision:
       | { kind: 'attach'; bus: CoderRunBus; tailFrom: number }
-      | { kind: 'fresh'; bus: CoderRunBus }
-    > => {
-      // Idempotency: a retry re-POSTs this body. Replay the original bus
-      // instead of spinning a second runCoder (see /messages + recent-message-keys.ts).
-      if (dedupeKey) {
-        const hit = recentMessageKeys.lookup(id, dedupeKey);
-        if (hit) {
-          return hit.bus && (hit.bus.ended || hit.bus === workerPool.getBus(id))
-            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
-            : { kind: 'gone' };
+      | { kind: 'fresh'; bus: CoderRunBus };
+    try {
+      decision = await withSessionLock(id, async () => {
+        // A live run already owns this session. Tail it rather than replacing
+        // activeRuns; the early command claim is terminalized as attached.
+        const live = workerPool.getBus(id);
+        if (live && !live.ended) {
+          const tailFrom = live.nextSeq - 1;
+          if (
+            continueAcceptance?.commandContext
+            && !bindLocalCommandBus(controlPlaneStore, continueAcceptance, live.busId)
+          ) {
+            settleContinueFailure('command-bus-binding-failed');
+            throw new Error('failed to bind continue command to the live coder bus');
+          }
+          terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
+            status: 'succeeded',
+            reason: 'attached-to-live-run',
+          });
+          continueSettled = true;
+          if (dedupeKey) {
+            recentMessageKeys.record(id, dedupeKey, live, tailFrom, continueClaimGuard);
+          }
+          return { kind: 'attach' as const, bus: live, tailFrom };
         }
-      }
-      // Hardening: a live run already owns this session (double-submit, a
-      // retry without a key, or a /continue racing an in-flight run). Never
-      // start a second concurrent runCoder over the same session DB — tail
-      // the live bus instead. Previously this path unconditionally created a
-      // fresh bus and overwrote activeRuns, orphaning the running runner.
-      const live = workerPool.getBus(id);
-      if (live && !live.ended) {
-        if (dedupeKey) recentMessageKeys.record(id, dedupeKey, live, live.nextSeq - 1);
-        return { kind: 'attach', bus: live, tailFrom: live.nextSeq - 1 };
-      }
-      const shadowEnabled = coderControlPlaneShadowEnabled();
-      const shadowSession = shadowEnabled ? sessionStore.getSession(id) : null;
-      const acceptance = shadowEnabled
-        ? acceptLocalCoderCommand({
-            store: controlPlaneStore,
-            legacySessionId: id,
-            kind: 'resume',
-            idempotencyKey: dedupeKey,
-            fingerprint: fingerprintLocalCoderMessage({
-              content: '',
-              resume: true,
-              agent: agentSelectionId ?? runAgent,
-              profile: body.profile,
-              planMode: body.plan_mode,
-              maxTurns: body.max_turns,
-            }),
-            createRun: true,
-            role: runAgent ?? 'explore',
-            agentDefinitionId: agentSelectionId ?? runAgent ?? 'explore',
-            requestedProvider: shadowSession?.provider,
-            requestedModel: shadowSession?.model,
-            requestedReasoningEffort: shadowSession?.reasoning_effort_override ?? undefined,
-            requestedPreset: agentSelectionId ?? runAgent,
-            requestedCapabilityProfile: body.profile ?? shadowSession?.tool_profile ?? 'auto',
-          })
-        : null;
-      const newBus = await workerPool.runFresh(id, {
-        userMessage: '',
-        maxTurns: body.max_turns,
-        planMode: body.plan_mode,
-        agent: runAgent,
-        agentSelectionId,
-        customAgentPrompt: customAgent?.prompt,
-        allowedToolNames: customAgent?.toolNames ?? undefined,
-        profile: body.profile,
-        resume: true,
-        modelSupportsVision: resolveModelSupportsVision(id),
-        describeImages: body.describe_images,
-        previewAvailable: resolvePreviewAvailable(id),
-        browserAvailable: resolveBrowserAvailable(),
-        ...deps.buildAgentDecisionRuntimeOptions(),
-        controlPlaneRunContext: acceptance?.runContext,
-      });
-      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, newBus, -1);
-      return { kind: 'fresh', bus: newBus };
-    });
 
-    if (decision.kind === 'replay') {
-      return pumpBusToSSE(c, decision.bus, { since: decision.since, trimReplay: true });
+        materializePendingAgentTransition(id);
+        const newBus = await workerPool.runFresh(id, {
+          userMessage: '',
+          maxTurns: body.max_turns,
+          planMode: body.plan_mode,
+          agent: runAgent,
+          agentSelectionId,
+          customAgentPrompt: customAgent?.prompt,
+          allowedToolNames: customAgent?.toolNames ?? undefined,
+          profile: body.profile,
+          resume: true,
+          modelSupportsVision: resolveModelSupportsVision(id),
+          describeImages: body.describe_images,
+          previewAvailable: resolvePreviewAvailable(id),
+          browserAvailable: resolveBrowserAvailable(),
+          ...deps.buildAgentDecisionRuntimeOptions(),
+          controlPlaneRunContext: continueAcceptance?.runContext,
+        });
+        if (
+          continueAcceptance?.commandContext
+          && !bindLocalCommandBus(controlPlaneStore, continueAcceptance, newBus.busId)
+        ) {
+          newBus.ctrl.abort(new Error('command-bus-binding-failed'));
+          settleContinueFailure('command-bus-binding-failed');
+          throw new Error('failed to bind continue command to the fresh coder bus');
+        }
+        bindFreshCommandCompletion(
+          id,
+          dedupeKey,
+          continueAcceptance,
+          newBus,
+          continueClaimGuard,
+        );
+        continueSettled = true;
+        if (dedupeKey) {
+          recentMessageKeys.record(id, dedupeKey, newBus, -1, continueClaimGuard);
+        }
+        return { kind: 'fresh' as const, bus: newBus };
+      });
+    } catch (error) {
+      settleContinueFailure('continue-setup-failed', error);
+      throw error;
     }
-    if (decision.kind === 'gone') {
-      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
-    }
+
     if (decision.kind === 'attach') {
       emitWorkerLog(decision.bus, 'warn', 'route', 'POST /continue attached to live run', {
         client_msg_id: dedupeKey ?? null,

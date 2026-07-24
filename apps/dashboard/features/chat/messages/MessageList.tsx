@@ -6,14 +6,15 @@ import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { LOAD_MORE_SIZE } from '../constants.js';
 import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
 import {
-  collectLatestPersistedInteractivePromptSignatures,
-  collectPersistedToolResultIds,
+  buildPersistedLiveReconciliation,
   groupMessages,
   liveTurnCoversPersistedAssistantRun,
   liveTurnContinuesPersistedAssistant,
+  liveTurnReconciliationRevision,
   mergeConsecutiveAssistantGroups,
   suppressLatestPersistedAssistantRun,
   suppressPersistedAgentDuplicates,
+  type PersistedLiveReconciliation,
   visibleLiveBlocks,
 } from '../utils.js';
 import { AssistantBubble } from './AssistantBubble.js';
@@ -50,6 +51,15 @@ export function shouldLoadEarlierAtScrollTop(scrollTop: number): boolean {
   return scrollTop <= LOAD_EARLIER_SCROLL_THRESHOLD;
 }
 
+/** Token-only streaming updates need one paint; history/structure changes need
+ * the immediate + double-rAF settle pass used for fonts/images/layout. */
+export function messageListScrollPasses(
+  streaming: boolean,
+  structuralChange: boolean,
+): 1 | 3 {
+  return streaming && !structuralChange ? 1 : 3;
+}
+
 export interface MessageListProps {
   sessionData: SessionData | null;
   currentTurn: AssistantTurn | null;
@@ -60,6 +70,9 @@ export interface MessageListProps {
   doneReason: string | null;
   error: string | null;
   liveTurnDuplicatedInHistory: boolean;
+  /** Precomputed once per history refetch by LiveMessageList. Direct callers
+   *  may omit it and MessageList builds the same index locally. */
+  liveReconciliation?: PersistedLiveReconciliation;
   /** Assistant tool_use ids already in persisted history. The live turn drops
    *  any gate/tool block whose id is here, so a paused gate (awaiting approval)
    *  isn't rendered twice — once persisted (above) and once live (below). */
@@ -192,9 +205,16 @@ const PersistedMessages = React.memo(function PersistedMessages({
   );
   const chronologicalGroups = useMemo(
     () => suppressLatestAssistantRun
-      ? suppressLatestPersistedAssistantRun(cappedGroups)
+      ? suppressLatestPersistedAssistantRun(
+          cappedGroups,
+          sessionData.preceding_user_message_id,
+        )
       : cappedGroups,
-    [cappedGroups, suppressLatestAssistantRun],
+    [
+      cappedGroups,
+      sessionData.preceding_user_message_id,
+      suppressLatestAssistantRun,
+    ],
   );
   const displayGroups = useMemo(
     () => mergeConsecutiveAssistantGroups(
@@ -581,6 +601,7 @@ const LiveTurn = React.memo(function LiveTurn({
   persistedInteractivePromptSignatures,
   persistedToolResultIds,
   preferCompleteLiveRun,
+  reconciliation,
   continuation,
 }: {
   currentTurn: AssistantTurn | null;
@@ -593,17 +614,32 @@ const LiveTurn = React.memo(function LiveTurn({
   persistedInteractivePromptSignatures: Set<string>;
   persistedToolResultIds: Set<string>;
   preferCompleteLiveRun: boolean;
+  reconciliation: PersistedLiveReconciliation;
   continuation: boolean;
 }) {
   // Drop live blocks already rendered by the persisted history (gate cards on a
   // paused turn, or a tool call the refetch landed before currentTurn cleared).
   const allBlocks = currentTurn?.blocks ?? [];
-  const visible = visibleLiveBlocks(
-    allBlocks,
-    persistedToolUseIds,
-    persistedInteractivePromptSignatures,
-    persistedToolResultIds,
-    preferCompleteLiveRun,
+  const allBlocksRef = useRef(allBlocks);
+  allBlocksRef.current = allBlocks;
+  const structureRevision = liveTurnReconciliationRevision(currentTurn);
+  const visible = useMemo(
+    () => visibleLiveBlocks(
+      allBlocksRef.current,
+      persistedToolUseIds,
+      persistedInteractivePromptSignatures,
+      persistedToolResultIds,
+      preferCompleteLiveRun,
+      reconciliation,
+    ),
+    [
+      persistedInteractivePromptSignatures,
+      persistedToolResultIds,
+      persistedToolUseIds,
+      preferCompleteLiveRun,
+      reconciliation,
+      structureRevision,
+    ],
   );
   const hasBlocks = visible.length > 0 && !hidden;
   if (hasBlocks) {
@@ -647,6 +683,7 @@ export const MessageList = React.memo(function MessageList({
   doneReason,
   error,
   liveTurnDuplicatedInHistory,
+  liveReconciliation,
   persistedToolUseIds,
   fallbackProviderId,
   tasksState,
@@ -661,6 +698,9 @@ export const MessageList = React.memo(function MessageList({
   // animation per token fights with layout and amplifies the jank.
   const stickToBottomRef = useRef(true);
   const sessionIdRef = useRef<number | null>(null);
+  const previousScrollDataRef = useRef<SessionData | null | undefined>(undefined);
+  const previousScrollStructureRef = useRef<string | undefined>(undefined);
+  const previousScrollStreamingRef = useRef<boolean | undefined>(undefined);
   // Detect user-initiated scroll-up via wheel/touch — not generic scroll
   // events, which also fire on programmatic scrolls & layout reflows and
   // can falsely flip stickToBottomRef off when the chat grows.
@@ -716,46 +756,72 @@ export const MessageList = React.memo(function MessageList({
     }
   }, [sessionData?.session.id]);
 
+  const scrollStructureRevision = liveTurnReconciliationRevision(currentTurn);
   useEffect(() => {
     const el = scrollRef.current;
+    const structuralChange =
+      previousScrollDataRef.current !== sessionData
+      || previousScrollStructureRef.current !== scrollStructureRevision
+      || previousScrollStreamingRef.current !== streaming;
+    previousScrollDataRef.current = sessionData;
+    previousScrollStructureRef.current = scrollStructureRevision;
+    previousScrollStreamingRef.current = streaming;
     if (!el || !stickToBottomRef.current) return;
-    // Double-RAF: on mobile the content often lays out *after* the effect
-    // runs (fonts, images, code blocks, virtual keyboard resize). Scrolling
-    // once on the synchronous pass lands at scrollHeight=0 and sticks the
-    // user at the top — the second frame runs after layout has settled.
     const scroll = () => el.scrollTo({ top: el.scrollHeight, behavior: streaming ? 'auto' : 'smooth' });
+    if (messageListScrollPasses(streaming, structuralChange) === 1) {
+      // Token frames are already rAF-batched by openStream. One further paint
+      // is enough to observe the new height and avoids three scroll/layout
+      // passes for every token flush in a long turn.
+      const raf = requestAnimationFrame(scroll);
+      return () => cancelAnimationFrame(raf);
+    }
+    // Structural/history changes can mount images, fonts and whole message
+    // groups after the first paint. Preserve the settled-layout triple pass.
     scroll();
+    let raf2: number | null = null;
     const raf1 = requestAnimationFrame(() => {
       scroll();
-      const raf2 = requestAnimationFrame(scroll);
-      (scroll as unknown as { _raf2?: number })._raf2 = raf2;
+      raf2 = requestAnimationFrame(scroll);
     });
     return () => {
       cancelAnimationFrame(raf1);
-      const raf2 = (scroll as unknown as { _raf2?: number })._raf2;
-      if (raf2) cancelAnimationFrame(raf2);
+      if (raf2 !== null) cancelAnimationFrame(raf2);
     };
-  }, [sessionData, currentTurn, streaming]);
+  }, [sessionData, currentTurn, scrollStructureRevision, streaming]);
 
   const providerId = sessionData?.session.provider ?? fallbackProviderId;
-  const persistedInteractivePromptSignatures = useMemo(
-    () => collectLatestPersistedInteractivePromptSignatures(sessionData?.messages ?? []),
-    [sessionData],
+  const persistedReconciliation = useMemo(
+    () => liveReconciliation ?? buildPersistedLiveReconciliation(
+      sessionData?.messages ?? [],
+      sessionData?.preceding_user_message_id,
+      (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
+    ),
+    [liveReconciliation, sessionData],
   );
-  const persistedToolResultIds = useMemo(
-    () => collectPersistedToolResultIds(sessionData?.messages ?? []),
-    [sessionData],
-  );
+  const persistedInteractivePromptSignatures =
+    persistedReconciliation.pendingInteractivePromptSignatures;
+  const persistedToolResultIds = persistedReconciliation.persistedToolResultIds;
   const liveContinuation = useMemo(
     () => liveTurnContinuesPersistedAssistant(sessionData?.messages ?? []),
     [sessionData],
   );
+  const currentTurnRef = useRef(currentTurn);
+  currentTurnRef.current = currentTurn;
+  const reconciliationRevision = liveTurnReconciliationRevision(
+    currentTurn,
+    persistedReconciliation.tailTextLength,
+    persistedReconciliation.tailThinkingLength,
+  );
   const preferCompleteLiveRun = useMemo(
     () => !liveTurnDuplicatedInHistory && liveTurnCoversPersistedAssistantRun(
-      currentTurn,
-      sessionData?.messages ?? [],
+      currentTurnRef.current,
+      persistedReconciliation,
     ),
-    [currentTurn, liveTurnDuplicatedInHistory, sessionData],
+    [
+      liveTurnDuplicatedInHistory,
+      persistedReconciliation,
+      reconciliationRevision,
+    ],
   );
   const liveAgentIdentityKey = useMemo(() => JSON.stringify(
     (currentTurn?.blocks ?? []).flatMap((block) => (
@@ -834,6 +900,7 @@ export const MessageList = React.memo(function MessageList({
           persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
           persistedToolResultIds={persistedToolResultIds}
           preferCompleteLiveRun={preferCompleteLiveRun}
+          reconciliation={persistedReconciliation}
           continuation={preferCompleteLiveRun ? false : liveContinuation}
         />
 

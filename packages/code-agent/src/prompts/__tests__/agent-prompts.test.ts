@@ -101,6 +101,7 @@ describe('base.txt interpolation contract', () => {
     'subagentsSection',
     'visionSection',
     'memorySection',
+    'goalLifecycleSection',
   ]);
 
   it('every {{placeholder}} in base.txt is supplied by buildSystemPrompt', () => {
@@ -150,5 +151,24 @@ describe('capability-aligned composition', () => {
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
     expect(prefix).toContain('# Fixed extension');
     expect(suffix).not.toContain('# Fixed extension');
+  });
+
+  it('renders the goal lifecycle only when both transition tools exist', () => {
+    const withoutGoalTools = buildSystemPrompt({
+      ...BASE_CTX,
+      agentId: undefined,
+      availableTools: new Set(['read_file']),
+    });
+    expect(withoutGoalTools).not.toContain('# Goal lifecycle');
+    expect(withoutGoalTools).not.toContain('create_goal');
+    expect(withoutGoalTools).not.toContain('update_goal');
+
+    const withGoalTools = buildSystemPrompt({
+      ...BASE_CTX,
+      agentId: undefined,
+      availableTools: new Set(['create_goal', 'update_goal']),
+    });
+    expect(withGoalTools).toContain('# Goal lifecycle');
+    expect(withGoalTools).toContain('Before non-trivial work');
   });
 });

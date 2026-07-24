@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
-import { isLiveTurnDuplicatedInHistory } from '../utils.js';
+import {
+  buildPersistedLiveReconciliation,
+  isLiveTurnDuplicatedInHistory,
+  liveTurnReconciliationRevision,
+} from '../utils.js';
 import { MessageList, type MessageListProps } from './MessageList.js';
 
 const GOAL_TOOL_NAMES = new Set([
@@ -12,7 +16,7 @@ const GOAL_TOOL_NAMES = new Set([
 
 interface LiveMessageListProps extends Omit<
   MessageListProps,
-  'currentTurn' | 'liveTurnDuplicatedInHistory'
+  'currentTurn' | 'liveReconciliation' | 'liveTurnDuplicatedInHistory'
 > {
   sessionId: number;
   onClearCurrentTurn: () => void;
@@ -32,13 +36,28 @@ export function LiveMessageList({
   ...props
 }: LiveMessageListProps) {
   const currentTurn = useAgentCurrentTurn(sessionId);
+  const reconciliation = useMemo(
+    () => buildPersistedLiveReconciliation(
+      sessionData?.messages ?? [],
+      sessionData?.preceding_user_message_id,
+      (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
+    ),
+    [sessionData],
+  );
+  const currentTurnRef = useRef(currentTurn);
+  currentTurnRef.current = currentTurn;
+  const reconciliationRevision = liveTurnReconciliationRevision(
+    currentTurn,
+    reconciliation.tailTextLength,
+    reconciliation.tailThinkingLength,
+  );
   const duplicated = useMemo(
     () => isLiveTurnDuplicatedInHistory(
-      currentTurn,
-      sessionData?.messages ?? [],
+      currentTurnRef.current,
+      reconciliation,
       persistedToolUseIds,
     ),
-    [currentTurn, persistedToolUseIds, sessionData],
+    [persistedToolUseIds, reconciliation, reconciliationRevision],
   );
 
   useEffect(() => {
@@ -66,6 +85,7 @@ export function LiveMessageList({
       {...props}
       sessionData={sessionData}
       currentTurn={currentTurn}
+      liveReconciliation={reconciliation}
       liveTurnDuplicatedInHistory={duplicated}
       persistedToolUseIds={persistedToolUseIds}
     />

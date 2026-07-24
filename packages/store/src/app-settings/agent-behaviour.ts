@@ -74,11 +74,39 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   {
     key: 'CODER_GOAL_VERIFY_MAX_TURNS',
     label: 'Completion verifier max turns',
-    description: 'Optional exact turn cap for the independent completion verifier. 0 = unlimited.',
+    description:
+      'Turn cap for the independent completion verifier. Defaults to 12; values below 1 fall back to 12, and the hard maximum is 50.',
     type: 'int',
     category: 'agent',
-    default: '0',
+    default: '12',
+    min: 1,
+    max: 50,
+    advanced: true,
+  },
+  {
+    key: 'CODER_FINISH_EVIDENCE_ROLLOUT_PERCENT',
+    label: 'Completion-evidence gate rollout %',
+    description:
+      'Percent of sessions (deterministic per session id) that get the one-shot completion-evidence nudge: ' +
+      'before saying work is done, if edits were made without a fresh test/typecheck/lint/build, the agent is ' +
+      'reminded once (reversible). 0 disables; 100 enables for everyone.',
+    type: 'int',
+    category: 'agent',
+    default: '100',
     min: 0,
+    max: 100,
+    advanced: true,
+  },
+  {
+    key: 'CODER_BUG_WORKFLOW',
+    label: 'Bug reproduction-first workflow',
+    description:
+      'For sessions the preflight classifies as a bugfix, inject a short reproduce-before-fix workflow ' +
+      '(reproduction that fails → root cause → minimal fix → confirm before-fails/after-passes). ' +
+      'Purely advisory text; set 0 to suppress it.',
+    type: 'bool',
+    category: 'agent',
+    default: '1',
     advanced: true,
   },
   {

@@ -78,6 +78,12 @@ beforeEach(() => {
       total_cache_read_tokens INTEGER DEFAULT 0,
       total_cache_creation_tokens INTEGER DEFAULT 0,
       last_turn_input_tokens INTEGER DEFAULT 0,
+      goal_text TEXT,
+      goal_status TEXT,
+      goal_budget_tokens INTEGER,
+      goal_completion_note TEXT,
+      goal_created_at TEXT,
+      goal_updated_at TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
     );
     CREATE TABLE coder_messages (
@@ -188,6 +194,344 @@ describe('persistAssistantTurn — paired tool-role message', () => {
     expect(roles.filter((r) => r === 'assistant')).toHaveLength(6);
     expect(roles.filter((r) => r === 'tool')).toHaveLength(6);
     expect(unmatchedToolUses(loaded.messages)).toEqual([]);
+  });
+});
+
+describe('persistAssistantTurn — atomic goal lifecycle', () => {
+  const createdAt = '2026-07-23T12:00:00.000Z';
+  const completedAt = '2026-07-23T12:05:00.000Z';
+  const activeSnapshot = () => ({
+    text: 'ship safely',
+    status: 'in_progress' as const,
+    budget_tokens: null,
+    completion_note: null,
+    created_at: createdAt,
+    updated_at: createdAt,
+  });
+
+  function seedActiveGoal(): void {
+    db.prepare(`
+      UPDATE coder_sessions
+         SET goal_text = 'ship safely',
+             goal_status = 'in_progress',
+             goal_completion_note = NULL,
+             goal_created_at = ?,
+             goal_updated_at = ?
+       WHERE id = ?
+    `).run(createdAt, createdAt, sessionId);
+  }
+
+  it('commits create_goal evidence and the fresh objective in one transaction', () => {
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'goal-create-1', name: 'create_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'goal-create-1', name: 'create_goal' }]),
+      goal_mutations: [{
+        tool_use_id: 'goal-create-1',
+        tool_name: 'create_goal',
+        expected: null,
+        next: activeSnapshot(),
+      }],
+    });
+
+    expect(db.prepare(`
+      SELECT goal_text, goal_status, goal_created_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_text: 'ship safely',
+      goal_status: 'in_progress',
+      goal_created_at: createdAt,
+    });
+    expect(db.prepare(`
+      SELECT tool_name, is_error FROM coder_tool_calls
+       WHERE tool_use_id = 'goal-create-1'
+    `).get()).toEqual({ tool_name: 'create_goal', is_error: 0 });
+  });
+
+  it('reconciles a committed goal turn when the dbWriter ACK was lost', () => {
+    const input = {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'goal-create-lost-ack', name: 'create_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'goal-create-lost-ack', name: 'create_goal' }]),
+      goal_mutations: [{
+        tool_use_id: 'goal-create-lost-ack',
+        tool_name: 'create_goal' as const,
+        expected: null,
+        next: activeSnapshot(),
+      }],
+    };
+
+    const committedMessageId = messages.persistAssistantTurn(db, input);
+    const reconciledMessageId = messages.persistAssistantTurn(db, input);
+
+    expect(reconciledMessageId).toBe(committedMessageId);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_tool_calls').get())
+      .toEqual({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_messages').get())
+      .toEqual({ count: 2 });
+    expect(db.prepare(`
+      SELECT goal_text, goal_status, goal_created_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_text: 'ship safely',
+      goal_status: 'in_progress',
+      goal_created_at: createdAt,
+    });
+  });
+
+  it('refuses to reconcile a reused goal tool id with different evidence', () => {
+    const base = {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'goal-create-conflict', name: 'create_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'goal-create-conflict', name: 'create_goal' }]),
+      goal_mutations: [{
+        tool_use_id: 'goal-create-conflict',
+        tool_name: 'create_goal' as const,
+        expected: null,
+        next: activeSnapshot(),
+      }],
+    };
+    messages.persistAssistantTurn(db, base);
+
+    expect(() => messages.persistAssistantTurn(db, {
+      ...base,
+      tool_calls: base.tool_calls.map((call) => ({
+        ...call,
+        args: { goal: 'different payload under the same id' },
+      })),
+    })).toThrow(/conflicts with tool evidence/);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_tool_calls').get())
+      .toEqual({ count: 1 });
+  });
+
+  it('commits update_goal evidence and terminal state in one transaction', () => {
+    seedActiveGoal();
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'goal-complete-1', name: 'update_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'goal-complete-1', name: 'update_goal' }]),
+      goal_mutations: [{
+        tool_use_id: 'goal-complete-1',
+        tool_name: 'update_goal',
+        expected: activeSnapshot(),
+        next: {
+          ...activeSnapshot(),
+          status: 'complete',
+          completion_note: 'verified',
+          updated_at: completedAt,
+        },
+      }],
+    });
+
+    expect(db.prepare(`
+      SELECT goal_status, goal_completion_note, goal_updated_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_status: 'complete',
+      goal_completion_note: 'verified',
+      goal_updated_at: completedAt,
+    });
+    expect(db.prepare(`
+      SELECT tool_name, is_error FROM coder_tool_calls
+       WHERE tool_use_id = 'goal-complete-1'
+    `).get()).toEqual({ tool_name: 'update_goal', is_error: 0 });
+  });
+
+  it('rolls back the entire turn when terminal state has no successful update_goal evidence', () => {
+    seedActiveGoal();
+    expect(() => messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'goal-complete-2', name: 'update_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'goal-complete-2', name: 'update_goal', isError: true }]),
+      goal_mutations: [{
+        tool_use_id: 'goal-complete-2',
+        tool_name: 'update_goal',
+        expected: activeSnapshot(),
+        next: {
+          ...activeSnapshot(),
+          status: 'complete',
+          completion_note: 'must not land',
+          updated_at: completedAt,
+        },
+      }],
+    })).toThrow(/no successful update_goal/);
+
+    expect(db.prepare('SELECT goal_status FROM coder_sessions WHERE id = ?').get(sessionId))
+      .toEqual({ goal_status: 'in_progress' });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_tool_calls').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_messages').get())
+      .toEqual({ count: 0 });
+  });
+
+  it('rolls back a stale completion instead of closing a replacement goal', () => {
+    seedActiveGoal();
+    const replacementCreatedAt = '2026-07-23T12:03:00.000Z';
+    db.prepare(`
+      UPDATE coder_sessions
+         SET goal_text = 'replacement objective',
+             goal_created_at = ?,
+             goal_updated_at = ?
+       WHERE id = ?
+    `).run(replacementCreatedAt, replacementCreatedAt, sessionId);
+
+    expect(() => messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([{ id: 'stale-goal-complete', name: 'update_goal' }]),
+      usage: null,
+      tool_calls: toolCalls([{ id: 'stale-goal-complete', name: 'update_goal' }]),
+      goal_mutations: [{
+        tool_use_id: 'stale-goal-complete',
+        tool_name: 'update_goal',
+        expected: activeSnapshot(),
+        next: {
+          ...activeSnapshot(),
+          status: 'complete',
+          completion_note: 'belongs to the old objective',
+          updated_at: completedAt,
+        },
+      }],
+    })).toThrow(/lost its expected objective/);
+
+    expect(db.prepare(`
+      SELECT goal_text, goal_status, goal_created_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_text: 'replacement objective',
+      goal_status: 'in_progress',
+      goal_created_at: replacementCreatedAt,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_tool_calls').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_messages').get())
+      .toEqual({ count: 0 });
+  });
+
+  it('commits supersede + replacement create as one atomic pivot batch', () => {
+    seedActiveGoal();
+    const supersededAt = '2026-07-23T12:04:00.000Z';
+    const replacementCreatedAt = '2026-07-23T12:04:01.000Z';
+    const superseded = {
+      ...activeSnapshot(),
+      status: 'superseded' as const,
+      completion_note: 'user changed objective',
+      updated_at: supersededAt,
+    };
+    const replacement = {
+      text: 'replacement objective',
+      status: 'in_progress' as const,
+      budget_tokens: 12_000,
+      completion_note: null,
+      created_at: replacementCreatedAt,
+      updated_at: replacementCreatedAt,
+    };
+    messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([
+        { id: 'goal-pivot-old', name: 'update_goal' },
+        { id: 'goal-pivot-new', name: 'create_goal' },
+      ]),
+      usage: null,
+      tool_calls: toolCalls([
+        { id: 'goal-pivot-old', name: 'update_goal' },
+        { id: 'goal-pivot-new', name: 'create_goal' },
+      ]),
+      goal_mutations: [
+        {
+          tool_use_id: 'goal-pivot-old',
+          tool_name: 'update_goal',
+          expected: activeSnapshot(),
+          next: superseded,
+        },
+        {
+          tool_use_id: 'goal-pivot-new',
+          tool_name: 'create_goal',
+          expected: superseded,
+          next: replacement,
+        },
+      ],
+    });
+
+    expect(db.prepare(`
+      SELECT goal_text, goal_status, goal_budget_tokens, goal_created_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_text: 'replacement objective',
+      goal_status: 'in_progress',
+      goal_budget_tokens: 12_000,
+      goal_created_at: replacementCreatedAt,
+    });
+    expect(db.prepare(`
+      SELECT tool_name, is_error FROM coder_tool_calls
+       WHERE tool_use_id IN ('goal-pivot-old', 'goal-pivot-new')
+       ORDER BY id
+    `).all()).toEqual([
+      { tool_name: 'update_goal', is_error: 0 },
+      { tool_name: 'create_goal', is_error: 0 },
+    ]);
+  });
+
+  it('rolls back the whole pivot when replacement create evidence failed', () => {
+    seedActiveGoal();
+    const superseded = {
+      ...activeSnapshot(),
+      status: 'superseded' as const,
+      completion_note: 'must roll back',
+      updated_at: completedAt,
+    };
+    const replacementCreatedAt = '2026-07-23T12:06:00.000Z';
+
+    expect(() => messages.persistAssistantTurn(db, {
+      session_id: sessionId,
+      message: assistantWithTools([
+        { id: 'goal-pivot-rollback-old', name: 'update_goal' },
+        { id: 'goal-pivot-rollback-new', name: 'create_goal' },
+      ]),
+      usage: null,
+      tool_calls: toolCalls([
+        { id: 'goal-pivot-rollback-old', name: 'update_goal' },
+        { id: 'goal-pivot-rollback-new', name: 'create_goal', isError: true },
+      ]),
+      goal_mutations: [
+        {
+          tool_use_id: 'goal-pivot-rollback-old',
+          tool_name: 'update_goal',
+          expected: activeSnapshot(),
+          next: superseded,
+        },
+        {
+          tool_use_id: 'goal-pivot-rollback-new',
+          tool_name: 'create_goal',
+          expected: superseded,
+          next: {
+            text: 'must not land',
+            status: 'in_progress',
+            budget_tokens: null,
+            completion_note: null,
+            created_at: replacementCreatedAt,
+            updated_at: replacementCreatedAt,
+          },
+        },
+      ],
+    })).toThrow(/no successful create_goal/);
+
+    expect(db.prepare(`
+      SELECT goal_text, goal_status, goal_created_at
+        FROM coder_sessions WHERE id = ?
+    `).get(sessionId)).toEqual({
+      goal_text: 'ship safely',
+      goal_status: 'in_progress',
+      goal_created_at: createdAt,
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_tool_calls').get())
+      .toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM coder_messages').get())
+      .toEqual({ count: 0 });
   });
 });
 

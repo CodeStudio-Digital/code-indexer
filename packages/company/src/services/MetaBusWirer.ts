@@ -3,9 +3,9 @@
  * meta-bus, enveloped as `agent_event` so the dashboard can demux them
  * by agent role/id.
  *
- * Declarative event list keeps the Open/Closed principle: add a new
- * runner event name to `FORWARDED_EVENTS` and it flows to the dashboard
- * with no other changes.
+ * Declarative event list keeps the Open/Closed principle for single-payload
+ * events. Positional runner events are normalized below into stable named
+ * payloads before crossing the meta-bus boundary.
  */
 
 import type { EventEmitter } from 'node:events';
@@ -19,6 +19,8 @@ import type { IMetaBusPublisher, IMetaBusWirer } from '@mcp/company/services/por
 export const FORWARDED_EVENTS: readonly string[] = [
   // Turn streaming
   'text_delta', 'tool_call_start', 'tool_call_result', 'message_complete',
+  // Goal mutation durability
+  'goal_mutations_persisted', 'goal_mutations_persistence_failed',
   // Live activity pill — `provider_call` gives the `provider:model` + "calling
   // provider with N tools" line; `tool_progress` refines elapsed/note; the
   // `operation_*` trio covers nested sub-agent / task ops. The dashboard
@@ -36,32 +38,108 @@ export const FORWARDED_EVENTS: readonly string[] = [
   'auto_continue', 'context_status',
 ];
 
+function normalizeEventData(event: string, args: unknown[]): unknown {
+  switch (event) {
+    case 'text_delta':
+      return { text: args[0] };
+    case 'tool_call_start':
+      return { id: args[0], name: args[1], input: args[2] };
+    case 'tool_call_result': {
+      const [id, name, result, durationMs] = args;
+      const isError = typeof result === 'object'
+        && result !== null
+        && 'isError' in result
+        && (result as { isError?: unknown }).isError === true;
+      const awaitsGoalPersistence =
+        !isError && (name === 'create_goal' || name === 'update_goal');
+      return {
+        id,
+        name,
+        result,
+        duration_ms: durationMs,
+        status: isError ? 'error' : awaitsGoalPersistence ? 'running' : 'done',
+        ...(awaitsGoalPersistence ? { persistence: 'pending' } : {}),
+      };
+    }
+    case 'message_complete':
+      return { message: args[0], usage: args[1] };
+    default:
+      return args.length === 1 ? args[0] : args;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class MetaBusWirer implements IMetaBusWirer {
+  private readonly wiredRunners = new WeakMap<
+    object,
+    { eventsWired: boolean; terminalWired: boolean }
+  >();
+
   constructor(private readonly publisher: IMetaBusPublisher) {}
 
   wire(handle: RunCoderHandle, role: string, agentRunId: number): void {
     const emitter = handle.runner as unknown as EventEmitter;
+    const runnerKey = handle.runner as unknown as object;
+    const wiring = this.wiredRunners.get(runnerKey) ?? {
+      eventsWired: false,
+      terminalWired: false,
+    };
+    this.wiredRunners.set(runnerKey, wiring);
 
-    for (const evt of FORWARDED_EVENTS) {
-      emitter.on(evt, (...args: unknown[]) => {
+    if (!wiring.eventsWired) {
+      wiring.eventsWired = true;
+      for (const evt of FORWARDED_EVENTS) {
+        emitter.on(evt, (...args: unknown[]) => {
+          this.publisher.publish('agent_event', {
+            agent: role,
+            agentRunId,
+            event: evt,
+            data: normalizeEventData(evt, args),
+          });
+        });
+      }
+    }
+
+    // Company installs turn listeners through onRunnerReady before runCoder
+    // can return a complete handle. That first call intentionally stops here;
+    // the lifecycle calls wire() again with the full handle to attach only the
+    // durable terminal boundary (the WeakMap prevents duplicate stream rows).
+    const transcriptFlushed = (
+      handle as Partial<Pick<RunCoderHandle, 'transcriptFlushed'>>
+    ).transcriptFlushed;
+    if (
+      wiring.terminalWired
+      || !transcriptFlushed
+      || typeof transcriptFlushed.then !== 'function'
+    ) {
+      return;
+    }
+    wiring.terminalWired = true;
+
+    // Runner completion precedes the final transcript/goal transaction. The
+    // Company surface must therefore publish its terminal event from the
+    // durable boundary, not from runner.done, or a provisional green goal can
+    // be followed by a failed commit after the UI already declared success.
+    void transcriptFlushed.then(
+      (outcome) => {
         this.publisher.publish('agent_event', {
           agent: role,
           agentRunId,
-          event: evt,
-          data: args.length === 1 ? args[0] : args,
+          event: 'done',
+          data: { reason: outcome.reason, error: outcome.error },
         });
-      });
-    }
-
-    // `done` has a distinct payload shape (reason + optional error) — kept
-    // separate so the envelope always matches what the dashboard expects.
-    handle.runner.on('done', (reason: string, error?: Error) => {
-      this.publisher.publish('agent_event', {
-        agent: role,
-        agentRunId,
-        event: 'done',
-        data: { reason, error: error?.message },
-      });
-    });
+      },
+      (error: unknown) => {
+        this.publisher.publish('agent_event', {
+          agent: role,
+          agentRunId,
+          event: 'done',
+          data: { reason: 'error', error: errorMessage(error) },
+        });
+      },
+    );
   }
 }

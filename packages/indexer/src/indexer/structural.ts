@@ -26,6 +26,25 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * A routed project DB has no UI-thread writers, so extraction can retain the
+ * normal parallelism and only yield periodically. The central DB is shared
+ * with Electron-main stores; serializing its structural writes and yielding
+ * after every file gives busy handlers on those connections a real lock-free
+ * window instead of letting a full index immediately reacquire the writer.
+ */
+export function resolveStructuralWriteSchedule(
+  usesProjectDb: boolean,
+  requestedConcurrency: number,
+): { concurrency: number; yieldEvery: number } {
+  const concurrency = Number.isFinite(requestedConcurrency)
+    ? Math.max(1, Math.trunc(requestedConcurrency))
+    : 1;
+  return usesProjectDb
+    ? { concurrency, yieldEvery: STRUCTURAL_YIELD_EVERY }
+    : { concurrency: 1, yieldEvery: 1 };
+}
+
 export interface StructuralProgress {
   current: number;
   total: number;
@@ -173,6 +192,10 @@ export async function runStructuralIndex(
   // it race-free.) Generalization (Option B): move this counter into
   // `withConcurrency` so the embeddings/full-pipeline callers get it for free.
   let completed = 0;
+  const writeSchedule = resolveStructuralWriteSchedule(
+    db.useProjectDb(projectId),
+    opts.concurrency ?? 5,
+  );
   try {
     await withConcurrency(scan.toIndex, async (file) => {
       if (opts.signal?.aborted) { aborted = 'signal'; return; }
@@ -185,8 +208,8 @@ export async function runStructuralIndex(
       }
       const current = ++completed;
       opts.onProgress?.({ phase: 'indexing', current, total: scan.toIndex.length, currentFile: file.relativePath });
-      if (current % STRUCTURAL_YIELD_EVERY === 0) await yieldToEventLoop();
-    }, opts.concurrency ?? 5);
+      if (current % writeSchedule.yieldEvery === 0) await yieldToEventLoop();
+    }, writeSchedule.concurrency);
 
     try {
       const sweep = sweepContentCoverage(db, projectId, project.root_path);

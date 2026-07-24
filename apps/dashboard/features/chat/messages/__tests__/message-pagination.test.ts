@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePage, SessionData } from '../../types.js';
-import { shouldLoadEarlierAtScrollTop } from '../MessageList.js';
+import {
+  messageListScrollPasses,
+  shouldLoadEarlierAtScrollTop,
+} from '../MessageList.js';
 import { groupMessages } from '../../utils.js';
 import {
   appendOptimisticUserMessage,
@@ -32,6 +35,12 @@ function messagePage(ids: number[], precedingUserMessageId = 0): MessagePage {
 }
 
 describe('conversation scroll pagination', () => {
+  it('uses one scroll paint for token-only streaming updates', () => {
+    expect(messageListScrollPasses(true, false)).toBe(1);
+    expect(messageListScrollPasses(true, true)).toBe(3);
+    expect(messageListScrollPasses(false, false)).toBe(3);
+  });
+
   it.each([
     [-12, true],
     [0, true],

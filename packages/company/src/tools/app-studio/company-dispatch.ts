@@ -26,18 +26,38 @@ export interface AppRoleRuntime {
   fallbackModels?: AllowedModel[];
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface AppSubordinateSnapshot {
+  agentRunId: number;
+  role: string;
+  status: AgentRunStatus;
+  projectIds: number[];
+  provider: string;
+  model: string;
+  coderSessionId: number;
+  isAlive: boolean;
+}
+
+export interface AppDispatchCapacity {
+  concurrencyLimit: number;
+  activeConcurrent: number;
+  maxSubordinates: number | null;
+  activeSubordinates: number;
+}
+
+export interface AppAgentRuntimeProvenance {
+  configuredProvider: string;
+  configuredModel: string;
+  effectiveProvider: string;
+  effectiveModel: string;
+  dispatchSource: CompanyAgentDispatchSource;
+  fallbackReason: string | null;
+}
+
 export interface AppCompanyDispatchHost {
-  getRoleDefaults(role: string): AppRoleRuntime | null;
-  listSubordinates(): Array<{
-    agentRunId: number;
-    role: string;
-    status: AgentRunStatus;
-    projectIds: number[];
-    provider: string;
-    model: string;
-    coderSessionId: number;
-    isAlive: boolean;
-  }>;
+  getRoleDefaults(role: string): MaybePromise<AppRoleRuntime | null>;
+  listSubordinates(): MaybePromise<AppSubordinateSnapshot[]>;
   spawnSubordinate(spec: {
     role: string;
     task: string;
@@ -56,26 +76,17 @@ export interface AppCompanyDispatchHost {
    * still consume the global maxSubordinates budget, but can be reactivated
    * without allocating another global slot.
    */
-  getAppDispatchCapacity(): {
-    concurrencyLimit: number;
-    activeConcurrent: number;
-    maxSubordinates: number | null;
-    activeSubordinates: number;
-  };
-  getAppAgentRuntimeProvenance(agentRunId: number): {
-    configuredProvider: string;
-    configuredModel: string;
-    effectiveProvider: string;
-    effectiveModel: string;
-    dispatchSource: CompanyAgentDispatchSource;
-    fallbackReason: string | null;
-  } | null;
+  getAppDispatchCapacity(): MaybePromise<AppDispatchCapacity>;
+  getAppAgentRuntimeProvenance(
+    agentRunId: number,
+  ): MaybePromise<AppAgentRuntimeProvenance | null>;
 }
 
 export interface AppCompanyDispatchResult {
   workItemId: string;
   role: string;
   outcome: 'spawned' | 'reused' | 'skipped' | 'blocked';
+  code?: 'OUTCOME_UNKNOWN';
   workItemRunId?: number;
   companyAgentRunId?: number;
   coderSessionId?: number;
@@ -159,12 +170,12 @@ function taskFor(item: AppWorkItem): string {
   return lines.filter((line): line is string => line != null).join('\n');
 }
 
-function runtimeEventPayload(
+async function runtimeEventPayload(
   host: AppCompanyDispatchHost,
   agentRunId: number,
   configured: AppRoleRuntime,
-): Record<string, unknown> {
-  const persisted = host.getAppAgentRuntimeProvenance(agentRunId);
+): Promise<Record<string, unknown>> {
+  const persisted = await host.getAppAgentRuntimeProvenance(agentRunId);
   return {
     configured_provider: persisted?.configuredProvider ?? configured.provider ?? null,
     configured_model: persisted?.configuredModel ?? configured.model ?? null,
@@ -186,7 +197,7 @@ function fileScopesConflict(a: AppWorkItem, b: AppWorkItem): boolean {
 
 const dispatchingReusableAgents = new Set<number>();
 
-function findReusableAgent(args: {
+async function findReusableAgent(args: {
   store: AppStudioStore;
   session: AppStudioSession;
   host: AppCompanyDispatchHost;
@@ -194,10 +205,10 @@ function findReusableAgent(args: {
   projectId: number;
   runtime: AppRoleRuntime;
   runtimeConfigHash: string;
-}): ReturnType<AppCompanyDispatchHost['listSubordinates']>[number] | null {
+}): Promise<AppSubordinateSnapshot | null> {
   if (!args.runtime.provider || !args.runtime.model) return null;
   const priorRuns = args.store.listWorkItemRuns(args.session.id, { limit: 1_000 });
-  return args.host.listSubordinates().find((agent) =>
+  return (await args.host.listSubordinates()).find((agent) =>
     !dispatchingReusableAgents.has(agent.agentRunId)
     && agent.role === args.role
     && agent.status === 'waiting'
@@ -212,7 +223,7 @@ function findReusableAgent(args: {
 }
 
 function capacitySkipDetail(
-  capacity: ReturnType<AppCompanyDispatchHost['getAppDispatchCapacity']>,
+  capacity: AppDispatchCapacity,
   reusesExistingAgent: boolean,
 ): string | null {
   if (capacity.activeConcurrent >= capacity.concurrencyLimit) {
@@ -232,6 +243,18 @@ function isCapacityRefusal(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes('concurrent subordinate cap reached')
     || normalized.includes('global subordinate budget reached');
+}
+
+function isMutationOutcomeUnknown(error: unknown): boolean {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (
+      (error as { code?: unknown }).code === 'port_closed'
+      || (error as { code?: unknown }).code === 'request_timeout'
+      || (error as { code?: unknown }).code === 'unserializable_response'
+    )
+  );
 }
 
 function approvedPlanOwnsItem(store: AppStudioStore, item: AppWorkItem): boolean {
@@ -265,6 +288,20 @@ async function dispatchOneUnlocked(args: {
 }): Promise<AppCompanyDispatchResult> {
   const { store, session, host, item } = args;
   let active = store.getActiveWorkItemRun(session.id, item.id);
+  if (
+    active
+    && active.company_agent_run_id == null
+    && active.status_message?.startsWith('OUTCOME_UNKNOWN:')
+  ) {
+    return {
+      workItemId: item.id,
+      role: active.role,
+      outcome: 'blocked',
+      code: 'OUTCOME_UNKNOWN',
+      workItemRunId: active.id,
+      detail: active.status_message,
+    };
+  }
   if (active?.company_agent_run_id != null) {
     return {
       workItemId: item.id,
@@ -278,7 +315,7 @@ async function dispatchOneUnlocked(args: {
   }
 
   const role = normalizeAppWorkRole(item, host);
-  const runtime = host.getRoleDefaults(role);
+  const runtime = await host.getRoleDefaults(role);
   if (!runtime) {
     const reason = `No configured Company role '${role}' for App work item '${item.id}'.`;
     blockWorkItem(store, session, item, reason);
@@ -308,7 +345,7 @@ async function dispatchOneUnlocked(args: {
     });
     active = null;
   }
-  const reusable = findReusableAgent({
+  const reusable = await findReusableAgent({
     store,
     session,
     host,
@@ -317,7 +354,10 @@ async function dispatchOneUnlocked(args: {
     runtime,
     runtimeConfigHash: configHash,
   });
-  const capacityDetail = capacitySkipDetail(host.getAppDispatchCapacity(), reusable != null);
+  const capacityDetail = capacitySkipDetail(
+    await host.getAppDispatchCapacity(),
+    reusable != null,
+  );
   if (capacityDetail) {
     return { workItemId: item.id, role, outcome: 'skipped', detail: capacityDetail };
   }
@@ -370,7 +410,7 @@ async function dispatchOneUnlocked(args: {
             company_agent_run_id: reusable.agentRunId,
             coder_session_id: reusable.coderSessionId,
             source: args.source,
-            ...runtimeEventPayload(host, reusable.agentRunId, runtime),
+            ...await runtimeEventPayload(host, reusable.agentRunId, runtime),
           }),
           `app-specialist-dispatched:${workRun.id}:reused`,
         );
@@ -382,7 +422,10 @@ async function dispatchOneUnlocked(args: {
       // The waiting agent changed state between selection and reactivation.
       // A fresh spawn needs a global slot of its own, so re-check before
       // falling through instead of turning capacity pressure into a failure.
-      const spawnCapacityDetail = capacitySkipDetail(host.getAppDispatchCapacity(), false);
+      const spawnCapacityDetail = capacitySkipDetail(
+        await host.getAppDispatchCapacity(),
+        false,
+      );
       if (spawnCapacityDetail) {
         store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: spawnCapacityDetail });
         return {
@@ -422,7 +465,7 @@ async function dispatchOneUnlocked(args: {
         company_agent_run_id: spawned.agentRunId,
         coder_session_id: spawned.coderSessionId,
         source: args.source,
-        ...runtimeEventPayload(host, spawned.agentRunId, runtime),
+        ...await runtimeEventPayload(host, spawned.agentRunId, runtime),
       }),
       `app-specialist-dispatched:${workRun.id}:spawned`,
     );
@@ -432,6 +475,36 @@ async function dispatchOneUnlocked(args: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isMutationOutcomeUnknown(error)) {
+      const detail =
+        `OUTCOME_UNKNOWN: App specialist dispatch lost its worker acknowledgement. ` +
+        `Attempt ${attempt} remains claimed and will not be spawned again automatically.`;
+      store.updateWorkItemRunStatus(workRun.id, 'claimed', { statusMessage: detail });
+      try {
+        store.appendEvent(
+          session.id,
+          'agents.specialist_dispatch_outcome_unknown',
+          'work_item_run',
+          String(workRun.id),
+          JSON.stringify({
+            work_item_id: item.id,
+            attempt,
+            role,
+            source: args.source,
+            code: 'OUTCOME_UNKNOWN',
+          }),
+          `app-specialist-dispatch-outcome-unknown:${workRun.id}`,
+        );
+      } catch { /* the claimed run remains the durable replay fence */ }
+      return {
+        workItemId: item.id,
+        role,
+        outcome: 'blocked',
+        code: 'OUTCOME_UNKNOWN',
+        workItemRunId: workRun.id,
+        detail,
+      };
+    }
     if (isCapacityRefusal(message)) {
       store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: message });
       return {

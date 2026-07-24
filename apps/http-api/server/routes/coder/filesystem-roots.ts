@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { Hono } from 'hono';
 import type { SessionFilesystemAccess } from '@mcp/code-agent/sessions/types.js';
@@ -21,7 +21,14 @@ export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): voi
     const sessionId = parseIdParam(c);
     const session = sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
-    return c.json({ roots: sessionStore.listSessionFilesystemRoots(sessionId) });
+    const roots = sessionStore.listSessionFilesystemRoots(sessionId).map((root) => ({
+      ...root,
+      kind: (() => {
+        try { return statSync(root.root_path).isFile() ? 'file' as const : 'directory' as const; }
+        catch { return 'directory' as const; }
+      })(),
+    }));
+    return c.json({ roots });
   });
 
   app.post('/api/coder/sessions/:id/filesystem-roots', async (c) => {

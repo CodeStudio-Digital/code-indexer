@@ -10,6 +10,13 @@ import {
   type CoderRunBus,
 } from '../coder-bus.js';
 import { attachHeartbeat } from './SSEHeartbeat.js';
+import {
+  SerializedWriteQueue,
+  streamDrainTimeoutMs,
+  streamQueueLimits,
+} from './SerializedWriteQueue.js';
+
+export const LAST_EVENT_BUS_ID_HEADER = 'X-MCP-Bus-ID';
 
 export interface PumpBusToSSEOptions {
   /** Last-Event-ID equivalent for replay. `-1` means no replay. */
@@ -40,8 +47,16 @@ export function pumpBusToSSE(
   bus: CoderRunBus,
   opts: PumpBusToSSEOptions = {},
 ) {
-  const rawSince = Number.isFinite(opts.since ?? NaN) ? (opts.since as number) : -1;
-  const since = effectiveSince(rawSince, bus.nextSeq);
+  const rawSince = Number.isFinite(opts.since ?? NaN)
+    ? (opts.since as number)
+    : parseLastEventId(c);
+  const requestedBusId = parseLastEventBusId(c);
+  const since = effectiveSinceForBus(
+    rawSince,
+    bus.nextSeq,
+    requestedBusId,
+    bus.busId,
+  );
   const heartbeat = opts.heartbeat ?? true;
   // Anti-buffering: Hono's streamSSE already sets Content-Type/Cache-Control/
   // Connection, but proxies (nginx, Vite dev http-proxy, Cloudflare) key off
@@ -52,24 +67,48 @@ export function pumpBusToSSE(
   c.header('X-Accel-Buffering', 'no');
   return streamSSE(c, async (stream) => {
     const ac = new AbortController();
-    stream.onAbort(() => ac.abort());
+    const limits = streamQueueLimits();
+    const writer = new SerializedWriteQueue(
+      (msg: { id?: string; event?: string; data: string }) => stream.writeSSE(msg),
+      {
+        ...limits,
+        signal: ac.signal,
+        // Overflow only disconnects this subscriber. The run and its bounded
+        // replay bus continue, so ReconnectingSSEClient can resume with the
+        // last event id it actually consumed.
+        onOverflow: (error) => {
+          console.warn(
+            `[sse] disconnecting slow consumer bus=${bus.busId} `
+            + `pending=${error.pendingWrites} bytes=${error.pendingBytes}`,
+          );
+          ac.abort();
+        },
+        onWriteError: () => ac.abort(),
+      },
+    );
+    stream.onAbort(() => {
+      ac.abort();
+      writer.stop();
+    });
 
-    const stopHeartbeat = heartbeat ? attachHeartbeat(stream) : () => {};
+    // Heartbeats use this exact writer too. They can no longer race a token
+    // frame or terminal event through a second write path.
+    const queuedWriter = {
+      writeSSE: (msg: { id?: string; event?: string; data: string }) =>
+        writer.enqueue(msg, estimateSSEMessageBytes(msg)),
+    };
+    const stopHeartbeat = heartbeat ? attachHeartbeat(queuedWriter) : () => {};
 
-    // Sequential write queue — writes are awaited in order so backpressure
-    // is respected. A write failure means the client disconnected; abort
-    // immediately so waitEnded resolves and stream.close() doesn't hang.
-    let drainChain = Promise.resolve();
-    const enqueueWrite = (msg: { id?: string; event: string; data: string }) => {
-      drainChain = drainChain.then(() => {
-        if (ac.signal.aborted) return;
-        return stream.writeSSE(msg).catch(() => { ac.abort(); });
-      });
+    const enqueueWrite = (msg: { id?: string; event: string; data: string }): void => {
+      // Queue errors are converted into subscriber aborts by the callbacks
+      // above. Every returned promise still gets a rejection handler.
+      void queuedWriter.writeSSE(msg).catch(() => undefined);
     };
 
-    // Perf W2 — trimmed attach replay: the route opts in AND the env flag
-    // must be on (default OFF — see attachReplayTrimEnabled). Computed up
-    // front so the bus_info preamble reports the actual first replay seq.
+    // Bounded semantic attach replay: coder routes opt in and it is enabled
+    // by default (CODER_ATTACH_REPLAY_TRIM=0 is the emergency compatibility
+    // escape hatch). Compute it before bus_info so the preamble reports the
+    // actual first replay seq.
     const trimmedReplay: readonly BufferedEvent[] | null =
       opts.trimReplay && attachReplayTrimEnabled() && since < 0
         ? buildAttachReplay(bus)
@@ -93,11 +132,13 @@ export function pumpBusToSSE(
       }),
     });
 
+    let terminalEnqueued = false;
     const onEvent = (ev: BufferedEvent): void => {
+      if (ev.event === 'done' || ev.event === 'error') terminalEnqueued = true;
       enqueueWrite({
         id: String(ev.seq),
         event: ev.event,
-        data: JSON.stringify(ev.data),
+        data: serializeSSEData(ev.data),
       });
     };
     const unsubscribe = trimmedReplay
@@ -108,7 +149,25 @@ export function pumpBusToSSE(
     } finally {
       unsubscribe();
       stopHeartbeat();
-      if (!ac.signal.aborted) await drainChain;
+      // `markEnded()` records the terminal outcome but deliberately does not
+      // publish a bus row. Some producers publish done/error first, others do
+      // not, and an old terminal row may already have fallen out of replay.
+      // Every connection therefore guarantees one explicit terminal frame.
+      if (!ac.signal.aborted && bus.endReason && !terminalEnqueued) {
+        terminalEnqueued = true;
+        enqueueWrite({
+          event: bus.endReason.event,
+          data: serializeSSEData(bus.endReason.data),
+        });
+      }
+      if (!ac.signal.aborted) {
+        const drained = await writer.waitForIdle(streamDrainTimeoutMs());
+        if (!drained) {
+          console.warn(`[sse] terminal drain timed out bus=${bus.busId}`);
+          ac.abort();
+        }
+      }
+      writer.stop();
       await stream.close();
       opts.onDone?.();
     }
@@ -125,10 +184,42 @@ export function effectiveSince(since: number, nextSeq: number): number {
   return since >= nextSeq ? -1 : since;
 }
 
+/**
+ * A numeric cursor is meaningful only inside the bus that allocated it.
+ * New clients pair Last-Event-ID with X-MCP-Bus-ID; missing bus ids retain
+ * the legacy range heuristic for backward compatibility.
+ */
+export function effectiveSinceForBus(
+  since: number,
+  nextSeq: number,
+  requestedBusId: string | null,
+  currentBusId: string,
+): number {
+  if (requestedBusId && requestedBusId !== currentBusId) return -1;
+  return effectiveSince(since, nextSeq);
+}
+
 /** Parse the standard `Last-Event-ID` header (returns -1 when absent/invalid). */
 export function parseLastEventId(c: Context): number {
   const header = c.req.header('Last-Event-ID');
   if (!header) return -1;
   const n = parseInt(header, 10);
   return Number.isFinite(n) ? n : -1;
+}
+
+export function parseLastEventBusId(c: Context): string | null {
+  const header = c.req.header(LAST_EVENT_BUS_ID_HEADER)?.trim();
+  return header && header.length <= 256 ? header : null;
+}
+
+function estimateSSEMessageBytes(msg: { id?: string; event?: string; data: string }): number {
+  return Buffer.byteLength(msg.data, 'utf8')
+    + Buffer.byteLength(msg.event ?? '', 'utf8')
+    + Buffer.byteLength(msg.id ?? '', 'utf8')
+    + 32;
+}
+
+function serializeSSEData(data: unknown): string {
+  const serialized = JSON.stringify(data);
+  return serialized === undefined ? '{}' : serialized;
 }

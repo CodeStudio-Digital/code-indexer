@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateToolInvocation, type PolicyContext } from '@mcp/code-agent/core/policy.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { submitSpec } from '@mcp/code-agent/tools/spec/submit-spec.js';
 
 function makeTool(overrides: Partial<CoderTool> = {}): CoderTool {
   return {
@@ -34,6 +35,16 @@ function makeCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
 }
 
 describe('policy — spec mode gate', () => {
+  it('keeps the real submit_spec approval primitive reachable before approval', () => {
+    expect(submitSpec.mutates).toBe(false);
+    const decision = evaluateToolInvocation(
+      submitSpec,
+      { name: 'Durable Run', body: '# Spec' },
+      makeCtx({ specMode: true, specApproved: false }),
+    );
+    expect(decision.allowed).toBe(true);
+  });
+
   it('blocks a mutating tool when specMode is on and specApproved is false', () => {
     const tool = makeTool({ name: 'write_file' });
     const decision = evaluateToolInvocation(tool, { path: 'foo.ts', content: 'x' }, makeCtx({ specMode: true }));
@@ -58,6 +69,56 @@ describe('policy — spec mode gate', () => {
     const tool = makeTool({ name: 'read_file' });
     const decision = evaluateToolInvocation(tool, { path: 'foo.ts' }, makeCtx({ specMode: true }));
     expect(decision.allowed).toBe(true);
+  });
+
+  it('blocks submit_plan in spec mode even after a regular plan was approved', () => {
+    const tool = makeTool({ name: 'submit_plan', mutates: false });
+    const decision = evaluateToolInvocation(
+      tool,
+      { plan: 'wrong gate' },
+      makeCtx({ specMode: true, specApproved: true, planApproved: true }),
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toBe('spec_mode');
+      expect(decision.detail).toMatch(/submit_spec/);
+      expect(decision.detail).toMatch(/does not release the spec gate/);
+    }
+  });
+
+  it('blocks gated task approval before submit_spec but keeps tracking available', () => {
+    const taskList = makeTool({ name: 'task_list', mutates: false });
+    const approve = evaluateToolInvocation(
+      taskList,
+      { gate: 'approve', items: [] },
+      makeCtx({ specMode: true, specApproved: false }),
+    );
+    expect(approve.allowed).toBe(false);
+    if (!approve.allowed) expect(approve.detail).toMatch(/submit_spec/);
+
+    const track = evaluateToolInvocation(
+      taskList,
+      { gate: 'track', items: [] },
+      makeCtx({ specMode: true, specApproved: false }),
+    );
+    expect(track.allowed).toBe(true);
+  });
+
+  it('allows submit_tasks after the specification is approved', () => {
+    const tool = makeTool({ name: 'submit_tasks', mutates: false });
+    const before = evaluateToolInvocation(
+      tool,
+      { summary: 'tasks', tasks: [] },
+      makeCtx({ specMode: true, specApproved: false }),
+    );
+    expect(before.allowed).toBe(false);
+
+    const after = evaluateToolInvocation(
+      tool,
+      { summary: 'tasks', tasks: [] },
+      makeCtx({ specMode: true, specApproved: true }),
+    );
+    expect(after.allowed).toBe(true);
   });
 
   it('runs independently of planMode (both off → no gate)', () => {

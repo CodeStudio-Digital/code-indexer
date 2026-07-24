@@ -56,7 +56,13 @@ import { CompanyServiceTransitionsStore } from '../../../packages/store/src/comp
 import { CompanyServiceLogsStore } from '../../../packages/store/src/company-service-logs-store.js';
 import { CompanySandboxServicesHealth } from '../../../packages/store/src/company-sandbox-services-health.js';
 import { CompanySandboxServicesStore } from '../../../packages/store/src/company-sandbox-services-store.js';
+import { CompanySandboxStore } from '../../../packages/store/src/company-sandbox-store.js';
 import { CompanyLocalProjectStore } from '../../../packages/store/src/company-local-project-store.js';
+import {
+  setCompanySandboxServicesStore,
+  setCompanySandboxStore,
+  setCompanySessionEnvStore,
+} from '../../../packages/services/src/sandbox/index.js';
 import { setServiceSupervisorStores } from '../../../packages/company/src/services/service-supervisor/stores.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
 import { COOLDOWN_RESURRECT_MS } from '../../../packages/company/src/services/RuntimeReconciler.js';
@@ -121,8 +127,8 @@ import { registerPerfStatsHandler } from './perf-stats.js';
 import { buildWorkerDocSearch } from './worker-doc-search.js';
 import { requestDocsResearchOverBridge } from './docs-research-rpc.js';
 import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
-import { installWorkerQualityWiring } from './quality-wiring.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
+import { mergeAdjacentStreamDeltas } from './stream-delta-coalescer.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
 
@@ -154,18 +160,6 @@ const dbConn = openWorkerDb({ dbPath });
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
-
-// Quality classifiers — worker_threads don't share module state, so the
-// quality globals installed in server.ts (main thread) are NULL here. The
-// main Company CoderRunner instances fire completed-round assessment from INSIDE
-// this worker, so without this re-install Telemetry
-// → Quality stays empty for company/subordinate runs. See quality-wiring.ts
-// for the gaps vs main.
-const qualityController = installWorkerQualityWiring(
-  dbConn.handle,
-  `company-worker ${companySessionId}`,
-  process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
-);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
@@ -356,6 +350,11 @@ setQaTestRunStore(new QaTestRunStore(rawDb));
 const sessionEnvStore = new CompanySessionEnvStore(rawDb);
 setQaEndpointEnvStore(sessionEnvStore);
 setEnvToolStore(sessionEnvStore);
+setCompanySessionEnvStore(sessionEnvStore);
+const companySandboxStore = new CompanySandboxStore(rawDb);
+const companySandboxServicesStore = new CompanySandboxServicesStore(rawDb);
+setCompanySandboxStore(companySandboxStore);
+setCompanySandboxServicesStore(companySandboxServicesStore);
 // B1 — per-service transition audit + ring-buffered logs (mig 188), built on
 // the worker's own shared handle like QaTestRunStore above.
 const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(rawDb);
@@ -369,7 +368,7 @@ setServiceSupervisorStores({
   health: new CompanySandboxServicesHealth(rawDb),
   transitions: companyServiceTransitionsStore,
   logs: companyServiceLogsStore,
-  services: new CompanySandboxServicesStore(rawDb),
+  services: companySandboxServicesStore,
   // B8 — host-process discovery for the supervisor. The LocalProcessManager
   // singleton lives on the MAIN process; the worker sees the SQLite row.
   localProjects: new CompanyLocalProjectStore(rawDb),
@@ -532,7 +531,15 @@ const busUnsubscribe = subscribe(
   (ev) => {
     const envelope: BusEventEnvelope = { seq: ev.seq, event: ev.event, data: ev.data };
     if (BUS_BATCH_MS > 0 && isCoalescable(envelope)) {
-      pendingEvents.push(envelope);
+      // Concatenate only compatible adjacent SDK-style deltas. Different
+      // agents, runs, fields or lifecycle boundaries remain distinct and in
+      // global order inside the existing MessagePort batch.
+      const previous = pendingEvents[pendingEvents.length - 1];
+      const merged = previous
+        ? mergeAdjacentStreamDeltas(previous, envelope)
+        : null;
+      if (merged) pendingEvents[pendingEvents.length - 1] = merged;
+      else pendingEvents.push(envelope);
       if (batchTimer == null) {
         batchTimer = setTimeout(flushPending, BUS_BATCH_MS);
         // Don't let a pending flush keep the worker alive on its own — the
@@ -583,13 +590,6 @@ interface RpcPayload {
   /** Positional args. POJO-only — survived `structuredClone`. */
   args: unknown[];
 }
-
-bridge.handle('quality.setEnabled', (payload) => {
-  const { enabled } = payload as { enabled: boolean };
-  return qualityController.setEnabled(enabled);
-});
-
-bridge.handle('quality.status', () => ({ enabled: qualityController.isEnabled() }));
 
 bridge.handle('rpc', async (payload) => {
   const { path, args } = payload as RpcPayload;
@@ -669,12 +669,13 @@ bridge.handle('supervisor.rpc', (payload) => {
 });
 
 bridge.handle('stop', async () => {
+  try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
   try { disposeExecCommandSessions('company-worker-stop'); } catch { /* best-effort */ }
   try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // Tear down the orchestrator. `abortAll` aborts any live runners
   // and marks the bus ended. The bus.end mirror above will fire.
   try {
-    orchestrator.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
+    await orchestrator.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
   } catch (err) {
     console.warn(`[company-worker ${companySessionId}] abortAll threw:`, err);
   }

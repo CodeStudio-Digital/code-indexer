@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { withConcurrency } from '../indexer/enrich-references.js';
+import { resolveStructuralWriteSchedule } from '../structural.js';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -40,5 +41,21 @@ describe('structural progress (Bug B)', () => {
     // Completion is reversed → the buggy sequence is strictly decreasing,
     // i.e. not ascending-sorted. Pins exactly what we fixed.
     expect(byIndex).not.toEqual([...byIndex].sort((a, b) => a - b));
+  });
+});
+
+describe('structural central-writer fairness', () => {
+  it('serializes and yields every central-DB file', () => {
+    expect(resolveStructuralWriteSchedule(false, 5)).toEqual({
+      concurrency: 1,
+      yieldEvery: 1,
+    });
+  });
+
+  it('retains requested concurrency for an isolated project DB', () => {
+    expect(resolveStructuralWriteSchedule(true, 5)).toEqual({
+      concurrency: 5,
+      yieldEvery: 50,
+    });
   });
 });

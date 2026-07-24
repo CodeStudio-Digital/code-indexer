@@ -40,6 +40,17 @@ export interface RunnerEvents {
     stateEpoch?: number;
   }, durationMs: number) => void;
   /**
+   * Host persistence acknowledgements for create_goal/update_goal. Their live
+   * tool result is provisional until the assistant/tool rows and ordered goal
+   * mutations commit together, so SSE/UI keep the card pending until one of
+   * these events arrives.
+   */
+  goal_mutations_persisted: (payload: { toolUseIds: string[] }) => void;
+  goal_mutations_persistence_failed: (payload: {
+    toolUseIds: string[];
+    message: string;
+  }) => void;
+  /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
    * progress reports from cooperating tools (via `ctx.reportProgress`).
    *
@@ -236,10 +247,9 @@ export interface RunnerEvents {
   }) => void;
   /**
    * PR-E: emitted by `execute_tasks` when the run's token budget is
-   * about to be exceeded. The dashboard renders the prompt and posts
-   * the user's choice back via `runner.provideUserInput(answer, ask_id)`.
-   * Tools without a UI can ignore this event — the orchestrator falls
-   * back to 'cancel_pending' when no answer arrives.
+   * about to be exceeded. Compatible surfaces may post the user's choice
+   * back via `runner.provideUserInput(answer, ask_id)`. Headless or older
+   * surfaces are safe: the orchestrator times out to `cancel_pending`.
    */
   budget_request: (payload: {
     ask_id: string;
@@ -537,31 +547,6 @@ export interface RunnerEvents {
     | 'admin_required'
     | 'policy_hard_block';
     detail?: string;
-  }) => void;
-  /**
-   * Quality v2, A2 — Emitted when the next-turn nudge builder waited for
-   * the prior turn's classifier Promise but it didn't resolve within the
-   * timeout. Low-volume diagnostic; not a hard error. Operators tune the
-   * timeout (`MCP_QUALITY_NUDGE_WAIT_TIMEOUT_MS`) using this signal.
-   */
-  quality_nudge_missed: (payload: { runId: string; turn: number }) => void;
-  /**
-   * Emitted when the QualityWatchdog LLM (Apêndice 3 — Parte A)
-   * returns a non-'ok' verdict for the current session. Dashboard
-   * renders a separate banner with the LLM's reason text; the runner
-   * also injects a one-shot system reminder on the next turn when
-   * the verdict's `recommendedAction` is 'nudge' or 'stop'.
-   */
-  quality_watchdog_alert: (payload: {
-    turn: number;
-    sessionId: number;
-    suspectTool: string;
-    verdict: 'ok' | 'warn' | 'flagged' | 'error';
-    confidence: number;
-    reason: string;
-    recommendedAction: 'stop' | 'nudge' | 'ok';
-    providerId: string;
-    modelId: string;
   }) => void;
   /**
    * Emitted when an active loop-detection guard fires. Lets the

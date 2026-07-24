@@ -14,6 +14,7 @@
 import { getWorkerOrchestratorPool } from './workerPoolSingleton.js';
 import type { CoderRunBus } from '../coder-bus.js';
 import type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
+export type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
 
 /**
  * Lookup an orchestrator for an active session. Returns null when no
@@ -37,6 +38,18 @@ export function hasCompanyOrchestrator(id: number): boolean {
  */
 export function deleteCompanyOrchestrator(id: number): void {
   void getWorkerOrchestratorPool().evict(id);
+}
+
+/**
+ * Gracefully evict a session and wait until its worker has exited.
+ *
+ * Destructive HTTP flows (abort/reset/delete) must use this awaited form so
+ * they cannot report success or delete durable rows while a worker is still
+ * able to write them. `deleteCompanyOrchestrator` remains the intentionally
+ * fire-and-forget compatibility surface for non-blocking cleanup paths.
+ */
+export async function evictCompanyOrchestrator(id: number): Promise<void> {
+  await getWorkerOrchestratorPool().evict(id);
 }
 
 /**

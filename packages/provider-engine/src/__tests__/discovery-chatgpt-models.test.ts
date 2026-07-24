@@ -16,8 +16,8 @@ import { chatgptSpec } from '../specs/chatgpt.js';
 const API_RESPONSE = {
   models: [
     {
-      slug: 'gpt-5-codex',
-      display_name: 'GPT-5 Codex',
+      slug: 'gpt-5.6-sol',
+      display_name: 'GPT-5.6-Sol',
       description: 'codex model',
       context_window: 256000,
       default_reasoning_level: 'high',
@@ -28,6 +28,17 @@ const API_RESPONSE = {
       visibility: 'list',
       supported_in_api: true,
       input_modalities: ['text'],
+    },
+    {
+      // Listed on the Codex product even though it is not a public API model.
+      slug: 'gpt-5.3-codex-spark',
+      display_name: 'GPT-5.3-Codex-Spark',
+      context_window: 128000,
+      default_reasoning_level: 'high',
+      supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+      apply_patch_tool_type: 'freeform',
+      visibility: 'list',
+      supported_in_api: false,
     },
     {
       // hidden + non-api + context fallback to max_context_window
@@ -84,10 +95,10 @@ describe('chatgpt-models discovery', () => {
 
     expect(b.notModified).toBe(false);
     expect(b.etag).toBe('"v7"');
-    expect(b.models).toHaveLength(2);
+    expect(b.models).toHaveLength(3);
     expect(b.models[0]).toMatchObject({
-      model_id: 'gpt-5-codex',
-      name: 'GPT-5 Codex',
+      model_id: 'gpt-5.6-sol',
+      name: 'GPT-5.6-Sol',
       context_window: 256000,
       source: 'live',
       default_enabled: true,
@@ -97,8 +108,15 @@ describe('chatgpt-models discovery', () => {
       apply_patch_tool_type: 'freeform',
       visibility: 'list',
     });
-    // hidden + non-api → default_enabled false, context falls back to max
     expect(b.models[1]).toMatchObject({
+      model_id: 'gpt-5.3-codex-spark',
+      context_window: 128000,
+      default_enabled: true,
+      visibility: 'list',
+      supported_in_api: false,
+    });
+    // Hidden remains disabled regardless of its public API status.
+    expect(b.models[2]).toMatchObject({
       model_id: 'gpt-internal',
       context_window: 128000,
       default_enabled: false,
@@ -139,7 +157,27 @@ describe('chatgpt-models discovery', () => {
 
     expect(b.notModified).toBe(false);
     expect(b.etag).toBeNull();
-    expect(b.models.length).toBeGreaterThan(0);
+    expect(b.models.map((model) => model.model_id)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex-spark',
+    ]);
+    expect(b.models.find((model) => model.model_id === 'gpt-5.6-sol')).toMatchObject({
+      context_window: 272000,
+      default_reasoning_level: 'low',
+      supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      apply_patch_tool_type: 'freeform',
+    });
+    expect(b.models.find((model) => model.model_id === 'gpt-5.3-codex-spark')).toMatchObject({
+      context_window: 128000,
+      default_reasoning_level: 'high',
+      supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+      apply_patch_tool_type: 'freeform',
+    });
     expect(b.models.every((m) => m.source === 'live')).toBe(true);
   });
 });

@@ -18,7 +18,10 @@ import {
   type CoderWorkerDocDeps,
 } from './CoderWorkerPool.js';
 import type { McpExternalPool } from './McpExternalPool.js';
-import type { ControlPlaneStore } from '@mcp/store/control-plane/index.js';
+import type {
+  ControlPlaneDivergenceStore,
+  ControlPlaneStore,
+} from '@mcp/store/control-plane/index.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
 let cachedPool: CoderWorkerPool | null = null;
@@ -38,7 +41,10 @@ const docDeps: CoderWorkerDocDeps = {};
  * per-worker manager.
  */
 const mcpPoolBox: { pool: McpExternalPool | null } = { pool: null };
-const controlPlaneBox: { store: ControlPlaneStore | null } = { store: null };
+const controlPlaneBox: {
+  store: ControlPlaneStore | null;
+  divergences: ControlPlaneDivergenceStore | null;
+} = { store: null, divergences: null };
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -109,6 +115,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     // the legacy per-worker manager.
     getMcpExternalPool: () => mcpPoolBox.pool,
     getControlPlaneStore: () => controlPlaneBox.store,
+    getControlPlaneDivergenceStore: () => controlPlaneBox.divergences,
   });
   return cachedPool;
 }
@@ -169,8 +176,12 @@ export function setCoderWorkerMcpPool(pool: McpExternalPool | null): void {
   mcpPoolBox.pool = pool;
 }
 
-export function setCoderWorkerControlPlaneStore(store: ControlPlaneStore | null): void {
+export function setCoderWorkerControlPlaneStore(
+  store: ControlPlaneStore | null,
+  divergences: ControlPlaneDivergenceStore | null = null,
+): void {
   controlPlaneBox.store = store;
+  controlPlaneBox.divergences = divergences;
 }
 
 export function getCoderWorkerControlPlaneStore(): ControlPlaneStore | null {

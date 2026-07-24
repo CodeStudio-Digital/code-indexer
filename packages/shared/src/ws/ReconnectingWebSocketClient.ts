@@ -16,14 +16,13 @@
  *
  * Lifecycle parity with SSE:
  *   - `getLastEventId` → encoded as `?sinceSeq=N` query param at
- *     connect time. WebSocket has no `Last-Event-ID` HTTP header
- *     equivalent (the upgrade is just one GET) so the seq has to ride
- *     in the URL.
+ *     connect time. `getLastEventBusId` rides beside it as `busId`, because
+ *     a numeric sequence is meaningful only inside the bus that allocated it.
  *   - `onPhase` emits `connecting | replaying | live | disconnected`
  *     with the same semantics — `replaying` when reconnecting with
  *     a non-negative `sinceSeq`, `live` after the first non-ping
  *     frame arrives.
- *   - Same backoff strategy.
+ *   - Same backoff strategy and progress-based retry-budget replenishment.
  */
 
 import type { SSEEvent } from '../sse/SSEFramer.js';
@@ -45,12 +44,19 @@ export interface ReconnectingWebSocketOpts {
   onPhase?: (phase: SSEConnectionPhase) => void;
   /** Provides the latest seq for replay. Same contract as SSE's getter. */
   getLastEventId?: () => number;
+  /** Provides the bus instance paired with the latest seq. */
+  getLastEventBusId?: () => string | null | undefined;
   /** Invoked before each reconnect attempt (attempt >= 1). */
   onReconnect?: (attempt: number) => void | Promise<void>;
   /** AbortSignal for cancellation. */
   signal: AbortSignal;
   /** Reconnect backoff. Defaults to exponential 1s..16s, 5 tries. */
   backoff?: BackoffStrategy;
+  /**
+   * A connection that stays open for this long replenishes the retry budget
+   * even when its frames have no numeric sequence. Defaults to 30 seconds.
+   */
+  reconnectBudgetResetMs?: number;
   /** Predicate marking a terminal event (defaults to `event === 'done'`). */
   isTerminal?: (ev: SSEEvent) => boolean;
 }
@@ -94,12 +100,18 @@ export class ReconnectingWebSocketClient {
   private readonly opts: ReconnectingWebSocketOpts;
   private readonly backoff: BackoffStrategy;
   private readonly isTerminal: (ev: SSEEvent) => boolean;
+  private readonly reconnectBudgetResetMs: number;
   private terminalSeen = false;
+  private highestEventIdSeen = Number.NEGATIVE_INFINITY;
+  private highestEventIdBusId: string | null = null;
+  private connectionMadeProgress = false;
+  private connectionOpenedAt = 0;
 
   constructor(opts: ReconnectingWebSocketOpts) {
     this.opts = opts;
     this.backoff = opts.backoff ?? new ExponentialBackoff();
     this.isTerminal = opts.isTerminal ?? defaultIsTerminal;
+    this.reconnectBudgetResetMs = opts.reconnectBudgetResetMs ?? 30_000;
   }
 
   /**
@@ -110,6 +122,8 @@ export class ReconnectingWebSocketClient {
   async run(): Promise<void> {
     let attempt = 0;
     while (!this.opts.signal.aborted && !this.terminalSeen) {
+      this.connectionMadeProgress = false;
+      this.connectionOpenedAt = 0;
       try {
         if (attempt > 0) await this.opts.onReconnect?.(attempt);
         await this.connectOnce();
@@ -118,6 +132,15 @@ export class ReconnectingWebSocketClient {
       } catch (err) {
         if (this.opts.signal.aborted) return;
         if (this.terminalSeen) return;
+        if (
+          this.connectionMadeProgress
+          || (
+            this.connectionOpenedAt > 0
+            && Date.now() - this.connectionOpenedAt >= this.reconnectBudgetResetMs
+          )
+        ) {
+          attempt = 0;
+        }
         this.emitPhase('disconnected');
         const delay = this.backoff.nextDelay(attempt);
         if (delay === null) throw err;
@@ -143,16 +166,26 @@ export class ReconnectingWebSocketClient {
   private async connectOnce(): Promise<void> {
     const ctor = resolveWebSocketCtor();
     const sinceSeq = this.opts.getLastEventId?.() ?? -1;
+    const busId = normalizedBusId(this.opts.getLastEventBusId?.());
+    if (busId && this.highestEventIdBusId !== busId) {
+      this.highestEventIdBusId = busId;
+      this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
+    }
     const replaying = typeof sinceSeq === 'number' && sinceSeq >= 0;
     this.emitPhase(replaying ? 'replaying' : 'connecting');
 
-    const url = appendSinceSeq(this.opts.url, replaying ? sinceSeq : -1);
+    const url = appendReplayCursor(
+      this.opts.url,
+      replaying ? sinceSeq : -1,
+      replaying ? busId : null,
+    );
     const ws = new ctor(url);
     let firstEventSeen = false;
     let resolved = false;
 
     return new Promise<void>((resolve, reject) => {
       const cleanup = (): void => {
+        this.opts.signal.removeEventListener('abort', onAbort);
         ws.onopen = null;
         ws.onmessage = null;
         ws.onclose = null;
@@ -171,6 +204,10 @@ export class ReconnectingWebSocketClient {
         return;
       }
       this.opts.signal.addEventListener('abort', onAbort, { once: true });
+
+      ws.onopen = () => {
+        this.connectionOpenedAt = Date.now();
+      };
 
       ws.onmessage = (msg) => {
         const data = typeof msg.data === 'string' ? msg.data : '';
@@ -195,6 +232,15 @@ export class ReconnectingWebSocketClient {
           this.opts.onEvent(ev);
         } catch {
           /* consumer error — don't kill the stream */
+        }
+        const currentBusId = normalizedBusId(this.opts.getLastEventBusId?.());
+        if (currentBusId && this.highestEventIdBusId !== currentBusId) {
+          this.highestEventIdBusId = currentBusId;
+          this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
+        }
+        if (typeof ev.id === 'number' && ev.id > this.highestEventIdSeen) {
+          this.highestEventIdSeen = ev.id;
+          this.connectionMadeProgress = true;
         }
         if (this.isTerminal(ev)) {
           this.terminalSeen = true;
@@ -234,8 +280,17 @@ export class ReconnectingWebSocketClient {
   }
 }
 
-function appendSinceSeq(url: string, sinceSeq: number): string {
+function appendReplayCursor(url: string, sinceSeq: number, busId: string | null): string {
   if (sinceSeq < 0) return url;
   const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}sinceSeq=${sinceSeq}`;
+  const cursor = `${sep}sinceSeq=${sinceSeq}`;
+  return busId
+    ? `${url}${cursor}&busId=${encodeURIComponent(busId)}`
+    : `${url}${cursor}`;
+}
+
+function normalizedBusId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 256 ? trimmed : null;
 }

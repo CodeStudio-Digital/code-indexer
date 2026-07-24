@@ -39,6 +39,8 @@ declare global {
     };
     /** Native folder picker. Returns the chosen path, or null if canceled. */
     openDirectory?: () => Promise<string | null>;
+    /** Absolute path for an OS-backed File; empty for synthetic/clipboard Files. */
+    getPathForFile?: (file: File) => string;
     /** Native multi-file picker. Used by desktop-first JSONL session import. */
     openFiles?: () => Promise<string[]>;
     /** Open a URL in the user's default browser. */

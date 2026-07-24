@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  groupMessages,
   mergeConsecutiveAssistantGroups,
   liveTurnContinuesPersistedAssistant,
   suppressLatestPersistedAssistantRun,
@@ -18,6 +19,26 @@ function assistant(id: number, content: PersistedMessage['content'], hasText = f
 }
 
 describe('assistant visual grouping', () => {
+  it('keeps persisted meta inputs out of the visible transcript', () => {
+    const groups = groupMessages([
+      {
+        role: 'user',
+        content: [{ type: 'text', text: '<system-reminder>internal</system-reminder>' }],
+        isMeta: true,
+      },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'Visible request' }],
+      },
+    ], []);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      kind: 'user',
+      message: { content: [{ text: 'Visible request' }] },
+    });
+  });
+
   it('renders all provider/tool cycles before the next user message under one assistant header', () => {
     const user: VisualGroup = {
       kind: 'user',

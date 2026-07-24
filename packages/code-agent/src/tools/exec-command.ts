@@ -35,6 +35,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
+import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -354,6 +355,8 @@ async function spawnSession(opts: {
   maxChars: number;
   /** Per-project PHP/Python (not Node) to put on PATH for the session. */
   runtimeEnv?: AgentRuntimeEnv;
+  /** Revalidate ownership immediately before the physical spawn. */
+  assertFence?: () => void;
 }): Promise<SessionRecord> {
   const env = applyRuntimeEnv(cleanEnv(), opts.runtimeEnv);
   const id = randomUUID().slice(0, 8);
@@ -374,6 +377,7 @@ async function spawnSession(opts: {
     }
     const isElectron = !!process.versions.electron;
     const isWindows = process.platform === 'win32';
+    opts.assertFence?.();
     proc = pty.spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
       name: 'xterm-color',
       cols: opts.cols,
@@ -384,6 +388,7 @@ async function spawnSession(opts: {
     });
   } else {
     const isWindows = process.platform === 'win32';
+    opts.assertFence?.();
     proc = nodeSpawn(isWindows ? 'cmd.exe' : '/bin/sh', isWindows ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
       cwd: opts.cwd,
       env,
@@ -520,6 +525,7 @@ const EXEC_COMMAND_DESC =
 
 export const execCommand: CoderTool = {
   name: 'exec_command',
+  effectBoundary: 'shell',
   description: EXEC_COMMAND_DESC,
   source: 'native',
   mutates: true,
@@ -561,7 +567,25 @@ export const execCommand: CoderTool = {
 
     let rec: SessionRecord;
     try {
-      rec = await spawnSession({ cmd, cwd, mode, cols, rows, maxChars, runtimeEnv: ctx.runtimeEnv });
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'shell',
+        operation: 'exec',
+        resource: cmd,
+      });
+      rec = await spawnSession({
+        cmd,
+        cwd,
+        mode,
+        cols,
+        rows,
+        maxChars,
+        runtimeEnv: ctx.runtimeEnv,
+        assertFence: () => assertMutationFence(ctx.mutationFence, {
+          kind: 'shell',
+          operation: 'exec',
+          resource: cmd,
+        }),
+      });
     } catch (e) {
       return err(`exec_command: spawn failed — ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -715,6 +739,7 @@ export const listSessions: CoderTool = {
 
 export const writeStdin: CoderTool = {
   name: 'write_stdin',
+  effectBoundary: 'control',
   description: WRITE_STDIN_DESC,
   source: 'native',
   mutates: true,
@@ -777,6 +802,11 @@ export const writeStdin: CoderTool = {
 
     if (chars && rec.status === 'running') {
       try {
+        assertMutationFence(ctx.mutationFence, {
+          kind: 'control',
+          operation: 'write_stdin',
+          resource: id,
+        });
         writeToSession(rec, chars);
       } catch (e) {
         return err(`write_stdin: write failed — ${e instanceof Error ? e.message : String(e)}`);

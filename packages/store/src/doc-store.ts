@@ -89,6 +89,21 @@ import type {
 export class DocStore {
   constructor(private db: DB) {}
 
+  /** Scope a synchronous write to a connection-local busy ceiling. Worker
+   * telemetry uses zero so a contested best-effort event never stalls the
+   * agent stream; its buffer retries later through a timer. */
+  withBusyTimeout<T>(busyTimeoutMs: number, operation: () => T): T {
+    const timeout = Math.max(0, Math.trunc(busyTimeoutMs));
+    const previous = Number(this.db.pragma('busy_timeout', { simple: true }));
+    if (previous === timeout) return operation();
+    this.db.pragma(`busy_timeout = ${timeout}`);
+    try {
+      return operation();
+    } finally {
+      this.db.pragma(`busy_timeout = ${previous}`);
+    }
+  }
+
   // ─── Collections ──────────────────────────────────────────────
   createCollection(input: DocCollectionInput): DocCollection { return collections.create(this.db, input); }
   getCollection(id: number): DocCollection | null { return collections.get(this.db, id); }
@@ -185,6 +200,9 @@ export class DocStore {
     ragTelemetry.putEnrichmentCache(this.db, contentHash, fingerprint, value);
   }
   recordDocSearchEvent(input: ragTelemetry.DocSearchEventInput): void { ragTelemetry.recordSearchEvent(this.db, input); }
+  recordDocSearchEvents(inputs: readonly ragTelemetry.DocSearchEventInput[]): void {
+    ragTelemetry.recordSearchEvents(this.db, inputs);
+  }
 
   // ─── FTS5 search ──────────────────────────────────────────────
   searchChunksFts(query: string, opts: { collectionId?: number; collectionIds?: readonly number[]; limit?: number } = {}): DocFtsHit[] { return fts.searchChunks(this.db, query, opts); }

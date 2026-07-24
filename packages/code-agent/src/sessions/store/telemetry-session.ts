@@ -108,13 +108,29 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       `SELECT
          COUNT(*)                                   AS turn_count,
          COALESCE(SUM(is_subagent), 0)              AS subagent_turn_count,
-         COALESCE(SUM(input_tokens), 0)             AS total_input_tokens,
+         COALESCE(SUM(
+           CASE
+             WHEN provider IN ('anthropic', 'claude-code', 'bedrock')
+               THEN COALESCE(input_tokens, 0)
+                  + COALESCE(cache_read_input_tokens, 0)
+                  + COALESCE(cache_creation_input_tokens, 0)
+             ELSE COALESCE(input_tokens, 0)
+           END
+         ), 0)                                      AS total_input_tokens,
          COALESCE(SUM(output_tokens), 0)            AS total_output_tokens,
          COALESCE(SUM(cache_read_input_tokens), 0)  AS total_cache_read_tokens,
          COALESCE(SUM(cache_creation_input_tokens), 0) AS total_cache_creation_tokens,
          COALESCE(SUM(thinking_tokens), 0)          AS total_thinking_tokens,
          COALESCE(SUM(tool_count), 0)               AS total_tool_calls,
-         COALESCE(MAX(input_tokens), 0)             AS peak_context_tokens,
+         COALESCE(MAX(
+           CASE
+             WHEN provider IN ('anthropic', 'claude-code', 'bedrock')
+               THEN COALESCE(input_tokens, 0)
+                  + COALESCE(cache_read_input_tokens, 0)
+                  + COALESCE(cache_creation_input_tokens, 0)
+             ELSE COALESCE(input_tokens, 0)
+           END
+         ), 0)                                      AS peak_context_tokens,
          COALESCE(SUM(compaction_triggered), 0)     AS compaction_turns,
          COALESCE(SUM(summarizer_ran), 0)           AS summarizer_turns,
          COALESCE(SUM(paginate_count), 0)           AS paginate_total,
@@ -329,6 +345,7 @@ export function getSessionTelemetrySummary(db: DB, sessionId: number): SessionTe
       `SELECT provider, model,
               COALESCE(input_tokens, 0)            AS input_tokens,
               COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
+              COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
               tools_def_chars, ${eligibleToolsExpr}
        FROM coder_turn_telemetry WHERE session_id = ?`,
     )

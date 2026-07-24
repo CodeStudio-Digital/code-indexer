@@ -9,7 +9,12 @@
  * Each adapter (Anthropic, OpenAI/ZAI/DeepSeek, Gemini) translates the
  * normalized AgentMessage / ToolSpec format to its vendor schema and back.
  */
-export type { ChatProvider, ChatRequest, ToolSpec } from '@mcp/provider-sdk';
+export type {
+  ChatProvider,
+  ChatRequest,
+  ProviderAttemptTelemetry,
+  ToolSpec,
+} from '@mcp/provider-sdk';
 
 /**
  * Provider kind. An OPEN string — the store persists `ProviderKind = string`

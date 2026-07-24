@@ -88,7 +88,7 @@ const INTENT_RULES: readonly IntentRule[] = [
   {
     intent: 'edit',
     pattern:
-      /\b(implement|implemente|fix|corrij(a|e)|refactor|refatore|add\b|adicione|create|crie|write|escreva|edit|edite|update|atualize|rename|renomeie|move|mova|delete|remove|remova|change|mude|altere|wire up|hook up|build (a|the) (feature|component|function))\b/,
+      /\b(implement|implemente|fix|corrij(a|e)|arrum(e|ar)|consert(e|ar)|ajust(e|ar)|melhor(e|ar)|aprimor(e|ar)|refactor|refatore|add\b|adicione|create|crie|write|escreva|edit|edite|update|atualize|rename|renomeie|move|mova|delete|remove|remova|change|mude|altere|wire up|hook up|build (a|the) (feature|component|function))\b/,
     confidence: 0.7,
   },
   // locate — find / where is / search.

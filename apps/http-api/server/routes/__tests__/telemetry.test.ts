@@ -67,7 +67,7 @@ beforeEach(() => {
   `);
 });
 
-afterEach(() => db.close());
+afterEach(() => db?.close());
 
 describe('GET /api/sessions/:id/telemetry', () => {
   it('returns 200 for a pre-repair database missing eligible_tools_def_chars', async () => {
@@ -84,14 +84,25 @@ describe('GET /api/sessions/:id/telemetry', () => {
         skills_count: null,
       }),
       getTurnTelemetry: () => [],
+      listProviderAttempts: () => [],
     };
     const app = new Hono();
     mountTelemetryRoutes(app, { sessionStore, providerStore: {} } as unknown as ServerDeps);
 
     const response = await app.request('/api/sessions/1221/telemetry');
-    const payload = await response.json() as { turn_count: number; compaction_count_auto: number; turns: unknown[] };
+    const payload = await response.json() as {
+      turn_count: number;
+      compaction_count_auto: number;
+      turns: unknown[];
+      attempts: unknown[];
+    };
 
     expect(response.status).toBe(200);
-    expect(payload).toMatchObject({ turn_count: 0, compaction_count_auto: 5, turns: [] });
+    expect(payload).toMatchObject({
+      turn_count: 0,
+      compaction_count_auto: 5,
+      turns: [],
+      attempts: [],
+    });
   });
 });

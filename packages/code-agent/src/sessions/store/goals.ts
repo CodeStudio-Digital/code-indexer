@@ -1,20 +1,23 @@
 import type { Database as DB } from 'better-sqlite3';
+import type { GoalStatus } from '@mcp/code-agent/core/tool.js';
 
 export interface SessionGoal {
   text: string;
-  status: 'in_progress' | 'complete';
+  status: GoalStatus;
   budgetTokens: number | null;
   completionNote: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-/**
- * Read the current goal for a session, or null when none was ever set AND
- * when the migration columns are absent (older sqlite files).
- */
+/** Read the current goal for a session, or null when none was ever set. */
 export function get(db: DB, id: number): SessionGoal | null {
-  let row: {
+  const row = db
+    .prepare(
+      'SELECT goal_text, goal_status, goal_budget_tokens, goal_completion_note, goal_created_at, goal_updated_at ' +
+      'FROM coder_sessions WHERE id = ?',
+    )
+    .get(id) as {
     goal_text: string | null;
     goal_status: string | null;
     goal_budget_tokens: number | null;
@@ -22,20 +25,14 @@ export function get(db: DB, id: number): SessionGoal | null {
     goal_created_at: string | null;
     goal_updated_at: string | null;
   } | undefined;
-  try {
-    row = db
-      .prepare(
-        'SELECT goal_text, goal_status, goal_budget_tokens, goal_completion_note, goal_created_at, goal_updated_at ' +
-        'FROM coder_sessions WHERE id = ?',
-      )
-      .get(id) as typeof row;
-  } catch {
-    return null; // table missing migration — degrade gracefully
-  }
   if (!row || !row.goal_text || !row.goal_status) return null;
   return {
     text: row.goal_text,
-    status: row.goal_status === 'complete' ? 'complete' : 'in_progress',
+    status: row.goal_status === 'complete'
+      ? 'complete'
+      : row.goal_status === 'superseded'
+        ? 'superseded'
+        : 'in_progress',
     budgetTokens: row.goal_budget_tokens,
     completionNote: row.goal_completion_note,
     createdAt: row.goal_created_at ?? '',
@@ -45,7 +42,7 @@ export function get(db: DB, id: number): SessionGoal | null {
 
 export interface UpsertGoalInput {
   text: string;
-  status: 'in_progress' | 'complete';
+  status: GoalStatus;
   budgetTokens?: number | null;
   completionNote?: string | null;
   createdAt: string;
@@ -58,22 +55,19 @@ export interface UpsertGoalInput {
  * shows up after a dashboard reload.
  */
 export function upsert(db: DB, id: number, goal: UpsertGoalInput): void {
-  try {
-    db
-      .prepare(
-        'UPDATE coder_sessions SET ' +
-        'goal_text = ?, goal_status = ?, goal_budget_tokens = ?, goal_completion_note = ?, ' +
-        "goal_created_at = ?, goal_updated_at = ?, updated_at = datetime('now') " +
-        'WHERE id = ?',
-      )
-      .run(
-        goal.text, goal.status, goal.budgetTokens ?? null, goal.completionNote ?? null,
-        goal.createdAt, goal.updatedAt, id,
-      );
-  } catch (e) {
-    // Older db without migration 068 — log and let the in-memory fallback
-    // in goal.ts keep things working for the live runner.
-    console.warn(`[session-store] upsertSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
+  const result = db
+    .prepare(
+      'UPDATE coder_sessions SET ' +
+      'goal_text = ?, goal_status = ?, goal_budget_tokens = ?, goal_completion_note = ?, ' +
+      "goal_created_at = ?, goal_updated_at = ?, updated_at = datetime('now') " +
+      'WHERE id = ?',
+    )
+    .run(
+      goal.text, goal.status, goal.budgetTokens ?? null, goal.completionNote ?? null,
+      goal.createdAt, goal.updatedAt, id,
+    );
+  if (result.changes !== 1) {
+    throw new Error(`upsertSessionGoal: session ${id} was not found`);
   }
 }
 

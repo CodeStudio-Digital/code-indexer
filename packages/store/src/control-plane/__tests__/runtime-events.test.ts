@@ -271,4 +271,59 @@ describe('control-plane restart recovery', () => {
     });
     expect(new ControlPlaneStore(db, { journalEnabled: true }).recoverInterruptedRuns()).toBe(0);
   });
+
+  it('checks legacy command-kind aliases in the same acceptance transaction', () => {
+    db.prepare('INSERT INTO coder_sessions(id) VALUES (?)').run(8);
+    const store = new ControlPlaneStore(db, { journalEnabled: true });
+    const sessionId = asSessionId('session:legacy:8');
+    const payload = { content: 'first message' };
+    const legacy = {
+      schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
+      commandId: asSessionCommandId('command:legacy-start'),
+      idempotencyKey: 'first-message-key',
+      kind: 'start' as const,
+      sessionId,
+      actor: ACTOR,
+      requestedAt: '2026-01-01T00:00:00.000Z',
+      correlationId: asCorrelationId('correlation:legacy-start'),
+      payload,
+    };
+    expect(store.acceptCommand({
+      command: legacy,
+      payloadHash: hashControlPlanePayload(payload),
+      legacySessionId: 8,
+    }).kind).toBe('accepted');
+
+    const canonical = {
+      ...legacy,
+      commandId: asSessionCommandId('command:canonical-send'),
+      kind: 'send_message' as const,
+      correlationId: asCorrelationId('correlation:canonical-send'),
+    };
+    expect(store.acceptCommand({
+      command: canonical,
+      payloadHash: hashControlPlanePayload(payload),
+      legacySessionId: 8,
+      idempotencyKindAliases: ['start'],
+    })).toMatchObject({
+      kind: 'existing',
+      command: {
+        commandId: legacy.commandId,
+        kind: 'start',
+      },
+    });
+    expect(store.acceptCommand({
+      command: { ...canonical, payload: { content: 'different' } },
+      payloadHash: hashControlPlanePayload({ content: 'different' }),
+      legacySessionId: 8,
+      idempotencyKindAliases: ['start'],
+    })).toMatchObject({
+      kind: 'payload_conflict',
+      command: { commandId: legacy.commandId },
+    });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM session_commands').get()).toEqual({ count: 1 });
+    expect(db.prepare(
+      'SELECT version FROM control_plane_sessions WHERE session_id = ?',
+    ).get(sessionId)).toEqual({ version: 1 });
+  });
 });

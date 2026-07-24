@@ -20,7 +20,7 @@
  * Unparseable or foreign payloads deny too (fail-safe).
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import { isIrreversibleTool, resolveToolMetadata } from './policy.js';
+import { isIrreversibleTool, resolveToolInvocationMetadata } from './policy.js';
 
 export type ToolPermissionMode = 'ask' | 'auto' | 'unrestricted';
 export type ApprovalRiskClass = 'write' | 'execute' | 'admin';
@@ -79,27 +79,23 @@ export function classifyForGate(
 ): 'allow' | ApprovalRiskClass {
   if (NEVER_GATE.has(name)) return 'allow';
   if (!tool) return 'write'; // unknown tool name — conservative (invoke will error anyway)
-  // Dynamic per-input classifier wins over the static metadata chain (e.g.
-  // db_query: SELECT → read, INSERT → write). A throw or an unexpected value
-  // gates as 'write' (fail-safe). Absent riskOf → EXACTLY the legacy chain.
-  if (typeof tool.riskOf === 'function') {
-    try {
-      const risk = tool.riskOf(input);
-      if (risk === 'read') return 'allow';
-      if (risk === 'write' || risk === 'execute' || risk === 'admin') return risk;
-      return 'write';
-    } catch {
-      return 'write';
-    }
+  const declared = tool.riskLevel !== undefined || tool.mutates !== undefined;
+  // Keep the approval UX's established verb-based refinement for genuinely
+  // unannotated external tools. The shared policy metadata remains
+  // conservative for lifecycle/accounting, while obvious remote reads do not
+  // prompt and destructive verbs receive the stronger admin class.
+  if (tool.source !== 'native' && !declared && typeof tool.riskOf !== 'function') {
+    if (DESTRUCTIVE_VERB_REGEX.test(name)) return 'admin';
+    if (READ_VERB_REGEX.test(name)) return 'allow';
+    return 'write';
   }
-  const meta = resolveToolMetadata(tool);
+  const meta = resolveToolInvocationMetadata(tool, input);
   if (meta.interactive) return 'allow'; // already pauses via its own wait — double-pause deadlocks the UX
   if (meta.riskLevel === 'admin') return 'admin';
   if (meta.riskLevel === 'execute') return 'execute';
   if (meta.riskLevel === 'write') return 'write';
   // riskLevel === 'read':
   if (meta.mutates) return 'write'; // declared mutating but read-risk — gate as write
-  const declared = tool.riskLevel !== undefined || tool.mutates !== undefined;
   if (tool.source === 'native' || declared) return 'allow';
   // MCP/plugin tool with no metadata at all — classify by name.
   if (DESTRUCTIVE_VERB_REGEX.test(name)) return 'admin';

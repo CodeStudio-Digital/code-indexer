@@ -176,7 +176,7 @@ export async function removeServiceAndProject(
 
   const orch = getCompanyOrchestrator(id);
   if (orch) {
-    await orch.sandboxService.removeService(serviceId);
+    await orch.removeSandboxService(serviceId);
   } else {
     await getSandboxManager()
       .destroyService(String(id), serviceId, 'user-removed-offline')

@@ -3,6 +3,7 @@ import type { AgentMessage } from '../../core/messages.js';
 import { toOpenAIMessages } from '../openai.js';
 import { toResponsesInput } from '../chatgpt.js';
 import { toBedrockMessages } from '../bedrock.js';
+import { toKimiMessages } from '../kimi-code.js';
 import { renderTextDocument } from '../document-utils.js';
 
 const PDF_BASE64 = Buffer.from('%PDF-1.7\n%%EOF').toString('base64');
@@ -75,5 +76,32 @@ describe('text document framing', () => {
     expect(rendered).toContain('mediaType="text/plain&quot; bad=&quot;1"');
     expect(rendered).toContain('<![CDATA[');
     expect(rendered).toContain(']]]]><![CDATA[>');
+  });
+
+  it('renders a local path as a lazy reference without fake file contents', () => {
+    const rendered = renderTextDocument({
+      name: 'trace.tmp',
+      mediaType: 'application/octet-stream',
+      path: 'C:\\Temp\\a&b\\trace.tmp',
+    });
+    expect(rendered).toContain('<file_reference');
+    expect(rendered).toContain('path="C:\\Temp\\a&amp;b\\trace.tmp"');
+    expect(rendered).toContain('Use read_file');
+    expect(rendered).not.toContain('<![CDATA[');
+  });
+
+  it('keeps a reference visible on text-only transports such as Kimi', () => {
+    const messages: AgentMessage[] = [{
+      role: 'user',
+      content: [{
+        type: 'document',
+        name: 'trace.tmp',
+        mediaType: 'application/octet-stream',
+        path: 'C:\\Temp\\trace.tmp',
+      }],
+    }];
+    const payload = toKimiMessages('system', messages);
+    expect(JSON.stringify(payload)).toContain('<file_reference');
+    expect(JSON.stringify(payload)).toContain('C:\\\\Temp\\\\trace.tmp');
   });
 });

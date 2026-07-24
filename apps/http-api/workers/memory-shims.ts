@@ -10,13 +10,18 @@
  * registered by `apps/http-api/sse/worker-memory-handlers.ts` — the same
  * single-source-of-truth pattern as the docSearch / vision shims.
  *
- * Failure posture: memory must NEVER break a spawn or a run. Every call
- * degrades to a no-op ([] / skip / not-configured) when the handler is
- * missing, the deps box is empty, or the RPC times out.
+ * Read/injection paths remain best-effort. Mutating paths are different:
+ * a timeout has an unknown outcome because the host may still commit. They
+ * reconcile by operation id and surface an explicit error instead of lying
+ * that a write succeeded or automatically replaying it.
  */
 // Workers import via relative paths only — Node's loader resolves these
 // before tsx/tsconfig `paths` get a chance (see coder-worker.ts header).
-import type { MessageBridge } from '../../../packages/orchestrator-host/src/index.js';
+import { randomUUID } from 'node:crypto';
+import {
+  isMutationOutcomeUnknownError,
+  type MessageBridge,
+} from '../../../packages/orchestrator-host/src/index.js';
 import type { InvestigationSemanticIndexPort } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 
 /** Mirrors the structural `RunCoderOptions.memoryRetriever` item shape. */
@@ -104,6 +109,113 @@ export interface WorkerMemoryShims {
 }
 
 const CONFIGURED_CACHE_MS = 60_000;
+const MEMORY_SAVE_TIMEOUT_MS = 15_000;
+const MEMORY_SAVE_RECONCILE_MS = 45_000;
+const MEMORY_SAVE_STATUS_POLL_MS = 250;
+
+type MemorySaveStatus =
+  | { state: 'unknown' | 'pending' }
+  | { state: 'completed'; result: ShimRunEndResult }
+  | { state: 'failed'; error: string; code?: string };
+type MemoryForgetStatus =
+  | { state: 'unknown' | 'pending' }
+  | { state: 'completed'; result: { archived: number } }
+  | { state: 'failed'; error: string; code?: string };
+
+export class MemorySaveOutcomeUnknownError extends Error {
+  readonly code = 'memory_save_outcome_unknown';
+
+  constructor(readonly operationId: string, cause?: unknown) {
+    super(
+      `Project memory save outcome is unknown (operation ${operationId}). `
+      + `The host may still complete it; do not repeat automatically.`
+      + (cause instanceof Error ? ` ${cause.message}` : ''),
+    );
+    this.name = 'MemorySaveOutcomeUnknownError';
+  }
+}
+
+export class MemoryForgetOutcomeUnknownError extends Error {
+  readonly code = 'memory_forget_outcome_unknown';
+
+  constructor(readonly operationId: string, cause?: unknown) {
+    super(
+      `Project memory archive outcome is unknown (operation ${operationId}). `
+      + `The host may still complete it; do not repeat automatically.`
+      + (cause instanceof Error ? ` ${cause.message}` : ''),
+    );
+    this.name = 'MemoryForgetOutcomeUnknownError';
+  }
+}
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+
+async function reconcileMemorySave(
+  bridge: MessageBridge,
+  operationId: string,
+  cause: unknown,
+): Promise<ShimRunEndResult> {
+  const deadline = Date.now() + MEMORY_SAVE_RECONCILE_MS;
+  while (Date.now() < deadline) {
+    await wait(MEMORY_SAVE_STATUS_POLL_MS);
+    let status: MemorySaveStatus;
+    try {
+      status = await bridge.request<MemorySaveStatus>(
+        'memorySaveStatus',
+        { operationId },
+        { timeoutMs: 5_000 },
+      );
+    } catch (statusError) {
+      if (isMutationOutcomeUnknownError(statusError)) {
+        throw new MemorySaveOutcomeUnknownError(operationId, cause);
+      }
+      continue;
+    }
+    if (status.state === 'completed') return status.result;
+    if (status.state === 'failed') {
+      const error = Object.assign(new Error(status.error), {
+        code: status.code ?? 'memory_save_failed',
+      });
+      throw error;
+    }
+  }
+  throw new MemorySaveOutcomeUnknownError(operationId, cause);
+}
+
+async function reconcileMemoryForget(
+  bridge: MessageBridge,
+  operationId: string,
+  cause: unknown,
+): Promise<{ archived: number }> {
+  const deadline = Date.now() + MEMORY_SAVE_RECONCILE_MS;
+  while (Date.now() < deadline) {
+    await wait(MEMORY_SAVE_STATUS_POLL_MS);
+    let status: MemoryForgetStatus;
+    try {
+      status = await bridge.request<MemoryForgetStatus>(
+        'memoryForgetStatus',
+        { operationId },
+        { timeoutMs: 5_000 },
+      );
+    } catch (statusError) {
+      if (isMutationOutcomeUnknownError(statusError)) {
+        throw new MemoryForgetOutcomeUnknownError(operationId, cause);
+      }
+      continue;
+    }
+    if (status.state === 'completed') return status.result;
+    if (status.state === 'failed') {
+      throw Object.assign(new Error(status.error), {
+        code: status.code ?? 'memory_forget_failed',
+      });
+    }
+  }
+  throw new MemoryForgetOutcomeUnknownError(operationId, cause);
+}
 
 export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims {
   // `isConfigured` gates every run's end-of-run summary; cache it so the
@@ -168,16 +280,18 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
     },
     projectMemory: {
       save: async (projectId, projectName, entry) => {
+        const operationId = randomUUID();
         try {
-          // Write path embeds + dedups main-side; generous ceiling for the
-          // embedding round-trip, still bounded against a stuck bridge.
-          return await bridge.request<ShimRunEndResult | null>(
+          return await bridge.request<ShimRunEndResult>(
             'memorySave',
-            { projectId, projectName, entry },
-            { timeoutMs: 15_000 },
+            { operationId, projectId, projectName, entry },
+            { timeoutMs: MEMORY_SAVE_TIMEOUT_MS },
           );
-        } catch {
-          return null; // tool surfaces "not available" — never crash the run
+        } catch (error) {
+          if (isMutationOutcomeUnknownError(error)) {
+            return reconcileMemorySave(bridge, operationId, error);
+          }
+          throw error;
         }
       },
       recall: async (projectId, projectName, query, limit) => {
@@ -203,14 +317,18 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
         }
       },
       forget: async (projectId, projectName, target) => {
+        const operationId = randomUUID();
         try {
           return await bridge.request<{ archived: number }>(
             'memoryForget',
-            { projectId, projectName, target },
-            { timeoutMs: 10_000 },
+            { operationId, projectId, projectName, target },
+            { timeoutMs: MEMORY_SAVE_TIMEOUT_MS },
           );
-        } catch {
-          return { archived: 0 };
+        } catch (error) {
+          if (isMutationOutcomeUnknownError(error)) {
+            return reconcileMemoryForget(bridge, operationId, error);
+          }
+          throw error;
         }
       },
     },

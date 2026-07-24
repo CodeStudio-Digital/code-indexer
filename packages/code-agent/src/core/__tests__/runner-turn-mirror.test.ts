@@ -10,12 +10,8 @@
  * (runViaBehaviorTree) and assigns `this.turn` BEFORE forwarding to
  * listeners.
  *
- * Live consumers today are the snapshot/checkpoint path in index.ts
- * (`checkpointCoordinator.submit(checkpoint, runner.turn)`). The former
- * Quality v2 consumer — `recordIntervention` stamping `turn_fired` from a
- * mid-run nudge — no longer exists: semantic quality became terminal-only
- * and `buildQualityFeedbackSuffix` is now a stub that never mutates the
- * next prompt, so no intervention is inserted mid-run to assert on.
+ * The live consumer is the snapshot/checkpoint path in index.ts
+ * (`checkpointCoordinator.submit(checkpoint, runner.turn)`).
  */
 import { describe, expect, it } from 'vitest';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';

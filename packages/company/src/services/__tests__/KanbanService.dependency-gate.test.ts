@@ -12,7 +12,6 @@
  *   6. Advancing to `review`/`done` is also gated while a blocker is open.
  *
  * Setup uses a real temp SQLite via CodeIndexDB (runs all migrations).
- * Mirrors KanbanService.quality-gate.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';

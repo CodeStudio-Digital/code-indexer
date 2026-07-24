@@ -79,7 +79,13 @@ export class ControlPlaneStore {
       if (canonicalPayloadHash !== input.payloadHash) {
         throw new Error(`Command ${command.commandId} payload hash is not canonical`);
       }
-      const existing = this.commands.findByIdempotency(command.sessionId, command.kind, command.idempotencyKey);
+      const idempotencyKinds = [
+        command.kind,
+        ...(input.idempotencyKindAliases ?? []).filter((kind) => kind !== command.kind),
+      ];
+      const existing = idempotencyKinds
+        .map((kind) => this.commands.findByIdempotency(command.sessionId, kind, command.idempotencyKey))
+        .find((candidate) => candidate != null);
       if (existing) {
         const agentRun = existing.agentRunId ? this.runs.get(existing.agentRunId) ?? undefined : undefined;
         const attempt = agentRun?.activeAttemptId ? this.runs.getAttempt(agentRun.activeAttemptId) ?? undefined : undefined;
@@ -212,6 +218,18 @@ export class ControlPlaneStore {
     tx.immediate();
   }
 
+  bindCommandExecution(
+    context: ControlPlaneCommandContext,
+    busId: string,
+    occurredAt = new Date().toISOString(),
+  ): void {
+    const tx = this.db.transaction(() => {
+      this.assertCommandContext(context);
+      this.commands.bindExecution(context.commandId, { busId }, occurredAt);
+    });
+    tx.immediate();
+  }
+
   appendToolBoundary(input: {
     context: ControlPlaneRunContext;
     toolUseId: string;
@@ -335,9 +353,11 @@ export class ControlPlaneStore {
   }
 
   private terminalizeRunInternal(input: TerminalizeRunInput, recovery: boolean): void {
+    const command = this.commands.get(input.context.commandId);
+    const terminalizesCommand = command?.agentRunId === input.context.agentRunId;
     const occurredAt = input.occurredAt
       ?? this.runs.get(input.context.agentRunId)?.finishedAt
-      ?? this.commands.get(input.context.commandId)?.completedAt
+      ?? command?.completedAt
       ?? new Date().toISOString();
     const tx = this.db.transaction(() => {
       if (recovery) {
@@ -357,11 +377,16 @@ export class ControlPlaneStore {
           input.attemptLeaseStatus ?? 'released',
         );
       }
-      this.commands.markTerminal(input.context.commandId, input.commandStatus, {
-        reasonCode: input.reason,
-        errorRef: input.errorRef,
-        completedAt: occurredAt,
-      });
+      // A command owns exactly one root AgentRun. Fase-3 child runs share that
+      // command as their causal turn (D-018), so child completion/recovery must
+      // never terminalize the root command.
+      if (terminalizesCommand) {
+        this.commands.markTerminal(input.context.commandId, input.commandStatus, {
+          reasonCode: input.reason,
+          errorRef: input.errorRef,
+          completedAt: occurredAt,
+        });
+      }
       if (input.transcriptRef) {
         this.appendJournal({
           schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
@@ -409,26 +434,28 @@ export class ControlPlaneStore {
         idempotencyKey: `agent-run:${input.context.agentRunId}:terminal`,
         redaction: { policyVersion: 'control-plane-shadow-v1', fields: [], secretRefs: [] },
       });
-      const commandType = commandTerminalType(input.commandStatus);
-      this.appendJournal({
-        schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
-        eventId: eventId(input.context.commandId, 'terminal'),
-        eventClass: runtimeEventClass(commandType),
-        partitionKey: input.context.sessionId,
-        sessionId: input.context.sessionId,
-        legacySessionId: input.context.legacySessionId,
-        commandId: input.context.commandId,
-        agentRunId: input.context.agentRunId,
-        attemptId: input.context.attemptId,
-        causationId: input.context.commandId,
-        correlationId: input.context.correlationId,
-        type: commandType,
-        occurredAt,
-        actor: input.context.actor,
-        payload: { status: input.commandStatus, reason: input.reason, errorRef: input.errorRef ?? null },
-        idempotencyKey: `command:${input.context.commandId}:terminal`,
-        redaction: { policyVersion: 'control-plane-shadow-v1', fields: [], secretRefs: [] },
-      });
+      if (terminalizesCommand) {
+        const commandType = commandTerminalType(input.commandStatus);
+        this.appendJournal({
+          schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
+          eventId: eventId(input.context.commandId, 'terminal'),
+          eventClass: runtimeEventClass(commandType),
+          partitionKey: input.context.sessionId,
+          sessionId: input.context.sessionId,
+          legacySessionId: input.context.legacySessionId,
+          commandId: input.context.commandId,
+          agentRunId: input.context.agentRunId,
+          attemptId: input.context.attemptId,
+          causationId: input.context.commandId,
+          correlationId: input.context.correlationId,
+          type: commandType,
+          occurredAt,
+          actor: input.context.actor,
+          payload: { status: input.commandStatus, reason: input.reason, errorRef: input.errorRef ?? null },
+          idempotencyKey: `command:${input.context.commandId}:terminal`,
+          redaction: { policyVersion: 'control-plane-shadow-v1', fields: [], secretRefs: [] },
+        });
+      }
     });
     tx.immediate();
   }

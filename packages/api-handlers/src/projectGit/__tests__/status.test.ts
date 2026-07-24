@@ -101,12 +101,30 @@ async function setupRepoWithSubmodule(): Promise<string> {
 function makeHandlers(root: string) {
   return createProjectGitHandlers({
     db: {
-      getProject: (id: number) => (id === 1 ? { id, name: 'Repo', root_path: root } : null),
+      getProjectRootPath: (id: number) => (id === 1 ? root : undefined),
     },
   } as never);
 }
 
 describe('project git status', () => {
+  it('reads the catalog root without loading the full project overlays', async () => {
+    const root = await setupRepo();
+    const getProject = vi.fn(() => {
+      throw new Error('full project lookup must not run');
+    });
+    const handlers = createProjectGitHandlers({
+      db: {
+        getProjectRootPath: (id: number) => (id === 1 ? root : undefined),
+        getProject,
+      },
+    } as never);
+
+    const status = await handlers.status({ projectId: 1, includeFiles: false }, {} as never);
+
+    expect(status.branch).toBe('main');
+    expect(getProject).not.toHaveBeenCalled();
+  });
+
   it('returns summary without files using one git status process', async () => {
     const handlers = makeHandlers(await setupRepo());
     gitSpawnStats.statusCalls = 0;

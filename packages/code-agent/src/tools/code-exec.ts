@@ -29,7 +29,13 @@ import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } 
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
-import { evaluateToolInvocation, findScopeViolations, resolveToolMetadata, type PolicyContext } from '@mcp/code-agent/core/policy.js';
+import {
+  evaluateToolInvocation,
+  findScopeViolations,
+  resolveToolInvocationMetadata,
+  resolveToolMetadata,
+  type PolicyContext,
+} from '@mcp/code-agent/core/policy.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
@@ -103,7 +109,7 @@ const CODE_EXEC_DESC =
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
-  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and task-lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
+  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (create_goal, get_goal, update_goal, task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
@@ -148,15 +154,20 @@ const CODE_EXEC_DESC =
  *    — would let a script spin up nested coder runs unbounded.
  *  - view_image — relies on `extraUserBlocks` injection, which only fires
  *    on direct tool dispatch.
- *  - Plan/task lifecycle (execute_task, task_complete) — same pause/resume
- *    coupling as the interactive prompts.
+ *  - Goal/plan/task lifecycle — these are control-plane boundaries whose
+ *    result and durable session transition must stay attributable to a direct
+ *    top-level tool_use id.
  */
 function isSafeTool(tool: CoderTool): boolean {
   if (resolveToolMetadata(tool).interactive) return false;
   if (
     tool.name === 'spawn_agent' ||
+    tool.name === 'resume_agent' ||
     tool.name === 'code_exec' ||
     tool.name.startsWith('spawn_') ||
+    tool.name === 'create_goal' ||
+    tool.name === 'get_goal' ||
+    tool.name === 'update_goal' ||
     tool.name === 'execute_task' ||
     tool.name === 'task_complete' ||
     tool.name === 'expand_toolset' ||
@@ -282,6 +293,7 @@ export function buildCodeExecTool(
 ): CoderTool {
   return {
     name: 'code_exec',
+    effectBoundary: 'nested',
     description: maybeTerse(CODE_EXEC_DESC),
     source: 'native',
     outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
@@ -529,7 +541,6 @@ export function buildCodeExecTool(
 
       const toolsProxy: Record<string, (a: unknown) => Promise<string>> = {};
       for (const t of safe) {
-        const metadata = resolveToolMetadata(t);
         const impl = async (rawArgs: unknown): Promise<string> => {
           if (executionClosing) {
             throw new Error('code_exec: script already finished; refusing a late nested call');
@@ -539,15 +550,31 @@ export function buildCodeExecTool(
           }
           const rawArgObj = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
           const argObj = normalizeGuardInput(t, rawArgObj);
+          const metadata = resolveToolInvocationMetadata(t, argObj);
           const observer = ctx.nestedToolObserver;
           const repeatable = metadata.repeatPolicy === 'pollable';
           const forceReread = argObj.force_reread === true;
           const callEpoch = stateEpoch;
           const attemptOrigin = `${ctx.currentToolUseId ?? ctx.approvalAnchorId ?? 'code_exec'}#${toolCalls}`;
+          const nestedToolUseId =
+            `nx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          const nestedAuthority = ctx.nestedCapabilityDispatch;
+          const hookBase = {
+            toolUseId: nestedToolUseId,
+            toolName: t.name,
+            turn: nestedAuthority?.turn ?? 0,
+            known: true,
+          };
+          let hookOutcome: {
+            isError: boolean;
+            refused: boolean;
+            durationMs: number;
+          } | undefined;
           const recordNestedOutcome = (input: {
             content: string;
             isError: boolean;
             durationMs: number;
+            structuredData?: unknown;
             sourceTruncations?: ToolResult['sourceTruncations'];
             refusalKind?: string;
             error?: ToolErrorInfo;
@@ -555,14 +582,21 @@ export function buildCodeExecTool(
             guardVerdict?: GuardVerdict;
             delivered?: boolean;
           }) => {
+            hookOutcome = {
+              isError: input.isError,
+              refused: input.refusalKind !== undefined,
+              durationMs: input.durationMs,
+            };
             const delivered = input.delivered !== false;
             const ledgerEntry = ctx.toolCallLedger?.record({
               name: t.name,
               args: argObj,
               content: input.content,
               isError: input.isError,
+              structuredData: input.structuredData,
               refusalKind: input.refusalKind,
               mutates: metadata.mutates,
+              riskLevel: metadata.riskLevel,
               durationMs: input.durationMs,
               executionClass: metadata.executionClass,
               repeatPolicy: metadata.repeatPolicy,
@@ -608,9 +642,72 @@ export function buildCodeExecTool(
             });
             return ledgerEntry;
           };
-          const policyCtx = buildPolicyCtx();
-          const decision = evaluateToolInvocation(t, argObj, policyCtx);
-          if (!decision.allowed) {
+          if (nestedAuthority?.capabilityHooks) {
+            try {
+              await nestedAuthority.capabilityHooks.before(hookBase);
+            } catch {
+              // Capability hooks are observation-only and never alter dispatch.
+            }
+          }
+          try {
+          const preflight = await nestedAuthority?.preflight?.({
+            tool: t,
+            toolUseId: nestedToolUseId,
+            toolName: t.name,
+            toolInput: argObj,
+            turn: nestedAuthority.turn,
+            toolMutates: metadata.mutates,
+          });
+          if (preflight) {
+            const refusalKind = preflight.refusalKind ?? 'gate';
+            const guardVerdict = preflight.guardVerdict ?? (
+              preflight.isError
+                ? refusalVerdict({
+                    tool: t.name,
+                    reason: 'preflight-gate',
+                    refusalKind,
+                    stateEpoch: callEpoch,
+                    originToolUseId: attemptOrigin,
+                  })
+                : {
+                    action: 'reuse' as const,
+                    reason: 'preflight-reuse',
+                    shouldReflect: false,
+                    affectsFailureStreak: false,
+                    sourceTool: t.name,
+                    originToolUseId: attemptOrigin,
+                    stateEpoch: callEpoch,
+                  }
+            );
+            recordNestedOutcome({
+              content: preflight.content,
+              isError: preflight.isError,
+              durationMs: 0,
+              ...(preflight.isError ? {
+                refusalKind,
+                error: refusalErrorInfo(refusalKind),
+                delivered: false,
+              } : {}),
+              affectsFailureStreak: false,
+              guardVerdict,
+            });
+            if (preflight.isError) {
+              throw nestedRefusalError(
+                t.name,
+                refusalKind,
+                preflight.content,
+                guardVerdict,
+              );
+            }
+            return preflight.content;
+          }
+          // Standalone code_exec hosts keep the legacy local evaluator. Runner
+          // dispatch supplies the unified preflight above, which is the sole
+          // authority there so direct and nested decisions cannot diverge.
+          if (!nestedAuthority?.preflight) {
+            const policyCtx = buildPolicyCtx();
+            const decision = evaluateToolInvocation(t, argObj, policyCtx);
+            if (!decision.allowed) {
             // Mirror the runner's task-scope unlock: scopeAware + plan-mode
             // block + all candidate paths inside the active scope → run.
             const canUnlock =
@@ -652,6 +749,46 @@ export function buildCodeExecTool(
               });
               throw nestedRefusalError(t.name, 'gate', detail, guardVerdict);
             }
+            }
+          }
+
+          // A nested call is the same capability boundary as a direct call.
+          // Reuse the visible code_exec invocation's exact scoped policy port,
+          // with the normalized arguments that will reach the handler. Policy
+          // evaluation failures intentionally bubble and fail closed.
+          if (nestedAuthority?.policyShadow) {
+            const shadow = await nestedAuthority.policyShadow({
+              tool: t,
+              toolUseId: nestedToolUseId,
+              toolName: t.name,
+              toolInput: argObj,
+              turn: nestedAuthority.turn,
+            });
+            if (shadow?.refuse) {
+              const guardVerdict = refusalVerdict({
+                tool: t.name,
+                reason: 'policy-gate',
+                refusalKind: 'user_denied',
+                stateEpoch: callEpoch,
+                originToolUseId: attemptOrigin,
+              });
+              recordNestedOutcome({
+                content: shadow.refusalText,
+                isError: true,
+                durationMs: 0,
+                refusalKind: 'user_denied',
+                error: refusalErrorInfo('user_denied'),
+                affectsFailureStreak: false,
+                guardVerdict,
+                delivered: false,
+              });
+              throw nestedRefusalError(
+                t.name,
+                'user_denied',
+                shadow.refusalText,
+                guardVerdict,
+              );
+            }
           }
 
           // Permission must be decided before the local repetition observer:
@@ -661,7 +798,7 @@ export function buildCodeExecTool(
           try {
             if (ctx.permissionGate) {
               const decision = await ctx.permissionGate.check({
-                toolUseId: `nx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                toolUseId: nestedToolUseId,
                 toolName: t.name,
                 input: argObj,
                 tool: t,
@@ -817,7 +954,13 @@ export function buildCodeExecTool(
                   try { callAbort.abort(error); } catch { /* ignore */ }
                   throw error;
                 }
-                const invocation = registry.invoke(t.name, argObj, { ...ctx, signal: callAbort.signal });
+                const invocation = registry.invoke(t.name, argObj, {
+                  ...ctx,
+                  currentToolUseId: nestedToolUseId,
+                  parentToolUseId:
+                    ctx.currentToolUseId ?? ctx.parentToolUseId ?? ctx.approvalAnchorId,
+                  signal: callAbort.signal,
+                });
                 if (releaseLane) {
                   laneReleaseOwnedByInvocation = true;
                   void invocation.then(releaseLane, releaseLane);
@@ -841,6 +984,7 @@ export function buildCodeExecTool(
                   content: nestedContent,
                   isError: !!result.isError,
                   durationMs: Date.now() - started,
+                  structuredData: result.structuredData,
                   sourceTruncations: normalizeSourceTruncations(result.sourceTruncations),
                   ...(result.isError
                     ? { error: result.error ?? inferToolErrorInfo(t.name, result.content) }
@@ -857,6 +1001,7 @@ export function buildCodeExecTool(
                 }
                 if (
                   metadata.mutates ||
+                  metadata.repeatPolicy === 'mutating' ||
                   metadata.executionClass === 'write' ||
                   metadata.executionClass === 'execute'
                 ) {
@@ -911,6 +1056,20 @@ export function buildCodeExecTool(
           } finally {
             inFlight -= 1;
             if (inFlight === 0) resumeClock();
+          }
+          } finally {
+            if (nestedAuthority?.capabilityHooks) {
+              try {
+                await nestedAuthority.capabilityHooks.after({
+                  ...hookBase,
+                  isError: hookOutcome?.isError ?? true,
+                  refused: hookOutcome?.refused ?? false,
+                  durationMs: hookOutcome?.durationMs ?? 0,
+                });
+              } catch {
+                // Capability hooks are observation-only and never alter dispatch.
+              }
+            }
           }
         };
         toolsProxy[t.name] = (rawArgs: unknown): Promise<string> => {

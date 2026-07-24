@@ -4,7 +4,7 @@
  * symbol the production code reads, so we don't need a real network
  * stack.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReconnectingWebSocketClient, type WebSocketLike } from '../ReconnectingWebSocketClient.js';
 import type { SSEEvent } from '../../sse/SSEFramer.js';
 import { ExponentialBackoff } from '../../sse/BackoffStrategy.js';
@@ -80,11 +80,13 @@ describe('ReconnectingWebSocketClient', () => {
     await new Promise((r) => setTimeout(r, 0));
     const ws = MockWebSocket.instances[0];
     expect(ws).toBeTruthy();
+    ws.push({ v: 1, type: 'bus_info', data: { bus_id: 'bus-1' } });
     ws.push({ v: 1, seq: 1, type: 'board_entry', data: { id: 1 } });
     ws.push({ v: 1, type: 'ping' });
     ws.push({ v: 1, seq: 2, type: 'done', data: {} });
     await runPromise;
     expect(events).toEqual([
+      { id: undefined, event: 'bus_info', data: JSON.stringify({ bus_id: 'bus-1' }) },
       { id: 1, event: 'board_entry', data: JSON.stringify({ id: 1 }) },
       { id: 2, event: 'done', data: JSON.stringify({}) },
     ]);
@@ -92,7 +94,7 @@ describe('ReconnectingWebSocketClient', () => {
     expect(phases).toContain('live');
   });
 
-  it('appends sinceSeq when Last-Event-ID equivalent is provided', async () => {
+  it('appends the paired sinceSeq and busId replay cursor', async () => {
     const ctrl = new AbortController();
     let lastSeen = 42;
     const client = new ReconnectingWebSocketClient({
@@ -100,12 +102,13 @@ describe('ReconnectingWebSocketClient', () => {
       signal: ctrl.signal,
       onEvent: () => undefined,
       getLastEventId: () => lastSeen,
+      getLastEventBusId: () => 'bus / 42',
       isTerminal: () => true, // first event terminates
     });
     const runPromise = client.run();
     await new Promise((r) => setTimeout(r, 0));
     const ws = MockWebSocket.instances[0];
-    expect(ws.url).toBe('ws://h/api/company/sessions/1/ws?sinceSeq=42');
+    expect(ws.url).toBe('ws://h/api/company/sessions/1/ws?sinceSeq=42&busId=bus%20%2F%2042');
     ws.push({ v: 1, seq: 1, type: 'done', data: {} });
     await runPromise;
     lastSeen = -1; // suppress eslint unused var warning
@@ -135,6 +138,41 @@ describe('ReconnectingWebSocketClient', () => {
     await runPromise;
     expect(phases).toContain('disconnected');
     expect(phases).toContain('live');
+  });
+
+  it('replenishes retry budget after newer frames and removes abort listeners on every reconnect', async () => {
+    const ctrl = new AbortController();
+    const addAbortListener = vi.spyOn(ctrl.signal, 'addEventListener');
+    const removeAbortListener = vi.spyOn(ctrl.signal, 'removeEventListener');
+    let lastSeen = -1;
+    const client = new ReconnectingWebSocketClient({
+      url: 'ws://h/x',
+      signal: ctrl.signal,
+      onEvent: (event) => {
+        if (typeof event.id === 'number') lastSeen = event.id;
+      },
+      getLastEventId: () => lastSeen,
+      backoff: new ExponentialBackoff({ baseMs: 1, maxMs: 1, maxAttempts: 1 }),
+      isTerminal: (event) => event.event === 'done',
+    });
+    const runPromise = client.run();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    MockWebSocket.instances[0].push({ v: 1, seq: 1, type: 'progress', data: {} });
+    MockWebSocket.instances[0].close(1006, 'drop-one');
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(MockWebSocket.instances).toHaveLength(2);
+    MockWebSocket.instances[1].push({ v: 1, seq: 2, type: 'progress', data: {} });
+    MockWebSocket.instances[1].close(1006, 'drop-two');
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(MockWebSocket.instances).toHaveLength(3);
+    MockWebSocket.instances[2].push({ v: 1, seq: 3, type: 'done', data: {} });
+    await runPromise;
+
+    expect(addAbortListener).toHaveBeenCalled();
+    expect(removeAbortListener.mock.calls.length).toBe(addAbortListener.mock.calls.length);
   });
 
   it('aborts cleanly via the signal', async () => {

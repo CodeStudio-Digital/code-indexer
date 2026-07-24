@@ -8,11 +8,33 @@
  */
 import type { PreflightSeed } from '@mcp/code-agent/index/types.js';
 
-export function renderPreflightHint(seed: PreflightSeed): string {
+export interface RenderPreflightOptions {
+  /** When false, suppress the bugfix reproduction-first workflow block. */
+  bugWorkflow?: boolean;
+}
+
+export function renderPreflightHint(
+  seed: PreflightSeed,
+  options: RenderPreflightOptions = {},
+): string {
   const lines: string[] = ['<preflight>'];
 
   if (seed.taskKind) {
     lines.push(`task_kind: ${seed.taskKind}`);
+    lines.push(
+      'goal_lifecycle: for non-trivial work, when both create_goal and update_goal are available, include create_goal in the first assistant tool-call batch before substantive tools; do not defer it until completion.',
+    );
+    if (seed.taskKind === 'bugfix' && options.bugWorkflow !== false) {
+      lines.push(
+        'bug_workflow: reproduce the defect BEFORE touching production code. ' +
+          '1) build a reproduction that fails for the expected reason; ' +
+          '2) find the root cause with evidence; ' +
+          '3) make the smallest fix; ' +
+          '4) confirm the reproduction now passes and the previously-passing tests still pass; ' +
+          '5) check boundary and negative cases. ' +
+          'When a unit test is not viable, a sanitized captured request, fixture, replay, script, browser scenario, integration test or benchmark is an acceptable oracle.',
+      );
+    }
   }
 
   const toolsetParts: string[] = [];

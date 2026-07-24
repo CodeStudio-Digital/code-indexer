@@ -13,6 +13,7 @@
 import type { SessionStore } from './store.js';
 
 const MAX_FIRST_MSG_CHARS = 1_500;
+const MAX_PLAN_CHARS = 2_000;
 const MAX_TASKS = 10;
 
 function cap(text: string, max: number): string {
@@ -28,6 +29,22 @@ export function buildSessionIntent(store: SessionStore, sessionId: number): stri
 
     const firstMsg = store.getFirstUserMessageText(sessionId);
     if (firstMsg) parts.push(`Original request:\n${cap(firstMsg, MAX_FIRST_MSG_CHARS)}`);
+
+    // A pivot changes the human's intent mid-session; surface the latest
+    // non-meta request so the review evaluates against the CURRENT ask, not
+    // only the first message. Skip when it is identical to the original.
+    const latestMsg = store.getLatestNonMetaUserMessageText(sessionId);
+    if (latestMsg && latestMsg.trim() !== (firstMsg ?? '').trim()) {
+      parts.push(`Latest request:\n${cap(latestMsg, MAX_FIRST_MSG_CHARS)}`);
+    }
+
+    // The approved plan is the contract the diff is expected to fulfill. The
+    // newest plan row wins (listPlans is DESC); only an approved plan counts —
+    // a pending/rejected one is not an obligation source.
+    const latestPlan = store.listPlans(sessionId)[0];
+    if (latestPlan && latestPlan.status === 'approved' && latestPlan.plan_text.trim()) {
+      parts.push(`Approved plan:\n${cap(latestPlan.plan_text, MAX_PLAN_CHARS)}`);
+    }
 
     const tasks = store.getTasksState(sessionId);
     if (tasks && tasks.tasks.length > 0) {

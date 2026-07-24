@@ -73,6 +73,49 @@ import { createTaskRunPersist } from './execute-tasks/task-run-persistence.js';
 import { dispatchWithRetry } from './execute-tasks/task-retry.js';
 import { shouldSkipTask } from './execute-tasks/task-stale-check.js';
 
+export const DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS = 30_000;
+
+function taskBudgetResponseTimeoutMs(): number {
+  const parsed = Number(process.env.CODER_TASKS_BUDGET_RESPONSE_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(1, Math.floor(parsed))
+    : DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS;
+}
+
+async function waitForBudgetAnswer(
+  runner: {
+    waitForUserInput(askId?: string): Promise<string>;
+    provideUserInput(value: string, askId?: string): boolean;
+  },
+  askId: string,
+): Promise<string> {
+  const fallback = 'cancel_pending';
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timedFallback = new Promise<string>((resolve) => {
+    timeout = setTimeout(() => {
+      // Resolve the keyed runner slot as well as this race. Otherwise a
+      // headless/dashboard-mismatch timeout would leave isWaitingForInput()
+      // latched forever even though execute_tasks already failed safe.
+      try {
+        runner.provideUserInput(fallback, askId);
+      } catch {
+        // The local race still resolves conservatively if the runner was
+        // concurrently torn down and its input registry is unavailable.
+      }
+      resolve(fallback);
+    }, taskBudgetResponseTimeoutMs());
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([
+      runner.waitForUserInput(askId),
+      timedFallback,
+    ]);
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+  }
+}
+
 // ─── Wave/group planning (pure) ─────────────────────────────────
 
 interface TaskGroup {
@@ -280,6 +323,7 @@ async function handleExecuteTasksInPlanMode(
 export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
   return {
     name: 'execute_tasks',
+    effectBoundary: 'nested',
     description: EXECUTE_TASKS_DESC,
     parameters: executeTasksSchema,
     source: 'native',
@@ -350,7 +394,9 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         ? async (req) => {
             const askId = `budget_${runId}_${Date.now().toString(36)}`;
             runnerForAsk.emit('budget_request', { ask_id: askId, run_id: runId, ...req });
-            const raw = await runnerForAsk.waitForUserInput(askId);
+            // Budget UI is advisory, never an unbounded execution lock. If no
+            // compatible surface answers, cancel queued work conservatively.
+            const raw = await waitForBudgetAnswer(runnerForAsk, askId);
             return parseBudgetAnswer(raw);
           }
         : undefined;
@@ -462,7 +508,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
 
             for (const r of [...skipped, ...tasksRun.results]) {
               applyStatus(statusById, r.task.id, r.status);
-              if (r.status === 'failed' || r.status === 'interrupted' || r.status === 'skipped') failedTasks++;
+              if (
+                r.status === 'failed'
+                || r.status === 'interrupted'
+                || (r.status === 'skipped' && r.satisfiesGoal !== true)
+              ) failedTasks++;
               summaries.push(formatTaskRunSummary(r));
             }
             accumulateUsage(totalUsage, tasksRun.usage);
@@ -508,7 +558,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
           openedInlineScope.task,
           openedInlineScope.remaining,
         );
-        return { ...ok(header + completedSummaries + inlineInstruction), subUsage: totalUsage };
+        const content = header + completedSummaries + inlineInstruction;
+        return {
+          ...(failedTasks > 0 ? err(content) : ok(content)),
+          subUsage: totalUsage,
+        };
       }
 
       const runFinishedAt = new Date().toISOString();
@@ -529,7 +583,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       const header =
         `[execute_tasks: ${waves.length} wave(s), ${state.tasks.length} task(s), ` +
         `input=${totalUsage.input_tokens} output=${totalUsage.output_tokens}]\n\n`;
-      return { ...ok(header + summaries.join('\n\n---\n\n')), subUsage: totalUsage };
+      const content = header + summaries.join('\n\n---\n\n');
+      return {
+        ...(failedTasks > 0 ? err(content) : ok(content)),
+        subUsage: totalUsage,
+      };
     },
   };
 }
@@ -1026,6 +1084,7 @@ function skipTaskAsStale(
   return {
     task,
     status: 'skipped',
+    satisfiesGoal: true,
     summary,
     usage: { input_tokens: 0, output_tokens: 0 },
     toolCallCount: 0,

@@ -18,6 +18,21 @@ function harness() {
 }
 
 describe('SemanticStore', () => {
+  it('temporarily overrides and restores the SQLite busy timeout', () => {
+    const { db, store } = harness();
+    try {
+      db.pragma('busy_timeout = 5000');
+      expect(() => store.withBusyTimeout(0, () => {
+        expect(db.pragma('busy_timeout', { simple: true })).toBe(0);
+        throw new Error('operation failed');
+      })).toThrow('operation failed');
+      expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
+    } finally {
+      store.close();
+      db.close();
+    }
+  });
+
   it('coalesces durable project-removal tombstones and reopens completed requests', () => {
     const { db, store } = harness();
     try {
@@ -637,6 +652,130 @@ describe('SemanticStore', () => {
         cursor: expect.objectContaining({
           fence_phase: 'settled',
           recovery_reason: 'process-restart',
+        }),
+      });
+    } finally {
+      store.close();
+      db.close();
+    }
+  });
+
+  it('settles Memory insert fences to exact post-watermark identities', () => {
+    const { db, store } = harness();
+    try {
+      db.exec(`
+        CREATE TABLE agent_memory (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scope TEXT NOT NULL,
+          project_id INTEGER NOT NULL,
+          archived_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE coder_investigations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      const generation = store.createGeneration({
+        purpose: 'memory',
+        fingerprint: 'memory-targeted',
+        dimension: 3,
+        embedding_target: {
+          kind: 'onnx', model: 'memory', pooling: 'mean', normalize: true,
+          queryTemplate: '{text}', documentTemplate: '{text}',
+        },
+      });
+      store.beginNamespaceGeneration({
+        namespace: 'memory:project:p7',
+        purpose: 'memory',
+        generation_id: generation.id,
+      });
+
+      const fence = store.noteNamespaceMutation({
+        namespace: 'memory:project:p7',
+        itemKeys: ['*'],
+        operation: 'upsert',
+        fence: { token: 'memory-batch', owner: 'sweeper' },
+      });
+      const insertMemory = db.prepare(`
+        INSERT INTO agent_memory (scope, project_id) VALUES ('project', 7)
+      `);
+      for (let index = 0; index < 10; index++) insertMemory.run();
+      db.prepare('INSERT INTO coder_investigations (project_id) VALUES (7)').run();
+
+      const settled = store.settleNamespaceMutationFence({
+        job_id: fence.id,
+        token: 'memory-batch',
+      });
+
+      expect(settled).toMatchObject({
+        id: fence.id,
+        status: 'pending',
+        expected_items: 11,
+        cursor: expect.objectContaining({
+          fence_phase: 'settled',
+          fence_identity_resolved: true,
+          item_keys_truncated: false,
+          resolved_item_count: 11,
+        }),
+      });
+      const keys = settled?.cursor?.item_keys as string[];
+      expect(keys).not.toContain('*');
+      expect(keys).toEqual([
+        ...Array.from({ length: 10 }, (_, index) => `agent_memory:${index + 1}`),
+        'investigation:1',
+      ]);
+      expect(store.listJobs({ namespace: 'memory:project:p7' })).toHaveLength(1);
+      expect(store.listNamespaceGenerations({ namespace: 'memory:project:p7' })[0])
+        .toMatchObject({ delta_items: 11 });
+    } finally {
+      store.close();
+      db.close();
+    }
+  });
+
+  it('shrinks a bulk Memory delete fence to rows that actually left the live set', () => {
+    const { db, store } = harness();
+    try {
+      db.exec(`
+        CREATE TABLE agent_memory (
+          id INTEGER PRIMARY KEY,
+          scope TEXT NOT NULL,
+          project_id INTEGER NOT NULL,
+          archived_at TEXT,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE coder_investigations (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER
+        );
+        INSERT INTO agent_memory (id, scope, project_id) VALUES
+          (4, 'project', 7),
+          (5, 'project', 7);
+      `);
+      const fence = store.noteNamespaceMutation({
+        namespace: 'memory:project:p7',
+        itemKeys: ['agent_memory:4', 'agent_memory:5'],
+        operation: 'delete',
+        fence: { token: 'hygiene', owner: 'sweeper' },
+      });
+      db.prepare(`
+        UPDATE agent_memory
+        SET archived_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = 4
+      `).run();
+
+      const settled = store.settleNamespaceMutationFence({
+        job_id: fence.id,
+        token: 'hygiene',
+      });
+
+      expect(settled).toMatchObject({
+        expected_items: 1,
+        cursor: expect.objectContaining({
+          item_keys: ['agent_memory:4'],
+          resolved_item_count: 1,
         }),
       });
     } finally {

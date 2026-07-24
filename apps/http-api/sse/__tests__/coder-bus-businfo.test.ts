@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createBus, publish, subscribe } from '../../coder-bus.js';
-import { effectiveSince } from '../pumpBusToSSE.js';
+import { effectiveSince, effectiveSinceForBus } from '../pumpBusToSSE.js';
 
 describe('coder-bus busId', () => {
   it('assigns a unique bus id per instance', () => {
@@ -38,5 +38,12 @@ describe('effectiveSince', () => {
     // have come from this bus.
     expect(effectiveSince(10, 10)).toBe(-1);
     expect(effectiveSince(10877, 5)).toBe(-1);
+  });
+
+  it('never applies a plausible numeric cursor from another bus', () => {
+    expect(effectiveSinceForBus(2, 10, 'old-bus', 'current-bus')).toBe(-1);
+    expect(effectiveSinceForBus(2, 10, 'current-bus', 'current-bus')).toBe(2);
+    // Header-less legacy clients retain the old range heuristic.
+    expect(effectiveSinceForBus(2, 10, null, 'current-bus')).toBe(2);
   });
 });

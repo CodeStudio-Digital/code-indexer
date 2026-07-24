@@ -62,12 +62,4 @@ describe('coder runtime notification feed', () => {
       resumableCount: 2,
     });
   });
-
-  it('ignores ok quality verdicts', () => {
-    const sessionId = ++nextSessionId;
-    recordCoderRuntimeNotification({
-      id: 20, ts: 20, sessionId, event: 'quality_watchdog_alert', data: { verdict: 'ok' },
-    });
-    expect(getNotifications(sessionId)).toHaveLength(0);
-  });
 });

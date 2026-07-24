@@ -21,6 +21,8 @@ import { WorkerHost } from '@mcp/orchestrator-host';
 import { resolveWorkerFile } from './workerFileResolution.js';
 
 let cached: WorkerHost | null = null;
+let cachedStart: Promise<void> | null = null;
+const projectCheckpointInflight = new Set<string>();
 
 /** Sync probe used to decide `externalCheckpointer` before the DB opens. */
 export function canResolveDbMaintenanceWorker(): boolean {
@@ -45,23 +47,70 @@ export function startDbMaintenanceWorker(
     workerData: { dbPath, tsEntry: resolved.devTsEntry },
     onCrash: (err) => {
       console.error(`[db-maintenance] worker crashed permanently: ${err.message}`);
-      cached = null;
+      if (cached === host) {
+        cached = null;
+        cachedStart = null;
+      }
       opts.onPermanentCrash?.();
     },
   });
   cached = host;
-  void host.start().catch((err: unknown) => {
+  cachedStart = host.start().then(() => undefined).catch((err: unknown) => {
     console.error(
       `[db-maintenance] failed to start: ${err instanceof Error ? err.message : String(err)}`,
     );
-    cached = null;
+    if (cached === host) cached = null;
     opts.onPermanentCrash?.();
   });
+}
+
+/**
+ * Recover stale semantic mutation fences on the maintenance worker. Fence
+ * resolution may inspect many source rows and acquire an IMMEDIATE
+ * transaction; neither operation belongs on Electron-main during startup.
+ */
+export async function recoverSemanticMutationFences(
+  prefixes: readonly string[],
+  currentOwner: string,
+): Promise<number | null> {
+  const host = cached;
+  const starting = cachedStart;
+  if (!host || !starting) return null;
+  await starting;
+  if (cached !== host || !host.isRunning()) return null;
+  const result = await host.requireBridge().request<{ recovered: number }>(
+    'semantic.recover-mutation-fences',
+    { prefixes: [...prefixes], currentOwner },
+    { timeoutMs: 60_000 },
+  );
+  return result.recovered;
+}
+
+/**
+ * Queue a project-DB PASSIVE checkpoint on the maintenance worker. Eviction is
+ * synchronous, so this intentionally never waits on the Electron main thread.
+ */
+export function scheduleProjectDbCheckpoint(dbPath: string): void {
+  const host = cached;
+  if (!host?.isRunning() || projectCheckpointInflight.has(dbPath)) return;
+  projectCheckpointInflight.add(dbPath);
+  void host.requireBridge()
+    .request('checkpoint.project', { dbPath }, { timeoutMs: 30_000 })
+    .catch((error: unknown) => {
+      console.warn(
+        `[db-maintenance] project checkpoint failed for ${dbPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    })
+    .finally(() => projectCheckpointInflight.delete(dbPath));
 }
 
 /** Graceful shutdown (registered as a deps shutdown task). Idempotent. */
 export async function stopDbMaintenanceWorker(): Promise<void> {
   const host = cached;
   cached = null;
+  cachedStart = null;
+  projectCheckpointInflight.clear();
   if (host) await host.evict();
 }

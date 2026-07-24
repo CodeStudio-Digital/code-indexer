@@ -21,7 +21,11 @@ import {
 } from '../../../hooks/useAgentStream.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
-import { isLiveTurnDuplicatedInHistory } from '../../chat/utils.js';
+import {
+  buildPersistedLiveReconciliation,
+  isLiveTurnDuplicatedInHistory,
+  liveTurnReconciliationRevision,
+} from '../../chat/utils.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import {
   executionModeChangeLocked,
@@ -168,13 +172,28 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       setProvider,
       setModel,
     });
+  const liveReconciliation = useMemo(
+    () => buildPersistedLiveReconciliation(
+      selectedSessionData?.messages ?? [],
+      selectedSessionData?.preceding_user_message_id,
+      (selectedSessionData?.tool_results ?? []).map((result) => result.tool_use_id),
+    ),
+    [selectedSessionData],
+  );
+  const currentTurnRef = useRef(currentTurn);
+  currentTurnRef.current = currentTurn;
+  const liveReconciliationRevision = liveTurnReconciliationRevision(
+    currentTurn,
+    liveReconciliation.tailTextLength,
+    liveReconciliation.tailThinkingLength,
+  );
   const liveTurnDuplicatedInHistory = useMemo(
     () => isLiveTurnDuplicatedInHistory(
-      currentTurn,
-      selectedSessionData?.messages ?? [],
+      currentTurnRef.current,
+      liveReconciliation,
       persistedToolUseIds,
     ),
-    [currentTurn, persistedToolUseIds, selectedSessionData],
+    [liveReconciliation, liveReconciliationRevision, persistedToolUseIds],
   );
 
   const settings = useEditorSessionSettings(selectedId, selectedSessionData, {
@@ -691,7 +710,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
     moveSessionToGroup, createGroup,
     sessionData: selectedSessionData, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
-    liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
+    liveReconciliation, liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
     provider, model, setModel, agent, setAgent: handleAgentChange, maxTurns, setMaxTurns,

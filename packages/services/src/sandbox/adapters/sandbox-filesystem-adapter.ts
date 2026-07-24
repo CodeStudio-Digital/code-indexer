@@ -21,6 +21,10 @@ import type {
   PortStats,
   FilesystemReaddirOptions,
 } from '@mcp/code-agent/ports/filesystem-port.js';
+import {
+  assertMutationFence,
+} from '@mcp/code-agent/core/mutation-fence.js';
+import type { ToolMutationFence } from '@mcp/code-agent/core/tool.js';
 import type { ISandboxDriver } from '../ports/sandbox-driver.js';
 
 export interface SandboxFilesystemAdapterOptions {
@@ -31,16 +35,26 @@ export interface SandboxFilesystemAdapterOptions {
 export class SandboxFilesystemAdapter implements IFilesystemPort {
   private readonly driver: ISandboxDriver;
   private readonly containerId: string;
+  private mutationFenceSource?: () => ToolMutationFence | undefined;
 
   constructor(options: SandboxFilesystemAdapterOptions) {
     this.driver = options.driver;
     this.containerId = options.containerId;
   }
 
+  setMutationFenceSource(source: () => ToolMutationFence | undefined): void {
+    this.mutationFenceSource = source;
+  }
+
   async writeFile(absPath: string, data: string): Promise<void> {
     // `recursive: true` mirrors the tool layer's implicit assumption that
     // `fs.mkdir(dirname(...), { recursive: true })` was already called.
     // The CLI driver creates parents as needed before `cp` runs.
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'writeFile',
+      resource: absPath,
+    });
     await this.driver.writeFile(this.containerId, absPath, data, { recursive: true });
   }
 
@@ -49,6 +63,11 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
   }
 
   async mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'mkdir',
+      resource: absPath,
+    });
     await this.driver.mkdir(this.containerId, absPath, options);
   }
 
@@ -66,6 +85,11 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
     // argv (no shell parsing). Mirrors how `mkdir` / `access` are layered
     // on top of `run` in cli-oci-driver. `rm -f` is silent on missing
     // files; we surface absence by re-running `access` only on error.
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'unlink',
+      resource: absPath,
+    });
     const res = await this.driver.run(this.containerId, 'rm', ['-f', absPath], {
       timeoutMs: 10_000,
     });
@@ -99,6 +123,16 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
   }
 
   async rename(oldAbsPath: string, newAbsPath: string): Promise<void> {
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rename',
+      resource: oldAbsPath,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rename',
+      resource: newAbsPath,
+    });
     const res = await this.driver.run(this.containerId, 'mv', [oldAbsPath, newAbsPath], {
       timeoutMs: 30_000,
     });
@@ -115,6 +149,11 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
     if (program === 'rm' && options?.recursive) args.push('-r');
     if (program === 'rm' && options?.force) args.push('-f');
     args.push(absPath);
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rm',
+      resource: absPath,
+    });
     const res = await this.driver.run(this.containerId, program, args, { timeoutMs: 30_000 });
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout || '').trim();

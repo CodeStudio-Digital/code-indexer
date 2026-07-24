@@ -1,6 +1,18 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
+import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import {
+  combinedMutationSignal,
+  MutationFenceError,
+} from '@mcp/code-agent/core/mutation-fence.js';
+import { defaultLocalFilesystemPort } from '@mcp/code-agent/ports/filesystem-port.js';
+import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
+import {
+  mutationFencedFilesystemPort,
+  mutationFencedShellPort,
+  runWithMutationFence,
+} from '@mcp/code-agent/ports/mutation-fenced-ports.js';
 
 /**
  * In-memory registry that holds the union of native + MCP tools available
@@ -80,7 +92,81 @@ export class ToolRegistry {
     // calls — the runner loop, subagents, and code_exec's nested calls.
     const finalArgs = aliasNormalizationEnabled() ? normalizeToolArgs(tool.parameters, args) : args;
     try {
-      return await tool.handler(finalArgs, ctx);
+      let invocationContext = ctx;
+      if (ctx.mutationFence) {
+        const metadata = resolveToolMetadata(tool);
+        let dynamicRisk = metadata.riskLevel;
+        if (tool.riskOf) {
+          try {
+            dynamicRisk = tool.riskOf(finalArgs);
+          } catch {
+            dynamicRisk = 'write';
+          }
+        }
+        const requiresEffectBoundary = metadata.mutates
+          || metadata.executionClass !== 'read'
+          || dynamicRisk !== 'read'
+          || tool.effectBoundary !== undefined
+          || (tool.source === 'mcp_external' && tool.mutates !== false);
+        const mutationFence = ctx.mutationFence.bindInvocation({
+          toolName: name,
+          toolUseId: ctx.currentToolUseId ?? ctx.approvalAnchorId ?? name,
+          effectiveInput: finalArgs,
+          boundary: tool.effectBoundary,
+          requiresEffectBoundary,
+        });
+        const rawFs = ctx.ports?.fs ?? defaultLocalFilesystemPort();
+        const rawShell = ctx.ports?.shell ?? defaultLocalShellPort();
+        if (mutationFence.mode === 'enforce'
+          && tool.effectBoundary === 'filesystem'
+          && rawFs.mutationFenceAttested !== true) {
+          throw new MutationFenceError(
+            'unsupported_port',
+            `${name} filesystem adapter has no attested physical mutation boundary`,
+          );
+        }
+        if (mutationFence.mode === 'enforce'
+          && tool.effectBoundary === 'shell'
+          && rawShell.mutationFenceAttested !== true) {
+          throw new MutationFenceError(
+            'unsupported_port',
+            `${name} shell adapter has no attested physical mutation boundary`,
+          );
+        }
+        invocationContext = {
+          ...ctx,
+          mutationFence,
+          signal: combinedMutationSignal(ctx.signal, mutationFence),
+          // Ports are rebound per invocation. The wrappers resolve the bound
+          // fence through AsyncLocalStorage, so concurrent A/B calls cannot
+          // observe each other's input/resource binding.
+          ports: {
+            fs: mutationFencedFilesystemPort(
+              rawFs,
+              () => mutationFence,
+            ),
+            shell: mutationFencedShellPort(
+              rawShell,
+              () => mutationFence,
+            ),
+          },
+        };
+        if (tool.effectBoundary === 'control') {
+          // In-process control tools declare handler entry as their physical
+          // boundary. Other kinds revalidate inside their port/adapter.
+          mutationFence.assertMutation({
+            kind: 'control',
+            operation: name,
+            resource: name,
+          });
+        }
+      }
+      return invocationContext.mutationFence
+        ? await runWithMutationFence(
+            invocationContext.mutationFence,
+            () => tool.handler(finalArgs, invocationContext),
+          )
+        : await tool.handler(finalArgs, invocationContext);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return {

@@ -64,11 +64,6 @@ export class PlanningNode implements BehaviorNode {
             }),
           }],
         });
-        ctx.bridge?.recordStrategyNudge?.({
-          guard: loopEvent.guard,
-          toolName: loopEvent.toolName,
-          count: loopEvent.count,
-        });
       }
     }
 

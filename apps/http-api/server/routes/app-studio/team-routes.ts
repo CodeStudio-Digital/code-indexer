@@ -39,10 +39,13 @@ export function mountAppStudioTeamConfigRoutes(app: Hono, deps: ServerDeps): voi
         dispatchSource: 'app_studio',
       });
       if (body.roles) {
-        getCompanyOrchestrator(company.id)?.applyConfigPatch({
-          role_assignments: next.roles.filter((role) => role.role !== 'master'),
-          allowed_models: next.allowedModels,
-        });
+        const orchestrator = getCompanyOrchestrator(company.id);
+        if (orchestrator) {
+          await orchestrator.applyConfigPatch({
+            role_assignments: next.roles.filter((role) => role.role !== 'master'),
+            allowed_models: next.allowedModels,
+          });
+        }
       }
       deps.companyStore.updateCompanySessionConfig(company.id, next.configJson);
       if (company.master_session_id) {

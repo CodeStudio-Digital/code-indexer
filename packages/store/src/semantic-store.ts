@@ -18,6 +18,20 @@ export function semanticPurposeForNamespace(namespace: string): SemanticPurpose 
   throw new Error(`Unsupported semantic namespace: ${namespace}`);
 }
 
+type MemoryNamespaceSource =
+  | { scope: 'user'; projectId: 0 }
+  | { scope: 'project'; projectId: number };
+
+function memoryNamespaceSource(namespace: string): MemoryNamespaceSource | null {
+  if (namespace === 'memory:user') return { scope: 'user', projectId: 0 };
+  const match = /^memory:project:p(\d+)$/.exec(namespace);
+  if (!match) return null;
+  const projectId = Number(match[1]);
+  return Number.isSafeInteger(projectId) && projectId > 0
+    ? { scope: 'project', projectId }
+    : null;
+}
+
 /** Dtypes accepted by the managed transformers.js ONNX runtime. `q8` is the
  * local default: it keeps the desktop memory envelope predictable while the
  * complete target remains pinned in the generation fingerprint. */
@@ -277,7 +291,10 @@ export class SemanticStore {
   private readonly db: DB;
   private readonly ownsConnection: boolean;
 
-  constructor(dbPathOrInstance: string | DB) {
+  constructor(
+    dbPathOrInstance: string | DB,
+    options: { busyTimeoutMs?: number } = {},
+  ) {
     if (typeof dbPathOrInstance === 'string') {
       this.db = new Database(dbPathOrInstance);
       this.db.pragma('journal_mode = WAL');
@@ -286,6 +303,28 @@ export class SemanticStore {
     } else {
       this.db = dbPathOrInstance;
       this.ownsConnection = false;
+    }
+    if (options.busyTimeoutMs != null) {
+      const timeout = Math.max(0, Math.trunc(options.busyTimeoutMs));
+      this.db.pragma(`busy_timeout = ${timeout}`);
+    }
+  }
+
+  /**
+   * Run a small main-thread mutation with a connection-local busy ceiling.
+   * SQLite's busy timeout is otherwise 5s, which is appropriate in workers but
+   * can freeze Electron-main when a structural writer owns the central DB.
+   * The previous value is restored even when SQLite throws.
+   */
+  withBusyTimeout<T>(busyTimeoutMs: number, operation: () => T): T {
+    const timeout = Math.max(0, Math.trunc(busyTimeoutMs));
+    const previous = Number(this.db.pragma('busy_timeout', { simple: true }));
+    if (previous === timeout) return operation();
+    this.db.pragma(`busy_timeout = ${timeout}`);
+    try {
+      return operation();
+    } finally {
+      this.db.pragma(`busy_timeout = ${previous}`);
     }
   }
 
@@ -720,6 +759,156 @@ export class SemanticStore {
   }
 
   /**
+   * Capture source identities before an INSERT whose row id is not known yet.
+   * The settled fence can then replace `*` with only rows above these durable
+   * watermarks. This keeps the activation barrier pre-write without turning
+   * every learned memory/investigation into a namespace-wide reconciliation.
+   */
+  private memorySourceWatermark(namespace: string): Record<string, number> | null {
+    const source = memoryNamespaceSource(namespace);
+    if (!source) return null;
+    try {
+      const memory = source.scope === 'user'
+        ? this.db.prepare(`
+            SELECT COALESCE(MAX(id), 0) AS id
+            FROM agent_memory
+            WHERE scope = 'user' AND project_id = 0
+          `).get() as { id: number }
+        : this.db.prepare(`
+            SELECT COALESCE(MAX(id), 0) AS id
+            FROM agent_memory
+            WHERE scope IN ('project', 'local') AND project_id = ?
+          `).get(source.projectId) as { id: number };
+      if (source.scope === 'user') {
+        return { agent_memory_max_id: Number(memory.id) || 0 };
+      }
+      const investigation = this.db.prepare(`
+        SELECT COALESCE(MAX(id), 0) AS id
+        FROM coder_investigations
+        WHERE project_id = ?
+      `).get(source.projectId) as { id: number };
+      return {
+        agent_memory_max_id: Number(memory.id) || 0,
+        investigation_max_id: Number(investigation.id) || 0,
+      };
+    } catch {
+      // Older/trimmed databases may not contain both relational sources.
+      // Keeping the wildcard preserves correctness during migration/recovery.
+      return null;
+    }
+  }
+
+  private memoryRowBelongsToNamespace(
+    row: { scope: string; project_id: number; archived_at: string | null } | undefined,
+    source: MemoryNamespaceSource,
+  ): boolean {
+    if (!row || row.archived_at !== null) return false;
+    if (source.scope === 'user') return row.scope === 'user' && row.project_id === 0;
+    return (row.scope === 'project' || row.scope === 'local')
+      && row.project_id === source.projectId;
+  }
+
+  /**
+   * Resolve a Memory fence after the relational write is visible. Wildcards
+   * become post-watermark INSERT identities; exact delete fences shrink to
+   * rows that actually left the live source set. Returning null deliberately
+   * retains the wildcard/full-reconciliation recovery path.
+   */
+  private resolveMemoryMutationFence(job: SemanticJobRow): {
+    cursor: Record<string, unknown>;
+    expectedItems: number;
+  } | null {
+    const source = memoryNamespaceSource(job.namespace);
+    if (!source || job.cursor?.fence_identity_resolved === true) return null;
+    const rawKeys = Array.isArray(job.cursor?.item_keys)
+      ? job.cursor.item_keys.filter((value): value is string => typeof value === 'string')
+      : [];
+    const wildcard = rawKeys.includes('*');
+    const resolved = new Set(rawKeys.filter((key) => key !== '*'));
+
+    try {
+      if (wildcard) {
+        const watermark = job.cursor?.memory_source_watermark;
+        if (!watermark || typeof watermark !== 'object') return null;
+        const values = watermark as Record<string, unknown>;
+        const memoryMaxId = Number(values.agent_memory_max_id);
+        if (!Number.isSafeInteger(memoryMaxId) || memoryMaxId < 0) return null;
+        const memories = source.scope === 'user'
+          ? this.db.prepare(`
+              SELECT id FROM agent_memory
+              WHERE scope = 'user' AND project_id = 0 AND id > ?
+              ORDER BY id
+            `).all(memoryMaxId) as Array<{ id: number }>
+          : this.db.prepare(`
+              SELECT id FROM agent_memory
+              WHERE scope IN ('project', 'local') AND project_id = ? AND id > ?
+              ORDER BY id
+            `).all(source.projectId, memoryMaxId) as Array<{ id: number }>;
+        for (const row of memories) resolved.add(`agent_memory:${row.id}`);
+
+        if (source.scope === 'project') {
+          const investigationMaxId = Number(values.investigation_max_id);
+          if (!Number.isSafeInteger(investigationMaxId) || investigationMaxId < 0) return null;
+          const investigations = this.db.prepare(`
+            SELECT id FROM coder_investigations
+            WHERE project_id = ? AND id > ?
+            ORDER BY id
+          `).all(source.projectId, investigationMaxId) as Array<{ id: number }>;
+          for (const row of investigations) resolved.add(`investigation:${row.id}`);
+        }
+      }
+      if (job.cursor?.operation === 'delete') {
+        for (const key of [...resolved]) {
+          const match = /^agent_memory:(\d+)$/.exec(key);
+          if (!match) continue;
+          const row = this.db.prepare(`
+            SELECT scope, project_id, archived_at FROM agent_memory WHERE id = ?
+          `).get(Number(match[1])) as {
+            scope: string;
+            project_id: number;
+            archived_at: string | null;
+          } | undefined;
+          if (this.memoryRowBelongsToNamespace(row, source)) resolved.delete(key);
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    const itemKeys = [...resolved];
+    return {
+      cursor: {
+        ...(job.cursor ?? {}),
+        item_keys: itemKeys,
+        item_keys_truncated: false,
+        fence_identity_resolved: true,
+        resolved_item_count: itemKeys.length,
+      },
+      expectedItems: itemKeys.length,
+    };
+  }
+
+  private applyResolvedMemoryFence(
+    job: SemanticJobRow,
+    cursor: Record<string, unknown>,
+    expectedItems: number,
+  ): void {
+    const deltaAdjustment = expectedItems - job.expected_items;
+    if (deltaAdjustment !== 0 && job.generation_id !== null) {
+      this.db.prepare(`
+        UPDATE semantic_namespace_generations
+        SET delta_items = MAX(0, delta_items + ?), updated_at = datetime('now')
+        WHERE namespace = ?
+      `).run(deltaAdjustment, job.namespace);
+    }
+    this.db.prepare(`
+      UPDATE semantic_jobs
+      SET expected_items = ?, cursor = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(expectedItems, JSON.stringify(cursor), job.id);
+  }
+
+  /**
    * Durably record a relational mutation against the vector generation that
    * currently owns the namespace. The job and namespace counter are updated
    * under one IMMEDIATE transaction, so activation can never observe only one
@@ -750,13 +939,21 @@ export class SemanticStore {
         const leaseMs = input.fence.leaseMs === undefined
           ? null
           : Math.max(1_000, Math.floor(input.fence.leaseMs));
+        const sourceWatermark = itemKeys.includes('*')
+          ? this.memorySourceWatermark(namespace)
+          : null;
         const cursor = {
-          ...this.mergeMutationCursor(null, input, itemKeys),
+          ...this.mergeMutationCursor(null, input, itemKeys, false),
           reason: 'mutation-fence',
+          // A fence is one immutable caller, not a coalesced diagnostic row:
+          // retain every exact key so settlement can safely narrow it.
+          item_keys: itemKeys,
+          item_keys_truncated: false,
           fence_phase: 'in-flight',
           fence_token: token,
           fence_owner: owner,
           fence_started_at_ms: startedAt,
+          ...(sourceWatermark ? { memory_source_watermark: sourceWatermark } : {}),
           ...(leaseMs === null ? {} : { fence_lease_expires_at_ms: startedAt + leaseMs }),
         };
         const inserted = this.db.prepare(`
@@ -861,8 +1058,11 @@ export class SemanticStore {
       if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed') {
         return job;
       }
+      const resolved = this.resolveMemoryMutationFence(job);
+      const resolvedCursor = resolved?.cursor ?? (job.cursor ?? {});
+      if (resolved) this.applyResolvedMemoryFence(job, resolvedCursor, resolved.expectedItems);
       const cursor = {
-        ...(job.cursor ?? {}),
+        ...resolvedCursor,
         fence_phase: 'settled',
         fence_settled_at_ms: Date.now(),
         ...(input.mutation_error ? { mutation_error: input.mutation_error } : {}),
@@ -903,8 +1103,11 @@ export class SemanticStore {
         // previous-process work once their lease has expired and must return
         // to the pending queue; otherwise every semantic control in the UI is
         // blocked forever by work that no process owns.
+        const resolved = this.resolveMemoryMutationFence(job);
+        const resolvedCursor = resolved?.cursor ?? (job.cursor ?? {});
+        if (resolved) this.applyResolvedMemoryFence(job, resolvedCursor, resolved.expectedItems);
         const cursor = {
-          ...(job.cursor ?? {}),
+          ...resolvedCursor,
           fence_phase: 'settled',
           fence_recovered_at_ms: Date.now(),
           recovery_reason: 'process-restart',
@@ -1031,13 +1234,16 @@ export class SemanticStore {
     cursor: Record<string, unknown> | null,
     input: SemanticMutationInput,
     itemKeys: readonly string[],
+    boundKeys = true,
   ): Record<string, unknown> {
     const previousKeys = Array.isArray(cursor?.item_keys)
       ? cursor.item_keys.filter((value): value is string => typeof value === 'string')
       : [];
     // Cursor details are diagnostic only; bound them so a hot namespace does
     // not turn job coalescing into an ever-growing JSON document.
-    const mergedKeys = [...new Set([...previousKeys, ...itemKeys])].slice(-256);
+    const allKeys = [...new Set([...previousKeys, ...itemKeys])];
+    const truncated = cursor?.item_keys_truncated === true || (boundKeys && allKeys.length > 256);
+    const mergedKeys = boundKeys ? allKeys.slice(-256) : allKeys;
     const requiresExplicitReindex = cursor?.requires_explicit_reindex === true
       || input.requiresExplicitReindex === true;
     return {
@@ -1045,6 +1251,7 @@ export class SemanticStore {
       reason: 'relational-mutation',
       operation: input.operation,
       item_keys: mergedKeys,
+      ...(truncated ? { item_keys_truncated: true } : {}),
       mutation_count: Math.max(0, Number(cursor?.mutation_count) || 0) + itemKeys.length,
       ...(requiresExplicitReindex ? { requires_explicit_reindex: true } : {}),
     };

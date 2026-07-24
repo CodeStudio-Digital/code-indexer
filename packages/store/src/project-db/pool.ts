@@ -6,9 +6,11 @@
  * its own. Cross-thread safety over the SAME file is delegated entirely to WAL
  * + busy_timeout (exactly as the central index.db works today).
  *
- * Checkpoint policy: writable handles open with wal_autocheckpoint=0; the pool
- * TRUNCATEs on evict/idle so an idle project leaves a clean single .db (no
- * lingering -wal). The optional idle sweeper bounds open handles + WAL growth.
+ * Checkpoint policy: writable handles open with wal_autocheckpoint=0. Normal
+ * LRU/idle eviction only closes the main-thread handle and delegates a PASSIVE
+ * checkpoint through `onCheckpoint`; a synchronous TRUNCATE here can freeze
+ * every Electron window while SQLite waits for readers. Controlled process
+ * shutdown still uses checkpointAndClose().
  */
 import { ProjectDb, type NowFn } from './handle.js';
 import type { OpenProjectDbOpts } from './open.js';
@@ -18,11 +20,17 @@ export interface ProjectDbPoolOpts {
   resolve: (projectId: number) => { dbPath: string };
   /** Max open handles; kept < ATTACH cap so federation can still attach. Default 8. */
   maxOpen?: number;
-  /** Evict + checkpoint(TRUNCATE) handles idle longer than this. Default 60s. */
+  /** Evict handles idle longer than this. Default 60s. */
   idleTtlMs?: number;
   readonly?: boolean;
   now?: NowFn;
   openOpts?: OpenProjectDbOpts;
+  /**
+   * Schedule a best-effort PASSIVE checkpoint outside the current thread after
+   * a normal LRU/idle eviction. Must return immediately and must not re-enter
+   * the pool.
+   */
+  onCheckpoint?: (projectId: number, dbPath: string) => void;
   /**
    * Called after a project's handle is dropped (LRU over-cap or idle sweep) so
    * the owner can release sibling per-project state it keyed by the same id
@@ -65,7 +73,7 @@ export class ProjectDbPool {
     return this.entries.has(projectId);
   }
 
-  /** Close + drop a single project (checkpoint TRUNCATE first). */
+  /** Close + drop a single project; checkpointing is delegated off-thread. */
   evict(projectId: number): void {
     const pdb = this.entries.get(projectId);
     if (!pdb) return;
@@ -109,11 +117,15 @@ export class ProjectDbPool {
     this.entries.set(id, e);
   }
 
-  /** Drop one handle (checkpoint TRUNCATE + close) and notify `onEvict`. */
+  /** Drop one handle without a main-thread TRUNCATE and notify the owner. */
   private dropEntry(projectId: number, pdb: ProjectDb): void {
     this.entries.delete(projectId);
-    pdb.checkpointAndClose();
-    this.opts.onEvict?.(projectId);
+    try {
+      pdb.close();
+    } finally {
+      this.opts.onCheckpoint?.(projectId, pdb.dbPath);
+      this.opts.onEvict?.(projectId);
+    }
   }
 
   private evictOverCap(): void {

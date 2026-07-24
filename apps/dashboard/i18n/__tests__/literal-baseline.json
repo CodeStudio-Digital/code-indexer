@@ -88,8 +88,6 @@
     "apps/dashboard/features/admin/ProviderCard.tsx|jsxText|auto": 1,
     "apps/dashboard/features/admin/ProviderCard.tsx|jsxText|ms": 1,
     "apps/dashboard/features/admin/providers/ProviderTile.tsx|jsxText|ms": 1,
-    "apps/dashboard/features/admin/QualityPanel.tsx|jsxText|ms": 1,
-    "apps/dashboard/features/admin/QualityPanel.tsx|jsxText|pp": 1,
     "apps/dashboard/features/admin/SkillsPanel.tsx|attr:title|Uninstall namespace": 1,
     "apps/dashboard/features/admin/SkillsPanel.tsx|attr:title|Update (re-fetch latest)": 1,
     "apps/dashboard/features/admin/SkillsPanel.tsx|jsxText|Install from GitHub": 1,

@@ -116,6 +116,11 @@ import {
   type CoderRunBus,
 } from '../coder-bus.js';
 import { wireRunnerEventsToBus } from '../sse/runnerWiring.js';
+import {
+  DEFAULT_STREAM_DELTA_COALESCE_MS,
+  StreamDeltaCoalescer,
+} from './stream-delta-coalescer.js';
+import { normalizeCoderTerminalSignal } from '../../../packages/agent-runtime-contracts/src/coder-terminal.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
@@ -134,7 +139,6 @@ import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-s
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
-import { installWorkerQualityWiring } from './quality-wiring.js';
 
 interface CoderWorkerData {
   sessionId: number;
@@ -211,17 +215,6 @@ function getWorkerPluginHostInvoke(): HostInvoke {
 
 // Per-model caps — module-global cache, re-hydrated per worker thread (see worker-capabilities.ts).
 hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
-
-// Quality classifiers — worker_threads don't share module state, so the
-// quality globals installed in server.ts (main thread) are NULL here. The
-// CoderRunner that fires the completed-round assessment runs INSIDE this worker
-// in this worker, so without this re-install the Telemetry →
-// Quality dashboard stays empty. See quality-wiring.ts for the gaps vs main.
-const qualityController = installWorkerQualityWiring(
-  dbConn.handle,
-  `coder-worker ${sessionId}`,
-  process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
-);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
@@ -461,12 +454,14 @@ interface ActiveRunState {
   handle: RunCoderHandle | null;
   runner: CoderRunner | null;
   inProgress: boolean;
+  flushBusEvents: () => void;
   detachBusSubscription: () => void;
   detachBusEndListener: () => void;
 }
 let activeRun: ActiveRunState | null = null;
 
 function detachRunForwarders(run: ActiveRunState): void {
+  try { run.flushBusEvents(); } catch { /* best-effort */ }
   try { run.detachBusSubscription(); } catch { /* best-effort */ }
   try { run.detachBusEndListener(); } catch { /* best-effort */ }
 }
@@ -494,6 +489,10 @@ function releaseCompletedRun(run: ActiveRunState): void {
 function createActiveRun(runId: number): ActiveRunState {
   const ctrl = new AbortController();
   const bus = createBus(ctrl);
+  const rawCoalesceMs = Number(process.env.MCP_BUS_BATCH_MS);
+  const coalesceMs = Number.isFinite(rawCoalesceMs) && rawCoalesceMs >= 0
+    ? rawCoalesceMs
+    : DEFAULT_STREAM_DELTA_COALESCE_MS;
   const run: ActiveRunState = {
     runId,
     ctrl,
@@ -501,9 +500,21 @@ function createActiveRun(runId: number): ActiveRunState {
     handle: null,
     runner: null,
     inProgress: true,
+    flushBusEvents: () => undefined,
     detachBusSubscription: () => undefined,
     detachBusEndListener: () => undefined,
   };
+
+  const coalescer = new StreamDeltaCoalescer(
+    (event) => {
+      // A stale timer from an already-replaced run must never leak an event
+      // into the next run's mirror.
+      if (activeRun !== run) return;
+      bridge.emit('bus.event', event);
+    },
+    coalesceMs,
+  );
+  run.flushBusEvents = () => coalescer.flush();
 
   run.detachBusSubscription = subscribe(
     bus,
@@ -516,7 +527,7 @@ function createActiveRun(runId: number): ActiveRunState {
       // fastest way to spot a worker dying mid-stream vs idle.
       lastBusEventName = ev.event;
       lastBusEventAt = Date.now();
-      bridge.emit('bus.event', {
+      coalescer.push({
         runId,
         seq: ev.seq,
         event: ev.event,
@@ -529,6 +540,8 @@ function createActiveRun(runId: number): ActiveRunState {
   const onEnd = () => {
     if (activeRun !== run) return;
     run.inProgress = false;
+    // A terminal envelope must never overtake a buffered text/thinking delta.
+    coalescer.flush();
     if (bus.endReason) {
       bridge.emit('bus.end', { runId, ...bus.endReason });
     }
@@ -751,15 +764,10 @@ process.on('unhandledRejection', (reason) => {
 
 // ─── RPC handlers ───────────────────────────────────────────────
 
-bridge.handle('quality.setEnabled', (payload) => {
-  const { enabled } = payload as { enabled: boolean };
-  return qualityController.setEnabled(enabled);
-});
-
-bridge.handle('quality.status', () => ({ enabled: qualityController.isEnabled() }));
-
 interface RunFreshPayload {
   runId?: number;
+  /** Opaque parent AgentRun identity; the full control-plane fence stays main-only. */
+  controlPlaneParentAgentRunId?: string;
   userMessage: string;
   attachments?: CoderAttachment[];
   maxTurns?: number;
@@ -822,6 +830,7 @@ bridge.handle('runFresh', async (payload) => {
     }
     const result = await runCoder({
       session: { id: sessionId },
+      controlPlaneParentAgentRunId: opts.controlPlaneParentAgentRunId,
       // Put the project's PHP/Python (not Node) on PATH for the agent's shell tools.
       resolveRuntimeEnv: resolveAgentRuntimeEnv,
       userMessage: opts.userMessage,
@@ -886,18 +895,22 @@ bridge.handle('runFresh', async (payload) => {
     // the SSE there made the dashboard refetch a one-turn-behind transcript.
     void result.transcriptFlushed
       .then((outcome) => {
-        const data = { reason: outcome.reason, error: outcome.error };
-        publish(run.bus, 'done', data);
-        markEnded(run.bus, 'done', data);
+        const terminal = normalizeCoderTerminalSignal('done', {
+          reason: outcome.reason,
+          error: outcome.error,
+        });
+        publish(run.bus, terminal.event, terminal.data);
+        markEnded(run.bus, terminal.event, terminal.data);
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        publish(run.bus, 'error', { message });
-        markEnded(run.bus, 'error', { message });
+        const terminal = normalizeCoderTerminalSignal('error', { message });
+        publish(run.bus, terminal.event, terminal.data);
+        markEnded(run.bus, terminal.event, terminal.data);
       });
 
-    // Terminal quality assessment and resource cleanup may continue after the
-    // transcript/SSE boundary; keep the worker run alive until all of it ends.
+    // Resource cleanup may continue after the transcript/SSE boundary; keep
+    // the worker run alive until all of it ends.
     void result.done
       .catch(() => undefined)
       .finally(() => {
@@ -1061,6 +1074,7 @@ bridge.handle('abort', () => {
 
 bridge.handle('stop', async () => {
   recordRpc('stop');
+  try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
   try { disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
   try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // `stop` is the EVICT/shutdown path (WorkerHost.evict → dispose). It must

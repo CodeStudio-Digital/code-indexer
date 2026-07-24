@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import type { Database as DB } from 'better-sqlite3';
 import { codeAgentOptimizationTelemetry206 } from '@mcp/store/migrations/206_code_agent_optimization_telemetry.js';
@@ -19,7 +19,10 @@ beforeEach(() => {
   `);
 });
 
-afterEach(() => db.close());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  db.close();
+});
 
 describe('subagent telemetry reads', () => {
   it('returns the persisted runs and tool calls used by the App Studio agent rail', () => {
@@ -97,5 +100,146 @@ describe('subagent telemetry reads', () => {
       completed_at: expect.any(String),
     });
     expect(telemetry.listRuns(db, 8)[0]).toMatchObject({ status: 'running', completed_at: null });
+  });
+
+  it('reconciles a workflow child only by exact session, spawn id, and step label', () => {
+    telemetry.start(db, {
+      session_id: 7,
+      run_id: 'run-workflow-child',
+      spawn_id: 'wf_exact-w1',
+      label: 'step-a',
+      profile: 'explore',
+      max_turns: 8,
+    });
+    telemetry.complete(db, {
+      run_id: 'run-workflow-child',
+      reason: 'completed',
+      turns: 1,
+      auto_continues: 0,
+      tool_calls: 0,
+      logical_operations: 0,
+      productive_operations: 0,
+      paginate_calls: 0,
+      duplicate_calls: 0,
+      error_calls: 0,
+      refused_calls: 0,
+      elapsed_ms: 10,
+      input_tokens: 1,
+      output_tokens: 1,
+      has_summary: true,
+      output_id: 'result:workflow-child',
+    });
+
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      7,
+      'wf_exact-w1',
+      'step-a',
+    )).toMatchObject({
+      outcome: 'terminal',
+      runId: 'run-workflow-child',
+      stepStatus: 'completed',
+      resultRef: 'result:workflow-child',
+    });
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      7,
+      'wf_exact-w1',
+      'step-b',
+    )).toMatchObject({
+      outcome: 'outcome_unknown',
+    });
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      8,
+      'wf_exact-w1',
+      'step-a',
+    )).toMatchObject({
+      outcome: 'outcome_unknown',
+    });
+  });
+
+  it('requires agreeing terminal legacy and AgentRun projections in ENFORCE', () => {
+    telemetry.start(db, {
+      session_id: 7,
+      run_id: 'run-enforced-child',
+      spawn_id: 'wf_enforced-w1',
+      label: 'step-a',
+      profile: 'explore',
+      max_turns: 8,
+    });
+    telemetry.complete(db, {
+      run_id: 'run-enforced-child',
+      reason: 'completed',
+      turns: 1,
+      auto_continues: 0,
+      tool_calls: 0,
+      logical_operations: 0,
+      productive_operations: 0,
+      paginate_calls: 0,
+      duplicate_calls: 0,
+      error_calls: 0,
+      refused_calls: 0,
+      elapsed_ms: 10,
+      input_tokens: 1,
+      output_tokens: 1,
+      has_summary: true,
+    });
+    db.exec(`
+      CREATE TABLE agent_runs (
+        agent_run_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        terminal_reason TEXT,
+        result_ref TEXT
+      );
+      INSERT INTO agent_runs (
+        agent_run_id, status, terminal_reason, result_ref
+      ) VALUES (
+        'agent-run:subagent:run-enforced-child',
+        'completed',
+        'completed',
+        'result:enforced-child'
+      );
+    `);
+    vi.stubEnv('CODER_AGENT_RUN_STORE_ENFORCE', '1');
+
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      7,
+      'wf_enforced-w1',
+      'step-a',
+    )).toMatchObject({
+      outcome: 'terminal',
+      stepStatus: 'completed',
+      resultRef: 'result:enforced-child',
+    });
+
+    db.prepare(`
+      UPDATE agent_runs
+      SET terminal_reason=NULL
+      WHERE agent_run_id='agent-run:subagent:run-enforced-child'
+    `).run();
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      7,
+      'wf_enforced-w1',
+      'step-a',
+    )).toMatchObject({
+      outcome: 'outcome_unknown',
+    });
+
+    db.prepare(`
+      UPDATE agent_runs
+      SET terminal_reason='failed'
+      WHERE agent_run_id='agent-run:subagent:run-enforced-child'
+    `).run();
+    expect(telemetry.reconcileWorkflowStepRun(
+      db,
+      7,
+      'wf_enforced-w1',
+      'step-a',
+    )).toMatchObject({
+      outcome: 'outcome_unknown',
+    });
   });
 });

@@ -41,7 +41,7 @@ describe('permissionsSection', () => {
       approvalMode: 'auto',
     });
     expect(out).toContain('Writable roots: `D:/project`, `D:/editable`');
-    expect(out).toContain('Additional read-only roots: `C:/reference`');
+    expect(out).toContain('Additional read-only roots/files: `C:/reference`');
     expect(out).toContain('use native filesystem tools for external roots');
     expect(out).toContain('filesystem_access:{path,access}');
   });

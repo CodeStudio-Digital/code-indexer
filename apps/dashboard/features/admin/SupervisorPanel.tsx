@@ -78,7 +78,7 @@ export interface SupervisorPanelProps {
    *                   right rail (the historical default).
    *   - 'dashboard' : flows in a scrolling page with a subtitle and
    *                   naturally-sized cards, matching the sibling
-   *                   `/telemetry` tabs (Overview / Prices / Quality).
+   *                   `/telemetry` tabs (Overview / Prices / Completion).
    */
   variant?: 'rail' | 'dashboard';
 }
@@ -255,7 +255,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
     <div className={dashboard ? 'space-y-4' : 'flex flex-col h-full p-3 gap-3 min-h-0'}>
       {dashboard ? (
         // Dashboard tab: subtitle + a borderless controls row, matching the
-        // sibling /telemetry tabs (Overview / Prices / Quality). The tab
+        // sibling /telemetry tabs (Overview / Prices / Completion). The tab
         // label already names the section, so there's no standalone heading;
         // health is read from the body (session cards + incidents).
         <>
@@ -355,7 +355,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
             // Rail fills remaining height via the radix ScrollArea (its
             // viewport resolves `h-full` against the flex parent). The
             // dashboard tab has no definite height, so it uses a plain
-            // capped-overflow box — the same pattern QualityPanel uses.
+            // capped-overflow box — the same pattern as other telemetry lists.
             <IncidentsScroller dashboard={dashboard}>
               <div className="px-3 pb-3 space-y-1">
                 {liveBuffer.map((env, idx) => (

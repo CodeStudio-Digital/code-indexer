@@ -1,3 +1,5 @@
+import { realpathSync, statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
@@ -13,6 +15,7 @@ import {
 export interface AttachmentInput {
   name?: string;
   mediaType?: string;
+  path?: string;
   base64?: string;
   text?: string;
 }
@@ -20,8 +23,14 @@ export interface AttachmentInput {
 export interface ValidatedAttachment {
   name: string;
   mediaType: string;
+  path?: string;
   base64?: string;
   text?: string;
+}
+
+export interface AttachmentValidationOptions {
+  /** Local coder sessions may pass exact file references instead of payloads. */
+  allowFileReferences?: boolean;
 }
 
 export type AttachmentValidationResult =
@@ -38,7 +47,10 @@ const MAX_PDF_PAGES = 1_000;
  * persistence. This is intentionally shared by coder + company routes so the
  * same file cannot be accepted on one chat surface and rejected on another.
  */
-export function validateAttachments(input: unknown): AttachmentValidationResult {
+export function validateAttachments(
+  input: unknown,
+  options: AttachmentValidationOptions = {},
+): AttachmentValidationResult {
   if (input === undefined || input === null) return { ok: true, value: undefined };
   if (!Array.isArray(input)) return invalid(400, 'ATTACHMENTS_INVALID', 'attachments must be an array');
   if (input.length === 0) return { ok: true, value: undefined };
@@ -60,18 +72,47 @@ export function validateAttachments(input: unknown): AttachmentValidationResult 
       return invalid(400, 'ATTACHMENT_INVALID', `attachments[${i}] must be an object`);
     }
     const a = raw as Record<string, unknown>;
-    const name = sanitizeDisplayName(typeof a.name === 'string' ? a.name : `attachment-${i + 1}`);
+    const rawPath = typeof a.path === 'string' && a.path.trim() ? a.path.trim() : undefined;
+    const name = sanitizeDisplayName(
+      typeof a.name === 'string'
+        ? a.name
+        : rawPath ?? `attachment-${i + 1}`,
+    );
     const declaredMediaType = typeof a.mediaType === 'string'
       ? a.mediaType.toLowerCase().split(';', 1)[0]!.trim()
       : '';
     const base64 = typeof a.base64 === 'string' && a.base64.length > 0 ? a.base64.replace(/\s/g, '') : undefined;
     const text = typeof a.text === 'string' && a.text.length > 0 ? a.text : undefined;
+    const representations = Number(!!rawPath) + Number(!!base64) + Number(!!text);
 
-    if (!base64 && !text) {
-      return invalid(400, 'ATTACHMENT_EMPTY', `attachments[${i}] must have base64 or text`);
+    if (representations === 0) {
+      return invalid(400, 'ATTACHMENT_EMPTY', `attachments[${i}] must have path, base64 or text`);
     }
-    if (base64 && text) {
-      return invalid(400, 'ATTACHMENT_AMBIGUOUS', `attachments[${i}] must not contain both base64 and text`);
+    if (representations > 1) {
+      return invalid(400, 'ATTACHMENT_AMBIGUOUS', `attachments[${i}] must contain exactly one of path, base64 or text`);
+    }
+
+    if (rawPath) {
+      if (!options.allowFileReferences) {
+        return invalid(
+          400,
+          'ATTACHMENT_REFERENCE_UNSUPPORTED',
+          `attachments[${i}] local file references are not supported on this surface`,
+        );
+      }
+      const reference = canonicalizeFileReference(rawPath);
+      if (!reference.ok) {
+        return invalid(400, 'ATTACHMENT_REFERENCE_INVALID', `attachments[${i}] ${reference.reason}`);
+      }
+      const kind = classifyAttachment(name, declaredMediaType);
+      out.push({
+        name,
+        mediaType: kind === 'unsupported'
+          ? declaredMediaType || 'application/octet-stream'
+          : canonicalMediaType(kind, name, declaredMediaType),
+        path: reference.path,
+      });
+      continue;
     }
 
     const extKind = classifyAttachment(name, undefined);
@@ -137,6 +178,25 @@ export function validateAttachments(input: unknown): AttachmentValidationResult 
   }
 
   return { ok: true, value: out };
+}
+
+function canonicalizeFileReference(
+  rawPath: string,
+): { ok: true; path: string } | { ok: false; reason: string } {
+  if (rawPath.length > 4_096 || /[\u0000-\u001f\u007f]/.test(rawPath)) {
+    return { ok: false, reason: 'path is malformed' };
+  }
+  if (!isAbsolute(rawPath)) return { ok: false, reason: 'path must be absolute' };
+  try {
+    const path = realpathSync(resolve(rawPath));
+    if (!statSync(path).isFile()) return { ok: false, reason: 'path must reference a regular file' };
+    return { ok: true, path };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `file is not accessible: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 export function sanitizeDisplayName(value: string): string {

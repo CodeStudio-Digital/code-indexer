@@ -41,6 +41,34 @@ function batch(
 }
 
 describe('dispatchTools — local repeat protection', () => {
+  it('forwards structured orchestration ids into the root ledger', async () => {
+    const workflowId = 'wf-direct-private';
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'workflow',
+      description: 'workflow tool',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      mutates: true,
+      handler: async () => ({
+        content: 'workflow completed',
+        structuredData: {
+          kind: 'workflow_result',
+          status: 'completed',
+          workflowId,
+        },
+      }),
+    });
+    const ledger = new ToolCallLedger();
+    await dispatchTools({
+      ...batch(registry, 'workflow', [{ x: 1 }], 1),
+      toolContext: { ...toolContext, toolCallLedger: ledger } as ToolContext,
+    });
+
+    expect(ledger.snapshot()[0]?.recoveryOperationId).toMatch(/^workflow:/);
+    expect(JSON.stringify(ledger.snapshot())).not.toContain(workflowId);
+  });
+
   it('coalesces stable read calls only inside each batch and never cross-turn-refuses', async () => {
     let invoked = 0;
     const registry = registryWith({
@@ -207,6 +235,57 @@ describe('dispatchTools — local repeat protection', () => {
       ],
     });
     expect(reads).toBe(2);
+    expect(result.results[2].guardVerdict?.action).not.toBe('reuse');
+    expect(result.results[2].stateEpoch).toBe(1);
+  });
+
+  it('a session-local mutating transition invalidates stable reads without becoming a workspace write', async () => {
+    let version = 0;
+    let reads = 0;
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'get_session_state',
+      description: 'read session state',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      mutates: false,
+      riskLevel: 'read',
+      executionClass: 'read',
+      repeatPolicy: 'stable',
+      parallelSafe: true,
+      handler: async () => ({ content: `version:${version}:read:${++reads}` }),
+    });
+    registry.register({
+      name: 'update_session_state',
+      description: 'update session state',
+      parameters: { type: 'object', properties: {} },
+      source: 'native',
+      mutates: false,
+      riskLevel: 'read',
+      executionClass: 'read',
+      repeatPolicy: 'mutating',
+      parallelSafe: false,
+      handler: async () => {
+        version += 1;
+        return { content: 'updated' };
+      },
+    });
+
+    const result = await dispatchTools({
+      registry,
+      toolContext,
+      turn: 1,
+      dupCalls: new Map(),
+      toolUses: [
+        { id: 'r1', name: 'get_session_state', input: {} },
+        { id: 'u1', name: 'update_session_state', input: {} },
+        { id: 'r2', name: 'get_session_state', input: {} },
+      ],
+    });
+
+    expect(reads).toBe(2);
+    expect(result.results[0].content).toContain('version:0');
+    expect(result.results[2].content).toContain('version:1');
     expect(result.results[2].guardVerdict?.action).not.toBe('reuse');
     expect(result.results[2].stateEpoch).toBe(1);
   });

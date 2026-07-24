@@ -136,6 +136,10 @@ export class CompanyStore {
   getMasterPrompt(id: number): MasterPrompt | null { return masterPrompts.get(this.db, id); }
   listMasterPrompts(companySessionId: number, opts?: { limit?: number; status?: MasterPromptStatus }): MasterPrompt[] { return masterPrompts.list(this.db, companySessionId, opts); }
   resolveMasterPrompt(id: number, resolution: masterPrompts.ResolveMasterPromptInput): MasterPrompt | null { return masterPrompts.resolve(this.db, id, resolution); }
+  claimMasterPromptDelivery(id: number, companySessionId: number, kind: MasterPromptKind, token: string, payloadHash: string, opts?: { retryOutcomeUnknown?: boolean }): masterPrompts.MasterPromptDeliveryClaim { return masterPrompts.claimDelivery(this.db, id, companySessionId, kind, token, payloadHash, opts); }
+  releaseMasterPromptDelivery(id: number, token: string): boolean { return masterPrompts.releaseDelivery(this.db, id, token); }
+  markMasterPromptDeliveryOutcomeUnknown(id: number, token: string): boolean { return masterPrompts.markDeliveryOutcomeUnknown(this.db, id, token); }
+  completeMasterPromptDelivery(id: number, token: string, resolution: masterPrompts.ResolveMasterPromptInput): MasterPrompt | null { return masterPrompts.completeDelivery(this.db, id, token, resolution); }
   cancelPendingMasterPrompts(companySessionId: number): MasterPrompt[] { return masterPrompts.cancelPending(this.db, companySessionId); }
   getPendingMasterPrompt(companySessionId: number, kind?: MasterPromptKind): MasterPrompt | null { return masterPrompts.getPending(this.db, companySessionId, kind); }
 

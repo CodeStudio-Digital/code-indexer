@@ -843,6 +843,10 @@ export class MasterLifecycle implements IMasterNotifier {
   }
 
   private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {
+    // onRunnerReady wired live events before a full RunCoderHandle existed.
+    // Re-wiring is idempotent and attaches the transcriptFlushed terminal
+    // boundary without duplicating any stream listeners.
+    this.deps.wirer.wire(handle, 'master', runId);
     attachMasterCompletionHandler(handle, runId, {
       ctx: this.deps.ctx,
       board: this.deps.board,

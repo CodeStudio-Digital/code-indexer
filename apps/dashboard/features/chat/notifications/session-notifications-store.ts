@@ -1,7 +1,7 @@
 /**
  * Per-session notification center store. Holds every notice surfaced during a
- * run — loop/failure interventions, run errors, run completion, quality
- * watchdog alerts — so the chat can show a dismissable banner for the ACTIVE
+ * run — loop/failure interventions, run errors and run completion — so the
+ * chat can show a dismissable banner for the ACTIVE
  * ones and a rail panel with the full HISTORY.
  *
  * Mirrors the canonical session-keyed module store of
@@ -21,13 +21,6 @@ export type SessionNotificationPayload =
   | { kind: 'tool-loop'; intervention: ToolLoopIntervention }
   | { kind: 'run-error'; message: string }
   | { kind: 'run-done'; reason: string; error?: string }
-  | {
-      kind: 'quality-alert';
-      verdict: 'warn' | 'flagged' | 'error';
-      suspectTool: string;
-      reason: string;
-      turn: number;
-    }
   | {
       kind: 'background-agents-done';
       jobId: string;
@@ -100,10 +93,6 @@ function derive(payload: SessionNotificationPayload): {
       return payload.error
         ? { severity: 'error', autoDismissMs: null }
         : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
-    case 'quality-alert':
-      return payload.verdict === 'error'
-        ? { severity: 'error', autoDismissMs: null }
-        : { severity: 'warning', autoDismissMs: WARN_DISMISS_MS };
     case 'background-agents-done':
       return payload.partialCount > 0 || payload.failedCount > 0
         ? { severity: 'warning', autoDismissMs: WARN_DISMISS_MS }

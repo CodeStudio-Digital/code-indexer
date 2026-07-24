@@ -4,6 +4,11 @@ import { formatClock } from '../../lib/datetime.js';
 import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, MessageSquare, PiggyBank, Scissors, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { useApi } from '../../hooks/useApi.js';
+import {
+  freshPromptTokens,
+  promptCacheHitRatio,
+  promptInputTokens,
+} from './prompt-cache-metrics.js';
 
 interface ToolBreakdown {
   name: string;
@@ -589,7 +594,12 @@ function groupTurnsByRound(turns: TurnRow[]): TurnRound[] {
       order.push(key);
     }
     bucket.turns.push(t);
-    bucket.totals.input += t.input_tokens ?? 0;
+    bucket.totals.input += promptInputTokens({
+      provider: t.provider,
+      inputTokens: t.input_tokens ?? 0,
+      cacheReadTokens: t.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: t.cache_creation_input_tokens ?? 0,
+    });
     bucket.totals.output += t.output_tokens ?? 0;
     bucket.totals.cacheRead += t.cache_read_input_tokens ?? 0;
   }
@@ -608,7 +618,12 @@ function TurnsTimeline({
   // Compute max input across ALL turns (not per-round) so the bar scale
   // stays consistent across rounds — easier to eyeball which round was
   // the heavy one.
-  const maxInput = turns.reduce((m, r) => Math.max(m, r.input_tokens ?? 0), 0);
+  const maxInput = turns.reduce((max, row) => Math.max(max, promptInputTokens({
+    provider: row.provider,
+    inputTokens: row.input_tokens ?? 0,
+    cacheReadTokens: row.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: row.cache_creation_input_tokens ?? 0,
+  })), 0);
   const rounds = groupTurnsByRound(turns);
   // Previous turn in GLOBAL session order (per main/subagent class) — a
   // round's T1 compares against the LAST turn of the previous round, which
@@ -677,8 +692,8 @@ function TurnsTimeline({
 /**
  * One collapsible block per round. Header shows the round number, turn
  * count, and aggregated in/out/cache so the user can scan rounds without
- * expanding. Cache % uses cache_read / input across the whole round —
- * matches the per-turn semantics so the numbers compose naturally.
+ * expanding. `input` is normalized to the full prompt for both split-style
+ * Anthropic usage and inclusive OpenAI-style usage.
  */
 function RoundGroup({
   round,
@@ -779,16 +794,28 @@ function TurnRowView({
   const cacheCreate = row.cache_creation_input_tokens ?? 0;
   const output = row.output_tokens ?? 0;
   const thinking = row.thinking_tokens ?? 0;
-  const fresh = Math.max(0, input - cacheRead);
-  const inputPct = maxInput > 0 ? (input / maxInput) * 100 : 0;
-  const cachePct = input > 0 ? Math.round((cacheRead / input) * 100) : 0;
+  const usage = {
+    provider: row.provider,
+    inputTokens: input,
+    cacheReadTokens: cacheRead,
+    cacheCreationTokens: cacheCreate,
+  };
+  const promptInput = promptInputTokens(usage);
+  const fresh = freshPromptTokens(usage);
+  const inputPct = maxInput > 0 ? (promptInput / maxInput) * 100 : 0;
+  const cachePct = Math.round((promptCacheHitRatio(usage) ?? 0) * 100);
 
   // Cache-bust cause badge (mig 143): when the cache hit drops sharply vs
   // the previous turn, the fingerprints say WHICH prefix segment diverged.
   // Rows from before the migration have NULL hashes → no badge.
   const bustCause = (() => {
-    if (!prev?.input_tokens) return null;
-    const prevPct = Math.round(((prev.cache_read_input_tokens ?? 0) / prev.input_tokens) * 100);
+    if (!prev) return null;
+    const prevPct = Math.round((promptCacheHitRatio({
+      provider: prev.provider,
+      inputTokens: prev.input_tokens ?? 0,
+      cacheReadTokens: prev.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: prev.cache_creation_input_tokens ?? 0,
+    }) ?? 0) * 100);
     if (prevPct < 50 || prevPct - cachePct < 40) return null;
     if (!row.tools_fingerprint || !prev.tools_fingerprint || !row.prefix_head_hash || !prev.prefix_head_hash) return null;
     if (row.tools_fingerprint !== prev.tools_fingerprint) return 'toolset';
@@ -811,9 +838,10 @@ function TurnRowView({
     }
   }
 
-  // Stacked bar segments (cache-read vs fresh-input vs output).
-  const segTotal = Math.max(1, input + output);
+  // Stacked bar segments cover the complete provider billable token split.
+  const segTotal = Math.max(1, promptInput + output);
   const cacheReadSeg = (cacheRead / segTotal) * 100;
+  const cacheCreateSeg = (cacheCreate / segTotal) * 100;
   const freshSeg = (fresh / segTotal) * 100;
   const outputSeg = (output / segTotal) * 100;
 
@@ -833,11 +861,11 @@ function TurnRowView({
           <div
             className="bg-primary"
             style={{ width: `${inputPct}%` }}
-            title={`input ${input} tok`}
+            title={`input ${promptInput} tok`}
           />
         </div>
         <span className="tabular-nums text-muted-foreground shrink-0">
-          {formatK(input)} in · {formatK(output)} out
+          {formatK(promptInput)} in · {formatK(output)} out
         </span>
         {bustCause && (
           <span
@@ -871,13 +899,18 @@ function TurnRowView({
           <div>
             <div className="flex h-2 rounded-full overflow-hidden bg-muted">
               <div className="bg-emerald-500" style={{ width: `${cacheReadSeg}%` }} title={`cached ${cacheRead}`} />
+              <div className="bg-sky-500" style={{ width: `${cacheCreateSeg}%` }} title={`cache write ${cacheCreate}`} />
               <div className="bg-primary" style={{ width: `${freshSeg}%` }} title={`fresh input ${fresh}`} />
               <div className="bg-amber-500" style={{ width: `${outputSeg}%` }} title={`output ${output}`} />
             </div>
-            <div className="grid grid-cols-3 gap-2 text-[11px] mt-1">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] mt-1">
               <span className="flex items-center gap-1">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 {t('chat:metrics.timeline.cached')}: {formatK(cacheRead)}
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                {t('chat:metrics.timeline.cacheCreate')}: {formatK(cacheCreate)}
               </span>
               <span className="flex items-center gap-1">
                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />

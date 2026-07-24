@@ -315,6 +315,9 @@ async function resumeSubordinateInner(
   };
   deps.subordinates.set(agentRun.id, subordinateHandle);
 
+  // Complete the two-phase meta-bus wiring now that transcriptFlushed exists.
+  // MetaBusWirer dedupes the live listeners installed by onRunnerReady.
+  deps.wirer.wire(handle, agentRun.role, agentRun.id);
   attachSubordinateCompletionHandler(
     handle,
     agentRun.id,

@@ -10,6 +10,8 @@ import type {
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@mcp/code-agent/core/system-prompt.js';
 import { renderTextDocument } from './document-utils.js';
 
+export const ANTHROPIC_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
+
 type AnthropicResolvedRequestModel = {
   apiModel: string;
   requestedModel?: string;
@@ -54,10 +56,107 @@ type AnthropicRawStreamResult = {
   requestId: string | null | undefined;
 };
 
+export type AnthropicPromptCacheTtl = '5m' | '1h';
+
+type AnthropicExtendedCacheControl = Anthropic.CacheControlEphemeral & {
+  ttl?: AnthropicPromptCacheTtl;
+};
+
+function anthropicCacheControl(ttl?: AnthropicPromptCacheTtl): AnthropicExtendedCacheControl {
+  return {
+    type: 'ephemeral',
+    ...(ttl ? { ttl } : {}),
+  };
+}
+
+function isTransientConversationContextBlock(block: Anthropic.ContentBlockParam): boolean {
+  if (block.type !== 'text') return false;
+  const text = block.text.trimStart();
+  return text.startsWith('<active_skills>')
+    || text.startsWith('<active-context>')
+    || text.startsWith('<system-reminder>');
+}
+
+/**
+ * Pin a moving cache breakpoint to the newest cacheable conversation message.
+ *
+ * Anthropic caches the request prefix through the marked content block. Moving
+ * this marker forward each turn lets the next request reuse the full prior
+ * conversation instead of caching only the system prompt and tool schema.
+ */
+export function applyAnthropicMessageCacheBreakpoint(
+  messages: readonly Anthropic.MessageParam[],
+  ttl?: AnthropicPromptCacheTtl,
+): Anthropic.MessageParam[] {
+  let cacheMessageIndex = -1;
+  let cacheBlockIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+    if (typeof message.content === 'string') {
+      if (
+        message.role === 'user'
+        && isTransientConversationContextBlock({ type: 'text', text: message.content })
+      ) {
+        continue;
+      }
+      cacheMessageIndex = index;
+      break;
+    }
+    const lastBlock = message.content.at(-1);
+    if (!lastBlock) continue;
+    if (
+      message.role === 'assistant'
+      && (lastBlock.type === 'thinking' || lastBlock.type === 'redacted_thinking')
+    ) {
+      continue;
+    }
+    if (message.role === 'user') {
+      let stableBlockIndex = -1;
+      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+        const block = message.content[blockIndex];
+        if (block && !isTransientConversationContextBlock(block)) {
+          stableBlockIndex = blockIndex;
+          break;
+        }
+      }
+      if (stableBlockIndex < 0) continue;
+      cacheBlockIndex = stableBlockIndex;
+    } else {
+      cacheBlockIndex = message.content.length - 1;
+    }
+    cacheMessageIndex = index;
+    break;
+  }
+
+  if (cacheMessageIndex < 0) return [...messages];
+
+  return messages.map((message, index) => {
+    if (index !== cacheMessageIndex) return message;
+    if (typeof message.content === 'string') {
+      return {
+        ...message,
+        content: [{
+          type: 'text' as const,
+          text: message.content,
+          cache_control: anthropicCacheControl(ttl),
+        }],
+      };
+    }
+    return {
+      ...message,
+      content: message.content.map((block, blockIndex) => blockIndex === cacheBlockIndex
+        ? { ...block, cache_control: anthropicCacheControl(ttl) }
+        : block),
+    } as Anthropic.MessageParam;
+  });
+}
+
 /** Build the provider system array while honoring the composer's cache split. */
 export function buildAnthropicSystemBlocks(
   defaultPrefix: readonly Anthropic.TextBlockParam[] | undefined,
   system: string | undefined,
+  ttl?: AnthropicPromptCacheTtl,
 ): Anthropic.TextBlockParam[] {
   const blocks: Anthropic.TextBlockParam[] = defaultPrefix ? [...defaultPrefix] : [];
   let boundaryFound = false;
@@ -84,7 +183,7 @@ export function buildAnthropicSystemBlocks(
     if (cacheIdx >= 0) {
       blocks[cacheIdx] = {
         ...blocks[cacheIdx],
-        cache_control: { type: 'ephemeral' as const },
+        cache_control: anthropicCacheControl(ttl),
       };
     }
   }
@@ -111,6 +210,8 @@ export class AnthropicChatProvider implements ChatProvider {
   private resolveModel?: (model: string, req: ChatRequest) => AnthropicResolvedRequestModel;
   private useBetaMessages: boolean;
   private streamViaCreate: boolean;
+  private cacheMessages: boolean;
+  private promptCacheTtl?: AnthropicPromptCacheTtl;
 
   constructor(opts: {
     apiKey?: string;
@@ -131,6 +232,8 @@ export class AnthropicChatProvider implements ChatProvider {
     dangerouslyAllowBrowser?: boolean;
     fetch?: typeof fetch;
     useBetaMessages?: boolean;
+    cacheMessages?: boolean;
+    promptCacheTtl?: AnthropicPromptCacheTtl;
     name?: string;
   }) {
     this.name = opts.name ?? 'anthropic';
@@ -145,9 +248,13 @@ export class AnthropicChatProvider implements ChatProvider {
     this.resolveModel = opts.resolveModel;
     this.useBetaMessages = opts.useBetaMessages ?? false;
     this.streamViaCreate = opts.streamViaCreate ?? false;
+    this.cacheMessages = opts.cacheMessages ?? false;
+    this.promptCacheTtl = opts.promptCacheTtl;
     this.client = new Anthropic({
       apiKey: opts.authToken ? null : (opts.apiKey ?? ''),
-      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+      // Runner recovery owns retries. Explicit override remains available to
+      // non-runner hosts; the coder default is one physical attempt.
+      maxRetries: opts.maxRetries ?? 0,
       ...(opts.authToken ? { authToken: opts.authToken } : {}),
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
       ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
@@ -166,20 +273,31 @@ export class AnthropicChatProvider implements ChatProvider {
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
-    const messages = req.messages.map(toAnthropicMessage).filter((m): m is Anthropic.MessageParam => m !== null);
+    const rawMessages = req.messages
+      .map(toAnthropicMessage)
+      .filter((m): m is Anthropic.MessageParam => m !== null);
+    const messages = this.cacheMessages
+      ? applyAnthropicMessageCacheBreakpoint(rawMessages, this.promptCacheTtl)
+      : rawMessages;
     const tools: Anthropic.Tool[] = req.tools.map((t, i, arr) => ({
       name: t.name,
       description: t.description,
       input_schema: t.parameters as unknown as Anthropic.Tool.InputSchema,
       // Cache breakpoint on the LAST tool covers the entire tools[] array.
-      ...(i === arr.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+      ...(i === arr.length - 1
+        ? { cache_control: anthropicCacheControl(this.promptCacheTtl) }
+        : {}),
     }));
 
     // Claude Code OAuth requires the canonical billing+identity prefix at the
     // start of the system array (mirrors Og8/Mg8 in the upstream bundle).
     // When the composer provides a cache boundary, cache only the stable prefix
     // and keep repo-map/tool-cap/skill variability in an uncached tail block.
-    const systemBlocks = buildAnthropicSystemBlocks(this.defaultSystemPrefixBlocks, req.system);
+    const systemBlocks = buildAnthropicSystemBlocks(
+      this.defaultSystemPrefixBlocks,
+      req.system,
+      this.promptCacheTtl,
+    );
 
     const resolvedModel = this.resolveModel?.(this.model, req);
     let thinking = resolvedModel?.thinking ?? (req.thinking ? this.defaultThinking : undefined);
@@ -558,7 +676,7 @@ function toAnthropicMessage(m: AgentMessage): Anthropic.MessageParam | null {
             },
           }];
         }
-        if (b.text) {
+        if (b.text || b.path) {
           return [{ type: 'text' as const, text: renderTextDocument(b) }];
         }
         return [];

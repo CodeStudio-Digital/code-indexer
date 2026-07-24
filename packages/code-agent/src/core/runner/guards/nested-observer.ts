@@ -156,17 +156,26 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
     },
 
     afterNestedCall(e) {
-      const ledgerEntry = deps.toolCallLedger?.record({
-        name: e.name,
-        args: e.args,
-        content: e.resultPreview,
-        isError: e.isError,
-        refusalKind: e.refusalKind,
-        mutates: e.repeatPolicy === 'mutating' || e.executionClass === 'write' || e.executionClass === 'execute',
-        durationMs: e.durationMs,
-        executionClass: e.executionClass,
-        repeatPolicy: e.repeatPolicy,
-      });
+      // code_exec records the authoritative result before notifying this
+      // observer and supplies its logicalOperationId. Other nested producers
+      // may not, so retain the fallback record only when no prior ledger
+      // identity exists.
+      const ledgerEntry = e.logicalOperationId
+        ? undefined
+        : deps.toolCallLedger?.record({
+            name: e.name,
+            args: e.args,
+            content: e.resultPreview,
+            isError: e.isError,
+            refusalKind: e.refusalKind,
+            mutates:
+              e.repeatPolicy === 'mutating'
+              || e.executionClass === 'write'
+              || e.executionClass === 'execute',
+            durationMs: e.durationMs,
+            executionClass: e.executionClass,
+            repeatPolicy: e.repeatPolicy,
+          });
       try {
         // A successful different write/execute establishes a new local state
         // epoch. Preserve the successful operation's own counter so repeating

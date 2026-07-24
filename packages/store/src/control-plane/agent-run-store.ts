@@ -11,7 +11,7 @@ import {
   type SessionCommand,
 } from '@mcp/agent-runtime-contracts';
 import { parseControlPlaneJson } from './codec.js';
-import type { AgentRunSeed, ControlPlaneRunContext } from './types.js';
+import type { AgentRunResolutionPatch, AgentRunSeed, ControlPlaneRunContext } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -163,7 +163,10 @@ export class AgentRunStore {
   }
 
   getByCommand(commandId: string): AgentRun | null {
-    const row = this.db.prepare('SELECT * FROM agent_runs WHERE command_id = ?').get(commandId) as RunRow | undefined;
+    const row = this.db.prepare(`
+      SELECT * FROM agent_runs
+      WHERE command_id = ? AND parent_agent_run_id IS NULL
+    `).get(commandId) as RunRow | undefined;
     return row ? hydrateRun(row) : null;
   }
 
@@ -192,22 +195,33 @@ export class AgentRunStore {
     `).all(expiresAt, safeLimit) as AttemptRow[]).map(hydrateAttempt);
   }
 
-  create<T>(command: SessionCommand<T>, legacySessionId: number | undefined, seed: AgentRunSeed): AgentRun {
+  create<T>(command: Pick<SessionCommand<T>, 'sessionId' | 'commandId'>, legacySessionId: number | undefined, seed: AgentRunSeed): AgentRun {
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO agent_runs (
         agent_run_id, spec_version, session_id, legacy_session_id, command_id,
-        spawn_depth, role, agent_definition_id, status, wait_mode,
+        owner_agent_run_id, parent_agent_run_id, spawn_depth,
+        role, agent_definition_id, status, wait_mode,
         requested_provider, requested_model, requested_reasoning_effort, requested_preset,
-        requested_capability_profile, downgrade_reasons_json, active_attempt_id,
+        requested_capability_profile,
+        effective_provider, effective_model, effective_reasoning_effort, effective_preset,
+        capability_set_ref, environment_id, preset_resolution_ref, policy_snapshot_ref,
+        downgrade_reasons_json, active_attempt_id,
         created_at, updated_at, version
-      ) VALUES (?, 1, ?, ?, ?, 0, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 1)
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     `).run(
       seed.agentRunId, command.sessionId, legacySessionId ?? null, command.commandId,
+      seed.ownerAgentRunId ?? null, seed.parentAgentRunId ?? null, seed.spawnDepth ?? 0,
       seed.role, seed.agentDefinitionId, seed.waitMode,
       seed.requestedProvider ?? null, seed.requestedModel ?? null,
       seed.requestedReasoningEffort ?? null, seed.requestedPreset ?? null,
-      seed.requestedCapabilityProfile, seed.attemptId, now, now,
+      seed.requestedCapabilityProfile,
+      seed.effectiveProvider ?? null, seed.effectiveModel ?? null,
+      seed.effectiveReasoningEffort ?? null, seed.effectivePreset ?? null,
+      seed.capabilitySetRef ?? null, seed.environmentId ?? null,
+      seed.presetResolutionRef ?? null, seed.policySnapshotRef ?? null,
+      seed.downgradeReasons ? JSON.stringify(seed.downgradeReasons) : '[]',
+      seed.attemptId, now, now,
     );
     return this.get(seed.agentRunId)!;
   }
@@ -241,8 +255,22 @@ export class AgentRunStore {
     if (runRow.active_attempt_id !== context.attemptId || attemptRow.agent_run_id !== context.agentRunId) {
       throw new AgentRunFenceError(context.agentRunId, 'attempt is not the active attempt for this run');
     }
-    if (commandRow.session_id !== context.sessionId || commandRow.agent_run_id !== context.agentRunId) {
-      throw new AgentRunFenceError(context.agentRunId, 'command is not linked to context session/run');
+    if (commandRow.session_id !== context.sessionId) {
+      throw new AgentRunFenceError(context.agentRunId, 'command is not linked to context session');
+    }
+    // Root runs remain linked directly from session_commands.agent_run_id.
+    // Fase-3 child runs intentionally share the root command (D-018), so the
+    // command keeps pointing at the root while the child is linked by
+    // parent_agent_run_id. The run's own session_id/command_id checks above,
+    // plus its exact active attempt + lease token below, still fence the child
+    // independently. A root without a direct command link remains invalid.
+    const directlyLinkedRoot = commandRow.agent_run_id === context.agentRunId;
+    const childOfCommand = commandRow.agent_run_id !== null
+      && runRow.parent_agent_run_id !== null
+      && (runRow.parent_agent_run_id === commandRow.agent_run_id
+        || runRow.owner_agent_run_id === commandRow.agent_run_id);
+    if (!directlyLinkedRoot && !childOfCommand) {
+      throw new AgentRunFenceError(context.agentRunId, 'command is not linked to context run/root hierarchy');
     }
     if (commandRow.correlation_id !== context.correlationId) {
       throw new AgentRunFenceError(context.agentRunId, 'correlation id mismatch');
@@ -318,6 +346,58 @@ export class AgentRunStore {
       context.attemptId, context.executorOwnerId, context.fencingEpoch,
     );
     if (result.changes !== 1) throw new AgentRunFenceError(context.agentRunId, 'transition changed concurrently or was fenced');
+    return this.get(context.agentRunId)!;
+  }
+
+  /**
+   * Writes the AgentRun resolution (effective provider/model/preset, capability
+   * set, environment and policy snapshot) AFTER accept, under an optimistic
+   * version compare-and-set. Owner/epoch are always fenced via assertContext;
+   * status and the executor lease are left untouched. When `expectedVersion`
+   * is supplied and no longer matches the persisted version, the write is a
+   * fenced no-op (AgentRunFenceError) so exactly one writer resolves a run.
+   */
+  markResolved(
+    context: ControlPlaneRunContext,
+    patch: AgentRunResolutionPatch,
+    expectedVersion?: number,
+  ): AgentRun {
+    const at = patch.at ?? new Date().toISOString();
+    const current = this.assertContext(context, { requireActiveLease: false }).run;
+    if (expectedVersion !== undefined && expectedVersion !== current.version) {
+      throw new AgentRunFenceError(
+        context.agentRunId,
+        `resolution version stale: expected ${expectedVersion}, actual ${current.version}`,
+      );
+    }
+    const result = this.db.prepare(`
+      UPDATE agent_runs SET
+        effective_provider = ?,
+        effective_model = ?,
+        effective_reasoning_effort = COALESCE(?, effective_reasoning_effort),
+        effective_preset = COALESCE(?, effective_preset),
+        capability_set_ref = ?,
+        environment_id = ?,
+        preset_resolution_ref = ?,
+        policy_snapshot_ref = ?,
+        downgrade_reasons_json = COALESCE(?, downgrade_reasons_json),
+        updated_at = ?, version = version + 1
+      WHERE agent_run_id = ? AND version = ?
+    `).run(
+      patch.effectiveProvider,
+      patch.effectiveModel,
+      patch.effectiveReasoningEffort ?? null,
+      patch.effectivePreset ?? null,
+      patch.capabilitySetRef,
+      patch.environmentId,
+      patch.presetResolutionRef,
+      patch.policySnapshotRef,
+      patch.downgradeReasons ? JSON.stringify(patch.downgradeReasons) : null,
+      at, context.agentRunId, current.version,
+    );
+    if (result.changes !== 1) {
+      throw new AgentRunFenceError(context.agentRunId, 'resolution changed concurrently or was fenced');
+    }
     return this.get(context.agentRunId)!;
   }
 

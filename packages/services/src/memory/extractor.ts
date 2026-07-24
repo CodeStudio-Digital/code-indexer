@@ -55,6 +55,8 @@ export interface MemoryDistiller {
 }
 
 export interface MemoryWriter {
+  /** Optional durability boundary for one logical extraction pass. */
+  runBatch?<T>(operation: () => Promise<T>): Promise<T>;
   create(
     projectId: number,
     data: {
@@ -136,54 +138,57 @@ export class MemoryExtractor {
       return out; // anything else is best-effort — never break the session over it
     }
 
-    for (const c of candidates) {
-      const importance = Math.max(c.importance ?? 0.5, IMPORTANCE_FLOOR[c.category] ?? 0);
-      if (!c.title.trim() || !c.content.trim()) {
-        out.skipped++;
-        continue;
-      }
+    const persist = async (): Promise<ExtractResult> => {
+      for (const c of candidates) {
+        const importance = Math.max(c.importance ?? 0.5, IMPORTANCE_FLOOR[c.category] ?? 0);
+        if (!c.title.trim() || !c.content.trim()) {
+          out.skipped++;
+          continue;
+        }
 
-      const existing = await this.search
-        .searchSnapshotsHybrid(projectId, projectName, `${c.title}\n${c.content}`.slice(0, 500), 3)
-        .catch(() => [] as ContextSnapshot[]);
-      const dup = existing.find(
-        (s) => s.category === c.category && titleSimilarity(s.title, c.title) >= DUP_TITLE_THRESHOLD,
-      );
+        const existing = await this.search
+          .searchSnapshotsHybrid(projectId, projectName, `${c.title}\n${c.content}`.slice(0, 500), 3)
+          .catch(() => [] as ContextSnapshot[]);
+        const dup = existing.find(
+          (s) => s.category === c.category && titleSimilarity(s.title, c.title) >= DUP_TITLE_THRESHOLD,
+        );
 
-      if (dup) {
-        // Merge: enrich the existing memory rather than spawning a near-dup.
-        // Corroboration bumps importance slightly (capped at 1) so a fact the
-        // session keeps re-deriving rises above the injection bar. When the
-        // body doesn't actually grow, the importance-only update stays on the
-        // cheap metadata path (no version row, no embedding invalidation).
-        // The style-profile singleton REPLACES its body (the candidate is the
-        // complete updated profile) instead of appending.
-        const merged = isStyleProfile(c.title)
-          ? c.content.trim()
-          : dup.content.includes(c.content.trim())
-            ? dup.content
-            : `${dup.content}\n\n${c.content.trim()}`;
-        const importanceBump = isStyleProfile(c.title)
-          ? Math.max(dup.importance ?? 0.5, STYLE_PROFILE_IMPORTANCE)
-          : Math.min(1, (dup.importance ?? 0.5) + 0.02);
-        await this.writer.update(dup.id, {
-          ...(merged !== dup.content ? { content: merged } : {}),
-          projectId,
-          importance: importanceBump,
-        });
-        out.merged++;
-      } else {
-        await this.writer.create(projectId, {
-          title: c.title.trim(),
-          category: c.category,
-          content: c.content.trim(),
-          source,
-          importance: isStyleProfile(c.title) ? Math.max(importance, STYLE_PROFILE_IMPORTANCE) : importance,
-          referencedFiles: c.referencedFiles,
-        });
-        out.created++;
+        if (dup) {
+          // Merge: enrich the existing memory rather than spawning a near-dup.
+          // Corroboration bumps importance slightly (capped at 1) so a fact the
+          // session keeps re-deriving rises above the injection bar. When the
+          // body doesn't actually grow, the importance-only update stays on the
+          // cheap metadata path (no version row, no embedding invalidation).
+          // The style-profile singleton REPLACES its body (the candidate is the
+          // complete updated profile) instead of appending.
+          const merged = isStyleProfile(c.title)
+            ? c.content.trim()
+            : dup.content.includes(c.content.trim())
+              ? dup.content
+              : `${dup.content}\n\n${c.content.trim()}`;
+          const importanceBump = isStyleProfile(c.title)
+            ? Math.max(dup.importance ?? 0.5, STYLE_PROFILE_IMPORTANCE)
+            : Math.min(1, (dup.importance ?? 0.5) + 0.02);
+          await this.writer.update(dup.id, {
+            ...(merged !== dup.content ? { content: merged } : {}),
+            projectId,
+            importance: importanceBump,
+          });
+          out.merged++;
+        } else {
+          await this.writer.create(projectId, {
+            title: c.title.trim(),
+            category: c.category,
+            content: c.content.trim(),
+            source,
+            importance: isStyleProfile(c.title) ? Math.max(importance, STYLE_PROFILE_IMPORTANCE) : importance,
+            referencedFiles: c.referencedFiles,
+          });
+          out.created++;
+        }
       }
-    }
-    return out;
+      return out;
+    };
+    return this.writer.runBatch ? this.writer.runBatch(persist) : persist();
   }
 }

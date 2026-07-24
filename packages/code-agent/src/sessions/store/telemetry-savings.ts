@@ -22,6 +22,7 @@ export interface TurnForSavings {
   model: string | null;
   input_tokens: number;
   cache_read_input_tokens: number;
+  cache_creation_input_tokens?: number;
   tools_def_chars: number | null;
   eligible_tools_def_chars?: number | null;
 }
@@ -67,8 +68,13 @@ export function computeSavings(input: SavingsInput): SavingsBreakdown {
   let hasUnpricedTurns = false;
 
   for (const t of turns) {
+    const promptTokens = t.provider === 'anthropic'
+      || t.provider === 'claude-code'
+      || t.provider === 'bedrock'
+      ? t.input_tokens + t.cache_read_input_tokens + (t.cache_creation_input_tokens ?? 0)
+      : t.input_tokens;
     cacheReadTokens += t.cache_read_input_tokens;
-    totalInputTokens += t.input_tokens;
+    totalInputTokens += promptTokens;
     if (t.tools_def_chars != null) {
       toolsDefCharsSum += t.tools_def_chars;
       toolsDefCharsCount++;
@@ -79,13 +85,13 @@ export function computeSavings(input: SavingsInput): SavingsBreakdown {
     }
     const pricing = resolvePricing(t.provider, t.model);
     if (!pricing) {
-      if (t.input_tokens > 0 || t.cache_read_input_tokens > 0) hasUnpricedTurns = true;
+      if (promptTokens > 0 || t.cache_read_input_tokens > 0) hasUnpricedTurns = true;
       continue;
     }
     const cacheReadRate = pricing.cacheRead ?? pricing.input;
     cacheSavedUsd += (t.cache_read_input_tokens * (pricing.input - cacheReadRate)) / 1_000_000;
-    weightedRateNum += pricing.input * t.input_tokens;
-    weightedRateDen += t.input_tokens;
+    weightedRateNum += pricing.input * promptTokens;
+    weightedRateDen += promptTokens;
   }
 
   const avgInputRate = weightedRateDen > 0 ? weightedRateNum / weightedRateDen : 0;

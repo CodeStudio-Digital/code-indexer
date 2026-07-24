@@ -66,6 +66,29 @@ describe('RecoveringNode', () => {
     });
     expect(event.kind).toBe('TurnSucceeded');
     expect(ctx.recovery.get('provider-transient-retry')).toBe(1);
+    expect(ctx.transientRetriesThisTurn).toBe(1);
+  });
+
+  it('enforces the per-turn transient retry cap before the run-lifetime cap', async () => {
+    vi.stubEnv('CODER_TRANSIENT_RETRY_MAX_PER_TURN', '1');
+    vi.stubEnv('CODER_RECOVERY_TRANSIENT_MAX', '30');
+    const { ctx, recordedEvents } = makeTestContext();
+    const error = {
+      kind: 'ProviderError' as const,
+      retryable: true,
+      status: 429,
+      message: 'rate limited',
+    };
+
+    expect((await new RecoveringNode().execute(ctx, error)).kind).toBe('TurnSucceeded');
+    const second = await new RecoveringNode().execute(ctx, error);
+
+    expect(second.kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('recovery_capped');
+    expect(ctx.error?.message).toContain('Per-turn transient retry cap exceeded');
+    expect(ctx.recovery.get('provider-transient-retry')).toBe(2);
+    expect(recordedEvents.find((entry) => entry.event === 'recovery_aborted')?.args[0])
+      .toMatchObject({ attempts: 2, cap: 1 });
   });
 
   it('classifies status 401 into provider-401-refresh', async () => {

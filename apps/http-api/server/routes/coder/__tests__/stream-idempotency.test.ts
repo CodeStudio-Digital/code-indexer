@@ -30,7 +30,7 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
 vi.mock('@mcp/app-studio/local-db.js', () => ({ findLocalD1File: () => null }));
 
 import { mountCoderStreamRoutes } from '../stream.js';
-import { createBus, markEnded, type CoderRunBus } from '../../../../coder-bus.js';
+import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import { RecentMessageKeys } from '../../recent-message-keys.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -56,22 +56,54 @@ function makeRunner() {
 
 const runners = new Map<number, ReturnType<typeof makeRunner>>();
 
+function preflightHash(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) {
+    hash = (((hash << 5) + hash) + value.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function setup(
-  recentMessageKeys: Pick<RecentMessageKeys, 'lookup' | 'record'> = new RecentMessageKeys(),
+  recentMessageKeys: Pick<
+    RecentMessageKeys,
+    'claim' | 'lookup' | 'record' | 'recordTerminal' | 'rejectClaim'
+  > = new RecentMessageKeys(),
   opts: {
     sessionAgent?: string | null;
     customAgents?: unknown[];
     globalFresh?: boolean;
     projectFresh?: boolean;
+    pendingTransition?: {
+      sessionId: number;
+      fromAgent: string | null;
+      toAgent: string | null;
+      updatedAt: string;
+    } | null;
     ensureStructuralReady?: () => Promise<{
       status: 'ready' | 'aborted' | 'disabled' | 'timeout' | 'error' | 'too_large';
       phase: 'none' | 'scanning' | 'structural_indexing' | 'structural_ready' | 'semantic_indexing' | 'semantic_ready' | 'too_large' | 'error';
       error?: string;
     }>;
+    controlPlaneCommands?: Map<string, Record<string, unknown>>;
+    controlPlaneUnavailable?: boolean;
+    initialMessageCount?: number;
+    preflightSeedJson?: string | null;
+    taskPreflightRun?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const appendCalls: unknown[] = [];
+  const inputCalls: unknown[] = [];
+  const consumeTransitionCalls: number[] = [];
+  const acceptCalls: unknown[] = [];
+  const controlPlaneCommands =
+    opts.controlPlaneCommands ?? new Map<string, Record<string, unknown>>();
+  let pendingTransition = opts.pendingTransition ?? null;
   const projectId = opts.globalFresh || opts.projectFresh ? 99 : null;
+  let messageCount = opts.initialMessageCount ?? (projectId != null ? 0 : 1);
+  let preflightSeedJson = opts.preflightSeedJson ?? null;
+  const preflightSeedWrites: Array<string | null> = [];
+  const taskPreflightRun = opts.taskPreflightRun ?? vi.fn(async () => ({ status: 'unconfigured' }));
   const sessionStore = {
     getSession: (id: number) => ({
       id,
@@ -80,9 +112,28 @@ function setup(
       agent: opts.sessionAgent ?? null,
       is_global: !!opts.globalFresh,
       compaction_summary: null,
+      preflight_seed_json: preflightSeedJson,
     }),
-    getMessageCount: () => projectId != null ? appendCalls.length : 1,
-    appendMessage: (_id: number, msg: unknown) => { appendCalls.push(msg); return appendCalls.length; },
+    getMessageCount: () => messageCount,
+    appendMessage: (_id: number, msg: unknown) => {
+      appendCalls.push(msg);
+      messageCount += 1;
+      return appendCalls.length;
+    },
+    consumePendingAgentTransition: (id: number) => {
+      consumeTransitionCalls.push(id);
+      const transition = pendingTransition;
+      pendingTransition = null;
+      return transition;
+    },
+    recordSessionInput: (input: unknown) => {
+      inputCalls.push(input);
+      return input;
+    },
+    setSessionPreflightSeed: (_id: number, value: string | null) => {
+      preflightSeedJson = value;
+      preflightSeedWrites.push(value);
+    },
     loadSessionWithMessages: (id: number) => ({
       session: { id, project_id: projectId, agent: opts.sessionAgent ?? null },
       messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1' }] }],
@@ -97,7 +148,11 @@ function setup(
         ? JSON.stringify(opts.customAgents)
         : null,
     },
-    db: { getProject: () => projectId == null ? null : ({ id: projectId, root_path: 'D:/fake' }) },
+    db: {
+      getProject: () => projectId == null
+        ? null
+        : ({ id: projectId, name: 'Fake project', root_path: 'D:/fake' }),
+    },
     projectIndexService: {
       ensureFresh: () => {},
       ensureStructuralReady: opts.ensureStructuralReady ?? (async () => ({
@@ -109,11 +164,72 @@ function setup(
       acquireCodeProjectLease: () => () => {},
     },
     taskPreflight: {
-      run: async () => ({ status: 'unconfigured' }),
+      run: taskPreflightRun,
       generateSessionTitle: async () => ({ status: 'unconfigured' }),
     },
     buildAgentDecisionRuntimeOptions: () => ({}),
     buildToolSelectionFilter: () => undefined,
+    controlPlaneStore: opts.controlPlaneUnavailable ? null : {
+      acceptCommand: (input: {
+        command: Record<string, unknown> & {
+          commandId: string;
+          sessionId: string;
+          kind: string;
+          idempotencyKey: string;
+        };
+        payloadHash: string;
+        idempotencyKindAliases?: string[];
+      }) => {
+        acceptCalls.push(input);
+        const key = `${input.command.sessionId}:${input.command.kind}:${input.command.idempotencyKey}`;
+        const existing = [
+          input.command.kind,
+          ...(input.idempotencyKindAliases ?? []),
+        ]
+          .map((kind) => controlPlaneCommands.get(
+            `${input.command.sessionId}:${kind}:${input.command.idempotencyKey}`,
+          ))
+          .find((candidate) => candidate != null);
+        if (existing) {
+          return existing.payloadHash === input.payloadHash
+            ? { kind: 'existing', command: existing }
+            : { kind: 'payload_conflict', command: existing };
+        }
+        const command = {
+          ...input.command,
+          status: 'accepted',
+          sessionVersion: 1,
+          payloadHash: input.payloadHash,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        controlPlaneCommands.set(key, command);
+        return { kind: 'accepted', command };
+      },
+      terminalizeCommand: (input: {
+        context: { commandId: string };
+        status: string;
+        reason: string;
+      }) => {
+        for (const command of controlPlaneCommands.values()) {
+          if (command.commandId === input.context.commandId) {
+            command.status = input.status;
+            command.reasonCode = input.reason;
+          }
+        }
+      },
+      bindCommandExecution: (
+        context: { commandId: string },
+        busId: string,
+      ) => {
+        for (const command of controlPlaneCommands.values()) {
+          if (command.commandId === context.commandId) {
+            command.status = 'running';
+            command.result = { busId };
+          }
+        }
+      },
+    },
   } as unknown as ServerDeps;
 
   const runtime = {
@@ -134,7 +250,20 @@ function setup(
       body: JSON.stringify(body),
     });
 
-  return { app, deps, runtime, activeRuns: workerEntries as Map<number, CoderRunBus>, appendCalls, post };
+  return {
+    app,
+    deps,
+    runtime,
+    activeRuns: workerEntries as Map<number, CoderRunBus>,
+    appendCalls,
+    inputCalls,
+    preflightSeedWrites,
+    taskPreflightRun,
+    consumeTransitionCalls,
+    acceptCalls,
+    controlPlaneCommands,
+    post,
+  };
 }
 
 /** Seed a live worker run and its mocked control surface. */
@@ -177,6 +306,344 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
+  it('upgrades a matching legacy fresh preflight cache before the run starts', async () => {
+    vi.stubEnv('CODER_PREFLIGHT', '1');
+    const content = 'fix the retry race';
+    const seed = { taskKind: 'bugfix', profile: 'navigate' as const };
+    const h = setup(new RecentMessageKeys(), {
+      projectFresh: true,
+      preflightSeedJson: JSON.stringify({
+        h: preflightHash(`${content}\0`),
+        seed,
+      }),
+    });
+
+    const response = await h.post('/api/coder/sessions/1/messages', {
+      content,
+      client_msg_id: 'preflight-cache-upgrade',
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(h.taskPreflightRun).not.toHaveBeenCalled();
+    expect(h.preflightSeedWrites).toHaveLength(1);
+    const upgradedCache = JSON.parse(h.preflightSeedWrites[0]!) as Record<string, unknown>;
+    expect(upgradedCache).toMatchObject({
+      h: preflightHash(`${content}\0`),
+      seed,
+      goalLifecycleIntentVersion: 1,
+      goalLifecycleRequired: true,
+    });
+    expect(typeof upgradedCache.goalLifecyclePendingSince).toBe('string');
+    expect(Number.isFinite(Date.parse(String(upgradedCache.goalLifecyclePendingSince)))).toBe(true);
+    expect(poolMock.runFresh).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ preflight: seed }),
+    );
+  });
+
+  it('rejects a concurrent payload conflict before indexing or run side effects', async () => {
+    let releaseIndex!: () => void;
+    const indexGate = new Promise<void>((resolve) => { releaseIndex = resolve; });
+    const ensureStructuralReady = vi.fn(async () => {
+      await indexGate;
+      return { status: 'ready' as const, phase: 'structural_ready' as const };
+    });
+    const h = setup(new RecentMessageKeys(), {
+      projectFresh: true,
+      ensureStructuralReady,
+    });
+
+    const owner = h.post('/api/coder/sessions/1/messages', {
+      content: 'payload-a',
+      client_msg_id: 'same-key',
+    });
+    await vi.waitFor(() => expect(ensureStructuralReady).toHaveBeenCalledTimes(1));
+    const conflict = await h.post('/api/coder/sessions/1/messages', {
+      content: 'payload-b',
+      client_msg_id: 'same-key',
+    });
+
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ code: 'IDEMPOTENCY_PAYLOAD_CONFLICT' });
+    expect(h.acceptCalls).toHaveLength(1);
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+    releaseIndex();
+    expect((await owner).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps 32 pre-bus owners authoritative across waiter TTL and rejects capacity before durable accept', async () => {
+    let releaseIndex!: () => void;
+    const indexGate = new Promise<void>((resolve) => { releaseIndex = resolve; });
+    const ensureStructuralReady = vi.fn(async () => {
+      await indexGate;
+      return { status: 'ready' as const, phase: 'structural_ready' as const };
+    });
+    const keys = new RecentMessageKeys({
+      ttlMs: 60_000,
+      pendingWaitMs: 25,
+      maxPerSession: 32,
+    });
+    const h = setup(keys, {
+      projectFresh: true,
+      ensureStructuralReady,
+    });
+
+    const owners = Array.from({ length: 32 }, (_, index) =>
+      h.post('/api/coder/sessions/1/messages', {
+        content: `owner-${index}`,
+        client_msg_id: `owner-key-${index}`,
+      }),
+    );
+    await vi.waitFor(
+      () => expect(ensureStructuralReady).toHaveBeenCalledTimes(32),
+      { timeout: 3_000 },
+    );
+    expect(h.controlPlaneCommands.size).toBe(32);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+
+    const overflow = await h.post('/api/coder/sessions/1/messages', {
+      content: 'overflow',
+      client_msg_id: 'owner-key-32',
+    });
+    expect(overflow.status).toBe(503);
+    expect(await overflow.json()).toMatchObject({
+      code: 'IDEMPOTENCY_CAPACITY_EXHAUSTED',
+      retry_after_ms: 25,
+    });
+    expect(overflow.headers.get('Retry-After')).toBe('1');
+    expect(h.controlPlaneCommands.size).toBe(32);
+
+    const retry = await h.post('/api/coder/sessions/1/messages', {
+      content: 'owner-0',
+      client_msg_id: 'owner-key-0',
+    });
+    expect(retry.status).toBe(503);
+    expect(retry.headers.get('Retry-After')).toBe('1');
+    expect(await retry.json()).toMatchObject({
+      code: 'IDEMPOTENCY_RETRY_LATER',
+    });
+    const firstCommand = [...h.controlPlaneCommands.values()].find(
+      (command) => command.idempotencyKey === 'owner-key-0',
+    );
+    expect(firstCommand).toMatchObject({ status: 'accepted' });
+    expect(firstCommand?.reasonCode).toBeUndefined();
+    expect(h.acceptCalls).toHaveLength(32);
+
+    releaseIndex();
+    await Promise.all(owners);
+  });
+
+  it('fails closed before effects when command authority is unavailable, even without a client key', async () => {
+    const h = setup(new RecentMessageKeys(), { controlPlaneUnavailable: true });
+
+    const response = await h.post('/api/coder/sessions/1/messages', {
+      content: 'must not execute',
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
+    });
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a fresh command non-terminal until its exact bus outcome', async () => {
+    const h = setup();
+    const response = await h.post('/api/coder/sessions/1/messages', {
+      content: 'long run',
+      client_msg_id: 'long-running-key',
+    });
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    const command = [...h.controlPlaneCommands.values()][0]!;
+    expect(command.status).toBe('running');
+    expect(command.result).toEqual({ busId: h.activeRuns.get(1)!.busId });
+
+    const bus = h.activeRuns.get(1)!;
+    markEnded(bus, 'done', { reason: 'completed' });
+    expect(command.status).toBe('succeeded');
+  });
+
+  it('never replays an unrelated session bus for a durable existing command', async () => {
+    const transientOnly = {
+      claim: () => ({ kind: 'owner' as const, token: Symbol('claim') }),
+      lookup: () => undefined,
+      record: () => false,
+      recordTerminal: () => true,
+      rejectClaim: () => {},
+    };
+    const h = setup(transientOnly);
+    expect((await h.post('/api/coder/sessions/1/messages', {
+      content: 'original',
+      client_msg_id: 'durable-key',
+    })).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+
+    const unrelated = createBus(new AbortController());
+    h.activeRuns.set(1, unrelated);
+    const retry = await h.post('/api/coder/sessions/1/messages', {
+      content: 'original',
+      client_msg_id: 'durable-key',
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.text()).toContain('executor-bus-unavailable');
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors Last-Event-ID when replaying the exact durable bus after a route remount', async () => {
+    const firstMount = setup();
+    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+      content: 'original',
+      client_msg_id: 'durable-cursor-key',
+    })).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    const exactBus = firstMount.activeRuns.get(1)!;
+    publish(exactBus, 'worker_log', { marker: 'already-acknowledged' });
+    publish(exactBus, 'text_delta', { marker: 'must-replay' });
+
+    const remounted = setup(new RecentMessageKeys(), {
+      controlPlaneCommands: firstMount.controlPlaneCommands,
+    });
+    const replay = await remounted.post(
+      '/api/coder/sessions/1/messages',
+      { content: 'original', client_msg_id: 'durable-cursor-key' },
+      { 'Last-Event-ID': '0' },
+    );
+    expect(replay.status).toBe(200);
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+    markEnded(exactBus, 'done', { reason: 'completed' });
+    expect(await replay.text()).toContain('must-replay');
+  });
+
+  it('keeps the first-message command identity stable across append and route remount', async () => {
+    const firstMount = setup(new RecentMessageKeys(), { initialMessageCount: 0 });
+    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+      content: 'first message',
+      client_msg_id: 'first-message-remount',
+    })).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(firstMount.acceptCalls[0]).toMatchObject({
+      command: { kind: 'send_message' },
+      idempotencyKindAliases: ['start'],
+    });
+    expect(firstMount.appendCalls).toHaveLength(0);
+
+    const remounted = setup(new RecentMessageKeys(), {
+      controlPlaneCommands: firstMount.controlPlaneCommands,
+      initialMessageCount: 1,
+    });
+    const retry = await remounted.post(
+      '/api/coder/sessions/1/messages',
+      { content: 'first message', client_msg_id: 'first-message-remount' },
+      { 'Last-Event-ID': '-1' },
+    );
+    expect(retry.status).toBe(200);
+    expect(firstMount.controlPlaneCommands.size).toBe(1);
+    expect(remounted.appendCalls).toHaveLength(0);
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+
+    markEnded(firstMount.activeRuns.get(1)!, 'done', { reason: 'completed' });
+    await retry.text();
+  });
+
+  it('persists a failure-class done signal as failed and replays an error terminal', async () => {
+    const firstMount = setup();
+    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+      content: 'will fail',
+      client_msg_id: 'failure-ledger-key',
+    })).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    const bus = firstMount.activeRuns.get(1)!;
+    const command = [...firstMount.controlPlaneCommands.values()][0]!;
+
+    // Compatibility guard: an older worker can still send done + a failure
+    // reason. The ledger must classify the semantic outcome, not the label.
+    markEnded(bus, 'done', {
+      reason: 'recovery_capped',
+      error: 'provider recovery exhausted',
+    });
+    expect(command).toMatchObject({
+      status: 'failed',
+      reasonCode: 'recovery_capped',
+    });
+
+    const remounted = setup(new RecentMessageKeys(), {
+      controlPlaneCommands: firstMount.controlPlaneCommands,
+    });
+    const retry = await remounted.post('/api/coder/sessions/1/messages', {
+      content: 'will fail',
+      client_msg_id: 'failure-ledger-key',
+    });
+    const replay = await retry.text();
+
+    expect(retry.status).toBe(200);
+    expect(replay).toContain('event: error');
+    expect(replay).toContain('command-failed');
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not advance an in-memory duplicate beyond the client replay cursor', async () => {
+    const h = setup();
+    const live = seedLiveRun(h.activeRuns, 1);
+    publish(live.bus, 'worker_log', { marker: 'acknowledged' });
+    publish(live.bus, 'worker_log', { marker: 'cursor-gap' });
+
+    expect((await h.post('/api/coder/sessions/1/messages', {
+      content: 'attach',
+      client_msg_id: 'memory-cursor-key',
+    })).status).toBe(200);
+    publish(live.bus, 'text_delta', { marker: 'after-command' });
+
+    const replay = await h.post(
+      '/api/coder/sessions/1/messages',
+      { content: 'attach', client_msg_id: 'memory-cursor-key' },
+      { 'Last-Event-ID': '0' },
+    );
+    markEnded(live.bus, 'done', { reason: 'completed' });
+    const text = await replay.text();
+    expect(text).toContain('cursor-gap');
+    expect(text).toContain('after-command');
+  });
+
+  it('materializes the final pending agent transition only when the fresh run starts', async () => {
+    const h = setup(new RecentMessageKeys(), {
+      pendingTransition: {
+        sessionId: 1,
+        fromAgent: 'explore',
+        toAgent: 'plan',
+        updatedAt: '2026-07-23T00:00:00.000Z',
+      },
+    });
+
+    const response = await h.post('/api/coder/sessions/1/messages', {
+      content: 'write the plan',
+      client_msg_id: 'transition-turn-1',
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(h.consumeTransitionCalls).toEqual([1]);
+    expect(h.appendCalls).toEqual([{
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: expect.stringContaining('Agent transition: explore → plan.'),
+      }],
+      isMeta: true,
+    }]);
+    expect(h.inputCalls).toEqual([expect.objectContaining({
+      session_id: 1,
+      kind: 'system_reminder',
+      source_label: 'reminder:agent-transition',
+      content: expect.stringContaining('The active agent is now plan.'),
+    })]);
+  });
+
   it('does not start a fresh normal runner before structural indexing is ready', async () => {
     let release!: (value: { status: 'ready'; phase: 'structural_ready' }) => void;
     const gate = vi.fn(() => new Promise<{ status: 'ready'; phase: 'structural_ready' }>((resolve) => {
@@ -251,8 +718,14 @@ describe('POST /messages idempotency', () => {
 
   it('answers with a synthetic done (no side effects) when the deduped bus is gone', async () => {
     const fakeStore = {
+      claim: () => ({
+        kind: 'existing' as const,
+        settled: Promise.resolve({ bus: undefined, sinceHint: -1 }),
+      }),
       lookup: () => ({ bus: undefined, sinceHint: -1 }),
-      record: () => {},
+      record: () => true,
+      recordTerminal: () => true,
+      rejectClaim: () => {},
     };
     const h = setup(fakeStore);
 
@@ -263,6 +736,7 @@ describe('POST /messages idempotency', () => {
     expect(text).toContain('"duplicate":true');
     expect(h.appendCalls).toHaveLength(0);
     expect(poolMock.runFresh).not.toHaveBeenCalled();
+    expect(h.acceptCalls).toHaveLength(0);
   });
 
   it('a retry with a recorded key replays instead of raising the spurious 409 (and preserves 409 otherwise)', async () => {

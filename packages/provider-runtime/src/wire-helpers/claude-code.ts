@@ -8,6 +8,7 @@ export const CLAUDE_CODE_CLI_BETA = 'claude-code-20250219';
 export const CLAUDE_CODE_INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14';
 export const CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-27';
 export const CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA = 'prompt-caching-scope-2026-01-05';
+export const CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 export const CLAUDE_CODE_CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 export const CLAUDE_CODE_ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_CODE_SMALL_FAST_MODEL =
@@ -50,6 +51,7 @@ export interface ResolveClaudeCodeModelOptions {
   thinking?: boolean;
   thinkingDisplay?: string | null;
   effort?: ClaudeCodeEffort | 'auto' | null;
+  promptCacheTtl?: '5m' | '1h';
   hasTools?: boolean;
 }
 
@@ -348,6 +350,7 @@ export function getClaudeCodeBetasForModel(
     hasEffort?: boolean;
     thinkingDisplay?: string | null;
     hasTools?: boolean;
+    promptCacheTtl?: '5m' | '1h';
   },
 ): string[] {
   const cleanModel = claudeCodeModelFamily(model);
@@ -366,7 +369,7 @@ export function getClaudeCodeBetasForModel(
     betas.push(CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA);
   }
   if (!experimentalBetasDisabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
-  void opts;
+  if (opts?.promptCacheTtl === '1h') betas.push(CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA);
   return betas;
 }
 
@@ -395,6 +398,7 @@ export function resolveClaudeCodeModel(
     hasEffort: Boolean(outputConfig),
     thinkingDisplay: opts?.thinkingDisplay,
     hasTools: opts?.hasTools,
+    promptCacheTtl: opts?.promptCacheTtl,
   });
   return {
     alias,

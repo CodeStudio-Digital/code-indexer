@@ -115,6 +115,8 @@ const PROJECT_DISCOVERY_MARKERS = new Set([
   'directory.packages.props', 'nuget.config', 'projectversion.txt',
 ]);
 
+const WATCHER_FLUSH_RETRY_MS = 250;
+
 function isProjectDiscoveryMarker(filePath: string): boolean {
   const name = basename(filePath).toLowerCase();
   return PROJECT_DISCOVERY_MARKERS.has(name)
@@ -211,6 +213,29 @@ export class FileWatcherService {
   private skipped = new Set<number>();
   /** Projects under bulk-op suppression (branch switch) — see {@link suspend}. */
   private suspendedProjects = new Set<number>();
+
+  private scheduleFlush(projectId: number, delayMs: number): void {
+    const existing = this.debounceTimers.get(projectId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.debounceTimers.delete(projectId);
+      this.flushPendingSafely(projectId);
+    }, delayMs);
+    this.debounceTimers.set(projectId, timer);
+  }
+
+  private flushPendingSafely(projectId: number): void {
+    void this.flushPending(projectId).catch((error) => {
+      console.warn(
+        `[watcher] flush failed for project ${projectId}; retrying buffered events:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      if (!this.suspendedProjects.has(projectId)
+        && (this.pendingChanges.get(projectId)?.size ?? 0) > 0) {
+        this.scheduleFlush(projectId, WATCHER_FLUSH_RETRY_MS);
+      }
+    });
+  }
 
   startWatching(projectId: number, options: WatcherOptions, events: WatcherEvents): void {
     if (this.isWatching(projectId)) return;
@@ -346,15 +371,7 @@ export class FileWatcherService {
     if (this.suspendedProjects.has(projectId)) return;
 
     // Reset debounce timer
-    const existingTimer = this.debounceTimers.get(projectId);
-    if (existingTimer) clearTimeout(existingTimer);
-
-    const timer = setTimeout(async () => {
-      this.debounceTimers.delete(projectId);
-      await this.flushPending(projectId);
-    }, debounceMs);
-
-    this.debounceTimers.set(projectId, timer);
+    this.scheduleFlush(projectId, debounceMs);
   }
 
   /** Resolves after chokidar's initial walk for the project's current handle. */
@@ -383,7 +400,7 @@ export class FileWatcherService {
   /** End bulk-op suppression; deliver anything buffered while suspended. */
   resume(projectId: number): void {
     if (!this.suspendedProjects.delete(projectId)) return;
-    if ((this.pendingChanges.get(projectId)?.size ?? 0) > 0) void this.flushPending(projectId);
+    if ((this.pendingChanges.get(projectId)?.size ?? 0) > 0) this.flushPendingSafely(projectId);
   }
 
   /** Deliver the current debounce buffer immediately (used at scan barriers). */
@@ -398,7 +415,23 @@ export class FileWatcherService {
     if (!pending || !sink || pending.size === 0) return;
     const batch = Array.from(pending, ([path, v]) => ({ path, kind: v.kind, isDir: v.isDir }));
     pending.clear();
-    await sink.onFileChanged(batch);
+    try {
+      await sink.onFileChanged(batch);
+    } catch (error) {
+      // Preserve any newer same-path event that arrived while the sink was in
+      // flight; otherwise restore the failed event so a timer/resume retry can
+      // deliver it. Clearing before invoking the sink keeps new events separate
+      // and makes this merge deterministic.
+      const current = this.pendingChanges.get(projectId);
+      if (current) {
+        for (const event of batch) {
+          if (!current.has(event.path)) {
+            current.set(event.path, { kind: event.kind, isDir: !!event.isDir });
+          }
+        }
+      }
+      throw error;
+    }
   }
 
   async stopWatching(projectId: number): Promise<void> {

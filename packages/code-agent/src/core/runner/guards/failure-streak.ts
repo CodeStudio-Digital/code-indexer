@@ -8,8 +8,8 @@
  *   - doom-loop fuzzy required ALL last 6 sigs identical ⇒ no-tool
  *     turns between failures reset the window.
  *   - `write_stdin` has no repeat-policy exemption (correctly).
- *   - quality watchdog has a long cooldown and doesn't distinguish
- *     `isError=true` from success.
+ *   - the older semantic evaluator did not distinguish `isError=true`
+ *     from success in the hot path.
  *
  * The unifying flaw was that `isError` was invisible to the loop
  * guards. `failure-streak` is the guard that uses it as the SOLE

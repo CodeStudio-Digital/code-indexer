@@ -38,6 +38,7 @@ function deps(): OpenStreamDeps {
     updateSession: vi.fn(),
     abortMap: new Map(),
     lastSeenSeqMap: new Map(),
+    lastSeenBusIdMap: new Map(),
   };
 }
 
@@ -58,6 +59,9 @@ describe('openStream cursor semantics (B3)', () => {
   it('does not commit the cursor for an event whose handler throws', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => sse([
       'id: 0\nevent: boom\ndata: {}\n\n',
+      // Transport completion is explicit. A clean EOF without done/error is
+      // now a reconnectable failure, not an application-level outcome.
+      'id: 1\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
     const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, d);
@@ -84,6 +88,74 @@ describe('openStream cursor semantics (B3)', () => {
       { event: 'text', id: 0 },
     );
   });
+
+  it('sends a paired bus cursor and adopts a new bus before its seq restarts', async () => {
+    let requestHeaders = new Headers();
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      requestHeaders = new Headers(init.headers);
+      return sse([
+        'event: bus_info\ndata: {"bus_id":"new-bus"}\n\n',
+        'id: 0\nevent: text\ndata: {"text":"new run"}\n\n',
+        'event: done\ndata: {}\n\n',
+      ]);
+    }));
+    const d = deps();
+    const p = openStream(1, {
+      url: '/api/coder/sessions/1/attach',
+      method: 'GET',
+      reattach: true,
+      lastEventId: 42,
+      lastEventBusId: 'old-bus',
+    }, d);
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+
+    expect(requestHeaders.get('Last-Event-ID')).toBe('42');
+    expect(requestHeaders.get('X-MCP-Bus-ID')).toBe('old-bus');
+    expect(d.lastSeenBusIdMap.get(1)).toBe('new-bus');
+    expect(d.lastSeenSeqMap.get(1)).toBe(0);
+  });
+
+  it('drops a process-owned stale turn after an evicted bus is confirmed terminal', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/state')) {
+        return Response.json({ alive: false, status: 'completed' });
+      }
+      return Response.json(
+        { error: 'no active run' },
+        { status: 404, statusText: 'Not Found' },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const d = deps();
+    d.lastSeenSeqMap.set(1, 42);
+    d.lastSeenBusIdMap.set(1, 'evicted-bus');
+    const onMessageComplete = vi.fn();
+
+    const p = openStream(
+      1,
+      {
+        url: '/api/coder/sessions/1/attach',
+        method: 'GET',
+        reattach: true,
+        lastEventId: 42,
+        lastEventBusId: 'evicted-bus',
+        initialBlocks: [{ type: 'text', text: 'already durable', id: 'text-old' }],
+      },
+      d,
+      onMessageComplete,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+
+    expect(d.lastSeenSeqMap.has(1)).toBe(false);
+    expect(d.lastSeenBusIdMap.has(1)).toBe(false);
+    expect(d.updateSession).toHaveBeenCalledWith(1, {
+      error: null,
+      currentTurn: null,
+    });
+    expect(onMessageComplete).toHaveBeenCalledOnce();
+  });
 });
 
 describe('openStream replay-gap visibility (B4)', () => {
@@ -98,7 +170,13 @@ describe('openStream replay-gap visibility (B4)', () => {
     const d = deps();
     const p = openStream(
       1,
-      { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true, lastEventId: 3 },
+      {
+        url: '/api/coder/sessions/1/attach',
+        method: 'GET',
+        reattach: true,
+        lastEventId: 3,
+        lastEventBusId: 'b1',
+      },
       d,
     );
     await vi.advanceTimersByTimeAsync(10);

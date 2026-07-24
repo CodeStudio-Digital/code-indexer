@@ -62,8 +62,6 @@ describe('session-notifications-store', () => {
       { payload: { kind: 'run-error', message: 'e' }, severity: 'error', autoDismissMs: null },
       { payload: { kind: 'run-done', reason: 'completed' }, severity: 'info', autoDismissMs: 10_000 },
       { payload: { kind: 'run-done', reason: 'crash', error: 'oops' }, severity: 'error', autoDismissMs: null },
-      { payload: { kind: 'quality-alert', verdict: 'warn', suspectTool: 't', reason: 'r', turn: 1 }, severity: 'warning', autoDismissMs: 20_000 },
-      { payload: { kind: 'quality-alert', verdict: 'error', suspectTool: 't', reason: 'r', turn: 1 }, severity: 'error', autoDismissMs: null },
     ];
     for (const c of cases) {
       const s = sid();

@@ -197,6 +197,26 @@ describe('execute_tasks — mixed mode (PR-G)', () => {
     expect(result.content).toContain("Inline task scope ACTIVE");
   });
 
+  it('keeps the opened inline scope but reports a prior subagent failure as a tool error', async () => {
+    vi.mocked(runSubagent).mockResolvedValue({
+      reason: 'error',
+      finalText: 'subagent failed before inline work',
+      usage: { input_tokens: 1, output_tokens: 1 },
+      sandboxViolations: [],
+    });
+    const { tool, ctx, runner } = setup([
+      task({ id: 'tsk_sub', suggested_mode: 'subagent' }),
+      task({ id: 'tsk_inline', suggested_mode: 'inline' }),
+    ], { execution_mode: 'per-task' });
+
+    const result = await tool.handler({}, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('status=failed');
+    expect(result.content).toContain("Inline task scope ACTIVE for 'tsk_inline'");
+    expect(runner.beginTaskScope).toHaveBeenCalled();
+  });
+
   it('per-task mode respects task.suggested_mode (not all subagent)', async () => {
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed', finalText: 'sub done',

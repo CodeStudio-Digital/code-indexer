@@ -10,10 +10,10 @@
  *
  * Two facing surfaces:
  *
- *   1. `getOrSpawn(sessionId)` — returns a `WorkerBackedOrchestrator`
- *      with the same shape as `CompanyOrchestrator` (Proxy magic).
- *      Existing HTTP routes can treat the result as the original
- *      class because every method call dispatches via the bridge.
+ *   1. `getOrSpawn(sessionId)` — returns a `WorkerBackedOrchestrator`,
+ *      the async, structured-clone-safe projection of
+ *      `CompanyOrchestrator`. Runtime-only handles/drivers/listeners are
+ *      deliberately absent and must have explicit DTO facades.
  *
  *   2. `getMirroredBus(sessionId)` — returns a main-side
  *      `CoderRunBus` whose events come from the worker's bus via
@@ -65,7 +65,6 @@ interface PoolEntry {
    * abandoned session is still reclaimed eventually.
    */
   awaitingHumanSince: number | null;
-  qualityEnabled: boolean;
   /** Aggregated subscription cleanup. */
   detachBusMirror: () => void;
 }
@@ -88,6 +87,21 @@ const AWAIT_HUMAN_END_EVENTS = new Set([
  * back) while still reclaiming a session the human silently abandoned.
  */
 const AWAITING_HUMAN_TTL_MS = 60 * 60 * 1000;
+
+const DEFAULT_COMPANY_RPC_TIMEOUT_MS = 60_000;
+/**
+ * Sandbox provisioning legitimately includes image/container work and a
+ * framework scaffold. Existing sandbox ceilings reach 420s for package
+ * installation and 10 minutes for E2B creation, so the transport envelope
+ * must not expire at the generic 60s boundary first.
+ */
+export const SANDBOX_PROVISION_RPC_TIMEOUT_MS = 10 * 60_000;
+
+export function resolveCompanyRpcTimeoutMs(path: readonly string[]): number {
+  return path.length === 1 && path[0] === 'addSandboxService'
+    ? SANDBOX_PROVISION_RPC_TIMEOUT_MS
+    : DEFAULT_COMPANY_RPC_TIMEOUT_MS;
+}
 
 export interface WorkerOrchestratorPoolOpts {
   /** Absolute path Node spawns — built `.js` in prod, dev bootstrap `.mjs` in dev. */
@@ -118,20 +132,83 @@ export interface WorkerOrchestratorPoolOpts {
 }
 
 /**
- * Main-side handle that mimics `CompanyOrchestrator`. Method access
- * proxies through `bridge.request('rpc', { path, args })`. Property
- * reads for primitives go through `orchestrator.property`. Anything
- * else (e.g. accessing `master`) returns a sub-proxy that prepends
- * its name to the rpc path on subsequent calls.
+ * Main-side handle that exposes the transport-safe
+ * `CompanyOrchestrator` method tree.
+ * Every method call proxies through `bridge.request('rpc', { path, args })`
+ * and therefore returns a Promise, including methods whose in-worker return
+ * type is synchronous. The mapped type also preserves that rule recursively
+ * for any future transport-safe nested facade. Only `companySessionId` and
+ * the main-side `metaBus` are synchronous root properties. Known runtime-only
+ * members such as `sandboxService` are omitted below even though the dynamic
+ * Proxy could technically construct a path for them; MessagePort cannot
+ * preserve their authority or behavior.
  *
  * Limitations:
- *   - All methods become async. Callers that expected sync returns
- *     (`isAlive`, `runningCount`, etc.) need to be updated. Most
- *     existing routes already `await` their orchestrator calls.
+ *   - Primitive/property reads other than the two root exceptions are not
+ *     transport-safe and are typed `never`; expose an explicit RPC method
+ *     returning a serializable DTO instead.
  *   - The actual class instance lives in the worker — `instanceof
  *     CompanyOrchestrator` checks return false. Don't rely on them.
  */
-export type WorkerBackedOrchestrator = CompanyOrchestrator;
+type AsyncRpcMember<T> =
+  T extends (...args: infer Args) => infer Result
+    ? (...args: Args) => Promise<Awaited<Result>>
+    : T extends object
+      ? AsyncRpcObject<T>
+      : never;
+
+type AsyncRpcObject<T extends object> = {
+  readonly [Key in keyof T]: AsyncRpcMember<T[Key]>;
+};
+
+/**
+ * Public in-worker members that must never be projected over MessagePort.
+ *
+ * These expose live runners, callbacks, EventEmitters, stores, drivers or
+ * promises embedded in handles. Main-process consumers must use an explicit
+ * serializable facade/DTO instead of asking structuredClone to serialize
+ * runtime authority.
+ */
+type WorkerUnsafeRpcKey =
+  | 'sandboxService'
+  | 'eventBus'
+  | 'driveStore'
+  | 'autonomy'
+  | 'getSandboxBinding'
+  | 'getSandboxServiceBinding'
+  | 'provisionSandboxIfNeeded'
+  | 'getSubordinate'
+  | 'onSubordinateAttention';
+
+type WorkerStartMasterOpts =
+  Omit<Parameters<CompanyOrchestrator['startMaster']>[0], 'signal'>;
+
+/**
+ * Compile-time representation of the dynamic worker proxy.
+ *
+ * Do not replace this with `CompanyOrchestrator`: that class has synchronous
+ * methods, while MessageBridge makes every proxy invocation asynchronous.
+ * Keeping the distinction here makes synchronous consumption of an RPC result
+ * a type error instead of permitting a runtime `{}` response or
+ * truthy-Promise false positive. Intentionally detached calls still need an
+ * explicit `void ...catch(...)` at the call site.
+ */
+export type WorkerBackedOrchestrator = {
+  readonly companySessionId: CompanyOrchestrator['companySessionId'];
+  readonly metaBus: CoderRunBus;
+} & Omit<
+  AsyncRpcObject<CompanyOrchestrator>,
+  'companySessionId' | 'metaBus' | WorkerUnsafeRpcKey | 'startMaster'
+> & {
+  /**
+   * AbortSignal is process-local and cannot cross MessagePort. Cancellation
+   * uses request ids / explicit RPCs; the main-side start facade only accepts
+   * structured-clone-safe launch fields.
+   */
+  readonly startMaster: (
+    opts: WorkerStartMasterOpts,
+  ) => Promise<Awaited<ReturnType<CompanyOrchestrator['startMaster']>>>;
+};
 
 export class WorkerOrchestratorPool {
   private readonly entries = new Map<number, PoolEntry>();
@@ -254,52 +331,6 @@ export class WorkerOrchestratorPool {
     return Promise.all(jobs);
   }
 
-  qualitySnapshot(): Array<{ sessionId: number; enabled: boolean }> {
-    return [...this.entries.entries()].map(([sessionId, entry]) => ({
-      sessionId,
-      enabled: entry.qualityEnabled,
-    }));
-  }
-
-  async refreshQualityStatus(timeoutMs = 2_000): Promise<Array<{ sessionId: number; enabled: boolean }>> {
-    await Promise.all([...this.entries.values()].map(async (entry) => {
-      try {
-        const status = await entry.host.requireBridge().request<{ enabled: boolean }>(
-          'quality.status',
-          {},
-          { timeoutMs },
-        );
-        entry.qualityEnabled = status.enabled === true;
-      } catch {
-        entry.qualityEnabled = false;
-      }
-    }));
-    return this.qualitySnapshot();
-  }
-
-  async setQualityEnabled(enabled: boolean, timeoutMs = 5_000): Promise<{
-    total: number;
-    acknowledged: number;
-    failed: number;
-  }> {
-    const entries = [...this.entries.values()];
-    let acknowledged = 0;
-    await Promise.all(entries.map(async (entry) => {
-      try {
-        const ack = await entry.host.requireBridge().request<{ enabled: boolean }>(
-          'quality.setEnabled',
-          { enabled },
-          { timeoutMs },
-        );
-        if (ack.enabled === enabled) {
-          entry.qualityEnabled = enabled;
-          acknowledged += 1;
-        }
-      } catch { /* reflected in failed */ }
-    }));
-    return { total: entries.length, acknowledged, failed: entries.length - acknowledged };
-  }
-
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
   async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
     const entry = this.entries.get(sessionId);
@@ -372,7 +403,7 @@ export class WorkerOrchestratorPool {
       },
       execArgv: this.opts.workerExecArgv,
       maxRestarts: 3,
-      defaultRequestTimeoutMs: 60_000, // LLM-bound calls can take a while
+      defaultRequestTimeoutMs: DEFAULT_COMPANY_RPC_TIMEOUT_MS,
       onCrash: (err) => {
         this.log('error', `[pool] worker session=${sessionId} crashed permanently: ${err.message}`);
         closeCompanyPreviewSession(sessionId);
@@ -402,14 +433,6 @@ export class WorkerOrchestratorPool {
     // (the bus itself is created at the top of spawn so `onCrash` can end it)
     const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
     const bridge = host.requireBridge();
-    let effectiveQualityEnabled = false;
-    try {
-      const status = await bridge.request<{ enabled: boolean }>('quality.status', {}, { timeoutMs: 5_000 });
-      effectiveQualityEnabled = status.enabled === true;
-    } catch {
-      // Keep false: status must reflect an ACK, never the desired spawn input.
-    }
-
     // ─── Doc-corpus RPC bridges from worker → main ───────────────
     // `rag_search_docs` runs in the worker. Only structural navigation and
     // deep research cross this bridge; the navigation verbs are short SQLite
@@ -604,27 +627,22 @@ export class WorkerOrchestratorPool {
       bus,
       lastTouchedAt: Date.now(),
       awaitingHumanSince: null,
-      qualityEnabled: effectiveQualityEnabled,
       detachBusMirror,
     };
   }
 }
 
 /**
- * Build the typed Proxy that mimics CompanyOrchestrator's surface.
+ * Build the typed async RPC proxy for CompanyOrchestrator's public surface.
  *
- * Key trick: when the consumer accesses `orch.master`, we return ANOTHER
- * proxy with the path prepended (`['master']`). Calling
- * `.sendUserMessage(...)` on that nested proxy sends an `rpc` request
- * with `{ path: ['master', 'sendUserMessage'], args: [...] }` to the
- * worker.
+ * Key trick: nested DTO-safe facade objects can return ANOTHER proxy with the
+ * path prepended. Calling a method on that nested proxy sends one `rpc`
+ * request with the complete property path. Live services/handles are omitted
+ * from `WorkerBackedOrchestrator`; current main-side routes use explicit root
+ * DTO facades instead.
  *
  * Special cases:
- *   - `companySessionId`, `parentSessionId` — read-only primitive
- *     properties known to live on the orchestrator itself. We cache
- *     `companySessionId` immediately and forward others via
- *     `orchestrator.property`. Returning a Promise for these would
- *     break code that does `orch.companySessionId` synchronously.
+ *   - `companySessionId` — cached synchronously from the pool key.
  *   - `metaBus` — returns the MAIN-SIDE mirrored bus directly. Routes
  *     that pump SSE from `orchestrator.metaBus` keep working.
  */
@@ -653,7 +671,11 @@ function createOrchestratorProxy(
         },
         apply(_target, _thisArg, args) {
           // Function call: dispatch the RPC. Caller MUST `await` the result.
-          return bridge.request('rpc', { path, args }, { timeoutMs: 60_000 });
+          return bridge.request(
+            'rpc',
+            { path, args },
+            { timeoutMs: resolveCompanyRpcTimeoutMs(path) },
+          );
         },
         // Block accidental writes — orchestrator state lives in the worker.
         set() {
@@ -662,7 +684,7 @@ function createOrchestratorProxy(
       },
     );
   }
-  // Cast through unknown — the proxy SHAPE matches CompanyOrchestrator
-  // at the type level even though the implementation is dynamic.
+  // Cast through unknown — runtime traps implement WorkerBackedOrchestrator's
+  // async method tree and its two synchronous root properties.
   return makeProxy([]) as unknown as WorkerBackedOrchestrator;
 }

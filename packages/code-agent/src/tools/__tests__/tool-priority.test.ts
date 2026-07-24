@@ -93,6 +93,21 @@ describe('selectUnderCap', () => {
 });
 
 describe('buildTools — priority trim at a weak-model cap', () => {
+  it('never exposes or re-pins submit_plan while the runner is in spec mode', () => {
+    const base = makeArgs('glm-4.5-flash');
+    const names = buildTools({
+      ...base,
+      pinnedTools: new Set(['submit_plan']),
+      toolContext: {
+        ...base.toolContext,
+        runner: { specMode: true },
+      } as unknown as ToolContext,
+    }).tools.map((tool) => tool.name);
+
+    expect(names).not.toContain('submit_plan');
+    expect(names).toContain('submit_spec');
+  });
+
   it('caps at 32 for glm-4.5-flash, keeps NEVER_TRIM + hot core, drops cold tiers', () => {
     const res = buildTools(makeArgs('glm-4.5-flash'));
     const names = res.tools.map((t) => t.name);
@@ -109,6 +124,10 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
     // the cap must never drop it, even at the most aggressive 32-tool cap.
     expect(names).toContain('task_list');
+    // Both visible goal transitions are a lifecycle pair: create_goal must be
+    // available before work, and update_goal must remain available at finish.
+    expect(names).toContain('create_goal');
+    expect(names).toContain('update_goal');
     // plan.txt requires decision_gate for genuine multi-option forks, so a
     // compact catalog must keep the direct interactive tool available.
     expect(names).toContain('decision_gate');
@@ -146,6 +165,8 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       if (![...BOOTSTRAP_SET, ...NAVIGATE_SET].includes(n)) continue;
       expect(names, `NEVER_TRIM tool ${n} must survive the default cap`).toContain(n);
     }
+    expect(names).toContain('create_goal');
+    expect(names).toContain('update_goal');
   });
 
   it('CODER_TOOL_CAP_DEFAULT=0 restores the legacy model-cap-only behavior (capInfo null)', () => {
@@ -314,6 +335,7 @@ describe('buildTools — session tool cap (task preflight)', () => {
     const byName = new Map(tools.map((t) => [t.name, t.description]));
     expect(byName.get('mcp__search')).toBe('mcp__search description.');
     expect(byName.get('read_file')).toBe(`read_file description. ${TAIL}`);
+    expect(byName.get('create_goal')).toBe(`create_goal description. ${TAIL}`);
   });
 
   it('an explicit session cap ABOVE 64 keeps full descriptions (not a compact catalog)', () => {
@@ -333,6 +355,7 @@ describe('buildTools — terse descriptions for compact-catalog models', () => {
     // NEVER_TRIM core → full USE/DON'T text preserved.
     expect(byName.get('read_file')).toBe(`read_file description. ${TAIL}`);
     expect(byName.get('code_exec')).toBe(`code_exec description. ${TAIL}`);
+    expect(byName.get('create_goal')).toBe(`create_goal description. ${TAIL}`);
   });
 
   it('legacy mode (CODER_TOOL_CAP_DEFAULT=0): large-catalog model keeps full descriptions (byte parity)', () => {

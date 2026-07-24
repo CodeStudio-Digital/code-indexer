@@ -298,6 +298,7 @@ export function EditorChatRail({
             streaming={s.streaming}
             doneReason={s.doneReason}
             error={s.error}
+            liveReconciliation={s.liveReconciliation}
             liveTurnDuplicatedInHistory={s.liveTurnDuplicatedInHistory}
             persistedToolUseIds={s.persistedToolUseIds}
             fallbackProviderId={s.provider}

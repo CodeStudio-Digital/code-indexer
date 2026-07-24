@@ -47,6 +47,7 @@ import type {
 import * as core from './store/sessions-core.js';
 import * as sessionProjects from './store/session-projects.js';
 import * as state from './store/sessions-state.js';
+import * as agentTransitions from './store/agent-transitions.js';
 import * as ops from './store/sessions-ops.js';
 import * as goals from './store/goals.js';
 import * as messages from './store/messages.js';
@@ -64,7 +65,9 @@ import * as telemetryPayload from './store/telemetry-payload.js';
 import * as telemetrySession from './store/telemetry-session.js';
 import * as telemetryGlobal from './store/telemetry-global.js';
 import * as telemetryBackfill from './store/telemetry-backfill.js';
+import * as providerAttempts from './store/provider-attempts.js';
 import * as subagentTelemetry from './store/subagent-telemetry.js';
+import * as orchestrationCheckpoints from './store/orchestration-checkpoints.js';
 import * as subagentRecommendations from './store/subagent-recommendations.js';
 import * as chapters from './store/chapters.js';
 import * as compactionAttempts from './store/compaction-attempts.js';
@@ -157,6 +160,12 @@ export class SessionStore {
 
   // ─── Sessions state (set*) ─────────────────────────────────────
   setSessionAgent(id: number, agent: string | null): void { state.setAgent(this.db, id, agent); }
+  stageManualAgentTransition(id: number, agent: string | null): agentTransitions.PendingAgentTransition | null {
+    return agentTransitions.stage(this.db, id, agent);
+  }
+  consumePendingAgentTransition(id: number): agentTransitions.PendingAgentTransition | null {
+    return agentTransitions.consume(this.db, id);
+  }
   setSessionTemperature(id: number, temperature: number | null): void { state.setTemperature(this.db, id, temperature); }
   setSessionReasoningEffort(id: number, effort: string | null): void { state.setReasoningEffort(this.db, id, effort); }
   setSessionExecutionMode(id: number, mode: CoderExecutionMode): void { state.setExecutionMode(this.db, id, mode); }
@@ -211,7 +220,9 @@ export class SessionStore {
 
   // ─── Session goal (migration 068) ──────────────────────────────
   getSessionGoal(id: number): goals.SessionGoal | null { return goals.get(this.db, id); }
-  upsertSessionGoal(id: number, goal: goals.UpsertGoalInput): void { goals.upsert(this.db, id, goal); }
+  upsertSessionGoal(id: number, goal: goals.UpsertGoalInput): void | Promise<void> {
+    return goals.upsert(this.db, id, goal);
+  }
   clearSessionGoal(id: number): void { goals.clear(this.db, id); }
 
   // ─── Messages ──────────────────────────────────────────────────
@@ -225,6 +236,7 @@ export class SessionStore {
   getMessageCount(sessionId: number): number { return messages.getCount(this.db, sessionId); }
   loadSessionMessagesTail(id: number, tail: number): SessionWithMessages | null { return messages.loadTail(this.db, id, tail); }
   getFirstUserMessageText(sessionId: number): string | null { return messages.getFirstUserText(this.db, sessionId); }
+  getLatestNonMetaUserMessageText(sessionId: number): string | null { return messages.getLatestNonMetaUserText(this.db, sessionId); }
   loadMessagesBefore(sessionId: number, beforeId: number, limit: number, includeArchived = false): { messages: AgentMessage[]; message_rows: CoderMessageRow[] } {
     return messages.loadBefore(this.db, sessionId, beforeId, limit, includeArchived);
   }
@@ -372,8 +384,15 @@ export class SessionStore {
   copyToolConfig(fromSessionId: number, toSessionId: number): number { return disabledTools.copyConfig(this.db, fromSessionId, toSessionId); }
 
   // ─── Per-turn telemetry (migration 069) ────────────────────────
-  startSubagentRun(input: subagentTelemetry.StartSubagentRunInput): void { subagentTelemetry.start(this.db, input); }
-  heartbeatSubagentRun(runId: string): void { subagentTelemetry.heartbeat(this.db, runId); }
+  startSubagentRun(input: subagentTelemetry.StartSubagentRunInput): subagentTelemetry.SubagentRunFence | null {
+    return subagentTelemetry.start(this.db, input);
+  }
+  assertSubagentRunFence(fence: subagentTelemetry.SubagentRunFence): void {
+    subagentTelemetry.assertFence(this.db, fence);
+  }
+  heartbeatSubagentRun(runId: string, fence?: subagentTelemetry.SubagentRunFence): void {
+    subagentTelemetry.heartbeat(this.db, runId, fence);
+  }
   recordSubagentToolCall(input: subagentTelemetry.SubagentToolCallInput): void { subagentTelemetry.recordToolCall(this.db, input); }
   completeSubagentRun(input: subagentTelemetry.CompleteSubagentRunInput): void { subagentTelemetry.complete(this.db, input); }
   recoverOrphanedSubagentRuns(opts: subagentTelemetry.RecoverOrphanedSubagentRunsOptions = {}): number {
@@ -381,10 +400,80 @@ export class SessionStore {
   }
   listSubagentRuns(sessionId: number, limit = 50): subagentTelemetry.SubagentRunTelemetry[] { return subagentTelemetry.listRuns(this.db, sessionId, limit); }
   listSubagentToolCalls(runId: string, limit = 100): subagentTelemetry.SubagentToolCallTelemetry[] { return subagentTelemetry.listToolCalls(this.db, runId, limit); }
+  reconcileWorkflowStepRun(
+    sessionId: number,
+    groupId: string,
+    stepId: string,
+  ): subagentTelemetry.WorkflowStepRunReconciliation {
+    return subagentTelemetry.reconcileWorkflowStepRun(this.db, sessionId, groupId, stepId);
+  }
   getSubagentBudgetRecommendations(): subagentRecommendations.SubagentBudgetRecommendation[] {
     return subagentRecommendations.getSubagentBudgetRecommendations(this.db);
   }
+  saveOrchestrationCheckpoint(input: orchestrationCheckpoints.SaveOrchestrationCheckpointInput): boolean {
+    return orchestrationCheckpoints.save(this.db, input);
+  }
+  loadOrchestrationCheckpoint(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    scopeId: string,
+  ): orchestrationCheckpoints.OrchestrationCheckpointRow | null {
+    return orchestrationCheckpoints.load(this.db, sessionId, kind, scopeId);
+  }
+  listOrchestrationCheckpoints(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    limit = 50,
+  ): orchestrationCheckpoints.OrchestrationCheckpointRow[] {
+    return orchestrationCheckpoints.list(this.db, sessionId, kind, limit);
+  }
+  removeOrchestrationCheckpoint(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    scopeId: string,
+    leaseToken?: string,
+  ): void {
+    orchestrationCheckpoints.remove(this.db, sessionId, kind, scopeId, leaseToken);
+  }
+  tryAcquireOrchestrationCheckpoint(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    scopeId: string,
+    leaseMs?: number,
+  ): string | null {
+    return orchestrationCheckpoints.tryAcquire(this.db, sessionId, kind, scopeId, leaseMs);
+  }
+  releaseOrchestrationCheckpoint(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    scopeId: string,
+    leaseToken: string,
+  ): void {
+    orchestrationCheckpoints.release(this.db, sessionId, kind, scopeId, leaseToken);
+  }
+  renewOrchestrationCheckpoint(
+    sessionId: number,
+    kind: orchestrationCheckpoints.OrchestrationCheckpointKind,
+    scopeId: string,
+    leaseToken: string,
+    leaseMs?: number,
+  ): boolean {
+    return orchestrationCheckpoints.renew(
+      this.db,
+      sessionId,
+      kind,
+      scopeId,
+      leaseToken,
+      leaseMs,
+    );
+  }
   recordTurnTelemetry(input: telemetryRecord.RecordTurnTelemetryInput): number | null { return telemetryRecord.record(this.db, input); }
+  recordProviderAttempt(input: providerAttempts.RecordProviderAttemptInput): number | null {
+    return providerAttempts.record(this.db, input);
+  }
+  listProviderAttempts(sessionId: number, limit = 500): Array<Record<string, unknown>> {
+    return providerAttempts.list(this.db, sessionId, limit);
+  }
   getFirstTurnPayloadBreakdown(sessionId: number): telemetryPayload.FirstTurnPayloadBreakdown { return telemetryPayload.getFirstTurnPayloadBreakdown(this.db, sessionId); }
   getTurnTelemetry(sessionId: number): Array<Record<string, unknown>> { return telemetryPayload.getTurnTelemetry(this.db, sessionId); }
   getSessionTelemetrySummary(sessionId: number): telemetrySession.SessionTelemetrySummary { return telemetrySession.getSessionTelemetrySummary(this.db, sessionId); }

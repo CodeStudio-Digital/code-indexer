@@ -94,6 +94,7 @@ const BUILTIN_CLASSIFICATION: Record<
 
   // ─── Subagent / orchestration ─────────────────────────────────
   spawn_agent:      { mutates: false, parallelSafe: false, riskLevel: 'admin' },
+  resume_agent:     { mutates: false, parallelSafe: false, riskLevel: 'admin', executionClass: 'execute' },
   expand_toolset:   { mutates: false, parallelSafe: false, riskLevel: 'admin' },
   invoke_skill:     { mutates: false, parallelSafe: false, riskLevel: 'read' },
 
@@ -152,20 +153,20 @@ export interface ResolvedToolMetadata {
 export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
   const builtin = BUILTIN_CLASSIFICATION[tool.name];
 
-  // Phase 2 default posture: legacy-compatible. Tools that don't declare
-  // metadata and aren't in `BUILTIN_CLASSIFICATION` fall through as
-  // `mutates: false` so the policy module preserves the pre-hardening
-  // behaviour where unknown tools (master/company tools, MCP external,
-  // etc) ran freely. Tightening this default to "mutates by default"
-  // is reserved for Phase 5 (strict mode) — at that point the policy
-  // context's `strict: true` flag will make the difference.
-  //
-  // Within this default posture, `parallelSafe` still respects the
-  // `mutates` outcome (a tool declared mutating is never paralelizable).
+  // Native/internal tools retain the legacy read default. External MCP tools
+  // without an explicit contract are conservative: their remote side effects
+  // are unknowable, so they default to write/non-parallel. This matches the
+  // CoderTool contract and prevents an unannotated mutation from bypassing
+  // lifecycle, permission and ledger gates.
+  const unclassifiedExternal =
+    tool.source === 'mcp_external'
+    && !builtin
+    && tool.mutates === undefined
+    && tool.riskLevel === undefined;
   const sourceDefault = {
-    mutates: false,
-    parallelSafe: true,
-    riskLevel: 'read' as ToolRiskLevel,
+    mutates: unclassifiedExternal,
+    parallelSafe: !unclassifiedExternal,
+    riskLevel: (unclassifiedExternal ? 'write' : 'read') as ToolRiskLevel,
   };
 
   const mutates = tool.mutates ?? builtin?.mutates ?? sourceDefault.mutates;
@@ -195,6 +196,56 @@ export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
     interactive,
     repeatPolicy,
     executionClass,
+  };
+}
+
+/**
+ * Resolve metadata for one concrete invocation. `riskOf` is authoritative for
+ * input-sensitive tools (for example db_query SELECT vs INSERT) and fails
+ * closed as a write when it throws or returns an invalid value.
+ */
+export function resolveToolInvocationMetadata(
+  tool: CoderTool,
+  input: unknown,
+): ResolvedToolMetadata {
+  const metadata = resolveToolMetadata(tool);
+  if (typeof tool.riskOf !== 'function') return metadata;
+
+  let riskLevel: ToolRiskLevel;
+  try {
+    const classified = tool.riskOf(input);
+    riskLevel = classified === 'read'
+      || classified === 'write'
+      || classified === 'execute'
+      || classified === 'admin'
+      ? classified
+      : 'write';
+  } catch {
+    riskLevel = 'write';
+  }
+
+  const mutates = riskLevel === 'write'
+    ? true
+    : riskLevel === 'read'
+      ? false
+      : metadata.mutates;
+  const executionClass: ToolExecutionClass = metadata.interactive || riskLevel === 'admin'
+    ? 'control'
+    : riskLevel === 'execute'
+      ? 'execute'
+      : riskLevel === 'write'
+        ? 'write'
+        : 'read';
+  return {
+    ...metadata,
+    riskLevel,
+    mutates,
+    parallelSafe: riskLevel === 'read' ? metadata.parallelSafe : false,
+    executionClass,
+    repeatPolicy:
+      riskLevel === 'write' && metadata.repeatPolicy === 'stable'
+        ? 'mutating'
+        : metadata.repeatPolicy,
   };
 }
 
@@ -415,6 +466,34 @@ export function isPlanModeWorkflowTool(name: string): boolean {
 }
 
 /**
+ * Spec mode owns a distinct approval contract. A regular plan can never
+ * satisfy that contract, while gated task submission is valid only after the
+ * specification itself has been approved.
+ *
+ * Keep this predicate exported so both the invocation policy and the
+ * per-turn catalog assembly enforce the same invariant. Handler-level guards
+ * remain as a final defense for direct/test/nested invocations that bypass the
+ * normal dispatcher.
+ */
+export function specModeInteractionBlockDetail(
+  name: string,
+  args: Readonly<Record<string, unknown>>,
+  specApproved: boolean,
+): string | null {
+  if (name === 'submit_plan') {
+    return "Tool 'submit_plan' is unavailable in spec mode. Submit the specification with 'submit_spec'; approving a regular plan does not release the spec gate.";
+  }
+  if (specApproved) return null;
+  if (name === 'submit_tasks') {
+    return "Tool 'submit_tasks' is blocked until the specification is approved. Call 'submit_spec' first and wait for human approval.";
+  }
+  if (name === 'task_list' && args.gate === 'approve') {
+    return "task_list gate:'approve' is blocked until the specification is approved. Call 'submit_spec' first; gate:'track' remains available for a non-blocking checklist.";
+  }
+  return null;
+}
+
+/**
  * Decide whether `tool` may be invoked with `args` under `ctx`.
  *
  * Path-scope enforcement is split: we tell the caller *whether* the
@@ -428,8 +507,7 @@ export function evaluateToolInvocation(
   args: Record<string, unknown>,
   ctx: PolicyContext,
 ): PolicyDecision {
-  const metadata = resolveToolMetadata(tool);
-  void args;
+  const metadata = resolveToolInvocationMetadata(tool, args);
 
   // 1. Sandbox requirement — fails fast if the tool needs one and the
   //    session has none bound.
@@ -440,6 +518,26 @@ export function evaluateToolInvocation(
       detail: `Tool '${tool.name}' requires a sandbox runtime but none is bound to this session.`,
       metadata,
     };
+  }
+
+  // 1b. Spec mode has exactly one approval primitive. Prompt instructions are
+  // not a security or lifecycle boundary: without this hard gate a model can
+  // call submit_plan, receive approval, and remain permanently blocked because
+  // only submit_spec flips specApproved.
+  if (ctx.specMode) {
+    const detail = specModeInteractionBlockDetail(
+      tool.name,
+      args,
+      ctx.specApproved === true,
+    );
+    if (detail) {
+      return {
+        allowed: false,
+        reason: 'spec_mode',
+        detail,
+        metadata,
+      };
+    }
   }
 
   // 2. Plan-mode mutating block — same semantics as the legacy

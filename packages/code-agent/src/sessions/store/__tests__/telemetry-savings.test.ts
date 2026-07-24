@@ -24,9 +24,27 @@ const turn = (over: Partial<TurnForSavings>): TurnForSavings => ({
 });
 
 describe('computeSavings', () => {
+  it('uses the full split prompt as the Anthropic cache-hit denominator', () => {
+    const r = computeSavings({
+      turns: [{
+        provider: 'claude-code',
+        model: 'known',
+        input_tokens: 2,
+        cache_read_input_tokens: 27_487,
+        cache_creation_input_tokens: 500_786,
+        tools_def_chars: 0,
+      }],
+      rawToolChars: 0,
+      shapedToolChars: 0,
+      resolvePricing: resolve,
+    });
+
+    expect(r.cacheHitRatio).toBeCloseTo(27_487 / 528_275);
+  });
+
   it('computes cache saving as read × (input − cacheRead)', () => {
     const r = computeSavings({
-      turns: [turn({ input_tokens: 100_000, cache_read_input_tokens: 100_000 })],
+      turns: [turn({ input_tokens: 0, cache_read_input_tokens: 100_000 })],
       rawToolChars: 0,
       shapedToolChars: 0,
       resolvePricing: resolve,

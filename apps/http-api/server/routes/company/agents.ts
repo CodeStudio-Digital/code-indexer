@@ -1,6 +1,8 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import {
+  evictCompanyOrchestrator,
   getCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
@@ -40,7 +42,19 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
     const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
-    const ok = await orchestrator.pauseSubordinate(agentRunId);
+    let ok: boolean;
+    try {
+      ok = await orchestrator.pauseSubordinate(agentRunId);
+    } catch (error) {
+      if (isMutationOutcomeUnknownError(error)) {
+        await evictCompanyOrchestrator(id);
+        return c.json({
+          error: 'Agent pause outcome is unknown because the worker acknowledgement was lost.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
+      throw error;
+    }
     if (!ok) return c.json({ error: 'Agent is not running' }, 409);
     return c.json({ ok: true });
   });
@@ -62,12 +76,26 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
 
     const body = await parseJsonBody<{ message?: string; thinking?: boolean }>(c);
     const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
-    const ok = await orchestrator.reactivateSubordinate(
-      agentRunId,
-      body.message?.trim() || 'Continue de onde parou.',
-      undefined,
-      body.thinking,
-    );
+    let ok: boolean;
+    try {
+      ok = await orchestrator.reactivateSubordinate(
+        agentRunId,
+        body.message?.trim() || 'Continue de onde parou.',
+        undefined,
+        body.thinking,
+      );
+    } catch (error) {
+      if (isMutationOutcomeUnknownError(error)) {
+        await evictCompanyOrchestrator(id);
+        return c.json({
+          error:
+            'Agent resume outcome is unknown because its worker acknowledgement ' +
+            'was lost; the continuation was not replayed.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
+      throw error;
+    }
     if (!ok) return c.json({ error: 'Agent is not in a resumable state' }, 409);
     return c.json({ ok: true });
   });
@@ -89,7 +117,20 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
 
     const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
-      try { await orchestrator.abortSubordinate(agentRunId); } catch { /* best-effort */ }
+      try {
+        await orchestrator.abortSubordinate(agentRunId);
+      } catch (error) {
+        // Before deleting the durable run row, fence the whole worker if the
+        // targeted abort was not acknowledged. This prevents an orphan runner
+        // from continuing to write against a row we are about to remove.
+        await evictCompanyOrchestrator(id);
+        if (!isMutationOutcomeUnknownError(error)) {
+          console.warn(
+            `[company/agents] abort ${agentRunId} failed; worker evicted before deletion:`,
+            error,
+          );
+        }
+      }
     }
     companyStore.deleteAgentRun(agentRunId);
     return c.json({ ok: true });

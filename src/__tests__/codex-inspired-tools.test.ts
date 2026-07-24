@@ -274,11 +274,7 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('in_progress');
   });
 
-  it('refuses with "stop loop" error after a 4th create in a tight burst of pivots', async () => {
-    // Threshold=3 inside the 90s window. Each create needs the prior goal
-    // completed first (an in_progress goal rejects a redundant create), but
-    // the burst counter still counts every create call and trips on the 4th —
-    // a backstop against rapid pivot-thrashing.
+  it('does not share the redundant-create burst quota across completed objectives', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
     _resetCreateBurstForKey(runner as unknown as object);
@@ -292,9 +288,21 @@ describe('goal — create / get / update', () => {
     expect(r1.isError).toBeFalsy();
     expect(r2.isError).toBeFalsy();
     expect(r3.isError).toBeFalsy();
-    expect(r4.isError).toBe(true);
-    expect(r4.content).toContain('stuck-loop');
-    expect(r4.content).toContain('EXECUTE');
+    expect(r4.isError).toBeFalsy();
+  });
+
+  it('escalates repeated create_goal calls against the same active objective', async () => {
+    const runner = new FakeRunner();
+    _resetGoalForKey(runner as unknown as object);
+    _resetCreateBurstForKey(runner as unknown as object);
+    await createGoal.handler({ goal: 'active objective' }, ctx(runner));
+    await createGoal.handler({ goal: 'rewrite 1' }, ctx(runner));
+    await createGoal.handler({ goal: 'rewrite 2' }, ctx(runner));
+    await createGoal.handler({ goal: 'rewrite 3' }, ctx(runner));
+    const repeated = await createGoal.handler({ goal: 'rewrite 4' }, ctx(runner));
+    expect(repeated.isError).toBe(true);
+    expect(repeated.content).toContain('same active goal');
+    expect(repeated.content).toContain('stuck-loop');
   });
 
   it('returns a quiet success message — no in-result nudge that would re-prime the model', async () => {
@@ -322,8 +330,9 @@ describe('goal — create / get / update', () => {
     await createGoal.handler({ goal: 'a1' }, ctx(r1));
     await createGoal.handler({ goal: 'a2' }, ctx(r1));
     await createGoal.handler({ goal: 'a3' }, ctx(r1));
-    const a4 = await createGoal.handler({ goal: 'a4' }, ctx(r1));
-    expect(a4.isError).toBe(true);
+    await createGoal.handler({ goal: 'a4' }, ctx(r1));
+    const a5 = await createGoal.handler({ goal: 'a5' }, ctx(r1));
+    expect(a5.isError).toBe(true);
     // r2 still has full quota.
     const b1 = await createGoal.handler({ goal: 'b1' }, ctx(r2));
     expect(b1.isError).toBeFalsy();

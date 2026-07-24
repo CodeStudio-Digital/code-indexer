@@ -17,9 +17,22 @@ describe('parseObligations', () => {
     });
     const obs = parseObligations(raw);
     expect(obs).toHaveLength(2);
-    expect(obs[0]).toMatchObject({ id: 'OB1', kind: 'behavior', mustHave: true });
+    expect(obs[0]).toMatchObject({ id: 'OB1', kind: 'behavior', mustHave: true, polarity: 'required' });
     // Unknown kind → behavior; non-boolean mustHave → false; missing id → generated.
     expect(obs[1]).toMatchObject({ id: 'OB2', kind: 'behavior', mustHave: false, evidenceHint: null });
+  });
+
+  it('parses an explicit forbidden polarity and defaults the rest to required', () => {
+    const raw = JSON.stringify({
+      obligations: [
+        { id: 'OB1', kind: 'behavior', text: 'do not touch the payment gateway', mustHave: true, polarity: 'forbidden' },
+        { id: 'OB2', kind: 'behavior', text: 'add the refund path', mustHave: true, polarity: 'weird' },
+      ],
+    });
+    const obs = parseObligations(raw);
+    expect(obs[0]).toMatchObject({ id: 'OB1', polarity: 'forbidden' });
+    // Unknown polarity → required (backward-compatible default).
+    expect(obs[1]).toMatchObject({ id: 'OB2', polarity: 'required' });
   });
 
   it('drops entries without text and tolerates fenced JSON', () => {
@@ -73,12 +86,19 @@ describe('IntentContractCompiler', () => {
 describe('formatContractSection', () => {
   it('renders id, kind, must-have flag and evidence hint', () => {
     const text = formatContractSection([
-      { id: 'OB1', kind: 'migration', text: 'add forward migration', evidenceHint: 'migrations/', mustHave: true },
-      { id: 'OB2', kind: 'behavior', text: 'nice to have', evidenceHint: null, mustHave: false },
+      { id: 'OB1', kind: 'migration', text: 'add forward migration', evidenceHint: 'migrations/', mustHave: true, polarity: 'required' },
+      { id: 'OB2', kind: 'behavior', text: 'nice to have', evidenceHint: null, mustHave: false, polarity: 'required' },
     ])!;
     expect(text).toContain('OB1 [migration] (must-have) add forward migration — evidence hint: migrations/');
     expect(text).toContain('OB2 [behavior] nice to have');
     expect(text).not.toContain('OB2 [behavior] (must-have)');
+  });
+
+  it('marks forbidden obligations distinctly for the reviewer', () => {
+    const text = formatContractSection([
+      { id: 'OB1', kind: 'behavior', text: 'do not modify auth', evidenceHint: null, mustHave: true, polarity: 'forbidden' },
+    ])!;
+    expect(text).toContain('OB1 [behavior] (forbidden) (must-have) do not modify auth');
   });
 
   it('returns null for an empty contract', () => {

@@ -20,6 +20,7 @@ function isLoopbackUrl(raw: string): boolean {
 
 export const previewOpenTool: CoderTool = {
   name: 'preview_open',
+  effectBoundary: 'control',
   description:
     'Open a DEDICATED preview window for the running app with DevTools (CDP) attached.\n' +
     'Lets you read its console/network, run JS, and screenshot it — a clean, isolated page (no interference).\n' +
@@ -88,6 +89,7 @@ export const previewOpenTool: CoderTool = {
 
 export const previewNavigateTool: CoderTool = {
   name: 'preview_navigate',
+  effectBoundary: 'control',
   description: 'Navigate the session preview window to a new loopback URL (same window, fresh page).',
   source: 'native',
   parameters: {
@@ -118,6 +120,7 @@ export const previewNavigateTool: CoderTool = {
 
 export const previewViewportTool: CoderTool = {
   name: 'preview_viewport',
+  effectBoundary: 'control',
   description:
     'Resize the preview window to a target viewport for responsive debugging — screenshots and layout then reflect this size. Use a `preset` (mobile/tablet/desktop/laptop/hd/fullhd) or custom width/height; WIDTH-based breakpoints react (mobile nav, stacking, overflow). Note: resizes the real window (clamped to your screen); it does not emulate touch or a mobile user-agent yet, so sites that switch purely on UA/touch may not.',
   source: 'native',
@@ -164,6 +167,7 @@ export const previewViewportTool: CoderTool = {
 
 export const previewCloseTool: CoderTool = {
   name: 'preview_close',
+  effectBoundary: 'control',
   description: "Close this session's preview window(s) and detach DevTools. Frees the window process.",
   source: 'native',
   parameters: { type: 'object', properties: {}, additionalProperties: false },

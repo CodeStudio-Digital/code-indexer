@@ -61,6 +61,136 @@ describe('ToolCallLedger', () => {
     expect(JSON.stringify(ledger.snapshot())).not.toContain('very-secret-value');
   });
 
+  it('keeps package validation scripts distinct and recognizes audit checks', () => {
+    const ledger = new ToolCallLedger();
+    const loc = ledger.record({
+      name: 'run_command',
+      args: { command: 'pnpm run check:loc -- --details' },
+      content: 'failed',
+      isError: true,
+    });
+    const env = ledger.record({
+      name: 'run_command',
+      args: { command: 'pnpm run audit:env:check' },
+      content: 'failed',
+      isError: true,
+    });
+    expect(loc.validationSignal).toBe('pnpm run check:loc');
+    expect(env.validationSignal).toBe('pnpm run audit:env:check');
+  });
+
+  it('correlates spawn recovery by a hashed opaque id across tools', () => {
+    const ledger = new ToolCallLedger();
+    const spawnId = 'spawn-private-control-id';
+    const failed = ledger.record({
+      name: 'spawn_agent',
+      args: { task: 'inspect streaming' },
+      content: 'partial',
+      isError: true,
+      structuredData: { kind: 'spawn_agent_result', status: 'partial', spawnId },
+    });
+    const recovered = ledger.record({
+      name: 'resume_agent',
+      args: { spawn_id: spawnId },
+      content: 'completed',
+      isError: false,
+      structuredData: { kind: 'resume_agent_result', status: 'completed', spawnId },
+    });
+    const unrelated = ledger.record({
+      name: 'resume_agent',
+      args: { spawn_id: 'different-spawn' },
+      content: 'completed',
+      isError: false,
+    });
+
+    expect(failed.recoveryOperationId).toBe(recovered.recoveryOperationId);
+    expect(unrelated.recoveryOperationId).not.toBe(failed.recoveryOperationId);
+    expect(JSON.stringify(ledger.snapshot())).not.toContain(spawnId);
+  });
+
+  it('ignores recovery-looking fields outside the allowlisted result shape', () => {
+    const ledger = new ToolCallLedger();
+    const entry = ledger.record({
+      name: 'spawn_agent',
+      args: { task: 'inspect' },
+      content: 'plugin-shaped result',
+      isError: true,
+      structuredData: {
+        kind: 'third_party_payload',
+        spawnId: 'must-not-correlate',
+      },
+    });
+    expect(entry.recoveryOperationId).toBeUndefined();
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('must-not-correlate');
+  });
+
+  it('correlates a resumed workflow without retaining its raw workflow id', () => {
+    const ledger = new ToolCallLedger();
+    const workflowId = 'wf_private_control_id';
+    const failed = ledger.record({
+      name: 'workflow',
+      args: { steps: [{ id: 'one' }] },
+      content: 'failed',
+      isError: true,
+      structuredData: { kind: 'workflow_result', status: 'failed', workflowId },
+    });
+    const recovered = ledger.record({
+      name: 'workflow',
+      args: { resume_workflow_id: workflowId, retry_failed: true },
+      content: 'completed',
+      isError: false,
+    });
+
+    expect(failed.recoveryOperationId).toBe(recovered.recoveryOperationId);
+    expect(JSON.stringify(ledger.snapshot())).not.toContain(workflowId);
+  });
+
+  it('records only the selected structured out-of-scope validation decision', () => {
+    const ledger = new ToolCallLedger();
+    const args = {
+      question: 'May failed baseline validation be treated as out of scope?',
+      options: [
+        {
+          label: 'Complete — drift is out of scope',
+          value: 'complete',
+          goal_lifecycle_resolution: 'accept_out_of_scope_validation',
+        },
+        { label: 'Keep working', value: 'retry' },
+      ],
+    };
+    expect(ledger.record({
+      name: 'ask_user',
+      args,
+      content: 'User answered: complete',
+      isError: false,
+    }).goalLifecycleResolution).toBe('accept_out_of_scope_validation');
+    expect(ledger.record({
+      name: 'ask_user',
+      args,
+      content: 'User answered: retry',
+      isError: false,
+    }).goalLifecycleResolution).toBeUndefined();
+  });
+
+  it('recognizes the released complete_out_of_scope option without retaining its prose', () => {
+    const ledger = new ToolCallLedger();
+    const entry = ledger.record({
+      name: 'ask_user',
+      args: {
+        question: 'Como proceder com o drift fora de escopo?',
+        options: [
+          { label: 'Concluir — drift é fora de escopo', value: 'complete_out_of_scope' },
+          { label: 'Continuar', value: 'continue' },
+        ],
+      },
+      content: 'User answered: complete_out_of_scope',
+      isError: false,
+    });
+    expect(entry.goalLifecycleResolution).toBe('accept_out_of_scope_validation');
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('Como proceder');
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('complete_out_of_scope');
+  });
+
   it('refuses only after repeated identical no-progress results', () => {
     const ledger = new ToolCallLedger();
     const input = { name: 'search', args: { query: 'same' }, content: 'unchanged', isError: false };

@@ -247,14 +247,19 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     const handleFiles = useCallback(async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       try {
-        const arr = await filesToAttachments(files, attachments);
+        const arr = await filesToAttachments(files, attachments, {
+          // Desktop coder sessions can authorize an exact local file and let
+          // the agent read it lazily. Browser/company surfaces retain the
+          // portable inline path because they have no host filesystem grant.
+          preferFileReferences: props.sessionId != null,
+        });
         setAttachments((prev) => [...prev, ...arr]);
       } catch (error) {
         toast.error(t('composer.attachmentRejected', { defaultValue: 'Attachment rejected' }), {
           description: error instanceof Error ? error.message : String(error),
         });
       }
-    }, [attachments, t]);
+    }, [attachments, props.sessionId, t]);
 
     const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled: streaming });
 

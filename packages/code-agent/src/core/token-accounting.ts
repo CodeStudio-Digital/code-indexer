@@ -94,8 +94,10 @@ export function estimateBlockTokens(block: ContentBlock): number {
       return n + 1000;
     case 'document': {
       const text = (block as { text?: string }).text ?? '';
+      const path = (block as { path?: string }).path ?? '';
       const base64 = (block as { base64?: string }).base64 ?? '';
       if (text) return n + estimateText(text);
+      if (path) return n + estimateText(path) + 40;
       // Assume PDFs ≈ 0.3 tokens per base64 byte (Anthropic average).
       return n + Math.ceil(base64.length * 0.3);
     }

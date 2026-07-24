@@ -21,7 +21,9 @@ function stubDb(toolCalls: Row[], editedFiles: Array<{ file_path: string; applie
       }
       return {
         all: (_sessionId: number, after: string) =>
-          editedFiles.filter((e) => e.applied_at > after).map((e) => ({ file_path: e.file_path })),
+          editedFiles
+            .filter((e) => e.applied_at >= after)
+            .map((e) => ({ file_path: e.file_path, applied_at: e.applied_at })),
       };
     },
   } as unknown as Parameters<typeof buildVerifyEvidence>[0];
@@ -62,6 +64,18 @@ describe('buildVerifyEvidence', () => {
     expect(e.filesEditedAfter).toEqual(['src/after.ts']);
     expect(formatVerifyEvidence(e)).toContain('STALE');
     expect(formatVerifyEvidence(e)).toContain('src/after.ts');
+  });
+
+  it('reports same-second edits as ambiguous instead of silently fresh', () => {
+    const db = stubDb(
+      [call('pnpm test', '2026-07-14 10:00:00', 'exit=0')],
+      [{ file_path: 'src/same-second.ts', applied_at: '2026-07-14 10:00:00' }],
+    );
+    const e = buildVerifyEvidence(db, 1)!;
+    expect(e.filesEditedAfter).toEqual([]);
+    expect(e.filesEditedAtSameTime).toEqual(['src/same-second.ts']);
+    expect(formatVerifyEvidence(e)).toContain('AMBIGUOUS');
+    expect(formatVerifyEvidence(e)).toContain('rerun verification');
   });
 
   it('declares the session unverified when no verify command ran', () => {

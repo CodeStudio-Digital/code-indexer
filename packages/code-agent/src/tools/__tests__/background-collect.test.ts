@@ -78,6 +78,11 @@ describe('spawn_agent background + collect_agents', () => {
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).toContain('background');
     expect(String(r.content)).toMatch(/job=job-/);
+    expect(r.structuredData).toMatchObject({
+      kind: 'spawn_agent_background_result',
+      status: 'running',
+      agentCount: 1,
+    });
     const start = emit.mock.calls.find((c) => c[0] === 'agents_group_start');
     expect(start?.[1].background).toBe(true);
     expect(start?.[1].jobId).toBeTruthy();
@@ -89,12 +94,23 @@ describe('spawn_agent background + collect_agents', () => {
     const jobId = jobIdFrom(String(spawn.content));
 
     // Let the fire-and-forget job settle.
-    await getSubagentJobManager().get(SID, jobId)!.settled;
+    const manager = getSubagentJobManager();
+    await manager.get(SID, jobId)!.settled;
+    expect(manager.hasUncollectedTerminalJobs(SID)).toBe(true);
 
     const collect = buildCollectAgentsTool(deps);
     const r = await collect.handler({ job_id: jobId, wait: true }, ctx);
     expect(String(r.content)).toContain('FOUND: the thing');
     expect(String(r.content)).toContain('### Agent 1: scout');
+    expect(r.structuredData).toMatchObject({
+      kind: 'collect_agents_result',
+      status: 'completed',
+      jobId,
+      completedCount: 1,
+      partialCount: 0,
+      failedCount: 0,
+    });
+    expect(manager.hasUncollectedTerminalJobs(SID)).toBe(false);
     // Usage accounted exactly once, at settle.
     expect(bump).toHaveBeenCalledTimes(1);
     expect(bump).toHaveBeenCalledWith(SID, usage);
@@ -118,6 +134,48 @@ describe('spawn_agent background + collect_agents', () => {
       partialCount: 1,
       failedCount: 0,
       resumableCount: 1,
+    });
+
+    const collect = buildCollectAgentsTool(deps);
+    const result = await collect.handler({ job_id: jobId }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({
+      code: 'COLLECT_AGENTS_PARTIAL',
+      retryable: true,
+    });
+    expect(result.structuredData).toMatchObject({
+      kind: 'collect_agents_result',
+      status: 'partial',
+      jobId,
+      spawnId: job.groupId,
+      completedCount: 0,
+      partialCount: 1,
+      failedCount: 0,
+      stillFailed: 1,
+      resumableCount: 1,
+    });
+  });
+
+  it('returns a terminal error when every background agent failed', async () => {
+    mockResult('error');
+    const spawn = await runBackgroundEphemeral(deps, [agent('scout')], ctx);
+    const jobId = jobIdFrom(String(spawn.content));
+    const job = getSubagentJobManager().get(SID, jobId)!;
+    await job.settled;
+
+    const collect = buildCollectAgentsTool(deps);
+    const result = await collect.handler({ job_id: jobId }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({
+      code: 'COLLECT_AGENTS_FAILED',
+    });
+    expect(result.structuredData).toMatchObject({
+      kind: 'collect_agents_result',
+      status: 'failed',
+      completedCount: 0,
+      partialCount: 0,
+      failedCount: 1,
+      stillFailed: 1,
     });
   });
 

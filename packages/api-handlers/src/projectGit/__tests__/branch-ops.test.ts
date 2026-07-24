@@ -49,7 +49,7 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
 
 function makeHandlers(root: string) {
   return createProjectGitHandlers({
-    db: { getProject: (id: number) => (id === 1 ? { id, name: 'Repo', root_path: root } : null) },
+    db: { getProjectRootPath: (id: number) => (id === 1 ? root : undefined) },
   } as never);
 }
 

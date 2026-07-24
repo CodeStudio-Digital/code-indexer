@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { getDB, promptStdin } from '../helpers.js';
+import { wireAgentToolOutput } from './agent-output.js';
 
 export function register(program: Command): void {
   program.command('agent [task...]')
@@ -182,17 +183,22 @@ export function register(program: Command): void {
         const short = args.length > 120 ? args.slice(0, 120) + '…' : args;
         process.stdout.write(`\n  ⚙ ${name} ${short}\n`);
       });
-      handle.runner.on('tool_call_result', (_id, _name, result, ms) => {
-        const prefix = result.isError ? '  ✖' : '  ✓';
-        const preview = result.content.split('\n').slice(0, 3).join('\n');
-        process.stdout.write(`${prefix} (${ms}ms) ${preview.length > 200 ? preview.slice(0, 200) + '…' : preview}\n\n`);
-      });
-      handle.runner.on('done', (reason, error) => {
-        process.stdout.write(`\n\n[done: ${reason}${error ? ' — ' + error.message : ''}]\n`);
-      });
+      wireAgentToolOutput(handle.runner, (chunk) => process.stdout.write(chunk));
 
-      const result = await handle.done;
-      console.log(`tokens: ${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
-      process.exit(0);
+      try {
+        // `runner.done` is intentionally earlier than transcript durability.
+        // `handle.done` resolves only after the final turn (including goal
+        // mutations) has committed and runtime cleanup has completed.
+        const result = await handle.done;
+        process.stdout.write(
+          `\n\n[done: ${result.reason}${result.error ? ` — ${result.error}` : ''}]\n`,
+        );
+        console.log(`tokens: ${result.usage.input_tokens} in / ${result.usage.output_tokens} out`);
+        process.exit(0);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stdout.write(`\n\n[done: error — ${message}]\n`);
+        process.exit(1);
+      }
     });
 }

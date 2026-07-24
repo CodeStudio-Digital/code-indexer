@@ -14,9 +14,10 @@ import { applyTuningPragmas } from '../db/pragmas.js';
 export interface OpenProjectDbOpts {
   readonly?: boolean;
   /**
-   * Disable WAL auto-checkpoint so the pool can checkpoint deterministically
-   * (main pool TRUNCATEs on idle/evict; workers only PASSIVE). Default true for
-   * writable handles. Ignored for readonly handles.
+   * Disable WAL auto-checkpoint so checkpoint ownership stays deterministic
+   * (main-pool eviction delegates PASSIVE work to the maintenance worker;
+   * controlled shutdown may TRUNCATE). Default true for writable handles.
+   * Ignored for readonly handles.
    */
   manualCheckpoint?: boolean;
 }

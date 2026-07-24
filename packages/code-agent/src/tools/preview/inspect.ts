@@ -102,6 +102,7 @@ export const previewNetworkTool: CoderTool = {
 
 export const previewEvalTool: CoderTool = {
   name: 'preview_eval',
+  effectBoundary: 'control',
   description:
     'Run JavaScript in the preview page context and return the result (Runtime.evaluate). Use for service/endpoint calls with the app\'s own cookies/origin (e.g. `await fetch("/api/me").then(r=>r.status)`), reading state, or driving the UI.',
   source: 'native',

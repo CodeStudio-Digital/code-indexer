@@ -30,7 +30,10 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, notFound } from '../_helpers.js';
 import { cleanupSessionPersistence, getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { sandboxArchivePath } from '@mcp/company/services/SandboxService.js';
-import { getCompanyOrchestrator, deleteCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import {
+  evictCompanyOrchestrator,
+  getCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 
 /**
  * Names a dependency cache volume mirroring the convention used by
@@ -45,16 +48,22 @@ export function nodeModulesVolumeName(sessionId: number | string, serviceId?: st
 
 /** Stop the worker-owned Company runtime before its durable rows disappear. */
 export async function stopCompanySessionRuntime(sessionId: number): Promise<void> {
-  try {
-    const orchestrator = getCompanyOrchestrator(sessionId);
-    if (orchestrator) {
-      orchestrator.abortAll();
-      deleteCompanyOrchestrator(sessionId);
+  const orchestrator = getCompanyOrchestrator(sessionId);
+  if (orchestrator) {
+    try {
+      await orchestrator.abortAll();
+    } catch (e) {
+      console.warn(
+        `[company] abort orchestrator ${sessionId} during delete failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    } finally {
+      // Deletion must fence the worker even when the abort RPC itself failed
+      // or lost its acknowledgement. Otherwise it could keep writing after
+      // the durable company rows below have been removed.
+      await evictCompanyOrchestrator(sessionId);
     }
-  } catch (e) {
-    console.warn(
-      `[company] abort orchestrator ${sessionId} during delete failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
   }
   try {
     await getSandboxManager().destroy(String(sessionId), 'session-deleted');

@@ -195,6 +195,13 @@ describe('parsePreflightOutput', () => {
     expect(seed?.pinTools).toEqual(['edit_file']);
   });
 
+  it('accepts and canonicalizes a task_kind-only seed', () => {
+    expect(parsePreflightOutput(
+      JSON.stringify({ task_kind: '  BugFix  ' }),
+      PARSE_CTX,
+    )).toEqual({ taskKind: 'bugfix' });
+  });
+
   it('returns null for garbage, arrays, and empty-after-validation outputs', () => {
     expect(parsePreflightOutput('not json at all', PARSE_CTX)).toBeNull();
     expect(parsePreflightOutput('[1,2,3]', PARSE_CTX)).toBeNull();

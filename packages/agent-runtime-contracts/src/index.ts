@@ -8,3 +8,4 @@ export * from './policy.js';
 export * from './ultra.js';
 export * from './artifacts.js';
 export * from './events.js';
+export * from './coder-terminal.js';

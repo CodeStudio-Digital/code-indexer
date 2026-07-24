@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest';
 import {
   parseVerdictBlock,
   buildVerifyInitialMessage,
+  resolveGoalVerificationScope,
   resolveVerifyMaxTurns,
+  shouldEnableGoalCompletionVerifier,
 } from '@mcp/code-agent/tools/verify-completion-subagent.js';
 
 describe('parseVerdictBlock', () => {
@@ -70,16 +72,28 @@ describe('buildVerifyInitialMessage', () => {
     const msg = buildVerifyInitialMessage({ goal: 'g', diff: big, plan: 'p', testSummary: 't' });
     expect(msg).toContain('[diff truncated at 80000 chars');
     expect(msg).toContain('# Plan\np');
-    expect(msg).toContain('# Test summary\nt');
+    expect(msg).toContain('# Recorded verification evidence\nt');
   });
 
-  it('tells the verifier to run git_diff itself when no diff is provided', () => {
+  it('surfaces stale verification evidence as factual input, not an executor claim', () => {
+    const msg = buildVerifyInitialMessage({
+      goal: 'g',
+      diff: 'diff --git a b',
+      testSummary: 'Verification is stale or failed; it does not cover the latest recorded write.',
+    });
+    expect(msg).toContain('# Recorded verification evidence');
+    expect(msg).toContain('does not cover the latest recorded write');
+    expect(msg).not.toContain('# Test summary');
+  });
+
+  it('keeps no-diff goals verifiable from project state and recorded evidence', () => {
     const msg = buildVerifyInitialMessage({
       goal: 'g',
       diff: '',
       files: ['src/owned.ts', 'test/owned.test.ts'],
     });
-    expect(msg).toContain('run `git_diff` yourself');
+    expect(msg).toContain('this may be a no-diff goal');
+    expect(msg).toContain('run `git_diff` if pending changes are relevant');
     expect(msg).toContain('# Session-owned file scope');
     expect(msg).toContain('`src/owned.ts`');
     expect(msg).toContain('unrelated concurrent changes');
@@ -87,11 +101,49 @@ describe('buildVerifyInitialMessage', () => {
   });
 });
 
+describe('goal completion verifier policy', () => {
+  it('is baseline for top-level runs with an explicit kill switch', () => {
+    expect(shouldEnableGoalCompletionVerifier(undefined, false)).toBe(true);
+    expect(shouldEnableGoalCompletionVerifier('1', false)).toBe(true);
+    expect(shouldEnableGoalCompletionVerifier('0', false)).toBe(false);
+    expect(shouldEnableGoalCompletionVerifier(undefined, true)).toBe(false);
+  });
+
+  it('keeps a substantive persisted goal eligible when no files changed', () => {
+    expect(resolveGoalVerificationScope({
+      goal: { text: '  Validate the current architecture  ' },
+      filesChanged: [],
+    })).toEqual({
+      goal: 'Validate the current architecture',
+      files: [],
+    });
+  });
+
+  it('does not treat missing or blank goal state as verifiable work', () => {
+    expect(resolveGoalVerificationScope(null)).toBeNull();
+    expect(resolveGoalVerificationScope({ goal: { text: '   ' }, filesChanged: [] })).toBeNull();
+  });
+
+  it('uses a staged create_goal from the current batch before DB persistence', () => {
+    expect(resolveGoalVerificationScope(
+      { goal: null, filesChanged: ['src/goal.ts'] },
+      { text: '  Finish the atomic lifecycle  ' },
+    )).toEqual({
+      goal: 'Finish the atomic lifecycle',
+      files: ['src/goal.ts'],
+    });
+  });
+});
+
 describe('resolveVerifyMaxTurns', () => {
-  it('bounds automatic Ultra verification while preserving explicit overrides', () => {
+  it('uses a finite baseline outside Ultra and preserves safe explicit overrides', () => {
+    expect(resolveVerifyMaxTurns(undefined)).toBe(12);
     expect(resolveVerifyMaxTurns(undefined, 12)).toBe(12);
     expect(resolveVerifyMaxTurns('5', 12)).toBe(5);
-    expect(resolveVerifyMaxTurns('0', 12)).toBe(0);
+    expect(resolveVerifyMaxTurns('0', 12)).toBe(12);
+    expect(resolveVerifyMaxTurns('-1', 12)).toBe(12);
     expect(resolveVerifyMaxTurns('invalid', 12)).toBe(12);
+    expect(resolveVerifyMaxTurns('999', 12)).toBe(50);
+    expect(resolveVerifyMaxTurns(undefined, 0)).toBe(12);
   });
 });

@@ -189,6 +189,7 @@ export interface ContentBlock {
   content?: string;
   is_error?: boolean;
   mediaType?: string;
+  path?: string;
   base64?: string;
   _truncated?: boolean;
   _originalLength?: number;

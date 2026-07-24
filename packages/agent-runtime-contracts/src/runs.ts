@@ -101,6 +101,31 @@ export interface AgentRun {
   version: number;
 }
 
+/**
+ * Mandatory resolution fields of the target contract
+ * (14-target-control-plane-contracts.md §6). A shadow AgentRun may exist
+ * before resolution; a ResolvedAgentRun carries every resolved reference.
+ */
+export interface AgentRunResolution {
+  effectiveProvider: string;
+  effectiveModel: string;
+  capabilitySetRef: string;
+  environmentId: EnvironmentId;
+  presetResolutionRef: string;
+  policySnapshotRef: string;
+}
+
+export type ResolvedAgentRun = AgentRun & AgentRunResolution;
+
+export function isResolvedAgentRun(run: AgentRun): run is ResolvedAgentRun {
+  return run.effectiveProvider !== undefined
+    && run.effectiveModel !== undefined
+    && run.capabilitySetRef !== undefined
+    && run.environmentId !== undefined
+    && run.presetResolutionRef !== undefined
+    && run.policySnapshotRef !== undefined;
+}
+
 export interface ExecutorLease {
   ownerId: string;
   fencingEpoch: number;

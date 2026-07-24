@@ -72,18 +72,6 @@ export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
     }, options);
     return;
   }
-
-  if (source.event === 'quality_watchdog_alert') {
-    const verdict = readString(data, 'verdict');
-    if (verdict !== 'warn' && verdict !== 'flagged' && verdict !== 'error') return;
-    pushNotification(source.sessionId, {
-      kind: 'quality-alert',
-      verdict,
-      suspectTool: readString(data, 'suspectTool') ?? '',
-      reason: readString(data, 'reason') ?? '',
-      turn: readNumber(data, 'turn') ?? 0,
-    }, options);
-  }
 }
 
 export function resetRuntimeNotificationStateForTests(): void {

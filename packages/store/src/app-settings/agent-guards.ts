@@ -105,6 +105,39 @@ export const AGENT_GUARD_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
+    key: 'CODER_TRANSIENT_RETRY_MAX_PER_TURN',
+    label: 'Transient retries per provider call',
+    description:
+      'Max runner retries for one logical provider call after 429/5xx. OpenRouter SDK retries are disabled, so this is the single retry authority. Default 3.',
+    type: 'int',
+    category: 'agent',
+    default: '3',
+    min: 0,
+    advanced: true,
+  },
+  {
+    key: 'CODER_CACHE_MISS_GUARD_PROMPT_TOKENS',
+    label: 'Cache-miss guard — prompt tokens',
+    description:
+      'Minimum OpenRouter prompt size eligible for the consecutive cache-miss cost guard. Default 100000.',
+    type: 'int',
+    category: 'agent',
+    default: '100000',
+    min: 1,
+    advanced: true,
+  },
+  {
+    key: 'CODER_CACHE_MISS_GUARD_MAX',
+    label: 'Cache-miss guard — consecutive misses',
+    description:
+      'Stop and alert after this many consecutive explicit OpenRouter cache misses above the prompt-token threshold. Default 2.',
+    type: 'int',
+    category: 'agent',
+    default: '2',
+    min: 1,
+    advanced: true,
+  },
+  {
     key: 'CODER_RECOVERY_FALLBACK_MAX',
     label: 'Recovery cap — provider fallbacks',
     description: 'Max provider-fallback switches before giving up. Default 5.',

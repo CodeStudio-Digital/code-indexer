@@ -1,8 +1,10 @@
 import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import * as path from 'node:path';
-import ignore, { type Ignore } from 'ignore';
-import { getProjectIgnoreRulesAsync, projectIgnorePatterns } from '@mcp/shared/utils/project-ignore.js';
+import {
+  getProjectIgnoreRulesAsync,
+  shouldIgnoreProjectPath,
+} from '@mcp/shared/utils/project-ignore.js';
 
 export interface ProjectTreeEntry {
   name: string;
@@ -16,83 +18,9 @@ export interface ProjectSearchResult {
   type: 'file' | 'dir';
 }
 
-interface IgnoreCacheEntry {
-  ig: Ignore;
-  loadedAt: number;
-  gitignoreMtime: number | null;
-  mcpignoreMtime: number | null;
-}
-
-const IGNORE_TTL_MS = 30_000;
-const ALWAYS_IGNORE = ['.git/', '.mcp-indexer/', 'node_modules/'];
-
-const cache = new Map<string, IgnoreCacheEntry>();
-
 interface ClassifiedEntry {
   type: 'file' | 'dir';
   size: number | null;
-}
-
-async function statMtime(p: string): Promise<number | null> {
-  try {
-    const st = await fs.stat(p);
-    return st.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-async function readIfExists(p: string): Promise<string | null> {
-  try {
-    return await fs.readFile(p, 'utf-8');
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Load (and cache) the merged .gitignore + .mcpignore matcher for a project
- * root. Cache invalidates after TTL OR when either ignore file's mtime changes.
- * Always includes baseline rules (`.git/`, `node_modules/`) even if both
- * files are missing.
- */
-export async function loadIgnore(rootAbs: string): Promise<Ignore> {
-  const now = Date.now();
-  const cached = cache.get(rootAbs);
-  const gitignorePath = path.join(rootAbs, '.gitignore');
-  const mcpignorePath = path.join(rootAbs, '.mcpignore');
-  const [gitMtime, mcpMtime] = await Promise.all([
-    statMtime(gitignorePath),
-    statMtime(mcpignorePath),
-  ]);
-
-  if (
-    cached &&
-    now - cached.loadedAt < IGNORE_TTL_MS &&
-    cached.gitignoreMtime === gitMtime &&
-    cached.mcpignoreMtime === mcpMtime
-  ) {
-    return cached.ig;
-  }
-
-  const [gitContent, mcpContent] = await Promise.all([
-    readIfExists(gitignorePath),
-    readIfExists(mcpignorePath),
-  ]);
-
-  const ig = ignore();
-  ig.add(ALWAYS_IGNORE);
-  ig.add(projectIgnorePatterns(await getProjectIgnoreRulesAsync(rootAbs)));
-  if (gitContent) ig.add(gitContent);
-  if (mcpContent) ig.add(mcpContent);
-
-  cache.set(rootAbs, {
-    ig,
-    loadedAt: now,
-    gitignoreMtime: gitMtime,
-    mcpignoreMtime: mcpMtime,
-  });
-  return ig;
 }
 
 function toPosix(rel: string): string {
@@ -139,26 +67,24 @@ async function classifyEntry(absDir: string, entry: Dirent): Promise<ClassifiedE
 }
 
 /**
- * One-level listing of `relDir` under `rootAbs`, filtered by .gitignore +
- * .mcpignore. Hidden dotfiles (other than the ignore files themselves) are
- * also dropped to match common file-tree expectations.
+ * One-level listing of `relDir` under `rootAbs`, using the same project-tree
+ * ignore policy as the editor Navigation. Git-ignored files remain visible;
+ * generated/dependency trees such as `.git`, `node_modules`, and Unity Library
+ * remain excluded.
  */
 export async function listDirFiltered(
   rootAbs: string,
   relDir: string,
 ): Promise<ProjectTreeEntry[]> {
-  const ig = await loadIgnore(rootAbs);
+  const projectIgnore = await getProjectIgnoreRulesAsync(rootAbs);
   const absDir = path.resolve(rootAbs, relDir === '.' ? '' : relDir);
   const entries = await fs.readdir(absDir, { withFileTypes: true });
   const out: ProjectTreeEntry[] = [];
   for (const e of entries) {
-    if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
     const classified = await classifyEntry(absDir, e);
     if (!classified) continue;
     const relPath = toPosix(relDir === '.' ? e.name : path.join(relDir, e.name));
-    // `ignore` package needs a trailing slash for directories to match dir rules.
-    const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
-    if (ig.ignores(probe)) continue;
+    if (shouldIgnoreProjectPath(projectIgnore, relPath, classified.type === 'dir')) continue;
     out.push({
       name: e.name,
       path: relPath,
@@ -196,7 +122,7 @@ export async function listFilesRecursive(
 ): Promise<{ files: string[]; truncated: boolean }> {
   const maxFiles = opts.maxFiles ?? 500;
   const maxEntries = opts.maxEntries ?? 5000;
-  const ig = await loadIgnore(rootAbs);
+  const projectIgnore = await getProjectIgnoreRulesAsync(rootAbs);
   const files: string[] = [];
   let visited = 0;
   let truncated = false;
@@ -223,12 +149,10 @@ export async function listFilesRecursive(
         truncated = true;
         return;
       }
-      if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
       const classified = await classifyEntry(absDir, e);
       if (!classified) continue;
       const relPath = toPosix(dirRel === '.' ? e.name : path.join(dirRel, e.name));
-      const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
-      if (ig.ignores(probe)) continue;
+      if (shouldIgnoreProjectPath(projectIgnore, relPath, classified.type === 'dir')) continue;
       if (classified.type === 'file') {
         files.push(relPath);
         if (files.length >= maxFiles) {
@@ -260,7 +184,7 @@ export async function searchFiles(
   const maxEntries = opts.maxEntries ?? 5000;
   const maxDepth = opts.maxDepth ?? 8;
   const needle = query.toLowerCase();
-  const ig = await loadIgnore(rootAbs);
+  const projectIgnore = await getProjectIgnoreRulesAsync(rootAbs);
 
   const results: ProjectSearchResult[] = [];
   let visited = 0;
@@ -289,12 +213,10 @@ export async function searchFiles(
         truncated = true;
         return;
       }
-      if (e.name.startsWith('.') && e.name !== '.gitignore' && e.name !== '.mcpignore') continue;
       const classified = await classifyEntry(absDir, e);
       if (!classified) continue;
       const relPath = toPosix(relDir === '.' ? e.name : path.join(relDir, e.name));
-      const probe = classified.type === 'dir' ? `${relPath}/` : relPath;
-      if (ig.ignores(probe)) continue;
+      if (shouldIgnoreProjectPath(projectIgnore, relPath, classified.type === 'dir')) continue;
       if (e.name.toLowerCase().includes(needle) || relPath.toLowerCase().includes(needle)) {
         results.push({ path: relPath, type: classified.type });
         if (results.length >= maxResults) {

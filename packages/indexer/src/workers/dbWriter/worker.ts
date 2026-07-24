@@ -4,6 +4,7 @@ import type DatabaseConstructor from 'better-sqlite3';
 import type { DbWriteReq, DbWriteRes, DbWriterWorkerData, PersistAssistantTurnPayload } from '@mcp/indexer/workers/dbWriter/protocol.js';
 import { classifyToolRefusal } from '@mcp/code-agent/sessions/store/tool-refusal.js';
 import { classifyToolError } from '@mcp/code-agent/sessions/store/tool-error-class.js';
+import { applyGoalMutations } from '@mcp/code-agent/sessions/store/goal-mutations.js';
 import { record as recordTurnTelemetry } from '@mcp/code-agent/sessions/store/telemetry-record.js';
 
 if (!parentPort) {
@@ -132,6 +133,12 @@ const persistAssistantTurnTx = db.transaction((p: PersistAssistantTurnPayload) =
   // Nested (code_exec) rows: audit-only — same table, parent linkage set,
   // EXCLUDED from the paired tool message synthesis below.
   for (const tc of p.nested_tool_calls ?? []) runInsertTool(tc);
+  applyGoalMutations(
+    db,
+    p.session_id,
+    [...p.tool_calls, ...(p.nested_tool_calls ?? [])],
+    p.goal_mutations ?? [],
+  );
   // Paired tool-role message (mirrors store/messages.ts persistAssistantTurn):
   // the dashboard derives tool status from the presence of a matching
   // tool_result block, so this must land atomically with the assistant turn.

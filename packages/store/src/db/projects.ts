@@ -33,6 +33,13 @@ export function get(db: DB, id: number): Project | undefined {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
 }
 
+/** Catalog-only lookup for callers that need no per-project overlays. */
+export function getRootPath(db: DB, id: number): string | undefined {
+  return (db.prepare('SELECT root_path FROM projects WHERE id = ?').get(id) as
+    | { root_path: string }
+    | undefined)?.root_path;
+}
+
 export function getByName(db: DB, name: string): Project | undefined {
   return db.prepare('SELECT * FROM projects WHERE name = ?').get(name) as Project | undefined;
 }

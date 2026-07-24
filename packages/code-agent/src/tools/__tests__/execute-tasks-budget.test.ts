@@ -29,14 +29,14 @@ function task(overrides: Partial<CoderTask> = {}): CoderTask {
   };
 }
 
-function makeStubRunner(answer: string) {
+function makeStubRunner(answer: string | null) {
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   const pending = new Map<string, (v: string) => void>();
   return {
     emit: vi.fn((event: string, payload: unknown) => {
       const list = listeners[event] ?? [];
       for (const l of list) l(payload);
-      if (event === 'budget_request') {
+      if (event === 'budget_request' && answer !== null) {
         const askId = (payload as { ask_id: string }).ask_id;
         queueMicrotask(() => {
           const r = pending.get(askId);
@@ -188,5 +188,24 @@ describe('execute_tasks budget integration', () => {
     // estimatePerTask=5000 > cap=4000 → gate fires, user extends to 6000,
     // task proceeds.
     expect(runSubagent).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails safe instead of waiting forever when no budget UI answers', async () => {
+    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '50');
+    vi.stubEnv('CODER_TASKS_BUDGET_RESPONSE_TIMEOUT_MS', '5');
+    const runner = makeStubRunner(null);
+    const { tool, ctx } = setupCtx(
+      [task({ id: 'tsk_1' }), task({ id: 'tsk_2' })],
+      runner,
+    );
+
+    await tool.handler({}, ctx);
+
+    expect(runSubagent).not.toHaveBeenCalled();
+    expect(runner.isWaitingForInput()).toBe(false);
+    const skipped = runner.emit.mock.calls.filter(
+      (c) => c[0] === 'task_finished' && (c[1] as { status: string }).status === 'skipped',
+    );
+    expect(skipped).toHaveLength(2);
   });
 });

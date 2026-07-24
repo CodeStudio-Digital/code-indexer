@@ -1,13 +1,16 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { ControlPlaneStore } from '@mcp/store/control-plane/index.js';
+import { ControlPlaneDivergenceStore, ControlPlaneStore } from '@mcp/store/control-plane/index.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
 import {
   canResolveDbMaintenanceWorker,
+  recoverSemanticMutationFences,
+  scheduleProjectDbCheckpoint,
   startDbMaintenanceWorker,
   stopDbMaintenanceWorker,
 } from '../sse/dbMaintenanceSingleton.js';
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { createProjectFeatureStoreResolver } from './project-feature-store.js';
+import { SqliteWriteQueue, isSqliteBusyError } from './sqlite-write-queue.js';
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 import { projectMemoryNamespace } from '@mcp/shared/vector-namespace.js';
@@ -108,13 +111,7 @@ import {
   UrlFetcher,
 } from '@mcp/services/services/docs/index.js';
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
-import { QualityClassificationStore } from '@mcp/store/quality-classification-store.js';
-import { QualityInterventionStore } from '@mcp/store/quality-intervention-store.js';
 import { CounterfactualLogStore } from '@mcp/store/counterfactual-log-store.js';
-import {
-  QualityClassifierPipeline,
-  createQualityRuntime,
-} from '@mcp/services/quality/index.js';
 import {
   ShadowTrafficRunner,
   FeedbackCollector,
@@ -294,8 +291,13 @@ export interface ProjectServiceDeps {
 
 export interface CoderDeps {
   sessionStore: SessionStore;
-  /** Default-off durable command/run ledger used only by the control-plane shadow. */
+  /**
+   * Durable control-plane store. Its command ledger is the always-on
+   * idempotency authority; AgentRun and runtime-journal projections are
+   * independently feature-gated.
+   */
   controlPlaneStore: ControlPlaneStore;
+  controlPlaneDivergenceStore: ControlPlaneDivergenceStore;
   /**
    * Resolver for OAuth bearer tokens of external MCP servers. Set by
    * `server.ts` after composing the MCP client auth bundle; `runCoder`
@@ -459,28 +461,10 @@ export interface PipelineDeps {
    */
   roleEmbeddingStore: InMemoryRoleEmbeddingStore;
   /**
-   * Persistent store of quality verdicts (`quality_classifications`).
-   * Read by the admin UI; written by `QualityClassifierPipeline`.
-   */
-  qualityClassificationStore: QualityClassificationStore;
-  /**
-   * Persistent store of quality interventions (`quality_interventions`,
-   * migration 090). Inserts on every nudge / planning intervention so the
-   * dashboard can answer "did the next turn improve?" without inference.
-   */
-  qualityInterventionStore: QualityInterventionStore;
-  /**
    * Shadow-traffic counterfactual log table. Inserts come from
    * shadow side-effects; outcome backfills come from feedback collectors.
    */
   counterfactualLogStore: CounterfactualLogStore;
-  /**
-   * Five-classifier pipeline (off-topic / completeness / code / policy /
-   * tool-misuse). Runs all in parallel via Promise.allSettled.
-   * Provider per classifier is resolved via PipelineProviderResolver, so
-   * the admin picks model/provider/temperature without a redeploy.
-   */
-  qualityClassifierPipeline: QualityClassifierPipeline;
   /**
    * Shadow-traffic runner for the ToolSelectionPipeline. Sample rate is
    * driven by the MCP_SHADOW_TOOL_SELECTION_RATE env var (default 0 = off).
@@ -658,6 +642,7 @@ export function createDeps(): ServerDeps {
   const db = new CodeIndexDB(config.dbPath, {
     checkpointOwner: true,
     externalCheckpointer: dbMaintenanceEnabled,
+    projectDbCheckpoint: dbMaintenanceEnabled ? scheduleProjectDbCheckpoint : undefined,
   });
   if (dbMaintenanceEnabled) {
     startDbMaintenanceWorker(config.dbPath, {
@@ -675,23 +660,67 @@ export function createDeps(): ServerDeps {
   // select their embedding/rerank model independently below.
   const providerStore = createAndSeedProviderStore(config.dbPath);
   const semanticStore = new SemanticStore(db.raw());
+  // Coordinator control-plane writes use a dedicated fail-fast connection.
+  // Waiting for another WAL writer is safe in workers but would park every
+  // Electron window when performed through the shared main-process handle.
+  const semanticCoordinatorStore = new SemanticStore(config.dbPath, { busyTimeoutMs: 0 });
   const semanticMutationOwner = `http-api:${process.pid}:${randomUUID()}`;
   let semanticCoordinatorForMutations: SemanticIndexCoordinator | null = null;
   const pendingMutationDrains = new Set<string>();
-  let mutationDrainScheduled = false;
-  const scheduleMutationDrain = (): void => {
-    if (mutationDrainScheduled || !semanticCoordinatorForMutations) return;
-    mutationDrainScheduled = true;
-    const timer = setTimeout(() => {
-      mutationDrainScheduled = false;
-      const namespaces = [...pendingMutationDrains];
-      pendingMutationDrains.clear();
-      for (const namespace of namespaces) {
-        void semanticCoordinatorForMutations?.catchUpMemoryNamespace(namespace).catch((error) =>
-          console.warn(`[semantic] mutation catch-up paused for ${namespace}: ${(error as Error).message}`));
-      }
-    }, 0);
-    (timer as { unref?: () => void }).unref?.();
+  const mutationDrainAttempts = new Map<string, number>();
+  const mutationDrainNotBefore = new Map<string, number>();
+  let mutationDrainTimer: ReturnType<typeof setTimeout> | null = null;
+  let mutationDrainTimerAt = 0;
+  let mutationDrainRun: Promise<void> | null = null;
+  let mutationDrainDisposed = false;
+  const scheduleMutationDrain = (delayMs = 0): void => {
+    if (mutationDrainDisposed || !semanticCoordinatorForMutations) return;
+    const dueAt = Date.now() + Math.max(0, delayMs);
+    if (mutationDrainTimer && mutationDrainTimerAt <= dueAt) return;
+    if (mutationDrainTimer) clearTimeout(mutationDrainTimer);
+    mutationDrainTimerAt = dueAt;
+    mutationDrainTimer = setTimeout(() => {
+      mutationDrainTimer = null;
+      mutationDrainTimerAt = 0;
+      if (mutationDrainRun) return;
+      mutationDrainRun = (async () => {
+        const now = Date.now();
+        const batch = [...pendingMutationDrains]
+          .filter((namespace) => (mutationDrainNotBefore.get(namespace) ?? 0) <= now);
+        for (const namespace of batch) pendingMutationDrains.delete(namespace);
+        for (const namespace of batch) {
+          if (mutationDrainDisposed) break;
+          try {
+            await semanticCoordinatorForMutations?.catchUpMemoryNamespace(namespace);
+            mutationDrainAttempts.delete(namespace);
+            mutationDrainNotBefore.delete(namespace);
+          } catch (error) {
+            const attempt = (mutationDrainAttempts.get(namespace) ?? 0) + 1;
+            mutationDrainAttempts.set(namespace, attempt);
+            const base = isSqliteBusyError(error) ? 50 : 1_000;
+            const ceiling = isSqliteBusyError(error) ? 1_000 : 30_000;
+            const retryMs = Math.min(ceiling, base * (2 ** Math.min(attempt - 1, 5)));
+            mutationDrainNotBefore.set(namespace, Date.now() + retryMs);
+            pendingMutationDrains.add(namespace);
+            console.warn(
+              `[semantic] mutation catch-up retry for ${namespace} in ${retryMs}ms: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+          // Fairness: one namespace never monopolizes the Electron task turn.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      })().finally(() => {
+        mutationDrainRun = null;
+        if (mutationDrainDisposed || pendingMutationDrains.size === 0) return;
+        const now = Date.now();
+        const nextAt = Math.min(...[...pendingMutationDrains]
+          .map((namespace) => mutationDrainNotBefore.get(namespace) ?? now));
+        scheduleMutationDrain(Math.max(0, nextAt - now));
+      });
+    }, Math.max(0, delayMs));
+    mutationDrainTimer.unref?.();
   };
   const semanticMutationSink: SemanticMutationSink = createDurableSemanticMutationSink(
     semanticStore,
@@ -712,6 +741,7 @@ export function createDeps(): ServerDeps {
         if (semanticCoordinatorForMutations
           && !semanticCoordinatorForMutations.allowsNamespaceMutation(namespace)) return;
         pendingMutationDrains.add(namespace);
+        mutationDrainNotBefore.delete(namespace);
         scheduleMutationDrain();
       },
     },
@@ -744,7 +774,7 @@ export function createDeps(): ServerDeps {
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
   // Pipeline telemetry is disabled — a no-op sink drops every event so the
-  // doc_search rewriter/reranker + quality/search pipelines stop hammering
+  // LLM-backed search pipelines stop hammering
   // `pipeline_telemetry` (the dashboard tab that read it was removed). The
   // store is kept only so the (now dead) admin routes still typecheck.
   const pipelineTelemetrySink = new NoopTelemetrySink();
@@ -880,6 +910,19 @@ export function createDeps(): ServerDeps {
   // over the admin-configured backend; the retriever blends importance/recency/
   // staleness and applies the conservative selector. `memoryRetriever` below is
   // the project-scope port the runner consumes.
+  const memoryRelationalWrites = new SqliteWriteQueue({
+    label: 'agent-memory',
+    maxPending: 256,
+    maxWaitMs: 30_000,
+    retryBaseMs: 25,
+    retryMaxMs: 500,
+    onRetry: ({ attempt, elapsedMs }) => {
+      if (attempt === 1 || attempt % 8 === 0) {
+        console.warn(`[memory] SQLite writer busy; retrying asynchronously (attempt ${attempt}, ${elapsedMs}ms)`);
+      }
+    },
+  });
+  registerShutdownTask('agent-memory-write-queue', () => memoryRelationalWrites.drain());
   const agentMemoryService = new AgentMemoryService(
     db,
     memoryEmbeddingService,
@@ -887,6 +930,10 @@ export function createDeps(): ServerDeps {
     memoryQueryEmbeddingService,
     semanticMutationSink,
     memoryReranker,
+    {
+      execute: <T>(operation: () => T): T => db.withBusyTimeout(0, operation),
+      retry: <T>(operation: () => T): Promise<T> => memoryRelationalWrites.run(operation),
+    },
   );
   const agentMemoryRetriever = new AgentMemoryRetriever(agentMemoryService, db, {
     topK: 5,
@@ -908,7 +955,10 @@ export function createDeps(): ServerDeps {
       const scope = projectId === 0 ? 'user' : 'project';
       const rows = await agentMemoryRetriever.retrieve(scope, projectId, taskText);
       // WS10 telemetry — proves proactive recall is firing (and how often it's empty).
-      try { db.recordAgentMemoryEvent({ eventType: 'recall', scope, projectId, kept: rows.length }); } catch { /* best-effort */ }
+      try {
+        db.withBusyTimeout(0, () =>
+          db.recordAgentMemoryEvent({ eventType: 'recall', scope, projectId, kept: rows.length }));
+      } catch { /* best-effort */ }
       return rows;
     },
   };
@@ -922,6 +972,7 @@ export function createDeps(): ServerDeps {
   const controlPlaneStore = new ControlPlaneStore(db.raw(), {
     journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
   });
+  const controlPlaneDivergenceStore = new ControlPlaneDivergenceStore(db.raw());
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
     memoryEmbeddingService,
@@ -1027,14 +1078,16 @@ export function createDeps(): ServerDeps {
   // `memory_extraction` binding; when no binding is set it falls back to the
   // general default AI model (zero-config). Passed into runCoder as `runEndMemory`.
   const runEndMemoryRaw = createRunEndMemory({
-    writer: new AgentMemoryWriter(db, agentMemoryService),
+    writer: new AgentMemoryWriter(db, agentMemoryService, memoryRelationalWrites),
     search: new AgentMemoryDedupeSearch(agentMemoryService),
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
     // Memory-health diagnostics (migration 136) — every pass lands a row so
     // the project Memory tab can show when/what was learned (or why not).
     distillLog: (projectId, entry) => {
-      try { db.insertMemoryDistillLog(projectId, entry); } catch { /* best-effort */ }
+      try {
+        db.withBusyTimeout(0, () => db.insertMemoryDistillLog(projectId, entry));
+      } catch { /* best-effort */ }
     },
     // Style-profile fold (opt-in): the positive distiller maintains ONE
     // "Project style profile" memory per project — same LLM call, replace-
@@ -1088,18 +1141,20 @@ export function createDeps(): ServerDeps {
       };
       const literal = new MemoryExtractor(
         { distill: async () => [candidate] },
-        new AgentMemoryWriter(db, agentMemoryService),
+        new AgentMemoryWriter(db, agentMemoryService, memoryRelationalWrites),
         new AgentMemoryDedupeSearch(agentMemoryService),
       );
       const res = await literal.extractAndPersist(projectId, projectName, 'agent', {});
       try {
-        db.insertMemoryDistillLog(projectId, { trigger: 'agent', status: 'ok', ...res });
-        db.recordAgentMemoryEvent({
-          eventType: 'remember',
-          scope: projectId === 0 ? 'user' : 'project',
-          projectId,
-          kept: res.created,
-          dropped: res.skipped,
+        db.withBusyTimeout(0, () => {
+          db.insertMemoryDistillLog(projectId, { trigger: 'agent', status: 'ok', ...res });
+          db.recordAgentMemoryEvent({
+            eventType: 'remember',
+            scope: projectId === 0 ? 'user' : 'project',
+            projectId,
+            kept: res.created,
+            dropped: res.skipped,
+          });
         });
       } catch { /* diagnostics are best-effort */ }
       return res;
@@ -1124,10 +1179,12 @@ export function createDeps(): ServerDeps {
       const scope = tgt.id === 0 ? 'user' : 'project';
       const row = db.getAgentMemoryByName(scope, tgt.id, target);
       if (!row) return { archived: 0 };
-      agentMemoryService.archive(row.id, 'forgotten:agent');
+      await memoryRelationalWrites.run(() =>
+        db.withBusyTimeout(0, () => agentMemoryService.archive(row.id, 'forgotten:agent')));
       await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
       try {
-        db.recordAgentMemoryEvent({ eventType: 'forget', scope, projectId: tgt.id, memoryId: row.id });
+        db.withBusyTimeout(0, () =>
+          db.recordAgentMemoryEvent({ eventType: 'forget', scope, projectId: tgt.id, memoryId: row.id }));
       } catch { /* best-effort */ }
       return { archived: 1 };
     },
@@ -1249,12 +1306,7 @@ export function createDeps(): ServerDeps {
   // template revision invalidates entries automatically.
   const roleEmbeddingStore = new InMemoryRoleEmbeddingStore();
 
-  // One shared hybrid runtime factory is used here and inside worker threads.
-  const qualityRuntime = createQualityRuntime(db.raw(), { telemetry: pipelineTelemetrySink });
-  const qualityClassificationStore = qualityRuntime.classificationStore;
-  const qualityInterventionStore = new QualityInterventionStore(db.raw());
   const counterfactualLogStore = new CounterfactualLogStore(db.raw());
-  const qualityClassifierPipeline = qualityRuntime.pipeline;
 
   // Shadow-traffic for ToolSelectionPipeline. Sample rate is environment
   // controlled — keep it off by default so test/dev runs don't burn
@@ -1310,7 +1362,7 @@ export function createDeps(): ServerDeps {
 
   const semanticCoordinator = new SemanticIndexCoordinator({
     db,
-    semanticStore,
+    semanticStore: semanticCoordinatorStore,
     router: localVectorRouter,
     vectorStore: vectorOverride,
     codeEmbedding: codeEmbeddingService,
@@ -1327,8 +1379,18 @@ export function createDeps(): ServerDeps {
     withProjectLock: (projectId, operation) =>
       projectIndexService.withProjectLock(projectId, operation),
     mutationFenceOwner: semanticMutationOwner,
+    ...(dbMaintenanceEnabled
+      ? { recoverMutationFences: recoverSemanticMutationFences }
+      : {}),
   });
   semanticCoordinatorForMutations = semanticCoordinator;
+  scheduleMutationDrain();
+  registerShutdownTask('memory-mutation-drain', async () => {
+    mutationDrainDisposed = true;
+    if (mutationDrainTimer) clearTimeout(mutationDrainTimer);
+    mutationDrainTimer = null;
+    await mutationDrainRun?.catch(() => undefined);
+  });
   // Session Drive keeps only text/metadata in the central ledger. Semantic
   // mutations are durable deltas on the project's shared Memory namespace;
   // search resolves the active generation through the worker-backed index.
@@ -1361,7 +1423,15 @@ export function createDeps(): ServerDeps {
     runCollectionExclusive: (collectionId, operation) =>
       semanticCoordinator.runDocsCollectionExclusive(collectionId, operation),
   });
-  registerShutdownTask('semantic-coordinator', () => semanticCoordinator.dispose());
+  registerShutdownTask('semantic-coordinator', async () => {
+    // Shutdown tasks run concurrently. Keep this owned connection alive until
+    // the coordinator has stopped all of its in-flight work.
+    try {
+      await semanticCoordinator.dispose();
+    } finally {
+      semanticCoordinatorStore.close();
+    }
+  });
   projectIndexService.setSemanticCatchup({
     noteDelta: (projectId, events) => semanticCoordinator.noteCodeDelta(projectId, events),
     ensureProject: (projectId) => semanticCoordinator.catchUpCodeProject(projectId),
@@ -1578,6 +1648,7 @@ export function createDeps(): ServerDeps {
     recentFilesSource,
     sessionStore,
     controlPlaneStore,
+  controlPlaneDivergenceStore,
     companyStore,
     companySandboxStore,
     companySandboxServicesStore,
@@ -1614,10 +1685,7 @@ export function createDeps(): ServerDeps {
     contextRelevancePipeline,
     subAgentResultCache,
     roleEmbeddingStore,
-    qualityClassificationStore,
-    qualityInterventionStore,
     counterfactualLogStore,
-    qualityClassifierPipeline,
     toolSelectionShadowRunner,
     setToolSelectionRegistry,
     lshIndex,

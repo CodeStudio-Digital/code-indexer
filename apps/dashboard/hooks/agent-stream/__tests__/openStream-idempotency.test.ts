@@ -23,6 +23,7 @@ function deps(): OpenStreamDeps {
     updateSession: vi.fn(),
     abortMap: new Map(),
     lastSeenSeqMap: new Map(),
+    lastSeenBusIdMap: new Map(),
   };
 }
 

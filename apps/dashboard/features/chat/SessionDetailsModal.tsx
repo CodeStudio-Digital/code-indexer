@@ -8,6 +8,7 @@ import { useApi } from '../../hooks/useApi.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { formatDuration } from './utils.js';
+import { promptCacheHitRatio, promptInputTokens } from './prompt-cache-metrics.js';
 
 type SessionInputKind =
   | 'system_prompt'
@@ -53,6 +54,7 @@ export interface SessionStatsLike {
 }
 
 export interface SessionLike {
+  provider?: string | null;
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_read_tokens?: number;
@@ -166,7 +168,14 @@ export function SessionSummaryView({ session, stats }: { session: SessionLike; s
   const totalOut = session.total_output_tokens;
   const totalCR = session.total_cache_read_tokens ?? 0;
   const totalCW = session.total_cache_creation_tokens ?? 0;
-  const hitRate = totalIn > 0 ? Math.round((totalCR / totalIn) * 100) : 0;
+  const usage = {
+    provider: session.provider,
+    inputTokens: totalIn,
+    cacheReadTokens: totalCR,
+    cacheCreationTokens: totalCW,
+  };
+  const promptInput = promptInputTokens(usage);
+  const hitRate = Math.round((promptCacheHitRatio(usage) ?? 0) * 100);
   const savedTokens = Math.round(totalCR * 0.5);
 
   const lastTurnInput = session.last_turn_input_tokens ?? stats?.last_turn_input_tokens ?? 0;
@@ -216,7 +225,7 @@ export function SessionSummaryView({ session, stats }: { session: SessionLike; s
       <section>
         <SectionTitle>{t('header.apiTotals')}</SectionTitle>
         <KvGrid>
-          <Kv label={t('header.totalInput')}>{totalIn.toLocaleString()}</Kv>
+            <Kv label={t('header.totalInput')}>{promptInput.toLocaleString()}</Kv>
           <Kv label={t('header.output')}>{totalOut.toLocaleString()}</Kv>
           <Kv label={t('header.cacheRead')} valueClassName="text-emerald-600 dark:text-emerald-400">
             {totalCR.toLocaleString()}

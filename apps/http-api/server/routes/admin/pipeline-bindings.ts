@@ -75,6 +75,27 @@ function nonConfigurableCatalogEntry(
   ) ?? null;
 }
 
+function knownCatalogEntry(
+  pipelineName: string | undefined,
+  bindingRole: string | undefined,
+): PipelineCatalogEntry | null {
+  if (!pipelineName || !bindingRole) return null;
+  return PIPELINE_CATALOG.find(
+    (entry) => entry.pipelineName === pipelineName && entry.bindingRole === bindingRole,
+  ) ?? null;
+}
+
+function unknownCatalogTargetResponse(
+  c: Context,
+  pipelineName: string | undefined,
+  bindingRole: string | undefined,
+) {
+  return c.json({
+    error: 'unknown_target',
+    details: [{ pipeline_name: pipelineName, binding_role: bindingRole }],
+  }, 400);
+}
+
 function bindingNotConfigurableResponse(
   c: Context,
   entry: PipelineCatalogEntry,
@@ -158,6 +179,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     }
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
 
+    if (!knownCatalogEntry(body.pipeline_name, body.binding_role)) {
+      return unknownCatalogTargetResponse(c, body.pipeline_name, body.binding_role);
+    }
     const nonConfigurable = nonConfigurableCatalogEntry(body.pipeline_name, body.binding_role);
     if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
 
@@ -199,6 +223,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     if (!body.model_id) errors.push('model_id is required');
     if (body.scope_type !== undefined && body.scope_type !== 'global') errors.push('only global scope is supported');
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
+    if (!knownCatalogEntry(body.pipeline_name, body.binding_role)) {
+      return unknownCatalogTargetResponse(c, body.pipeline_name, body.binding_role);
+    }
     const nonConfigurable = nonConfigurableCatalogEntry(body.pipeline_name, body.binding_role);
     if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
     if (!providerStore.getProvider(body.provider_id!)) {
@@ -230,10 +257,12 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     // Check both legacy rows and a requested target change. Without the
     // second check, a configurable row could be renamed into an
     // informational semantic-profile role through PATCH.
-    const nonConfigurable = nonConfigurableCatalogEntry(
-      body.pipeline_name ?? existing.pipeline_name,
-      body.binding_role ?? existing.binding_role,
-    );
+    const targetPipelineName = body.pipeline_name ?? existing.pipeline_name;
+    const targetBindingRole = body.binding_role ?? existing.binding_role;
+    if (!knownCatalogEntry(targetPipelineName, targetBindingRole)) {
+      return unknownCatalogTargetResponse(c, targetPipelineName, targetBindingRole);
+    }
+    const nonConfigurable = nonConfigurableCatalogEntry(targetPipelineName, targetBindingRole);
     if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
 
     const scopeType = body.scope_type ?? existing.scope_type;
@@ -363,8 +392,8 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
   //     targets?: Array<{ pipeline_name, binding_role }> }
   //
   // When `targets` is omitted, the server fans out only to setup-eligible
-  // catalog roles. Embedding and semantic reranking entries are informational
-  // here: their runtime configuration belongs to Semantic Indexing.
+  // catalog roles. Embedding and semantic reranking roles are absent here:
+  // their runtime configuration belongs to Semantic Indexing.
   //
   // The provider is validated first — a typo here would silently fail
   // every upsert if we let it through.
@@ -402,8 +431,8 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     }
 
     // The default set contains only roles this screen is allowed to configure.
-    // `comingSoon` entries are placeholders and `setupEligible:false` entries
-    // are owned by Semantic Indexing, so neither may be bulk-created.
+    // `comingSoon` entries are placeholders and any future
+    // `setupEligible:false` entries may not be bulk-created.
     const targets = (body.targets && body.targets.length > 0)
       ? body.targets
       : PIPELINE_CATALOG

@@ -157,6 +157,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
       defaultHeaders: headers,
+      maxRetries: 0,
       // Use undici (native fetch) so installLlmDispatcher's bodyTimeout:0
       // applies during the reasoning phase. See native-fetch.ts.
       fetch: nativeFetch(),
@@ -705,7 +706,7 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
             file_data: `data:${b.mediaType};base64,${b.base64}`,
             ...(b.mediaType === 'application/pdf' ? { detail: 'auto' as const } : {}),
           });
-        } else if (b.type === 'document' && b.text) {
+        } else if (b.type === 'document' && (b.text || b.path)) {
           parts.push({
             type: 'input_text',
             text: renderTextDocument(b),

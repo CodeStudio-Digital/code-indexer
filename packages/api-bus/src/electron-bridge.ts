@@ -20,6 +20,9 @@ export interface ElectronAPI {
   /** Native folder picker — used in the Onboarding wizard + ProjectSwitcher. */
   openDirectory(): Promise<string | null>;
 
+  /** Absolute path for an OS-backed File; empty for synthetic/clipboard Files. */
+  getPathForFile(file: File): string;
+
   /** Open a URL in the default browser (Stripe checkout, doc links). */
   openExternal(url: string): void;
 

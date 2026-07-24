@@ -17,6 +17,48 @@ const binding = {
 beforeEach(() => chat.mockReset());
 
 describe('OAuth completion streaming guards', () => {
+  it('accepts a stream only after the provider emits a terminal event', async () => {
+    chat.mockImplementation(async function* () {
+      yield { type: 'text_delta', text: '{"findings":[]}' };
+      yield { type: 'done', stop_reason: 'completed' };
+    });
+    const result = await coderProviderChat(binding, [{ role: 'user', content: 'complete' }], {
+      timeoutMs: 1000,
+    });
+    expect(result.content).toBe('{"findings":[]}');
+    expect(result.errorBody).toBeUndefined();
+    expect(result.finishReason).toBe('provider');
+  });
+
+  it('keeps partial output but rejects a stream cut by the timeout before done', async () => {
+    chat.mockImplementation(async function* (req: { signal?: AbortSignal }) {
+      yield { type: 'text_delta', text: '{"findings":[{"severity":"high"}' };
+      await new Promise<void>((resolve) => {
+        if (req.signal?.aborted) resolve();
+        else req.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    const result = await coderProviderChat(binding, [{ role: 'user', content: 'complete' }], {
+      timeoutMs: 10,
+    });
+    expect(result.content).toBe('{"findings":[{"severity":"high"}');
+    expect(result.errorBody).toMatch(/timed out.*terminal event/i);
+    expect(result.finishReason).toBe('timeout');
+  });
+
+  it('keeps partial output when the provider stream throws', async () => {
+    chat.mockImplementation(async function* () {
+      yield { type: 'text_delta', text: '{"findings":[' };
+      throw new Error('socket reset');
+    });
+    const result = await coderProviderChat(binding, [{ role: 'user', content: 'complete' }], {
+      timeoutMs: 1000,
+    });
+    expect(result.content).toBe('{"findings":[');
+    expect(result.errorBody).toBe('socket reset');
+    expect(result.finishReason).toBe('error');
+  });
+
   it('records TTFT and stops incrementally at a local stop sequence', async () => {
     chat.mockImplementation(async function* () {
       yield { type: 'text_delta', text: 'return value;' };

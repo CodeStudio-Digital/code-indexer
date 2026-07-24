@@ -13,7 +13,7 @@
  * Fetch is lazy: `/projects` is only hit on first open unless the caller
  * already has the list (AppShell) and passes it via `projects`.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronLeft, ChevronRight, ExternalLink, FolderGit2, Pin, Search } from 'lucide-react';
@@ -48,6 +48,54 @@ interface ProjectSwitcherProps {
 
 const SECTION_HEADER =
   'px-2.5 pt-2 pb-1 text-[9.5px] uppercase tracking-[0.08em] text-muted-foreground font-semibold';
+
+interface ProjectSwitcherRowProps {
+  project: ProjectLite;
+  index: number;
+  active: boolean;
+  current: boolean;
+  open: boolean;
+  menuSelected: boolean;
+  activeRef: React.RefObject<HTMLButtonElement | null>;
+  onActivate: (index: number) => void;
+  onOpenMenu: (projectId: number) => void;
+}
+
+const ProjectSwitcherRow = memo(function ProjectSwitcherRow({
+  project,
+  index,
+  active,
+  current,
+  open,
+  menuSelected,
+  activeRef,
+  onActivate,
+  onOpenMenu,
+}: ProjectSwitcherRowProps) {
+  return (
+    <button
+      type="button"
+      ref={active ? activeRef : undefined}
+      onPointerEnter={() => onActivate(index)}
+      onClick={() => onOpenMenu(project.id)}
+      className={cn(
+        'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left',
+        active || menuSelected ? 'bg-accent text-accent-foreground' : 'text-foreground',
+      )}
+    >
+      <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium">{project.name}</span>
+        {project.root_path && (
+          <span className="block truncate text-[10px] text-muted-foreground">{project.root_path}</span>
+        )}
+      </span>
+      {current && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+      {open && !current && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
+      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+    </button>
+  );
+});
 
 export function ProjectSwitcher({
   currentProjectId,
@@ -211,34 +259,24 @@ export function ProjectSwitcher({
     }
   };
 
+  const activateRow = useCallback((index: number): void => setActive(index), []);
+  const openRowMenu = useCallback((projectId: number): void => setMenuProjectId(projectId), []);
+
   const renderRow = (p: ProjectLite): React.ReactNode => {
     const i = indexById.get(p.id) ?? -1;
-    const isActive = i === active;
-    const isCurrent = p.id === currentProjectId;
-    const isOpen = openSet.has(p.id);
     return (
-      <button
+      <ProjectSwitcherRow
         key={p.id}
-        type="button"
-        ref={isActive ? activeRef : undefined}
-        onMouseMove={() => setActive(i)}
-        onClick={() => setMenuProjectId(p.id)}
-        className={cn(
-          'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left',
-          isActive || menuProjectId === p.id ? 'bg-accent text-accent-foreground' : 'text-foreground',
-        )}
-      >
-        <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium">{p.name}</span>
-          {p.root_path && (
-            <span className="block truncate text-[10px] text-muted-foreground">{p.root_path}</span>
-          )}
-        </span>
-        {isCurrent && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-        {isOpen && !isCurrent && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />}
-        <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
-      </button>
+        project={p}
+        index={i}
+        active={i === active}
+        current={p.id === currentProjectId}
+        open={openSet.has(p.id)}
+        menuSelected={menuProjectId === p.id}
+        activeRef={activeRef}
+        onActivate={activateRow}
+        onOpenMenu={openRowMenu}
+      />
     );
   };
 

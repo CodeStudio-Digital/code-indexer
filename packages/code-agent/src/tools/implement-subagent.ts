@@ -17,16 +17,23 @@
  * outside the declared scope (e.g. to look at a type definition). The parent
  * orchestrator gets the violation list in the TaskResult and can decide.
  */
+import { createHash } from 'node:crypto';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { CoderRunner, SUBAGENT_TOOL_RESULT_CAP, extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessions/types.js';
 import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
 import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
 import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
+import {
+  agentRunStoreEnabled,
+  agentRunStoreEnforceEnabled,
+} from '@mcp/code-agent/core/agent-run-recorder.js';
+import { createMutationFenceAuthority } from '@mcp/code-agent/core/mutation-fence.js';
 import { resolveTaskLimit } from '@mcp/code-agent/tools/execute-tasks/task-run-budget.js';
 import {
   buildResearchSynthesisNudge,
@@ -64,6 +71,8 @@ export interface SubagentSpec {
   pushTimeCap?: number;
   limits?: SubagentLimits;
   signal?: AbortSignal;
+  /** Caller wait behaviour; execution semantics stay identical. */
+  waitMode?: 'foreground' | 'background';
   /** When set, fs/shell tools record paths outside this list for scope telemetry. */
   pathScope?: string[];
   /**
@@ -96,6 +105,62 @@ export interface SubagentLimits {
 }
 
 export type PathScopeMode = 'warn' | 'enforce-writes';
+
+export function wrapProviderForSubagentFence(
+  provider: ChatProvider,
+  assertFence: () => void,
+): ChatProvider {
+  return {
+    get name() { return provider.name; },
+    get model() { return provider.model; },
+    set model(model: string) { provider.model = model; },
+    setModel(model: string): void { provider.setModel(model); },
+    chat(request) {
+      return (async function* fencedProviderStream() {
+        // Chat adapters are commonly async generators: constructing their
+        // iterable does not issue HTTP. Fence at first iteration, immediately
+        // before the adapter can start the physical upstream request.
+        assertFence();
+        for await (const delta of provider.chat(request)) {
+          // Do not acknowledge provider output after another executor has
+          // fenced this attempt while the upstream request was in flight.
+          assertFence();
+          yield delta;
+        }
+        assertFence();
+      })();
+    },
+  };
+}
+
+export function wrapToolForSubagentFence(
+  tool: CoderTool,
+  assertFence: () => void,
+): CoderTool {
+  const metadata = resolveToolMetadata(tool);
+  return {
+    ...tool,
+    handler: async (args, ctx) => {
+      let dynamicRisk = metadata.riskLevel;
+      if (tool.riskOf) {
+        try { dynamicRisk = tool.riskOf(args); } catch { dynamicRisk = 'write'; }
+      }
+      if (tool.name === 'record_memo'
+        || tool.name === 'expand_toolset'
+        || metadata.mutates
+        || metadata.executionClass !== 'read'
+        || dynamicRisk !== 'read') {
+        assertFence();
+        const result = await tool.handler(args, ctx);
+        // The side effect may have completed while the lease changed hands.
+        // Withhold its ACK/result from the stale executor in that case.
+        assertFence();
+        return result;
+      }
+      return tool.handler(args, ctx);
+    },
+  };
+}
 
 /** Helper: tests whether a tool is admitted by the given allowlist shape. */
 function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
@@ -313,6 +378,17 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   let watchdogPhase: string | undefined;
   const accruedRunnerUsage = emptyUsage();
   let lastStreamProgressAt = 0;
+  const agentRunEnforced = agentRunStoreEnforceEnabled();
+  let childRunFence: import('@mcp/code-agent/sessions/store/subagent-telemetry.js').SubagentRunFence | null = null;
+  const assertChildRunFence = (): void => {
+    if (!childRunFence || !parent.sessionStore) {
+      if (agentRunEnforced) {
+        throw new Error('AgentRun enforcement requires an active child fence');
+      }
+      return;
+    }
+    parent.sessionStore.assertSubagentRunFence(childRunFence);
+  };
   const streamProgressThrottleMs =
     Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
 
@@ -382,6 +458,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations, spec.pathScopeMode)
       : tool;
     wrapped = wrapToolForCollector(wrapped, collector);
+    wrapped = wrapToolForSubagentFence(wrapped, assertChildRunFence);
     subRegistry.register(wrapped);
   }
   // Frente C — `record_memo` is ALWAYS available in subagents regardless
@@ -390,7 +467,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   try {
     const { recordMemoTool } = await import('@mcp/code-agent/tools/record-memo.js');
     if (!subRegistry.has('record_memo')) {
-      subRegistry.register(recordMemoTool);
+      subRegistry.register(wrapToolForSubagentFence(recordMemoTool, assertChildRunFence));
     }
   } catch (e) {
     console.warn(`[subagent] record_memo registration failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -400,7 +477,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   // groups unreachable rather than merely lazy.
   for (const name of ['find_tools', 'expand_toolset']) {
     const tool = parent.tools.find((candidate) => candidate.name === name);
-    if (tool && !subRegistry.has(name)) subRegistry.register(tool);
+    if (tool && !subRegistry.has(name)) {
+      subRegistry.register(wrapToolForSubagentFence(tool, assertChildRunFence));
+    }
   }
 
   const subContext: ToolContext = {
@@ -408,6 +487,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     projectName: parent.ctx.projectName,
     globalWorkspace: parent.ctx.globalWorkspace,
     roots: parent.ctx.roots,
+    externalRoots: parent.ctx.externalRoots,
     overlayByRoot: parent.ctx.overlayByRoot,
     overlay: parent.ctx.overlay,
     projectId: parent.ctx.projectId,
@@ -450,8 +530,20 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     'CODER_SUBAGENT_TELEMETRY_ROLLOUT_PERCENT',
     telemetryRolloutKey,
   );
+  // The Fase-3 AgentRun shadow mirrors the LEGACY lifecycle rows, so it needs
+  // start/heartbeat/complete even when the broader telemetry rollout is 0%.
+  // Turn/tool-call telemetry remains governed solely by the legacy rollout.
+  const subagentLifecycleTelemetryEnabled = subagentTelemetryEnabled
+    || process.env.CODER_AGENT_RUN_STORE_SHADOW === '1'
+    || agentRunEnforced;
   const subProvider = spec.provider ?? parent.provider;
+  const fencedSubProvider = wrapProviderForSubagentFence(subProvider, assertChildRunFence);
   const parentRunner = parent.ctx.runner;
+  const inheritedHookBus = parentRunner?.getHookBus();
+  const inheritedPolicyScopeFactory =
+    typeof parentRunner?.getPolicyShadowScopeFactory === 'function'
+      ? parentRunner.getPolicyShadowScopeFactory()
+      : undefined;
   const inheritedToolSelection = parent.toolSelectionFilter
     ?? (typeof parentRunner?.getToolSelectionFilter === 'function'
       ? parentRunner.getToolSelectionFilter()
@@ -468,12 +560,83 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     const tier = tool.runtimeTier?.id.trim();
     if (tier) subExternalTiers.set(tool.name, tier);
   }
+  let subRunnerRef: CoderRunner | undefined;
+  const mutationFence = agentRunStoreEnabled()
+    ? createMutationFenceAuthority({
+        mode: agentRunEnforced ? 'enforce' : 'shadow',
+        authorizedRoot: subContext.cwd,
+        filesystemRoots: [
+          ...(subContext.roots ?? []).map((root) => ({
+            rootPath: root.rootPath,
+            aliases: [root.slug, root.name],
+            access: 'write' as const,
+          })),
+          ...(subContext.externalRoots ?? []).map((root) => ({
+            rootPath: root.rootPath,
+            access: root.access,
+          })),
+        ],
+        assertLease: assertChildRunFence,
+        snapshot: () => {
+          if (!childRunFence) {
+            throw new Error('child AgentRun fence is unavailable');
+          }
+          return {
+            environmentId: `environment:${childRunFence.agentRunId}`,
+            environmentVersion: 1,
+            workspaceLeaseId: `workspace-lease:${childRunFence.attemptId}`,
+            workspaceLeaseVersion: childRunFence.fencingEpoch,
+            workspaceFencingEpoch: childRunFence.fencingEpoch,
+            ownerAgentRunId: String(childRunFence.agentRunId),
+          };
+        },
+        onViolation: (error) => {
+          if (!agentRunEnforced) return;
+          abortSubagent(error.message);
+          try { subRunnerRef?.abort(); } catch { /* runner may already be terminal */ }
+        },
+      })
+    : undefined;
+  let stopMutationFenceMonitor = (): void => {};
+  if (mutationFence) {
+    subContext.mutationFence = mutationFence;
+  }
+  const childPolicyShadow = inheritedPolicyScopeFactory?.({
+    getLegacyContext: () => ({
+      // Ephemeral children do not own interactive plan/spec workflows. Their
+      // write authority is the delegated path scope plus the inherited
+      // permission/policy authority.
+      planMode: false,
+      planApproved: false,
+      specMode: false,
+      specApproved: false,
+      taskScope: spec.pathScope?.length
+        ? {
+            id: spec.spawnId ?? spec.label ?? 'subagent',
+            files: [...spec.pathScope],
+          }
+        : null,
+    }),
+    background: spec.waitMode === 'background',
+    sessionId: parent.sessionId == null
+      ? undefined
+      : `session:coder:${parent.sessionId}:subagent:${spec.spawnId ?? spec.label ?? 'child'}`,
+    getAgentRunId: () => subRunnerRef
+      ? `agent-run:subagent:${subRunnerRef.runId}`
+      : undefined,
+    capabilityRegistry: subRegistry,
+  });
   const subRunner = new CoderRunner({
-    provider: subProvider,
+    provider: fencedSubProvider,
     registry: subRegistry,
     systemPrompt: finalSystemPrompt,
     toolContext: subContext,
     initialMessages: spec.initialMessages,
+    ...(inheritedHookBus ? { hookBus: inheritedHookBus } : {}),
+    ...(childPolicyShadow ? { policyShadow: childPolicyShadow } : {}),
+    ...(inheritedPolicyScopeFactory
+      ? { policyShadowScopeFactory: inheritedPolicyScopeFactory }
+      : {}),
     maxTurns: spec.maxTurns,
     pushTimeCap: spec.pushTimeCap ?? SUBAGENT_TOOL_RESULT_CAP,
     sessionId: parent.sessionId,
@@ -505,6 +668,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         ? parent.ctx.runner.getReasoningEffort()
         : undefined),
   });
+  subRunnerRef = subRunner;
 
   const abortRunner = () => subRunner.abort();
   if (parent.ctx.signal) {
@@ -527,11 +691,19 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   subRunner.on('turn_start', (turn) => {
     currentTurn = typeof turn === 'number' ? turn : currentTurn + 1;
     markActivity('turn', `turn ${currentTurn}`);
-    if (subagentTelemetryEnabled && parent.sessionStore) {
+    if (subagentLifecycleTelemetryEnabled && parent.sessionStore) {
       try {
-        (parent.sessionStore as { heartbeatSubagentRun?: (runId: string) => void })
-          .heartbeatSubagentRun?.(subRunner.runId);
-      } catch { /* telemetry must never break child execution */ }
+        (parent.sessionStore as {
+          heartbeatSubagentRun?: (
+            runId: string,
+            fence?: import('@mcp/code-agent/sessions/store/subagent-telemetry.js').SubagentRunFence,
+          ) => void;
+        })
+          .heartbeatSubagentRun?.(subRunner.runId, childRunFence ?? undefined);
+      } catch (error) {
+        if (agentRunEnforced) throw error;
+        // Audit-only telemetry must never break child execution.
+      }
     }
     // Hard-budget warning at 80% of either cap — one-shot, and it supersedes
     // the soft research checkpoint (no point nudging twice in a row).
@@ -655,8 +827,12 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
           refusal_kind: toolResult.refusalKind ?? null,
           duration_ms: durationMs,
           result_chars: toolResult.rawChars ?? toolResult.content.length,
+          fence: childRunFence ?? undefined,
         });
-      } catch { /* telemetry must never affect the child */ }
+      } catch (error) {
+        if (agentRunEnforced) throw error;
+        // Audit-only telemetry must never affect the child.
+      }
     }
     if (parentEmit) {
       parentEmit.emit('tool_progress', {
@@ -780,15 +956,44 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const taskPreview = (delegatedAt >= 0
     ? taskText.slice(delegatedAt + delegatedMarker.length)
     : taskText).slice(0, 1000);
-  if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+  if (agentRunEnforced && (!parent.sessionStore || parent.sessionId == null)) {
+    throw new Error('AgentRun enforcement requires a durable session store and session id');
+  }
+  if (subagentLifecycleTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
     try {
-      parent.sessionStore.startSubagentRun({
+      childRunFence = parent.sessionStore.startSubagentRun({
         session_id: parent.sessionId,
         run_id: subRunner.runId,
         parent_run_id: parent.ctx.runner?.runId ?? null,
+        parent_agent_run_id: parent.ctx.controlPlaneParentAgentRunId ?? null,
         spawn_id: spec.spawnId ?? null,
         profile: spec.profile ?? 'unknown',
         label: spec.label ?? null,
+        requested_provider: subProvider.name,
+        requested_model: subProvider.model,
+        requested_reasoning_effort: spec.reasoningEffort
+          ?? (typeof parent.ctx.runner?.getReasoningEffort === 'function'
+            ? parent.ctx.runner.getReasoningEffort()
+            : null),
+        wait_mode: spec.waitMode ?? 'foreground',
+        effective_provider: subProvider.name,
+        effective_model: subProvider.model,
+        effective_reasoning_effort: spec.reasoningEffort
+          ?? (typeof parent.ctx.runner?.getReasoningEffort === 'function'
+            ? parent.ctx.runner.getReasoningEffort()
+            : null),
+        effective_capabilities: subRegistry.list().map((tool) => tool.name),
+        environment_fingerprint: createHash('sha256').update(JSON.stringify({
+          cwd: parent.ctx.cwd,
+          projectName: parent.ctx.projectName,
+          roots: parent.ctx.roots?.map((root) => root.rootPath) ?? [],
+          externalRoots: parent.ctx.externalRoots?.map((root) => root.rootPath) ?? [],
+        })).digest('hex'),
+        policy_mode: spec.waitMode === 'background'
+          ? 'background_noninteractive'
+          : parent.ctx.permissionGate
+            ? 'inherited_permission_gate'
+            : 'no_permission_gate',
         task_preview: taskPreview,
         max_turns: spec.maxTurns,
         max_tool_calls: limits.maxToolCalls ?? null,
@@ -798,15 +1003,31 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         soft_tool_target: spec.researchPolicy?.softToolTarget ?? null,
         soft_time_target_ms: spec.researchPolicy?.softTimeTargetMs ?? null,
       });
-    } catch { /* best-effort */ }
+    } catch (error) {
+      if (agentRunEnforced) throw error;
+      // Audit shadow remains best-effort.
+    }
+    if (agentRunEnforced && !childRunFence) {
+      throw new Error('AgentRun enforcement could not establish a child fence');
+    }
+    if (childRunFence && mutationFence?.startLeaseMonitor) {
+      stopMutationFenceMonitor = mutationFence.startLeaseMonitor();
+    }
   }
 
   const finishTelemetry = (out: SubagentRunResult): SubagentRunResult => {
-    if (subagentTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+    if (subagentLifecycleTelemetryEnabled && parent.sessionStore && parent.sessionId != null) {
+      // A captured token changes this from telemetry into the terminal ACK
+      // boundary: a stale executor must not publish its result to the parent.
+      if (childRunFence) assertChildRunFence();
       try {
         const outputId = out.finalText.length > SUBAGENT_TOOL_RESULT_CAP
           ? parent.ctx.toolOutputStore?.put(out.finalText) ?? null
           : null;
+        // The deterministic side-file write is idempotent, but ownership may
+        // still change while it happens. Never publish its reference or the
+        // terminal ACK from a stale child.
+        if (childRunFence) assertChildRunFence();
         parent.sessionStore.completeSubagentRun({
           run_id: subRunner.runId,
           reason: out.reason,
@@ -827,8 +1048,12 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
           has_summary: out.finalText.trim().length > 0,
           output_id: outputId,
           synthesis_nudged: synthesisNudged,
+          fence: childRunFence ?? undefined,
         });
-      } catch { /* best-effort */ }
+      } catch (error) {
+        if (childRunFence) throw error;
+        // Legacy telemetry remains best-effort when no durable token exists.
+      }
     }
     return out;
   };
@@ -881,6 +1106,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       failureDetail: e instanceof Error ? e.message : String(e),
     });
   } finally {
+    stopMutationFenceMonitor();
     watchdog.cleanup();
     if (parent.ctx.signal) parent.ctx.signal.removeEventListener('abort', parentAbort);
     if (spec.signal) spec.signal.removeEventListener('abort', explicitAbort);
@@ -1373,6 +1599,7 @@ export interface ParallelAgentSpec {
   pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
   signal?: AbortSignal;
+  waitMode?: 'foreground' | 'background';
   /**
    * Resume path — full seed history for the child runner. When set it
    * REPLACES the single synthesized `task` user message (resume_agent passes
@@ -1502,6 +1729,7 @@ export async function runParallelAgents(
         pathScopeMode: spec.pathScopeMode,
         limits: spec.limits,
         signal: spec.signal,
+        waitMode: spec.waitMode,
         onProgress: (progress) => {
           toolCallCount = progress.toolCallCount;
           onProgress({

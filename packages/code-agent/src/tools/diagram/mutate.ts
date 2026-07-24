@@ -16,6 +16,7 @@ import { validateMxXml } from './validate.js';
 
 export const diagramCreateTool: CoderTool = {
   name: 'diagram_create',
+  effectBoundary: 'filesystem',
   description:
     'Create a NEW draw.io diagram saved as diagrams/<name>.drawio. Provide draw.io mxGraph XML in `xml` — an <mxfile> (or a bare <mxGraphModel>) whose <root> holds the implicit cells id="0"/id="1" plus your vertices/edges. Fails if a diagram with that name already exists (use diagram_update instead). On success the diagram opens live in the Diagram panel. For complex architecture, build it incrementally: create a first pass, then diagram_read + diagram_update to refine.',
   source: 'native',
@@ -53,6 +54,7 @@ export const diagramCreateTool: CoderTool = {
 
 export const diagramUpdateTool: CoderTool = {
   name: 'diagram_update',
+  effectBoundary: 'filesystem',
   description:
     'Replace the FULL mxGraph XML of an existing draw.io diagram (this overwrites the file). Read the current XML first with diagram_read, make minimal targeted changes, then send the complete updated XML here. Re-opens it live in the Diagram panel.',
   source: 'native',

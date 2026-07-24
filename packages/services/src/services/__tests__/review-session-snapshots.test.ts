@@ -157,7 +157,7 @@ describe('reviewSessionSnapshots', () => {
     const pipeline = pipelineReturning({
       ok: false,
       findings: [],
-      raw: '',
+      raw: '{"findings":[{"severity":"high"}',
       errorCode: 'review_pipeline_unconfigured',
       error: 'Configure snapshot_review/reviewer.',
     });
@@ -175,6 +175,7 @@ describe('reviewSessionSnapshots', () => {
     expect(out.ok).toBe(false);
     expect(out.errorCode).toBe('review_pipeline_unconfigured');
     expect(rs.completed.at(-1)?.patch.status).toBe('error');
+    expect(rs.completed.at(-1)?.patch.raw_response).toBe('{"findings":[{"severity":"high"}');
   });
 
   it('builds contextText from focus + intent options', async () => {

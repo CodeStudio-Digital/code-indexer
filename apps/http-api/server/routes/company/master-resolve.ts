@@ -1,4 +1,5 @@
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { WorkerBackedOrchestrator } from '../../../sse/companyOrchestrator.js';
 
 /**
  * Resume-or-start the master, idempotent over an existing master run.
@@ -16,7 +17,7 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
  * Takes a `Pick` so callers (and tests) only need the two lifecycle methods.
  */
 export async function resolveAndRunMaster(
-  orchestrator: Pick<CompanyOrchestrator, 'startMaster' | 'resumeExistingMaster'>,
+  orchestrator: Pick<WorkerBackedOrchestrator, 'startMaster' | 'resumeExistingMaster'>,
   masterExists: boolean,
   opts: {
     userMessage: string;

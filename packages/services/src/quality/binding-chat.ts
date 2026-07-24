@@ -84,6 +84,10 @@ export async function coderProviderChat(
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 30_000;
   const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
+  let content = '';
+  let ttftMs: number | undefined;
+  let tokensIn: number | undefined;
+  let tokensOut: number | undefined;
   if (options.signal) {
     if (options.signal.aborted) controller.abort('aborted');
     else options.signal.addEventListener('abort', () => controller.abort('aborted'), { once: true });
@@ -102,11 +106,8 @@ export async function coderProviderChat(
         role: message.role === 'assistant' ? 'assistant' as const : 'user' as const,
         content: [{ type: 'text' as const, text: message.content }],
       }));
-    let content = '';
-    let ttftMs: number | undefined;
     let finishReason: ChatCallResult['finishReason'] = 'provider';
-    let tokensIn: number | undefined;
-    let tokensOut: number | undefined;
+    let sawTerminal = false;
     const stops = (options.stop ?? []).filter(Boolean);
     // OAuth adapters do not expose a per-request max-output knob consistently.
     // Guard the stream locally so a completion can stop as soon as one useful
@@ -149,14 +150,38 @@ export async function coderProviderChat(
         tokensIn = delta.usage.input_tokens;
         tokensOut = delta.usage.output_tokens;
       }
+      if (delta.type === 'done') {
+        sawTerminal = true;
+      }
+    }
+    if (finishReason !== 'local_stop' && finishReason !== 'local_max_tokens' && !sawTerminal) {
+      const reason = controller.signal.reason;
+      const timedOut = reason === 'timeout';
+      const aborted = reason === 'aborted';
+      return {
+        content,
+        errorBody: timedOut
+          ? `Provider stream timed out after ${timeoutMs}ms before a terminal event.`
+          : aborted
+            ? 'Provider stream was aborted before a terminal event.'
+            : 'Provider stream ended before a terminal event.',
+        tokensIn,
+        tokensOut,
+        latencyMs: performance.now() - startedAt,
+        ttftMs,
+        finishReason: timedOut ? 'timeout' : aborted ? 'aborted' : 'error',
+      };
     }
     return { content, tokensIn, tokensOut, latencyMs: performance.now() - startedAt, ttftMs, finishReason };
   } catch (e) {
     const reason = controller.signal.reason;
     return {
-      content: '',
+      content,
       errorBody: e instanceof Error ? e.message : String(e),
+      tokensIn,
+      tokensOut,
       latencyMs: performance.now() - startedAt,
+      ttftMs,
       finishReason: reason === 'timeout' ? 'timeout' : reason === 'aborted' ? 'aborted' : 'error',
     };
   } finally {

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import AdmZip from 'adm-zip';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '@mcp/shared';
 import { validateAttachments } from '../attachment-validation.js';
 
@@ -14,6 +17,12 @@ function zipBase64(entries: Record<string, string>): string {
 }
 
 describe('validateAttachments', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   it('accepts and canonicalizes a real PDF signature', () => {
     const result = validateAttachments([
       { name: '../report.pdf', mediaType: 'application/octet-stream', base64: b64('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF') },
@@ -65,6 +74,32 @@ describe('validateAttachments', () => {
       { name: 'payload.exe', mediaType: 'application/octet-stream', base64: b64('MZ') },
     ]);
     expect(result).toMatchObject({ ok: false, code: 'ATTACHMENT_UNSUPPORTED' });
+  });
+
+  it('accepts any regular file type as an exact local reference when enabled', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'attachment-reference-'));
+    tempDirs.push(dir);
+    const path = join(dir, '48bc9f98.tmp');
+    writeFileSync(path, Buffer.from([0, 1, 2, 3]));
+
+    const result = validateAttachments([
+      { name: '48bc9f98.tmp', mediaType: 'application/octet-stream', path },
+    ], { allowFileReferences: true });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value?.[0]).toEqual({
+      name: '48bc9f98.tmp',
+      mediaType: 'application/octet-stream',
+      path,
+    });
+  });
+
+  it('rejects local references on surfaces without filesystem authorization', () => {
+    const result = validateAttachments([
+      { name: 'a.tmp', mediaType: 'application/octet-stream', path: 'C:\\temp\\a.tmp' },
+    ]);
+    expect(result).toMatchObject({ ok: false, code: 'ATTACHMENT_REFERENCE_UNSUPPORTED' });
   });
 
   it('rejects an image whose bytes contradict its extension and MIME type', () => {

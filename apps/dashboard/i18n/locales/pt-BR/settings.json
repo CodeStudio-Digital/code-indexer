@@ -85,7 +85,7 @@
   "item.CODER_DOOM_LOOP_THRESHOLD.label": "Limite estrito de doom-loop",
   "item.CODER_FALLBACK_CHAIN.description": "Ids de provider separados por vírgula para tentar em ordem quando o primário dá 5xx/429.",
   "item.CODER_FALLBACK_CHAIN.label": "Cadeia de fallback de provider",
-  "item.CODER_GOAL_VERIFY_MAX_TURNS.description": "Teto exato opcional de turnos para o verificador independente de conclusão. 0 = ilimitado.",
+  "item.CODER_GOAL_VERIFY_MAX_TURNS.description": "Teto de turnos do verificador independente de conclusão. O padrão é 12; valores abaixo de 1 voltam para 12, e o máximo absoluto é 50.",
   "item.CODER_GOAL_VERIFY_MAX_TURNS.label": "Máx. de turnos do verificador de conclusão",
   "item.CODER_GREP_PER_FILE_CAP.description": "Limita matches por arquivo na saída do `grep_code` para um arquivo quente não afogar os resultados.",
   "item.CODER_GREP_PER_FILE_CAP.label": "Limite de matches por arquivo no grep",

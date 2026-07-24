@@ -110,9 +110,10 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 async function withRetry<T>(
   fn: () => Promise<T>,
   signal?: AbortSignal,
+  maxAttempts = RETRY_MAX_ATTEMPTS,
 ): Promise<T> {
   let delay = RETRY_INITIAL_DELAY_MS;
-  for (let attempt = 0; attempt < RETRY_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (err) {
@@ -128,7 +129,7 @@ async function withRetry<T>(
         throw new Error(`Rate limit terminal: suggested retry delay ${Math.round(suggestedDelay / 1000)}s exceeds threshold. ${msg}`);
       }
 
-      if (attempt >= RETRY_MAX_ATTEMPTS - 1) throw err;
+      if (attempt >= maxAttempts - 1) throw err;
 
       const useDelay = suggestedDelay ?? delay;
       const jitter = useDelay * RETRY_JITTER * (Math.random() * 2 - 1);
@@ -382,6 +383,7 @@ export async function* streamGenerateContent(
   signal?: AbortSignal,
   sessionId?: string,
   thinkingEnabled?: boolean,
+  maxAttempts = RETRY_MAX_ATTEMPTS,
 ): AsyncIterable<StreamChunk> {
   const sid = sessionId ?? randomUUID();
   // Inject session_id + optional generationConfig into the request object
@@ -421,6 +423,7 @@ export async function* streamGenerateContent(
       signal,
     }),
     signal,
+    maxAttempts,
   );
 
   const stream = res.data;

@@ -104,6 +104,14 @@ export interface RunContext {
    * over.
    */
   recovery: Map<RecoveryKind, number>;
+  /** Consecutive 429/5xx retries for the current logical provider call. */
+  transientRetriesThisTurn: number;
+  /** Run-wide ordinal for physical upstream attempts persisted to telemetry. */
+  providerAttempts: number;
+  /** Consecutive OpenRouter prompt-cache misses above the configured threshold. */
+  consecutiveLargePromptCacheMisses: number;
+  /** Latched once the long-prompt cache-miss guard trips. */
+  cacheMissGuardError: Error | null;
   /** Legacy rollback-only tuple table (`CODER_DEDUP_POLICY=legacy`). */
   dupCalls: Map<string, DupCallEntry>;
   /** Cross-turn post-result observation + monotonic workspace state epoch. */
@@ -143,14 +151,46 @@ export interface RunContext {
    */
   planNudges: number;
   /**
-   * A1 — independent goal-completion verifier attempts this run. When
-   * `CODER_GOAL_VERIFY` is on, a text-only finish with an active goal + pending
-   * diff is gated by a read-only verifier subagent (`bridge.verifyGoalCompletion`).
+   * Runtime goal-lifecycle gate state. `ledgerStartSeq` scopes substantive
+   * work detection to this run even when the ToolContext/ledger is reused.
+   * Missing and in-progress phases have independent bounded nudge budgets so
+   * creating a late goal still leaves one chance to close it correctly.
+   */
+  goalLifecycle: {
+    ledgerStartSeq: number;
+    /**
+     * Sticky ownership proof for a goal created by this run. The shared ledger
+     * is intentionally bounded, so the original create_goal entry can age out
+     * during a long objective while the run is still active.
+     */
+    createdGoalInRun: boolean;
+    missingNudges: number;
+    inProgressNudges: number;
+    /**
+     * Logical operations refused before execution because no active goal
+     * existed, mapped to the ledger sequence immediately before the refusal.
+     */
+    preDispatchPending: Map<string, number>;
+  };
+  /**
+   * Completion-evidence gate state. Shares the run-start ledger boundary with
+   * goal lifecycle, but owns an independent one-shot nudge budget.
+   */
+  verification: {
+    ledgerStartSeq: number;
+    nudges: number;
+  };
+  /**
+   * A1 — independent goal-completion verifier attempts this run. Completing an
+   * active goal is gated by a read-only verifier subagent
+   * (`bridge.verifyGoalCompletion`), including substantive no-diff goals.
    * A 'not met' verdict re-enters the turn with the gaps as a `<system-reminder>`;
    * bounded by `CODER_GOAL_VERIFY_MAX_ATTEMPTS` (default 2) so a stubborn verdict
    * can't loop the run forever. Incremented only when a nudge is actually issued.
    */
   goalVerifyAttempts: number;
+  /** Evidence revision associated with goalVerifyAttempts; progress resets the cap. */
+  goalVerifyEvidenceFingerprint: string | null;
   /** Dedup deterministic loop-strategy reminders for five turns. */
   lastStrategyNudgeTurnByKey: Map<string, number>;
   /**
@@ -200,8 +240,7 @@ export interface RunContext {
   operations: AsyncOperationRegistry;
   /**
    * Optional bridge to features still owned by the legacy `CoderRunner`.
-   * When unset the BT uses safe defaults (no skills, no quality suffix,
-   * no plan-mode gate, etc.).
+   * When unset the BT uses safe defaults (no skills, no plan-mode gate, etc.).
    */
   bridge?: BridgeCallbacks;
   /**
@@ -360,7 +399,7 @@ export interface BehaviorNode {
 /**
  * Bridge callbacks injected by the legacy `CoderRunner` into the BT so the
  * Executing node can delegate features it doesn't reimplement (skills,
- * active-context, quality feedback, plan-mode gate, …) back to methods
+ * active-context, plan-mode gate, …) back to methods
  * that already exist on the runner. Keeps the BT slim while preserving
  * production behavior.
  *
@@ -376,8 +415,6 @@ export interface BridgeCallbacks {
   buildActiveSkillsBlock?: (compactedHistory: AgentMessage[]) => string | null;
   /** Build the `<active-context>` block (goal + todos + scope). */
   buildActiveContextBlock?: () => string | null;
-  /** Legacy compatibility hook; terminal semantic Quality always returns an empty suffix. */
-  buildQualityFeedbackSuffix?: () => string;
   /**
    * Resolve the temperature for this turn. Returns null when the model
    * rejects sampling (e.g. OpenAI o-series with reasoning).
@@ -487,35 +524,24 @@ export interface BridgeCallbacks {
     isRepeatable: boolean,
     turn: number,
   ) => string | null;
-  /** Persist objective tool refusals after a batch; this never calls an LLM. */
-  runQualityCheck?: (args: {
-    turn: number;
-    assistantText: string;
-    toolResults: Array<{
-      name: string;
-      input: unknown;
-      content: string;
-      isError: boolean;
-      refusalKind?: string;
-      guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
-    }>;
-  }) => void;
-  /** Persist a deduplicated deterministic strategy reminder. */
-  recordStrategyNudge?: (args: {
-    guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
-    toolName?: string;
-    count?: number;
-  }) => void;
   /**
-   * A1 — independent goal-completion verifier (host-implemented). At a text-only
-   * finish the Executing node calls this; the host gates on `CODER_GOAL_VERIFY`
-   * + an active goal + a pending diff, resolves the `goal_verification` pipeline
-   * binding to a (cross-model) provider, spawns a READ-ONLY verifier subagent
-   * (`runVerifyCompletionSubagent`) that never sees the executor transcript, and
-   * returns its verdict. Returns null when disabled, not applicable, or on any
-   * error (fail-open — never blocks the run). Unset on subagents / tests.
+   * Await the host's previous-turn durability boundary before this turn may
+   * call the provider. The host schedules its flush from the synchronous
+   * `turn_start` event immediately before this callback is awaited.
    */
-  verifyGoalCompletion?: () => Promise<{
+  awaitTurnPersistence?: () => Promise<void>;
+  /**
+   * A1 — independent goal-completion verifier (host-implemented). Before
+   * update_goal(complete), the Executing node calls this for an in-progress
+   * goal. The host resolves the `goal_verification` pipeline binding to a
+   * (cross-model) provider, spawns a READ-ONLY verifier subagent that never sees
+   * the executor transcript, and returns its verdict. Returns null when
+   * disabled, not applicable, or on any error (fail-open). Unset on company
+   * subordinates / tests.
+   */
+  verifyGoalCompletion?: (
+    evidence?: import('../nodes/executing-verification-gate.js').VerificationReadiness,
+  ) => Promise<{
     goalMet: boolean;
     gaps: ReadonlyArray<{ description: string; severity: string }>;
   } | null>;
@@ -626,9 +652,8 @@ export interface BridgeCallbacks {
   injectSystemReminder?: (text: string) => void;
   /**
    * Per-turn telemetry persistence — wraps the pure
-   * `core/runner/telemetry/persist-turn.ts` helper with class-bound side
-   * effects (quality classifier dispatch + tool-selection feedback
-   * observer). Returns the inserted `coder_turn_telemetry.id` so the
+   * `core/runner/telemetry/persist-turn.ts` helper with the tool-selection
+   * feedback observer. Returns the inserted `coder_turn_telemetry.id` so the
    * Executing node can update `ctx.lastTurnTelemetryId` for the host's
    * `flushPendingTurn` to consume.
    *
@@ -668,6 +693,8 @@ export interface BridgeCallbacks {
    */
   backgroundJobs?: {
     hasActive: () => boolean;
+    /** Terminal full results still waiting for collect_agents acknowledgement. */
+    hasUncollectedTerminal: () => boolean;
     park: (signal: AbortSignal) => Promise<'work' | 'message' | 'aborted' | 'timeout'>;
   };
 }

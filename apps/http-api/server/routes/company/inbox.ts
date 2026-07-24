@@ -19,14 +19,14 @@ import {
 export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore } = deps;
 
-  app.get('/api/company/sessions/:id/inbox', (c) => {
+  app.get('/api/company/sessions/:id/inbox', async (c) => {
     const sessionId = parseIdParam(c);
     const status = c.req.query('status') as InboxStatus | undefined;
     const toRole = c.req.query('to_role') ?? undefined;
     const orchestrator = activeOrchestrators.get(sessionId);
 
     if (orchestrator) {
-      return c.json(orchestrator.inboxList({ status, toRole }));
+      return c.json(await orchestrator.inboxList({ status, toRole }));
     }
     return c.json(
       companyStore.listInboxMessages({
@@ -46,7 +46,7 @@ export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
     const body = await parseJsonBody<{ reason?: string }>(c);
     const orchestrator = activeOrchestrators.get(sessionId);
     if (!orchestrator) return c.json({ error: 'Session is not running.' }, 409);
-    const ok = orchestrator.inboxCancel(msgId, body.reason ?? 'cancelled by operator');
+    const ok = await orchestrator.inboxCancel(msgId, body.reason ?? 'cancelled by operator');
     if (!ok) return notFound(c, 'Message not found or already terminal.');
     return c.json({ ok: true });
   });
@@ -68,7 +68,7 @@ export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
     if (!answer) return c.json({ error: 'answer is required' }, 400);
     const orchestrator = activeOrchestrators.get(sessionId);
     if (!orchestrator) return c.json({ error: 'Session is not running.' }, 409);
-    const ok = orchestrator.inboxRespond(msgId, answer);
+    const ok = await orchestrator.inboxRespond(msgId, answer);
     if (!ok) return notFound(c, 'Message not found or already terminal.');
     return c.json({ ok: true });
   });

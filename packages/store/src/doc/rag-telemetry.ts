@@ -41,20 +41,31 @@ export interface DocSearchEventInput {
   result_count: number;
 }
 
-export function recordSearchEvent(db: DB, input: DocSearchEventInput): void {
-  db.prepare(
+export function recordSearchEvents(db: DB, inputs: readonly DocSearchEventInput[]): void {
+  if (inputs.length === 0) return;
+  const insert = db.prepare(
     `INSERT INTO doc_search_events(
        project_id,query_hash,scope,collection_ids_json,mode,duration_ms,fts_hits,vector_hits,
        stale_vector_hits,vector_coverage,top_relevance,no_good_match,result_count
      ) VALUES (@project_id,@query_hash,@scope,@collection_ids_json,@mode,@duration_ms,@fts_hits,@vector_hits,
        @stale_vector_hits,@vector_coverage,@top_relevance,@no_good_match,@result_count)`,
-  ).run({
-    project_id: input.project_id ?? null,
-    collection_ids_json: input.collection_ids ? JSON.stringify(input.collection_ids) : null,
-    stale_vector_hits: input.stale_vector_hits ?? 0,
-    vector_coverage: input.vector_coverage ?? null,
-    top_relevance: input.top_relevance ?? null,
-    no_good_match: input.no_good_match ? 1 : 0,
-    ...input,
+  );
+  const transaction = db.transaction((batch: readonly DocSearchEventInput[]) => {
+    for (const input of batch) {
+      insert.run({
+        ...input,
+        project_id: input.project_id ?? null,
+        collection_ids_json: input.collection_ids ? JSON.stringify(input.collection_ids) : null,
+        stale_vector_hits: input.stale_vector_hits ?? 0,
+        vector_coverage: input.vector_coverage ?? null,
+        top_relevance: input.top_relevance ?? null,
+        no_good_match: input.no_good_match ? 1 : 0,
+      });
+    }
   });
+  transaction(inputs);
+}
+
+export function recordSearchEvent(db: DB, input: DocSearchEventInput): void {
+  recordSearchEvents(db, [input]);
 }

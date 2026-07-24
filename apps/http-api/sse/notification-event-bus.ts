@@ -40,7 +40,6 @@ const CODER_EVENTS = new Set([
   'done',
   'error',
   'tool_loop_intervention',
-  'quality_watchdog_alert',
   'agents_group_start',
   'agent_progress',
   'agents_group_end',
@@ -136,9 +135,6 @@ function hasNotifiablePayload(event: string, value: unknown): boolean {
   }
   if (event === 'agents_group_start') return data.background === true;
   if (event === 'agents_group_end') return typeof data.jobId === 'string';
-  if (event === 'quality_watchdog_alert') {
-    return data.verdict === 'warn' || data.verdict === 'flagged' || data.verdict === 'error';
-  }
   if (event === 'tool_loop_intervention') {
     return !(data.kind === 'dup-result-marker' && data.severity === 'informational');
   }

@@ -13,9 +13,7 @@
  *   - Compute `estimated_cost_usd` via the pricing table.
  *   - Call `store.recordTurnTelemetry(...)` and return the inserted id.
  *
- * Out of scope (stays in `CoderRunner` because they need class state):
- *   - Quality classifier dispatch (`pendingClassifyByTurn`,
- *     `extractLastAssistantText`).
+ * Out of scope (stays in `CoderRunner` because it needs class state):
  *   - Tool-selection feedback observer (needs `this.messages`).
  *
  * The runner exposes the FULL flow via `BridgeCallbacks.persistTurnTelemetry`,

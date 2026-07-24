@@ -145,7 +145,9 @@ describe('AgentMemoryService active-generation queries', () => {
 
   it('fences bulk scope hygiene before consolidation/decay touches SQLite', () => {
     const order: string[] = [];
-    const service = new AgentMemoryService({} as CodeIndexDB, null, null, null, {
+    const service = new AgentMemoryService({
+      listAgentMemoryForSemanticIndex: vi.fn(() => [memoryRow(3), memoryRow(4)]),
+    } as unknown as CodeIndexDB, null, null, null, {
       noteMutation: vi.fn(),
       beginMutation: vi.fn(() => {
         order.push('fence:start');
@@ -161,6 +163,48 @@ describe('AgentMemoryService active-generation queries', () => {
 
     expect(result).toEqual({ archived: 2, decayed: 1 });
     expect(order).toEqual(['fence:start', 'sqlite:hygiene', 'fence:settle']);
+  });
+
+  it('coalesces N inserts into one identity fence and one settlement', async () => {
+    let nextId = 20;
+    const createAgentMemory = vi.fn(() => memoryRow(nextId++));
+    const beginMutation = vi.fn((input) => ({
+      jobId: 80,
+      token: 'batch-token',
+      namespace: input.namespace,
+    }));
+    const settleMutation = vi.fn();
+    const service = new AgentMemoryService({
+      createAgentMemory,
+    } as unknown as CodeIndexDB, null, null, null, {
+      noteMutation: vi.fn(),
+      beginMutation,
+      settleMutation,
+    });
+
+    await service.runMutationBatch(async () => {
+      for (let index = 0; index < 10; index++) {
+        service.create({
+          projectId: 7,
+          name: `memory-${index}`,
+          content: `content-${index}`,
+        });
+      }
+    });
+
+    expect(createAgentMemory).toHaveBeenCalledTimes(10);
+    expect(beginMutation).toHaveBeenCalledOnce();
+    expect(beginMutation).toHaveBeenCalledWith({
+      namespace: 'memory:project:p7',
+      itemKeys: ['*'],
+      operation: 'upsert',
+    });
+    expect(settleMutation).toHaveBeenCalledOnce();
+    expect(settleMutation).toHaveBeenCalledWith({
+      jobId: 80,
+      token: 'batch-token',
+      namespace: 'memory:project:p7',
+    }, null);
   });
 
   it('routes project and user recall through their active namespace snapshot', async () => {

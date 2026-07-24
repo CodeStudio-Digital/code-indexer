@@ -8,6 +8,29 @@
  */
 import type { AgentMessage, ChatDelta, JsonSchema } from './wire.js';
 
+/**
+ * One physical upstream HTTP/stream attempt.
+ *
+ * Providers report this independently from the successful turn telemetry so
+ * retries and failed requests remain visible instead of disappearing behind
+ * the final successful response.
+ */
+export interface ProviderAttemptTelemetry {
+  status: number | null;
+  ok: boolean;
+  generationId?: string | null;
+  requestId?: string | null;
+  upstreamProvider?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  cachedTokens?: number | null;
+  costUsd?: number | null;
+  retryAfter?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  durationMs: number;
+}
+
 export interface ToolSpec {
   name: string;
   description: string;
@@ -51,6 +74,11 @@ export interface ChatRequest {
   previousResponseMessageCount?: number;
   /** Stable local session id, used by providers that expose prompt/cache affinity knobs. */
   sessionId?: string | number;
+  /**
+   * Best-effort audit hook fired once for every physical upstream attempt.
+   * Telemetry failures must never fail the model request.
+   */
+  onAttempt?: (attempt: ProviderAttemptTelemetry) => void | Promise<void>;
   /**
    * Sampling parameters resolved by the runner via `resolveTemperature()`.
    * Each provider reads `inference.temperature` and translates it to its

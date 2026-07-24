@@ -7,9 +7,11 @@ import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { importOpenApiInto } from '@mcp/services/api-client/import-openapi.js';
 import { resolveApiCtx } from './shared.js';
+import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 export const apiImportOpenApiTool: CoderTool = {
   name: 'api_import_openapi',
+  effectBoundary: 'control',
   description:
     'Discover an OpenAPI/Swagger spec under the project root and import it into a collection (one request per operation). Idempotent: re-import preserves already-verified requests. Returns the collectionId to test against.',
   source: 'native',
@@ -28,6 +30,11 @@ export const apiImportOpenApiTool: CoderTool = {
       projectId: r.projectId,
       rootPath: ctx.cwd,
       specPath: typeof args.specPath === 'string' ? args.specPath : undefined,
+      beforeWrite: () => assertMutationFence(ctx.mutationFence, {
+        kind: 'control',
+        operation: 'api_import_openapi.write',
+        resource: String(r.projectId),
+      }),
     });
     if ('error' in outcome) return err(outcome.error);
     const staleNote = outcome.stale ? ` ${outcome.stale} removed endpoint(s) were dropped from the regression battery.` : '';
@@ -37,6 +44,7 @@ export const apiImportOpenApiTool: CoderTool = {
 
 export const apiUpdateRequestTool: CoderTool = {
   name: 'api_update_request',
+  effectBoundary: 'control',
   description:
     'Patch a request to fix it — add a missing required param, correct a header/body/path/method the spec got wrong. Pass only the fields to change. headers/query are objects; body is a string. After fixing, re-run with api_run_request.',
   source: 'native',
@@ -69,6 +77,11 @@ export const apiUpdateRequestTool: CoderTool = {
     if (args.query && typeof args.query === 'object') patch.query_json = JSON.stringify(args.query);
     if (typeof args.body === 'string') patch.body_json = args.body;
     if (typeof args.bodyKind === 'string') patch.body_kind = args.bodyKind;
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: 'api_update_request.write',
+      resource: String(rid),
+    });
     r.store.updateRequest(rid, patch);
     return ok(`request #${rid} updated (${Object.keys(patch).join(', ') || 'no changes'})`);
   },
@@ -76,6 +89,7 @@ export const apiUpdateRequestTool: CoderTool = {
 
 export const apiMarkVerifiedTool: CoderTool = {
   name: 'api_mark_verified',
+  effectBoundary: 'control',
   description:
     'Pin a request as verified with its expected status (and an optional response-shape skeleton like {"id":"number","name":"string"}). Verified requests form the non-LLM regression battery. Call this once a request returns the right status against the live server.',
   source: 'native',
@@ -98,6 +112,11 @@ export const apiMarkVerifiedTool: CoderTool = {
     const rid = Number(args.requestId);
     if (!r.store.getRequest(rid)) return err(`request ${rid} not found`);
     const assert = args.shape && typeof args.shape === 'object' ? JSON.stringify({ shape: args.shape }) : null;
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: 'api_mark_verified.write',
+      resource: String(rid),
+    });
     r.store.markVerified(rid, Number(args.expectedStatus), assert);
     return ok(`request #${rid} verified (expect ${args.expectedStatus})`);
   },

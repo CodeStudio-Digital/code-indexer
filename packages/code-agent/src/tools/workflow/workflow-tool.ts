@@ -22,6 +22,7 @@ import {
   assignWaveIndexes,
   countWorkflowOutcomes,
   validateWorkflowSteps,
+  workflowStatusFromSteps,
   type WorkflowRecord,
   type WorkflowStepInput,
   type WorkflowStepState,
@@ -29,6 +30,7 @@ import {
 import { executeWorkflow } from './workflow-run.js';
 import {
   getWorkflow,
+  reloadWorkflowUnderLease,
   releaseWorkflowRun,
   saveWorkflow,
   tryAcquireWorkflowRun,
@@ -142,108 +144,236 @@ function renderWorkflowResult(record: WorkflowRecord): string {
   return header + bodies.join('\n\n---\n\n') + hint;
 }
 
+function workflowToolResult(
+  record: WorkflowRecord,
+  content = renderWorkflowResult(record),
+  includeUsage = false,
+): ToolResult {
+  const counts = countWorkflowOutcomes(record);
+  return {
+    ...(record.status === 'completed' ? ok(content) : err(content)),
+    structuredData: {
+      kind: 'workflow_result',
+      status: record.status,
+      workflowId: record.id,
+      stepCount: record.steps.length,
+      completedCount: counts.completed,
+      partialCount: counts.partial,
+      failedCount: counts.failed,
+      skippedCount: counts.skipped + counts.pending,
+      stillFailed: counts.partial + counts.failed + counts.skipped + counts.pending,
+    },
+    ...(includeUsage ? { subUsage: record.totalUsage } : {}),
+  };
+}
+
 export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
   return {
     name: 'workflow',
+    effectBoundary: 'nested',
     description: maybeTerse(WORKFLOW_DESC),
     parameters: workflowSchema,
     source: 'native',
     mutates: true,
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
       const sessionId = ctx.runner?.sessionId;
-      let record: WorkflowRecord;
       const resumeId = typeof args.resume_workflow_id === 'string' ? args.resume_workflow_id.trim() : '';
-
-      if (resumeId) {
-        const existing = sessionId != null ? getWorkflow(sessionId, resumeId) : undefined;
-        if (!existing) {
-          return err(
-            `workflow: unknown workflow '${resumeId}' for this session — it may have expired. ` +
-            'Author the DAG again with a fresh workflow({steps:[...]}) call.',
+      let record: WorkflowRecord | undefined;
+      let leaseAcquired = false;
+      let runStarted = false;
+      try {
+        if (resumeId) {
+          const observed = sessionId != null
+            ? getWorkflow(sessionId, resumeId, deps.sessionStore)
+            : undefined;
+          if (!observed) {
+            return err(
+              `workflow: unknown workflow '${resumeId}' for this session — it may have expired. ` +
+              'Author the DAG again with a fresh workflow({steps:[...]}) call.',
+            );
+          }
+          if (sessionId != null) {
+            // Acquire before touching the cache object. After the CAS, discard
+            // the pre-acquire observation and reload the authoritative row:
+            // another executor may have completed steps in between.
+            if (!tryAcquireWorkflowRun(sessionId, resumeId, deps.sessionStore)) {
+              return err(`workflow: '${resumeId}' is already running in this session.`);
+            }
+            leaseAcquired = true;
+            record = reloadWorkflowUnderLease(sessionId, resumeId, deps.sessionStore);
+            if (!record) {
+              return err(
+                `workflow: recovery checkpoint for '${resumeId}' changed while acquiring; ` +
+                'nothing was relaunched.',
+              );
+            }
+          } else {
+            record = observed;
+          }
+          // Only failures that were already terminal when this resume began
+          // are eligible for this call's retry flag. A crash-orphan that is
+          // discovered below must first be durably classified; even when the
+          // caller supplied retry_failed:true, it is never replayed in this
+          // same recovery call after a possibly-lost ACK.
+          const retryableAtEntry = new Set(
+            record.steps
+              .filter((step) => step.status === 'failed' || step.status === 'skipped')
+              .map((step) => step.id),
           );
+          for (const step of record.steps) {
+            if (step.status !== 'running') continue;
+            const reconciliation = sessionId != null
+              && step.groupId
+              && deps.sessionStore?.reconcileWorkflowStepRun
+              ? deps.sessionStore.reconcileWorkflowStepRun(
+                  sessionId,
+                  step.groupId,
+                  step.id,
+                )
+              : {
+                  outcome: 'outcome_unknown' as const,
+                  detail: step.groupId
+                    ? 'durable AgentRun reconciliation is unavailable'
+                    : 'the running checkpoint has no idempotency group id',
+                };
+            if (reconciliation.outcome === 'terminal') {
+              step.status = reconciliation.stepStatus ?? 'failed';
+              const reference = reconciliation.resultRef
+                ? ` Result reference: ${reconciliation.resultRef}.`
+                : '';
+              if (step.status === 'completed' || step.status === 'partial') {
+                step.summary =
+                  `[reconciled after executor crash: ${reconciliation.detail}.` +
+                  `${reference || ' Result body was not recoverable from the bounded checkpoint.'}]`;
+                step.error = undefined;
+              } else {
+                step.summary = undefined;
+                step.error =
+                  `reconciled terminal child failure (${reconciliation.reason ?? 'unknown'}): ` +
+                  reconciliation.detail;
+              }
+            } else {
+              step.status = 'failed';
+              step.summary = undefined;
+              step.error =
+                `outcome_unknown: ${reconciliation.detail}. No automatic retry was performed. ` +
+                `Call workflow({resume_workflow_id:"${record.id}", retry_failed:true}) again ` +
+                'to explicitly accept replay risk.';
+            }
+          }
+          for (const step of record.steps) {
+            if (args.retry_failed === true
+              && retryableAtEntry.has(step.id)
+              && (step.status === 'failed' || step.status === 'skipped')) {
+              step.status = 'pending';
+              step.error = undefined;
+              step.summary = undefined;
+            }
+          }
+          if (!record.steps.some((s) => s.status === 'pending')) {
+            record.status = workflowStatusFromSteps(record);
+            if (sessionId != null && !saveWorkflow(sessionId, record, deps.sessionStore)) {
+              return err(`workflow: recovery classification for '${record.id}' was fenced.`);
+            }
+            const content =
+              `workflow ${record.id} has no pending steps (use retry_failed:true to relaunch ` +
+              'failed/skipped ones).\n\n' + renderWorkflowResult(record);
+            return workflowToolResult(record, content);
+          }
+          record.runCount += 1;
+          record.status = 'running';
+        } else {
+          const normalized = normalizeSteps((args.steps ?? []) as WorkflowStepInput[]);
+          if (typeof normalized === 'string') return err(normalized);
+          record = {
+            id: `wf_${randomUUID().slice(0, 8)}`,
+            name: String(args.name ?? 'workflow').trim().slice(0, 100) || 'workflow',
+            sessionId,
+            status: 'running',
+            steps: normalized,
+            totalUsage: { input_tokens: 0, output_tokens: 0 },
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            runCount: 1,
+          };
         }
-        record = existing;
-        for (const step of record.steps) {
-          if (step.status === 'running') step.status = 'pending';
-          if (args.retry_failed === true && (step.status === 'failed' || step.status === 'skipped')) {
-            step.status = 'pending';
-            step.error = undefined;
-            step.summary = undefined;
+
+        let totalWaves: number;
+        try {
+          totalWaves = assignWaveIndexes(record.steps);
+        } catch (e) {
+          return err(e instanceof Error ? e.message : String(e));
+        }
+        if (sessionId != null) {
+          // A fresh workflow must have a durable row before the cross-process
+          // lease CAS. A resume already acquired and reloaded above.
+          if (!resumeId) {
+            if (!saveWorkflow(sessionId, record, deps.sessionStore)) {
+              return err(
+                `workflow: unable to persist bounded recovery checkpoint for '${record.id}'; ` +
+                'the workflow was not started.',
+              );
+            }
+            if (!tryAcquireWorkflowRun(sessionId, record.id, deps.sessionStore)) {
+              return err(`workflow: '${record.id}' is already running in this session.`);
+            }
+            leaseAcquired = true;
+          }
+          if (!saveWorkflow(sessionId, record, deps.sessionStore)) {
+            return err(`workflow: recovery checkpoint for '${record.id}' was fenced or unavailable.`);
           }
         }
-        if (!record.steps.some((s) => s.status === 'pending')) {
-          return ok(
-            `workflow ${record.id} has no pending steps (use retry_failed:true to relaunch ` +
-            'failed/skipped ones).\n\n' + renderWorkflowResult(record),
-          );
-        }
-        record.runCount += 1;
-        record.status = 'running';
-      } else {
-        const normalized = normalizeSteps((args.steps ?? []) as WorkflowStepInput[]);
-        if (typeof normalized === 'string') return err(normalized);
-        record = {
-          id: `wf_${randomUUID().slice(0, 8)}`,
-          name: String(args.name ?? 'workflow').trim().slice(0, 100) || 'workflow',
-          sessionId,
-          status: 'running',
-          steps: normalized,
-          totalUsage: { input_tokens: 0, output_tokens: 0 },
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          runCount: 1,
-        };
-      }
 
-      let totalWaves: number;
-      try {
-        totalWaves = assignWaveIndexes(record.steps);
-      } catch (e) {
-        return err(e instanceof Error ? e.message : String(e));
-      }
-      if (sessionId != null) {
-        if (!tryAcquireWorkflowRun(sessionId, record.id)) {
-          return err(`workflow: '${record.id}' is already running in this session.`);
-        }
-        saveWorkflow(sessionId, record);
-      }
-
-      ctx.runner?.emit('workflow_run_started', {
-        workflow_id: record.id,
-        name: record.name,
-        ...(resumeId ? { resumed: true } : {}),
-        total_waves: totalWaves,
-        steps: record.steps.map((s) => ({
-          id: s.id,
-          title: s.title,
-          profile: s.profileId,
-          depends_on: s.dependsOn,
-          wave: s.wave,
-          status: s.status,
-        })),
-      });
-      ctx.reportProgress?.(`workflow ${record.id}: ${record.steps.length} step(s), ${totalWaves} wave(s)`);
-      console.log(
-        `[coder s=${sessionId ?? '?'}] workflow ${resumeId ? 'resume' : 'start'} id=${record.id} ` +
-        `steps=${record.steps.length} waves=${totalWaves}`,
-      );
-
-      try {
-        await executeWorkflow(deps, ctx, record);
-      } finally {
-        if (sessionId != null) releaseWorkflowRun(sessionId, record.id);
-        const counts = countWorkflowOutcomes(record);
-        ctx.runner?.emit('workflow_run_finished', {
+        ctx.runner?.emit('workflow_run_started', {
           workflow_id: record.id,
-          status: record.status === 'running' ? 'failed' : record.status,
-          completed_count: counts.completed + counts.partial,
-          failed_count: counts.failed,
-          skipped_count: counts.skipped + counts.pending,
-          total_usage: record.totalUsage,
+          name: record.name,
+          ...(resumeId ? { resumed: true } : {}),
+          total_waves: totalWaves,
+          steps: record.steps.map((s) => ({
+            id: s.id,
+            title: s.title,
+            profile: s.profileId,
+            depends_on: s.dependsOn,
+            wave: s.wave,
+            status: s.status,
+          })),
         });
+        runStarted = true;
+        ctx.reportProgress?.(`workflow ${record.id}: ${record.steps.length} step(s), ${totalWaves} wave(s)`);
+        console.log(
+          `[coder s=${sessionId ?? '?'}] workflow ${resumeId ? 'resume' : 'start'} id=${record.id} ` +
+          `steps=${record.steps.length} waves=${totalWaves}`,
+        );
+        await executeWorkflow(deps, ctx, record);
+        return workflowToolResult(record, renderWorkflowResult(record), true);
+      } catch (error) {
+        // Once the workflow id exists, convert fatal execution failures into a
+        // structured tool error. This preserves the opaque recovery identity
+        // in the root ledger even when a provider/lease failure interrupted
+        // the normal terminal renderer.
+        if (!record) throw error;
+        const detail = error instanceof Error ? error.message : String(error);
+        return workflowToolResult(
+          record,
+          `workflow ${record.id} failed before a terminal checkpoint: ${detail}`,
+          true,
+        );
+      } finally {
+        if (sessionId != null && leaseAcquired && record) {
+          releaseWorkflowRun(sessionId, record.id, deps.sessionStore);
+        }
+        if (runStarted && record) {
+          const counts = countWorkflowOutcomes(record);
+          ctx.runner?.emit('workflow_run_finished', {
+            workflow_id: record.id,
+            status: record.status === 'running' ? 'failed' : record.status,
+            completed_count: counts.completed + counts.partial,
+            failed_count: counts.failed,
+            skipped_count: counts.skipped + counts.pending,
+            total_usage: record.totalUsage,
+          });
+        }
       }
-
-      return { ...ok(renderWorkflowResult(record)), subUsage: record.totalUsage };
     },
   };
 }

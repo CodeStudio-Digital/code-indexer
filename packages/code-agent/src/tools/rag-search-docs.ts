@@ -17,7 +17,7 @@
  *
  * Backed by `DocHybridSearch` in `@mcp/services`. Wiring is via a process
  * singleton (`setGlobalDocSearch`) — same pattern as `setGlobalSubAgentCache`,
- * `setGlobalQualityClassifierPipeline`, etc. — to avoid threading another
+ * other process-wide pipeline holders — to avoid threading another
  * dep through `ToolContext`.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';

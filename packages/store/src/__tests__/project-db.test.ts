@@ -6,7 +6,7 @@
  * ABI note: needs `pnpm node:rebuild` (better-sqlite3 built for Node, not
  * Electron) — ERR_DLOPEN_FAILED here is an ABI mismatch, not a logic bug.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -245,12 +245,16 @@ describe('ATTACH federation', () => {
 describe('ProjectDbPool', () => {
   it('caches handles, reuses on get, and evicts the LRU over capacity', () => {
     const dir = freshDir();
+    const onCheckpoint = vi.fn();
     const pool = new ProjectDbPool({
       resolve: (id) => ({ dbPath: join(dir, `p${id}.db`) }),
       maxOpen: 2,
+      onCheckpoint,
     });
     try {
       const a1 = pool.get(1);
+      const closeSpy = vi.spyOn(a1, 'close');
+      const truncateSpy = vi.spyOn(a1, 'checkpointAndClose');
       const a1again = pool.get(1);
       expect(a1again).toBe(a1); // same cached handle
       pool.get(2);
@@ -259,6 +263,9 @@ describe('ProjectDbPool', () => {
       expect(pool.size).toBe(2);
       expect(pool.has(1)).toBe(false);
       expect(pool.has(3)).toBe(true);
+      expect(closeSpy).toHaveBeenCalledOnce();
+      expect(truncateSpy).not.toHaveBeenCalled();
+      expect(onCheckpoint).toHaveBeenCalledWith(1, join(dir, 'p1.db'));
     } finally {
       pool.closeAll();
     }

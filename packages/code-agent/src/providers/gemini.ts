@@ -122,6 +122,7 @@ export class GeminiChatProvider implements ChatProvider {
     // tool_call_end so the runner's bookkeeping stays uniform across providers.
     let lastUsage: { input: number; output: number; cachedRead: number; thinking: number } | null = null;
     let finishReason: string | undefined;
+    let receivedTerminal = false;
 
     try {
     for await (const chunk of stream) {
@@ -155,8 +156,9 @@ export class GeminiChatProvider implements ChatProvider {
           thinking: chunk.usageMetadata.thoughtsTokenCount ?? 0,
         };
       }
-      if (candidate?.finishReason) {
+      if (candidate?.finishReason != null) {
         finishReason = String(candidate.finishReason);
+        receivedTerminal = true;
       }
     }
 
@@ -173,7 +175,12 @@ export class GeminiChatProvider implements ChatProvider {
         },
       };
     }
-    yield { type: 'done', stop_reason: finishReason };
+    // EOF alone is not a successful Gemini response. The runner turns a
+    // stream without this native candidate finish marker into
+    // `stream_ended_no_result`, preserving a truncated physical attempt.
+    if (receivedTerminal) {
+      yield { type: 'done', stop_reason: finishReason };
+    }
     } catch (e) {
       throw new Error(humanizeGeminiError(e, this.model));
     }
@@ -210,6 +217,7 @@ export class GeminiChatProvider implements ChatProvider {
 
     let lastUsage: { input: number; output: number; thinking: number } | null = null;
     let finishReason: string | undefined;
+    let receivedTerminal = false;
 
     try {
       for await (const chunk of cloudCodeStream(
@@ -220,6 +228,7 @@ export class GeminiChatProvider implements ChatProvider {
         req.signal,
         cc.sessionId,
         req.thinking,
+        1,
       )) {
         if (chunk.thought) {
           yield { type: 'thinking_delta', text: chunk.thought };
@@ -243,8 +252,9 @@ export class GeminiChatProvider implements ChatProvider {
             thinking: chunk.usageMetadata.thoughtsTokenCount ?? 0,
           };
         }
-        if (chunk.finishReason) {
+        if (chunk.finishReason != null) {
           finishReason = chunk.finishReason;
+          receivedTerminal = true;
         }
       }
     } catch (e) {
@@ -264,7 +274,11 @@ export class GeminiChatProvider implements ChatProvider {
         },
       };
     }
-    yield { type: 'done', stop_reason: finishReason };
+    // CloudCode can close its SSE iterator without a terminal candidate.
+    // Do not convert that transport EOF into a successful logical result.
+    if (receivedTerminal) {
+      yield { type: 'done', stop_reason: finishReason };
+    }
   }
 }
 
@@ -538,7 +552,7 @@ function toGeminiContents(messages: AgentMessage[]): Content[] {
         if (b.type === 'text' && b.text) parts.push({ text: b.text });
         else if (b.type === 'image' && b.base64) {
           parts.push({ inlineData: { mimeType: b.mediaType, data: b.base64 } });
-        } else if (b.type === 'document' && b.text) {
+        } else if (b.type === 'document' && (b.text || b.path)) {
           parts.push({
             text: renderTextDocument(b),
           });

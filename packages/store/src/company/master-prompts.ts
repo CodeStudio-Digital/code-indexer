@@ -56,6 +56,17 @@ export type ResolveMasterPromptInput =
   | { kind: 'question'; answer: string }
   | { kind: 'plan'; approved: boolean; feedback?: string };
 
+export type MasterPromptDeliveryClaim =
+  | { kind: 'claimed'; prompt: MasterPrompt; token: string }
+  | {
+      kind:
+        | 'not_pending'
+        | 'delivery_in_progress'
+        | 'outcome_unknown'
+        | 'payload_conflict';
+      prompt: MasterPrompt | null;
+    };
+
 export function create(db: DB, input: CreateMasterPromptInput): MasterPrompt {
   const stmt = db.prepare(`
     INSERT INTO company_master_prompts
@@ -113,20 +124,183 @@ export function resolve(db: DB, id: number, resolution: ResolveMasterPromptInput
         UPDATE company_master_prompts
            SET status = 'answered',
                answer = ?,
-               resolved_at = datetime('now')
+               resolved_at = datetime('now'),
+               delivery_status = 'delivered',
+               delivery_completed_at = datetime('now')
          WHERE id = ? AND status = 'pending' AND kind = 'question'
+           AND delivery_status = 'pending'
       `)
     : db.prepare(`
         UPDATE company_master_prompts
            SET status = 'answered',
                approved = ?,
                feedback = ?,
-               resolved_at = datetime('now')
+               resolved_at = datetime('now'),
+               delivery_status = 'delivered',
+               delivery_completed_at = datetime('now')
          WHERE id = ? AND status = 'pending' AND kind = 'plan'
+           AND delivery_status = 'pending'
       `);
   const result = resolution.kind === 'question'
     ? stmt.run(resolution.answer, id)
     : stmt.run(resolution.approved ? 1 : 0, resolution.feedback ?? null, id);
+  if (result.changes === 0) return null;
+  return get(db, id);
+}
+
+/**
+ * Atomically reserve the one allowed delivery attempt for a pending prompt.
+ * The token is caller-generated so only that attempt can release or complete
+ * the reservation. A stranded `delivering` row is intentionally not reclaimed
+ * automatically: after a crash its external side effect is unknowable.
+ */
+export function claimDelivery(
+  db: DB,
+  id: number,
+  companySessionId: number,
+  kind: MasterPromptKind,
+  token: string,
+  payloadHash: string,
+  opts?: { retryOutcomeUnknown?: boolean },
+): MasterPromptDeliveryClaim {
+  const result = db.prepare(`
+    UPDATE company_master_prompts
+       SET delivery_status = 'delivering',
+           delivery_token = ?,
+           delivery_payload_hash = ?,
+           delivery_started_at = datetime('now'),
+           delivery_completed_at = NULL
+     WHERE id = ?
+       AND company_session_id = ?
+       AND kind = ?
+       AND status = 'pending'
+       AND delivery_status = 'pending'
+  `).run(token, payloadHash, id, companySessionId, kind);
+
+  if (result.changes === 1) {
+    return { kind: 'claimed', prompt: get(db, id)!, token };
+  }
+
+  let row = db.prepare(`
+    SELECT delivery_status, delivery_payload_hash
+      FROM company_master_prompts
+     WHERE id = ? AND company_session_id = ? AND kind = ?
+  `).get(id, companySessionId, kind) as {
+    delivery_status: string;
+    delivery_payload_hash: string | null;
+  } | undefined;
+  const prompt = row ? get(db, id) : null;
+  if (!row || prompt?.status !== 'pending') return { kind: 'not_pending', prompt };
+
+  if (
+    opts?.retryOutcomeUnknown
+    && (row.delivery_status === 'outcome_unknown' || row.delivery_status === 'delivering')
+  ) {
+    if (row.delivery_payload_hash !== payloadHash) {
+      return { kind: 'payload_conflict', prompt };
+    }
+    const retry = db.prepare(`
+      UPDATE company_master_prompts
+         SET delivery_status = 'delivering',
+             delivery_token = ?,
+             delivery_started_at = datetime('now'),
+             delivery_completed_at = NULL
+       WHERE id = ?
+         AND company_session_id = ?
+         AND kind = ?
+         AND status = 'pending'
+         AND delivery_status IN ('delivering', 'outcome_unknown')
+         AND delivery_payload_hash = ?
+    `).run(token, id, companySessionId, kind, payloadHash);
+    if (retry.changes === 1) {
+      return { kind: 'claimed', prompt: get(db, id)!, token };
+    }
+    row = db.prepare(`
+      SELECT delivery_status, delivery_payload_hash
+        FROM company_master_prompts
+       WHERE id = ? AND company_session_id = ? AND kind = ?
+    `).get(id, companySessionId, kind) as typeof row;
+    if (!row) return { kind: 'not_pending', prompt: null };
+  }
+
+  if (row.delivery_status === 'delivering') {
+    return { kind: 'delivery_in_progress', prompt };
+  }
+  return { kind: 'outcome_unknown', prompt };
+}
+
+/** Release a claim only after an authoritative pre-effect refusal/failure. */
+export function releaseDelivery(db: DB, id: number, token: string): boolean {
+  const result = db.prepare(`
+    UPDATE company_master_prompts
+       SET delivery_status = 'pending',
+           delivery_token = NULL,
+           delivery_payload_hash = NULL,
+           delivery_started_at = NULL,
+           delivery_completed_at = NULL
+     WHERE id = ?
+       AND status = 'pending'
+       AND delivery_status = 'delivering'
+       AND delivery_token = ?
+  `).run(id, token);
+  return result.changes === 1;
+}
+
+/** Permanently fence automatic replay after a mutating RPC loses its outcome. */
+export function markDeliveryOutcomeUnknown(db: DB, id: number, token: string): boolean {
+  const result = db.prepare(`
+    UPDATE company_master_prompts
+       SET delivery_status = 'outcome_unknown',
+           delivery_completed_at = datetime('now')
+     WHERE id = ?
+       AND status = 'pending'
+       AND delivery_status = 'delivering'
+       AND delivery_token = ?
+  `).run(id, token);
+  return result.changes === 1;
+}
+
+/**
+ * Commit the human resolution only for the attempt that owns delivery.
+ * This is the post-effect durable CAS; a null result is OUTCOME_UNKNOWN.
+ */
+export function completeDelivery(
+  db: DB,
+  id: number,
+  token: string,
+  resolution: ResolveMasterPromptInput,
+): MasterPrompt | null {
+  const stmt = resolution.kind === 'question'
+    ? db.prepare(`
+        UPDATE company_master_prompts
+           SET status = 'answered',
+               answer = ?,
+               resolved_at = datetime('now'),
+               delivery_status = 'delivered',
+               delivery_completed_at = datetime('now')
+         WHERE id = ?
+           AND kind = 'question'
+           AND status = 'pending'
+           AND delivery_status = 'delivering'
+           AND delivery_token = ?
+      `)
+    : db.prepare(`
+        UPDATE company_master_prompts
+           SET status = 'answered',
+               approved = ?,
+               feedback = ?,
+               resolved_at = datetime('now'),
+               delivery_status = 'delivered',
+               delivery_completed_at = datetime('now')
+         WHERE id = ?
+           AND kind = 'plan'
+           AND status = 'pending'
+           AND delivery_status = 'delivering'
+           AND delivery_token = ?
+      `);
+  const result = resolution.kind === 'question'
+    ? stmt.run(resolution.answer, id, token)
+    : stmt.run(resolution.approved ? 1 : 0, resolution.feedback ?? null, id, token);
   if (result.changes === 0) return null;
   return get(db, id);
 }

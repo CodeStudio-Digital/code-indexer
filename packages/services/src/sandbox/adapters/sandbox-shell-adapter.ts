@@ -58,7 +58,9 @@ export class SandboxShellAdapter implements IShellPort {
     // on the host, so long git operations no longer block the host loop.
     const r = await this.driver.run(this.containerId, program, args, {
       cwd: options.cwd || this.defaultCwd,
-      timeoutMs: 120_000,
+      timeoutMs: options.timeoutMs ?? 120_000,
+      signal: options.signal,
+      maxOutputBytes: options.maxOutputBytes,
       env: options.env as Record<string, string> | undefined,
     });
     return r;

@@ -119,8 +119,9 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
   if (typeof parsed.profile === 'string' && PROFILES.has(parsed.profile)) {
     seed.profile = parsed.profile as PreflightSeed['profile'];
   }
-  if (typeof parsed.task_kind === 'string' && TASK_KINDS.has(parsed.task_kind)) {
-    seed.taskKind = parsed.task_kind;
+  if (typeof parsed.task_kind === 'string') {
+    const taskKind = parsed.task_kind.trim().toLowerCase();
+    if (TASK_KINDS.has(taskKind)) seed.taskKind = taskKind;
   }
 
   if (Array.isArray(parsed.tools)) {
@@ -203,6 +204,7 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
 
   const usable = seed.sessionTitle !== undefined
     || seed.profile !== undefined
+    || seed.taskKind !== undefined
     || (seed.pinTools?.length ?? 0) > 0
     || (seed.targetProjects?.length ?? 0) > 0
     || (seed.suggestedSkills?.length ?? 0) > 0

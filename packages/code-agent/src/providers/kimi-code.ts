@@ -34,6 +34,7 @@ export class KimiCodeChatProvider implements ChatProvider {
       apiKey: opts.apiKey,
       baseURL: opts.baseURL ?? 'https://api.kimi.com/coding/v1',
       ...(opts.defaultHeaders ? { defaultHeaders: opts.defaultHeaders } : {}),
+      maxRetries: 0,
       // Use undici (native fetch) so installLlmDispatcher's bodyTimeout:0
       // applies during the reasoning phase. See native-fetch.ts.
       fetch: nativeFetch(),
@@ -204,7 +205,7 @@ export class KimiCodeChatProvider implements ChatProvider {
         };
       }
 
-      if (choice?.finish_reason) {
+      if (!finished && choice?.finish_reason) {
         for (const d of flushToolCalls()) yield d;
         finished = true;
         if (kimiDebugEnabled()) {
@@ -215,11 +216,12 @@ export class KimiCodeChatProvider implements ChatProvider {
     }
 
     if (!finished) {
-      for (const d of flushToolCalls()) yield d;
       if (kimiDebugEnabled()) {
         logKimiFinish({ finishedNormally: false });
       }
-      yield { type: 'done' };
+      // Do not flush an incomplete tool call or synthesize `done` from
+      // transport EOF. The runner classifies the missing native
+      // finish_reason as `stream_ended_no_result`.
     }
   }
 }
@@ -489,7 +491,7 @@ function appendUserMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
         type: 'image_url',
         image_url: { url: `data:${b.mediaType};base64,${b.base64}` },
       });
-    } else if (b.type === 'document' && b.text) {
+    } else if (b.type === 'document' && (b.text || b.path)) {
       parts.push({
         type: 'text',
         text: renderTextDocument(b),

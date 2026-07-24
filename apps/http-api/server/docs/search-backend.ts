@@ -107,25 +107,30 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
 
       const started = Date.now();
       const out = await docHybridSearch.search(forward);
-      out.diag.scope = scoped.length > 0 ? 'project' : 'all';
+      const resolvedScope = scoped.length > 0 ? 'project' : 'all';
+      out.diag.scope = resolvedScope;
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((c) => c.name);
       const explicitCollectionId = input.collection ? docStore.getCollectionByName(input.collection)?.id : undefined;
       try {
-        docStore.recordDocSearchEvent({
-          project_id: project_id,
-          query_hash: createHash('sha256').update(input.query).digest('hex'),
-          scope: out.diag.scope,
-          collection_ids: explicitCollectionId != null ? [explicitCollectionId] : scoped.map((c) => c.id),
-          mode: out.diag.mode,
-          duration_ms: Date.now() - started,
-          fts_hits: out.diag.fts_hits,
-          vector_hits: out.diag.vector_hits,
-          stale_vector_hits: out.diag.stale_vector_hits,
-          vector_coverage: out.diag.vector_coverage,
-          top_relevance: out.diag.top_relevance,
-          no_good_match: out.diag.no_good_match,
-          result_count: out.results.length,
-        });
+        // Host-side callers must never park Electron-main behind a telemetry
+        // row. Agent workers batch/retry these events; this fallback simply
+        // drops a contested best-effort sample.
+        docStore.withBusyTimeout(0, () =>
+          docStore.recordDocSearchEvent({
+            project_id: project_id,
+            query_hash: createHash('sha256').update(input.query).digest('hex'),
+            scope: resolvedScope,
+            collection_ids: explicitCollectionId != null ? [explicitCollectionId] : scoped.map((c) => c.id),
+            mode: out.diag.mode,
+            duration_ms: Date.now() - started,
+            fts_hits: out.diag.fts_hits,
+            vector_hits: out.diag.vector_hits,
+            stale_vector_hits: out.diag.stale_vector_hits,
+            vector_coverage: out.diag.vector_coverage,
+            top_relevance: out.diag.top_relevance,
+            no_good_match: out.diag.no_good_match,
+            result_count: out.results.length,
+          }));
       } catch { /* telemetry must never break retrieval */ }
       return out;
     },

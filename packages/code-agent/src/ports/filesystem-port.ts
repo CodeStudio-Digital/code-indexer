@@ -21,6 +21,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import type { ToolMutationFence } from '@mcp/code-agent/core/tool.js';
 
 /**
  * Minimal directory entry shape needed by tools. Matches the subset of
@@ -45,6 +46,20 @@ export interface FilesystemReaddirOptions {
 }
 
 export interface IFilesystemPort {
+  /**
+   * True when this adapter either performs the physical effect synchronously
+   * at method entry or cooperatively revalidates an installed mutation fence
+   * after any internal await and immediately before dispatching the effect.
+   */
+  readonly mutationFenceAttested?: true;
+
+  /**
+   * Composite ports (for example the snapshot recorder) use this hook to
+   * receive the invocation-local fence and reassert it at their real inner
+   * effect boundary.
+   */
+  setMutationFenceSource?(source: () => ToolMutationFence | undefined): void;
+
   /** Write `data` to `absPath` in utf-8. Overwrites if the file exists. */
   writeFile(absPath: string, data: string): Promise<void>;
 
@@ -81,6 +96,8 @@ export interface IFilesystemPort {
  * Holds no per-session state — safe to share as a process-wide singleton.
  */
 export class LocalFilesystemAdapter implements IFilesystemPort {
+  readonly mutationFenceAttested = true as const;
+
   async writeFile(absPath: string, data: string): Promise<void> {
     await fs.writeFile(absPath, data, 'utf-8');
   }

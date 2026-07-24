@@ -113,4 +113,27 @@ describe('active process event lifecycle', () => {
     }, 'task_run_task_finished');
     expect(getState().activeProcesses).toEqual([]);
   });
+
+  it('treats error as a terminal lifecycle and clears approvals and processes', () => {
+    const { handlers, getState } = setup();
+    handlers.tool_call_start({ id: 't1', name: 'edit_file', input: {} }, 'tool_call_start');
+    handlers.tool_approval_request({
+      toolUseId: 't1',
+      toolName: 'edit_file',
+      input: { path: 'src/app.ts' },
+    }, 'tool_approval_request');
+
+    handlers.error({
+      reason: 'recovery_capped',
+      error: 'provider recovery exhausted',
+      message: 'provider recovery exhausted',
+    }, 'error');
+
+    expect(getState()).toMatchObject({
+      doneReason: 'recovery_capped',
+      error: 'provider recovery exhausted',
+      pendingApprovals: [],
+      activeProcesses: [],
+    });
+  });
 });

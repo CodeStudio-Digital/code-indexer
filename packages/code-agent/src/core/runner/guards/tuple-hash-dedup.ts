@@ -65,7 +65,7 @@ export function createInvocationGuardState(stateEpoch = 0): InvocationGuardState
   return new InvocationGuardState(stateEpoch);
 }
 
-/** Alias + schema-default normalization used only for equality/signatures. */
+/** Canonical effective input shared by gates, handlers and equality/signatures. */
 export function normalizeGuardInput(
   tool: Pick<CoderTool, 'parameters'> | null | undefined,
   input: Record<string, unknown>,

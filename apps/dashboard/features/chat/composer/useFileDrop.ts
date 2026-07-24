@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * Drag-and-drop of OS files onto a composer. Dropped `File` objects are read by
- * the existing `fileToAttachment` path (FileReader) — no Electron native-path
- * plumbing needed. Shared by the project Composer and the company MasterComposer.
+ * the shared attachment conversion path. In Electron coder sessions, regular
+ * files retain their native path; images/structured documents and browser-only
+ * Files still use FileReader. Shared by project Composer and MasterComposer.
  *
  * The parent element must be `position: relative` so `<DropOverlay>` can cover
  * it. Spread `dropHandlers` onto that same element.

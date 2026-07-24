@@ -26,9 +26,8 @@ import { mountStatsRoutes } from './server/routes/stats.js';
 import { mountTelemetryRoutes } from './server/routes/telemetry.js';
 import { mountAdminPipelineBindingsRoutes } from './server/routes/admin/pipeline-bindings.js';
 import { mountAdminPipelineTelemetryRoutes } from './server/routes/admin/pipeline-telemetry.js';
-import { mountAdminQualityRoutes } from './server/routes/admin/quality.js';
+import { mountAdminCounterfactualRoutes } from './server/routes/admin/counterfactuals.js';
 import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
-import { mountAdminDriftRoutes } from './server/routes/admin/drift.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountSupervisorAdminRoutes } from './server/routes/admin/supervisor.js';
 import { mountNotificationRoutes } from './server/routes/notifications.js';
@@ -52,10 +51,6 @@ import {
   setGlobalToolSelectionFilter,
   setGlobalToolSelectionOutcomeObserver,
 } from '@mcp/code-agent/tool-selection/index.js';
-import {
-  setGlobalQualityClassifierPipeline,
-  setGlobalQualityClassificationStore,
-} from '@mcp/services/quality/index.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -277,21 +272,30 @@ export function createApp() {
   getCoderWorkerPool();
 
   const deps = createDeps();
+  // The command ledger is always the restart-safe idempotency authority.
+  // AgentRun recovery and the observational journal remain feature-gated, but
+  // the pool must retain the store so any context accepted while those flags
+  // are enabled can still be terminalized after a runtime flag change.
+  setCoderWorkerControlPlaneStore(
+    deps.controlPlaneStore,
+    deps.controlPlaneDivergenceStore,
+  );
+  let recoveredControlPlaneRuns = 0;
   if (coderControlPlaneShadowEnabled()) {
-    setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
     try {
-      const recovered = deps.controlPlaneStore.recoverInterruptedRuns();
-      console.log(
-        `[control-plane-shadow] enabled journal=${coderRuntimeJournalShadowEnabled()} recovered=${recovered}`,
-      );
+      recoveredControlPlaneRuns = deps.controlPlaneStore.recoverInterruptedRuns();
     } catch (error) {
       console.warn(
-        `[control-plane-shadow] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+        `[control-plane-agent-run] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-  } else {
-    setCoderWorkerControlPlaneStore(null);
   }
+  console.log(
+    `[control-plane] command-ledger=authoritative ` +
+      `agent-runs=${coderControlPlaneShadowEnabled() ? 'enabled' : 'disabled'} ` +
+      `journal=${coderRuntimeJournalShadowEnabled() ? 'enabled' : 'disabled'} ` +
+      `recovered=${recoveredControlPlaneRuns}`,
+  );
 
   // Wire the sandbox persistence store into the SandboxManager module
   // so its reconcile-on-boot + pause/resume paths can read/write DB.
@@ -318,15 +322,6 @@ export function createApp() {
   // returns undefined and the global stays disabled — zero overhead.
   setGlobalToolSelectionFilter(deps.buildToolSelectionFilter());
   setGlobalToolSelectionOutcomeObserver(deps.observeToolSelectionOutcome);
-  // Quality classifiers — pipeline already constructed in deps; we just
-  // install it as the global and toggle it via env flag.
-  setGlobalQualityClassifierPipeline(
-    deps.qualityClassifierPipeline,
-    process.env.MCP_PIPELINES_QUALITY_CLASSIFIERS === '1',
-  );
-  setGlobalQualityClassificationStore(deps.qualityClassificationStore);
-  // Semantic verdicts are consultative. PermissionGate and deterministic
-  // pre-dispatch guards remain the only action-blocking path.
   // C8 — Inbox message watchdog (Sprint 3.5). Detects messages stuck
   // pending/delivered past the threshold and publishes
   // `inbox_message_stuck` events BEFORE the timeout fires EXPIRED.
@@ -792,9 +787,8 @@ export function createApp() {
   mountTelemetryRoutes(app, deps);
   mountAdminPipelineBindingsRoutes(app, deps);
   mountAdminPipelineTelemetryRoutes(app, deps);
-  mountAdminQualityRoutes(app, deps);
+  mountAdminCounterfactualRoutes(app, deps);
   mountAdminLshRoutes(app, deps);
-  mountAdminDriftRoutes(app, deps);
   mountWorkersDiagnosticRoute(app);
   mountPerfRoutes(app);
   mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
@@ -862,7 +856,11 @@ export function createApp() {
   // dashboard's terminal UI hits before opening the WS upgrade, so
   // gate rejections surface as structured JSON instead of an opaque
   // WebSocket close code 1006.
-  mountTerminalDiagnoseRoute(app, { companyStore: deps.companyStore, db: deps.db });
+  mountTerminalDiagnoseRoute(app, {
+    companyStore: deps.companyStore,
+    companySandboxStore: deps.companySandboxStore,
+    db: deps.db,
+  });
 
   // Documentação (RAG) — global doc corpus + ingestion routes. Mounted
   // alongside its sibling tool wiring: `setGlobalDocSearch` installs the
@@ -1158,6 +1156,7 @@ export async function startServer(port: number, host: string) {
   // (gated by MCP_HOST_TERMINAL_ENABLED=1).
   attachTerminalUpgrade(server as unknown as import('node:http').Server, {
     companyStore: deps.companyStore,
+    companySandboxStore: deps.companySandboxStore,
     db: deps.db,
   });
 

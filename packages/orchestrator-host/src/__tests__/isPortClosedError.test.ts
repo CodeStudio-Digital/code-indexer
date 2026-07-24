@@ -1,12 +1,20 @@
 /**
- * `isPortClosedError` — the predicate callers use in catch blocks of
- * worker-bound RPCs to decide whether to retry once with a fresh
- * spawn. Must recognise both the `ErrPortClosed` class AND the
+ * Worker RPC failure predicates. `isPortClosedError` recognises only a
+ * closed transport; `isMutationOutcomeUnknownError` additionally recognises
+ * request timeouts because those do not cancel an already-running handler.
+ * Both recognise class instances and the serializable `.code` shape.
+ *
+ * `isPortClosedError` must recognise both the `ErrPortClosed` class AND the
  * `{ code: 'port_closed' }` shape so structured-cloned errors
  * crossing a MessageChannel (which lose prototype) still match.
  */
 import { describe, expect, it } from 'vitest';
-import { ErrPortClosed, ErrRequestTimeout, isPortClosedError } from '../MessageBridge.js';
+import {
+  ErrPortClosed,
+  ErrRequestTimeout,
+  isMutationOutcomeUnknownError,
+  isPortClosedError,
+} from '../MessageBridge.js';
 
 describe('isPortClosedError', () => {
   it('matches a thrown ErrPortClosed instance', () => {
@@ -48,5 +56,21 @@ describe('isPortClosedError', () => {
   it('does not match objects without any code field', () => {
     expect(isPortClosedError({ message: 'hi' })).toBe(false);
     expect(isPortClosedError({})).toBe(false);
+  });
+});
+
+describe('isMutationOutcomeUnknownError', () => {
+  it('matches closed ports and request timeouts', () => {
+    expect(isMutationOutcomeUnknownError(new ErrPortClosed())).toBe(true);
+    expect(isMutationOutcomeUnknownError({ code: 'port_closed' })).toBe(true);
+    expect(isMutationOutcomeUnknownError(new ErrRequestTimeout())).toBe(true);
+    expect(isMutationOutcomeUnknownError({ code: 'request_timeout' })).toBe(true);
+    expect(isMutationOutcomeUnknownError({ code: 'unserializable_response' })).toBe(true);
+  });
+
+  it('does not classify ordinary worker rejections as unknown outcomes', () => {
+    expect(isMutationOutcomeUnknownError(new Error('validation failed'))).toBe(false);
+    expect(isMutationOutcomeUnknownError({ code: 'provider_error' })).toBe(false);
+    expect(isMutationOutcomeUnknownError(null)).toBe(false);
   });
 });

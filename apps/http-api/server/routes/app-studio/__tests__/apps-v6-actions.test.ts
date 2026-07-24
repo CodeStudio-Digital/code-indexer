@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getAppTeamSession: vi.fn(),
   getOrSpawnCompanyOrchestrator: vi.fn(),
   sendMessageToMaster: vi.fn(),
+  evictCompanyOrchestrator: vi.fn(async () => undefined),
 }));
 
 vi.mock('@mcp/company/tools/app-studio/company-dispatch.js', () => ({
@@ -19,6 +20,8 @@ vi.mock('@mcp/api-handlers/app-studio/app-team-session.js', () => ({
 }));
 vi.mock('../../../../sse/companyOrchestrator.js', () => ({
   getOrSpawnCompanyOrchestrator: mocks.getOrSpawnCompanyOrchestrator,
+  getCompanyOrchestrator: vi.fn(() => null),
+  evictCompanyOrchestrator: mocks.evictCompanyOrchestrator,
 }));
 
 import { mountAppStudioV6AppRoutes } from '../apps-v6.js';
@@ -165,6 +168,7 @@ describe('App Studio v6 orchestration actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getAppTeamSession.mockReturnValue(null);
+    mocks.sendMessageToMaster.mockResolvedValue({ ok: true });
     mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({
       orchestrator: { sendMessageToMaster: mocks.sendMessageToMaster },
       bus: {},
@@ -273,8 +277,34 @@ describe('App Studio v6 orchestration actions', () => {
     await expect(response.json()).resolves.toMatchObject({ dispatch_results: results });
   });
 
+  it('fences the worker when a specialist spawn acknowledgement is lost', async () => {
+    const orchestrator = { marker: 'host' };
+    const results = [{
+      workItemId: 'custom:catalog',
+      role: 'fullstack',
+      outcome: 'blocked',
+      code: 'OUTCOME_UNKNOWN',
+    }];
+    mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
+    mocks.dispatchReadyAppWork.mockResolvedValue(results);
+    const { app } = testApp({ companySessionId: 90 });
+
+    const response = await app.request('/api/app-studio/apps/7/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'dispatch_ready_work' }),
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'OUTCOME_UNKNOWN',
+      dispatch_results: results,
+    });
+    expect(mocks.evictCompanyOrchestrator).toHaveBeenCalledWith(90);
+  });
+
   it('resumes Master coordination after durably resolving a decision', async () => {
-    const orchestrator = { sendMessageToMaster: vi.fn() };
+    const orchestrator = { sendMessageToMaster: vi.fn(async () => ({ ok: true })) };
     mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
     const { app, store } = testApp({
       companySessionId: 90,
@@ -329,8 +359,71 @@ describe('App Studio v6 orchestration actions', () => {
     );
   });
 
+  it('does not claim coordination resumed when the Master refuses a resolved decision', async () => {
+    const orchestrator = {
+      sendMessageToMaster: vi.fn(async () => ({
+        ok: false,
+        pending: 'interactive_wait' as const,
+      })),
+    };
+    mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
+    const { app, store } = testApp({
+      companySessionId: 90,
+      decisions: [{ id: 46, question: 'Qual fluxo?', status: 'open', answer: null }],
+    });
+
+    const response = await app.request('/api/app-studio/apps/7/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'answer_decision', decision_id: 46, answer: 'Catálogo' }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      coordination_resumed: false,
+      decision: { id: 46, status: 'resolved' },
+    });
+    expect(store.appendEvent).toHaveBeenCalledWith(
+      7,
+      'decision.coordination_failed',
+      'decision',
+      '46',
+      JSON.stringify({
+        error: 'Master is waiting for another interactive answer',
+        code: 'INTERACTION_PENDING',
+      }),
+    );
+  });
+
+  it('reports unknown decision-delivery outcome without replaying after a closed worker port', async () => {
+    const orchestrator = {
+      sendMessageToMaster: vi.fn(async () => {
+        throw { code: 'port_closed', message: 'worker exited' };
+      }),
+    };
+    mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
+    const { app } = testApp({
+      companySessionId: 90,
+      decisions: [{ id: 47, question: 'Qual fluxo?', status: 'open', answer: null }],
+    });
+
+    const response = await app.request('/api/app-studio/apps/7/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'answer_decision', decision_id: 47, answer: 'Catálogo' }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      coordination_resumed: false,
+      code: 'OUTCOME_UNKNOWN',
+    });
+    expect(mocks.evictCompanyOrchestrator).toHaveBeenCalledWith(90);
+    expect(orchestrator.sendMessageToMaster).toHaveBeenCalledOnce();
+  });
+
   it('resumes an approved build under the scheduler without waking the Master', async () => {
-    const orchestrator = { sendMessageToMaster: vi.fn() };
+    const orchestrator = { sendMessageToMaster: vi.fn(async () => ({ ok: true })) };
     mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
     const { app, revision, store } = testApp({ companySessionId: 90 });
     revision.status = 'approved';
@@ -354,7 +447,7 @@ describe('App Studio v6 orchestration actions', () => {
   });
 
   it('wakes the Master on resume only when planning coordination remains', async () => {
-    const orchestrator = { sendMessageToMaster: vi.fn() };
+    const orchestrator = { sendMessageToMaster: vi.fn(async () => ({ ok: true })) };
     mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
     const { app, store } = testApp({ companySessionId: 90 });
 
@@ -372,6 +465,33 @@ describe('App Studio v6 orchestration actions', () => {
       'app',
       '7',
       JSON.stringify({ mode: 'master_coordination' }),
+    );
+  });
+
+  it('does not append build.resumed when the Master refuses coordination', async () => {
+    const orchestrator = {
+      sendMessageToMaster: vi.fn(async () => ({
+        ok: false,
+        pending: 'interactive_wait' as const,
+      })),
+    };
+    mocks.getOrSpawnCompanyOrchestrator.mockResolvedValue({ orchestrator, bus: {} });
+    const { app, store } = testApp({ companySessionId: 90 });
+
+    const response = await app.request('/api/app-studio/apps/7/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'resume' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'INTERACTION_PENDING' });
+    expect(store.appendEvent).not.toHaveBeenCalledWith(
+      7,
+      'build.resumed',
+      'app',
+      '7',
+      expect.anything(),
     );
   });
 

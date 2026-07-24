@@ -102,6 +102,7 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
       const initial = resolveClaudeCodeModel(wireModel, accountInfo, {
         includeOAuth: !!creds.authToken,
         thinking: true,
+        promptCacheTtl: '1h',
         effort: readClaudeCodeEffortForModel(providerId, selectedModel, opts?.providerModels),
       });
       return new AnthropicChatProvider({
@@ -118,6 +119,8 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
         dangerouslyAllowBrowser: true,
         useBetaMessages: true,
         streamViaCreate: true,
+        cacheMessages: true,
+        promptCacheTtl: '1h',
         maxRetries: 0,
         resolveModel: (selectedModel, req) => {
           const nativeEffort = CLAUDE_CODE_VALID_EFFORTS.includes(req.reasoningEffort as ClaudeCodeEffort)
@@ -127,6 +130,7 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
             includeOAuth: !!creds.authToken,
             thinking: true,
             hasTools: (req.tools?.length ?? 0) > 0,
+            promptCacheTtl: '1h',
             effort: nativeEffort
               ?? readClaudeCodeEffortForModel(providerId, selectedModel, opts?.providerModels),
           });

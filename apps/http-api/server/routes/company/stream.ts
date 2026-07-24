@@ -1,26 +1,38 @@
+import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ServerDeps } from '../../deps.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
-import { isPortClosedError } from '@mcp/orchestrator-host';
 import {
   getCompanyOrchestrator,
   hasCompanyOrchestrator,
   deleteCompanyOrchestrator,
+  evictCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
+  type WorkerBackedOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
-import { RecentMessageKeys, normalizeDedupeKey, syntheticDoneSSE } from '../recent-message-keys.js';
+import {
+  RecentMessageKeys,
+  normalizeDedupeKey,
+  syntheticDoneSSE,
+  syntheticTerminalSSE,
+  type RecentMessageLookup,
+} from '../recent-message-keys.js';
+import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import {
   getRuntimeEventLog,
   runtimeEventsToJsonl,
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
 import { resolveAndRunMaster } from './master-resolve.js';
-import { ensureCompanyMasterLive } from './ensure-master-live.js';
+import {
+  ensureCompanyMasterLive,
+  ensureCompanyMasterLiveLocked,
+} from './ensure-master-live.js';
 import {
   appOwnedControlPlaneConflict,
   isAppOwnedCompanySession,
@@ -37,14 +49,13 @@ import { validateAttachments } from '@mcp/services/services/docs/attachment-vali
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { getDefinition } from '@mcp/services/providers/registry.js';
-
-/**
- * Backoff before retrying a resume that hit `port_closed`. The default
- * WorkerHost restart cadence is `500ms * 2^attempt` (capped 8s); 600ms
- * here covers the first restart attempt without making the user wait
- * forever if the worker is truly dead.
- */
-const PORT_CLOSED_RETRY_DELAY_MS = 600;
+import {
+  acceptLocalCompanyCommand,
+  bindLocalCommandBus,
+  fingerprintLocalCompanyCommand,
+  terminalizeLocalCoderCommand,
+  type LocalCoderShadowAcceptance,
+} from '../../../control-plane-shadow.js';
 
 /**
  * Backwards-compatible accessor used by sibling routes (kanban.ts).
@@ -91,13 +102,304 @@ interface PlanResponseBody {
   feedback?: string;
   /** Optional id of the master_prompt being resolved (idempotent across replay). */
   prompt_id?: number;
+  /**
+   * Explicitly accept a possible duplicate when recovering an acknowledged-
+   * unknown delivery. The payload must match the original attempt.
+   */
+  retry_outcome_unknown?: boolean;
 }
+
+type PersistedPromptDeliveryResult =
+  | {
+      ok: true;
+      prompt: MasterPrompt;
+      orchestrator: WorkerBackedOrchestrator;
+    }
+  | {
+      ok: false;
+      error: string;
+      status: 400 | 404 | 409 | 500 | 503;
+      code: string;
+    };
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   const { companyStore, db, providerStore } = deps;
   // Idempotency store for the streaming POSTs (/start, /resume). Per-mount so
   // route tests get a fresh, isolated instance. See recent-message-keys.ts.
-  const recentMessageKeys = new RecentMessageKeys<CompanyOrchestrator['metaBus']>();
+  const recentMessageKeys = new RecentMessageKeys<WorkerBackedOrchestrator['metaBus']>();
+  const controlPlaneStore = deps.controlPlaneStore ?? null;
+
+  type CompanyClaim =
+    | {
+        kind: 'owner';
+        acceptance: LocalCoderShadowAcceptance | null;
+        guard?: { token: symbol; fingerprintHash: string };
+      }
+    | { kind: 'pending'; settled: Promise<RecentMessageLookup<WorkerBackedOrchestrator['metaBus']>> }
+    | { kind: 'replay'; bus: WorkerBackedOrchestrator['metaBus']; since: number }
+    | { kind: 'terminal'; event: 'done' | 'error'; data: Record<string, unknown> }
+    | {
+        kind: 'reject';
+        status: 409 | 503;
+        body: { error: string; code: string; retry_after_ms?: number };
+        retryAfterMs?: number;
+      };
+
+  function companyTerminal(
+    acceptance: LocalCoderShadowAcceptance,
+  ): { event: 'done' | 'error'; data: Record<string, unknown> } | null {
+    if (acceptance.commandStatus === 'succeeded') {
+      return { event: 'done', data: { reason: 'completed', duplicate: true, persisted: true } };
+    }
+    if (
+      acceptance.commandStatus === 'failed'
+      || acceptance.commandStatus === 'cancelled'
+      || acceptance.commandStatus === 'rejected'
+    ) {
+      const reason = acceptance.commandReasonCode
+        ?? `command-${acceptance.commandStatus}`;
+      return {
+        event: 'error',
+        data: {
+          reason,
+          ...(reason === 'outcome_unknown' ? { code: 'OUTCOME_UNKNOWN' } : {}),
+          duplicate: true,
+          persisted: true,
+        },
+      };
+    }
+    return null;
+  }
+
+  function claimCompanyCommand(input: {
+    sessionId: number;
+    kind: 'start' | 'resume';
+    dedupeKey?: string;
+    fingerprint: Record<string, unknown>;
+    lastEventId: number;
+  }): CompanyClaim {
+    const fingerprintHash = hashControlPlanePayload(input.fingerprint);
+    const memoryClaim = input.dedupeKey
+      ? recentMessageKeys.claim(input.sessionId, input.dedupeKey, fingerprintHash)
+      : null;
+    const guard = memoryClaim?.kind === 'owner'
+      ? { token: memoryClaim.token, fingerprintHash }
+      : undefined;
+    // Refuse admission before durable acceptance when every cache slot is
+    // protected by a live owner. Cache pressure must never erase authority.
+    if (memoryClaim?.kind === 'capacity_exhausted') {
+      return {
+        kind: 'reject',
+        status: 503,
+        body: {
+          error: 'idempotency owner capacity exhausted; retry later',
+          code: 'IDEMPOTENCY_CAPACITY_EXHAUSTED',
+          retry_after_ms: memoryClaim.retryAfterMs,
+        },
+        retryAfterMs: memoryClaim.retryAfterMs,
+      };
+    }
+    // Same-process duplicate fingerprints are already validated by the owner
+    // table. Wait before durable acceptance so only the owner can create the
+    // command and later bind its executor bus.
+    if (memoryClaim?.kind === 'payload_conflict') {
+      return {
+        kind: 'reject',
+        status: 409,
+        body: {
+          error: 'client_msg_id is already bound to a different payload',
+          code: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+        },
+      };
+    }
+    if (memoryClaim?.kind === 'existing') {
+      return { kind: 'pending', settled: memoryClaim.settled };
+    }
+    const settleTerminal = (
+      terminal: { event: 'done' | 'error'; data: Record<string, unknown> },
+    ): void => {
+      if (!input.dedupeKey) return;
+      recentMessageKeys.recordTerminal(
+        input.sessionId,
+        input.dedupeKey,
+        terminal,
+        -1,
+        guard,
+      );
+    };
+    const acceptance = acceptLocalCompanyCommand({
+      store: controlPlaneStore,
+      companySessionId: input.sessionId,
+      kind: input.kind,
+      idempotencyKey: input.dedupeKey,
+      fingerprint: input.fingerprint,
+    });
+
+    if (
+      acceptance?.outcome === 'payload_conflict'
+    ) {
+      if (input.dedupeKey && memoryClaim?.kind === 'owner') {
+        recentMessageKeys.rejectClaim(
+          input.sessionId,
+          input.dedupeKey,
+          memoryClaim.token,
+          fingerprintHash,
+          { event: 'error', data: { reason: 'payload_conflict', duplicate: true } },
+        );
+      }
+      return {
+        kind: 'reject',
+        status: 409,
+        body: {
+          error: 'client_msg_id is already bound to a different payload',
+          code: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+        },
+      };
+    }
+    if (!acceptance) {
+      if (input.dedupeKey) {
+        recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, {
+          event: 'error',
+          data: { reason: 'idempotency-authority-unavailable', duplicate: false },
+        }, -1, guard);
+      }
+      return {
+        kind: 'reject',
+        status: 503,
+        body: {
+          error: 'idempotency authority unavailable; request was not executed',
+          code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
+        },
+      };
+    }
+    if (acceptance.outcome === 'version_conflict') {
+      settleTerminal({
+        event: 'error',
+        data: { reason: 'version_conflict', duplicate: true },
+      });
+      return {
+        kind: 'reject',
+        status: 409,
+        body: { error: 'session version changed', code: 'COMMAND_VERSION_CONFLICT' },
+      };
+    }
+    if (acceptance.outcome === 'existing') {
+      const terminal = companyTerminal(acceptance);
+      if (terminal) {
+        settleTerminal(terminal);
+        return { kind: 'terminal', ...terminal };
+      }
+      const currentBus = getCompanyOrchestrator(input.sessionId)?.metaBus;
+      if (
+        currentBus
+        && acceptance.executionBusId
+        && currentBus.busId === acceptance.executionBusId
+      ) {
+        if (currentBus.ended) {
+          const end = currentBus.endReason ?? {
+            event: 'error' as const,
+            data: { reason: 'missing-bus-outcome' },
+          };
+          const data = end.data && typeof end.data === 'object'
+            ? end.data as Record<string, unknown>
+            : {};
+          const reason = typeof data.reason === 'string'
+            ? data.reason
+            : end.event === 'done' ? 'completed' : 'error';
+          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+            status: end.event === 'done' ? 'succeeded' : 'failed',
+            reason,
+          });
+          const replayTerminal = {
+            event: end.event,
+            data: { reason, duplicate: true, persisted: true },
+          };
+          settleTerminal(replayTerminal);
+          return {
+            kind: 'terminal',
+            ...replayTerminal,
+          };
+        }
+        const sinceHint = input.lastEventId;
+        if (input.dedupeKey) {
+          recentMessageKeys.record(input.sessionId, input.dedupeKey, currentBus, sinceHint, guard);
+        }
+        return {
+          kind: 'replay',
+          bus: currentBus,
+          since: input.lastEventId,
+        };
+      }
+      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+        status: 'failed',
+        reason: 'executor-bus-unavailable',
+        errorRef: 'error:executor-bus-unavailable',
+      });
+      const unavailable = {
+        event: 'error' as const,
+        data: {
+          reason: 'executor-bus-unavailable',
+          duplicate: true,
+          persisted: true,
+        },
+      };
+      settleTerminal(unavailable);
+      return {
+        kind: 'terminal',
+        ...unavailable,
+      };
+    }
+    return { kind: 'owner', acceptance, ...(guard ? { guard } : {}) };
+  }
+
+  function bindCompanyCommandCompletion(
+    sessionId: number,
+    dedupeKey: string | undefined,
+    acceptance: LocalCoderShadowAcceptance | null,
+    bus: WorkerBackedOrchestrator['metaBus'],
+    guard?: { token: symbol; fingerprintHash: string },
+  ): boolean {
+    if (!acceptance?.commandContext) return true;
+    if (!bindLocalCommandBus(controlPlaneStore, acceptance, bus.busId)) return false;
+    let settled = false;
+    const settle = (): void => {
+      if (settled || !bus.ended) return;
+      if (
+        acceptance.commandStatus === 'succeeded'
+        || acceptance.commandStatus === 'failed'
+        || acceptance.commandStatus === 'cancelled'
+        || acceptance.commandStatus === 'rejected'
+      ) {
+        settled = true;
+        return;
+      }
+      settled = true;
+      const end = bus.endReason ?? {
+        event: 'error' as const,
+        data: { reason: 'missing-bus-outcome' },
+      };
+      const data = end.data && typeof end.data === 'object'
+        ? end.data as Record<string, unknown>
+        : {};
+      const reason = typeof data.reason === 'string'
+        ? data.reason
+        : end.event === 'done' ? 'completed' : 'error';
+      const cancelled = reason === 'aborted' || reason === 'cancelled';
+      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+        status: cancelled ? 'cancelled' : end.event === 'done' ? 'succeeded' : 'failed',
+        reason,
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(sessionId, dedupeKey, {
+          event: end.event,
+          data: { reason, duplicate: true, persisted: true },
+        }, -1, guard);
+      }
+    };
+    if (bus.ended) settle();
+    else bus.endListeners.add(settle);
+    return true;
+  }
 
   // Attachment-extraction options derived from the MASTER's model (the company
   // UI has no per-message toggles): extract embedded images only when the
@@ -177,43 +479,113 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!userMessage) return c.json({ error: 'user_message required' }, 400);
     const maxTurnsRequested = body.max_turns;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
+    const earlyClaim = await withSessionLock(id, async () => claimCompanyCommand({
+      sessionId: id,
+      kind: 'start',
+      dedupeKey,
+      fingerprint: fingerprintLocalCompanyCommand({
+        message: userMessage,
+        attachments: attachmentsCheck.value,
+        thinking: body.thinking,
+        maxTurns: maxTurnsRequested,
+      }),
+      lastEventId: parseLastEventId(c),
+    }));
+    if (earlyClaim.kind === 'pending') {
+      const settled = await earlyClaim.settled;
+      if (settled.retryLater) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(settled.retryLater.retryAfterMs / 1_000))),
+        );
+        return c.json({
+          error: 'the original request is still being admitted; retry later',
+          code: 'IDEMPOTENCY_RETRY_LATER',
+          retry_after_ms: settled.retryLater.retryAfterMs,
+        }, 503);
+      }
+      if (settled.terminal) {
+        return syntheticTerminalSSE(c, settled.terminal.event, settled.terminal.data);
+      }
+      if (settled.bus) {
+        return pumpBusToSSE(c, settled.bus, {
+          // Never substitute the first attachment point for the reconnecting
+          // client's acknowledged cursor; doing so drops durable replay data.
+          since: parseLastEventId(c),
+        });
+      }
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+    }
+    if (earlyClaim.kind === 'replay') {
+      return pumpBusToSSE(c, earlyClaim.bus, { since: earlyClaim.since });
+    }
+    if (earlyClaim.kind === 'terminal') {
+      return syntheticTerminalSSE(c, earlyClaim.event, earlyClaim.data);
+    }
+    if (earlyClaim.kind === 'reject') {
+      if (earlyClaim.retryAfterMs !== undefined) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(earlyClaim.retryAfterMs / 1_000))),
+        );
+      }
+      return c.json(earlyClaim.body, earlyClaim.status);
+    }
+    const commandAcceptance = earlyClaim.acceptance;
+    const claimGuard = earlyClaim.guard;
+    let commandSettled = false;
+    const settleCommandFailure = (reason: string, code?: string): void => {
+      if (commandSettled) return;
+      commandSettled = true;
+      terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
+        status: 'failed',
+        reason,
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(id, dedupeKey, {
+          event: 'error',
+          data: { reason, ...(code ? { code } : {}), duplicate: false },
+        }, -1, claimGuard);
+      }
+    };
+    try {
     let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
     try {
       attachmentOpts = masterAttachmentOpts(id);
     } catch (error) {
+      settleCommandFailure('master-runtime-invalid');
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
       }, 409);
     }
-    const attachments = await normalizeAttachmentsForModel(
-      attachmentsCheck.value,
-      attachmentOpts,
-    );
+    let attachments: AttachmentBody[] | undefined;
+    try {
+      attachments = await normalizeAttachmentsForModel(
+        attachmentsCheck.value,
+        attachmentOpts,
+      );
+    } catch (error) {
+      settleCommandFailure('attachment-normalization-failed');
+      throw error;
+    }
 
     // Serialize the "is there already a master for this id?" decision so two
     // concurrent POSTs cannot both pass the status check.
     const decision = await withSessionLock(id, async (): Promise<
       | {
           kind: 'success';
-          orchestrator: CompanyOrchestrator;
-          bus: CompanyOrchestrator['metaBus'];
+          orchestrator: WorkerBackedOrchestrator;
+          bus: WorkerBackedOrchestrator['metaBus'];
         }
-      | { kind: 'reject'; status: 404 | 409 | 500; body: { error: string } }
-      | { kind: 'replay'; bus: CompanyOrchestrator['metaBus']; since: number }
+      | {
+          kind: 'reject';
+          status: 404 | 409 | 500;
+          body: { error: string; code?: string };
+        }
+      | { kind: 'replay'; bus: WorkerBackedOrchestrator['metaBus']; since: number }
       | { kind: 'gone' }
     > => {
-      // Idempotency: a `ReconnectingSSEClient` retry re-POSTs /start. Replay
-      // the master's metaBus instead of returning the "Already running" 409
-      // that the guard below would otherwise produce.
-      if (dedupeKey) {
-        const hit = recentMessageKeys.lookup(id, dedupeKey);
-        if (hit) {
-          return hit.bus && (hit.bus.ended || hit.bus === getCompanyOrchestrator(id)?.metaBus)
-            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
-            : { kind: 'gone' };
-        }
-      }
       const cur = companyStore.getCompanySession(id);
       if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
       if (cur.status === 'running' || hasCompanyOrchestrator(id)) {
@@ -251,6 +623,25 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       const spawned = await getOrSpawnCompanyOrchestrator(id);
       const orchestrator = spawned.orchestrator;
       const busForPump = spawned.bus;
+      // Bind the immutable command↔bus correlation before pipeline recovery
+      // or master startup can produce any external effect.
+      if (!bindCompanyCommandCompletion(
+        id,
+        dedupeKey,
+        commandAcceptance,
+        busForPump,
+        claimGuard,
+      )) {
+        await evictCompanyOrchestrator(id);
+        return {
+          kind: 'reject',
+          status: 500,
+          body: { error: 'Failed to bind the command to its company stream' },
+        };
+      }
+      if (dedupeKey) {
+        recentMessageKeys.record(id, dedupeKey, busForPump, -1, claimGuard);
+      }
 
       // Pause any pipeline executions that were 'running' before the
       // server restart. The dashboard will surface a Resume button.
@@ -286,20 +677,40 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[company s=${id}] Master start failed:`, msg);
+        const outcomeUnknown = isMutationOutcomeUnknownError(err);
         // Evict the worker so the next /start gets a fresh one rather
         // than a half-initialized instance.
-        deleteCompanyOrchestrator(id);
-        companyStore.updateCompanySessionStatus(id, 'error');
-        return { kind: 'reject', status: 500, body: { error: `Master start failed: ${msg}` } };
+        await evictCompanyOrchestrator(id);
+        // A closed port may have lost only the acknowledgement; do not assert
+        // that a possibly-started session failed.
+        if (!outcomeUnknown) companyStore.updateCompanySessionStatus(id, 'error');
+        return {
+          kind: 'reject',
+          status: 500,
+          body: outcomeUnknown
+            ? {
+                error:
+                  `Master start outcome is unknown: ${msg}. ` +
+                  'The mutating RPC was not replayed.',
+                code: 'OUTCOME_UNKNOWN',
+              }
+            : { error: `Master start failed: ${msg}` },
+        };
       }
 
       // Persist the user message so it survives page reload
       companyStore.setLastUserMessage(id, userMessage);
-      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, busForPump, -1);
       return { kind: 'success', orchestrator, bus: busForPump };
     });
 
     if (decision.kind === 'reject') {
+      const outcomeUnknown = decision.body.code === 'OUTCOME_UNKNOWN';
+      settleCommandFailure(
+        outcomeUnknown
+          ? 'outcome_unknown'
+          : decision.status === 409 ? 'company-command-conflict' : 'company-start-failed',
+        decision.body.code,
+      );
       return c.json(decision.body, decision.status);
     }
     if (decision.kind === 'replay') {
@@ -308,13 +719,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (decision.kind === 'gone') {
       return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
-
-    return pumpBusToSSE(c, decision.bus, {
+    const response = pumpBusToSSE(c, decision.bus, {
       since: -1,
       // Worker pool handles eviction via its own TTL sweep — no
       // explicit scheduling needed here.
       onDone: () => undefined,
     });
+    commandSettled = true;
+    return response;
+    } catch (error) {
+      settleCommandFailure('company-start-setup-failed');
+      throw error;
+    }
   });
 
   /**
@@ -343,56 +759,181 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
+    const session = companyStore.getCompanySession(id);
+    if (!session) return notFound(c);
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
+    const message = body.message?.trim()
+      ? body.message
+      : (attachmentsCheck.value?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
+    if (!message) return c.json({ error: 'message required' }, 400);
+    const earlyClaim = await withSessionLock(id, async () => claimCompanyCommand({
+      sessionId: id,
+      kind: 'resume',
+      dedupeKey,
+      fingerprint: fingerprintLocalCompanyCommand({
+        message,
+        attachments: attachmentsCheck.value,
+        thinking: body.thinking,
+      }),
+      lastEventId: parseLastEventId(c),
+    }));
+    if (earlyClaim.kind === 'pending') {
+      const settled = await earlyClaim.settled;
+      if (settled.retryLater) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(settled.retryLater.retryAfterMs / 1_000))),
+        );
+        return c.json({
+          error: 'the original request is still being admitted; retry later',
+          code: 'IDEMPOTENCY_RETRY_LATER',
+          retry_after_ms: settled.retryLater.retryAfterMs,
+        }, 503);
+      }
+      if (settled.terminal) {
+        return syntheticTerminalSSE(c, settled.terminal.event, settled.terminal.data);
+      }
+      if (settled.bus) {
+        return pumpBusToSSE(c, settled.bus, {
+          since: parseLastEventId(c),
+        });
+      }
+      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+    }
+    if (earlyClaim.kind === 'replay') {
+      return pumpBusToSSE(c, earlyClaim.bus, { since: earlyClaim.since });
+    }
+    if (earlyClaim.kind === 'terminal') {
+      return syntheticTerminalSSE(c, earlyClaim.event, earlyClaim.data);
+    }
+    if (earlyClaim.kind === 'reject') {
+      if (earlyClaim.retryAfterMs !== undefined) {
+        c.header(
+          'Retry-After',
+          String(Math.max(1, Math.ceil(earlyClaim.retryAfterMs / 1_000))),
+        );
+      }
+      return c.json(earlyClaim.body, earlyClaim.status);
+    }
+    const commandAcceptance = earlyClaim.acceptance;
+    const claimGuard = earlyClaim.guard;
+    let commandSettled = false;
+    const settleResumeFailure = (reason: string, code?: string): void => {
+      if (commandSettled) return;
+      commandSettled = true;
+      terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
+        status: 'failed',
+        reason,
+      });
+      if (dedupeKey) {
+        recentMessageKeys.recordTerminal(id, dedupeKey, {
+          event: 'error',
+          data: { reason, ...(code ? { code } : {}), duplicate: false },
+        }, -1, claimGuard);
+      }
+    };
+    try {
     let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
     try {
       attachmentOpts = masterAttachmentOpts(id);
     } catch (error) {
+      settleResumeFailure('master-runtime-invalid');
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
       }, 409);
     }
-    const attachments = await normalizeAttachmentsForModel(
-      attachmentsCheck.value,
-      attachmentOpts,
-    );
-    const message = body.message?.trim()
-      ? body.message
-      : (attachments?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
+    let attachments: AttachmentBody[] | undefined;
+    try {
+      attachments = await normalizeAttachmentsForModel(
+        attachmentsCheck.value,
+        attachmentOpts,
+      );
+    } catch (error) {
+      settleResumeFailure('attachment-normalization-failed');
+      throw error;
+    }
 
     // Serialize the "is there an existing orchestrator?" decision so two
     // concurrent /resume calls can't both observe registry-empty and each
     // create a fresh CompanyOrchestrator + start its own runCoder loop.
     const decision = await withSessionLock(id, async (): Promise<
-      | { kind: 'attach'; orchestrator: CompanyOrchestrator; since: number; bus: CompanyOrchestrator['metaBus'] }
-      | { kind: 'fresh'; orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] }
-      | { kind: 'reject'; status: 400 | 404 | 409 | 500; body: { error: string } }
-      | { kind: 'replay'; bus: CompanyOrchestrator['metaBus']; since: number }
+      | { kind: 'attach'; orchestrator: WorkerBackedOrchestrator; since: number; bus: WorkerBackedOrchestrator['metaBus'] }
+      | { kind: 'fresh'; orchestrator: WorkerBackedOrchestrator; bus: WorkerBackedOrchestrator['metaBus'] }
+      | {
+          kind: 'reject';
+          status: 400 | 404 | 409 | 500;
+          body: { error: string; code?: string };
+        }
+      | { kind: 'replay'; bus: WorkerBackedOrchestrator['metaBus']; since: number }
       | { kind: 'gone' }
     > => {
-      // Idempotency: a retry re-POSTs /resume. Replay the metaBus instead of
-      // calling `sendMessageToMaster` again (duplicate message to the master)
-      // or cold-starting a second orchestrator. MUST run before the attach
-      // branch's send below.
-      if (dedupeKey) {
-        const hit = recentMessageKeys.lookup(id, dedupeKey);
-        if (hit) {
-          return hit.bus && (hit.bus.ended || hit.bus === getCompanyOrchestrator(id)?.metaBus)
-            ? { kind: 'replay', bus: hit.bus, since: Math.max(parseLastEventId(c), hit.sinceHint) }
-            : { kind: 'gone' };
-        }
-      }
       const existing = getCompanyOrchestrator(id);
       if (existing) {
-        if (message) existing.sendMessageToMaster(message, { attachments, thinking: body.thinking });
-        if (dedupeKey) recentMessageKeys.record(id, dedupeKey, existing.metaBus, parseLastEventId(c));
+        if (!bindCompanyCommandCompletion(
+          id,
+          dedupeKey,
+          commandAcceptance,
+          existing.metaBus,
+          claimGuard,
+        )) {
+          return {
+            kind: 'reject',
+            status: 500,
+            body: { error: 'Failed to bind the command to its company stream' },
+          };
+        }
+        let delivery: { ok: boolean; pending?: 'interactive_wait' };
+        try {
+          delivery = await existing.sendMessageToMaster(message, {
+            attachments,
+            thinking: body.thinking,
+          });
+        } catch (error) {
+          const outcomeUnknown = isMutationOutcomeUnknownError(error);
+          if (outcomeUnknown) await evictCompanyOrchestrator(id);
+          return {
+            kind: 'reject',
+            status: 500,
+            body: outcomeUnknown
+              ? {
+                  error:
+                    'Resume message outcome is unknown because its worker acknowledgement ' +
+                    'was lost. The mutating RPC was not replayed.',
+                  code: 'OUTCOME_UNKNOWN',
+                }
+              : {
+                  error:
+                    `Resume message failed: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  code: 'MASTER_MESSAGE_DELIVERY_FAILED',
+                },
+          };
+        }
+        if (!delivery.ok) {
+          return {
+            kind: 'reject',
+            status: 409,
+            body: {
+              error: delivery.pending === 'interactive_wait'
+                ? 'master is waiting for an interactive answer'
+                : 'master did not accept the message',
+            },
+          };
+        }
+        if (dedupeKey) {
+          recentMessageKeys.record(
+            id,
+            dedupeKey,
+            existing.metaBus,
+            parseLastEventId(c),
+            claimGuard,
+          );
+        }
         return { kind: 'attach', orchestrator: existing, since: parseLastEventId(c), bus: existing.metaBus };
       }
 
-      const session = companyStore.getCompanySession(id);
-      if (!session) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
-      if (!message) return { kind: 'reject', status: 400, body: { error: 'message required' } };
       const userMessage = message;
 
       // Sub-sessions (migration 067): a brand-new tab has no master_run
@@ -420,21 +961,31 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         };
       }
 
-      // Spawn-or-attach helper. Wraps one full attempt at:
+      // Spawn-or-attach helper. Wraps the single allowed attempt at:
       //   1. getOrSpawn the orchestrator (creates worker if needed)
       //   2. fire pipeline recovery
       //   3. resume OR cold-start the master
-      // Returns the spawn handle on success, throws on any failure.
-      //
-      // Extracted so the catch block can call it a SECOND time after a
-      // `port_closed` (the WorkerHost auto-restarts on worker exit, so
-      // the next `getOrSpawn` returns a fresh, healthy bridge).
+      // Returns the spawn handle on success, throws on any failure. A lost
+      // acknowledgement is never replayed onto a replacement worker.
       const attemptSpawnAndResume = async (): Promise<{
-        orchestrator: CompanyOrchestrator;
-        bus: CompanyOrchestrator['metaBus'];
+        orchestrator: WorkerBackedOrchestrator;
+        bus: WorkerBackedOrchestrator['metaBus'];
       }> => {
         const spawned = await getOrSpawnCompanyOrchestrator(id);
         const orchestrator = spawned.orchestrator;
+        if (!bindCompanyCommandCompletion(
+          id,
+          dedupeKey,
+          commandAcceptance,
+          spawned.bus,
+          claimGuard,
+        )) {
+          await evictCompanyOrchestrator(id);
+          throw new Error('failed to bind the command to its company stream');
+        }
+        if (dedupeKey) {
+          recentMessageKeys.record(id, dedupeKey, spawned.bus, -1, claimGuard);
+        }
         if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
           void orchestrator.pipelineRecoverRunning().catch((err) => {
             console.warn(`[company s=${id}] pipeline recovery failed:`, err);
@@ -459,59 +1010,47 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         return { orchestrator, bus: spawned.bus };
       };
 
-      let result: { orchestrator: CompanyOrchestrator; bus: CompanyOrchestrator['metaBus'] };
+      let result: {
+        orchestrator: WorkerBackedOrchestrator;
+        bus: WorkerBackedOrchestrator['metaBus'];
+      };
       try {
         result = await attemptSpawnAndResume();
       } catch (err) {
-        // `port_closed`: the worker exited mid-RPC and the auto-restart
-        // pipeline (WorkerHost backoff ≈500ms→8s) was racing. Evict the
-        // dead handle and try ONE more time with a fresh spawn. Any
-        // subsequent failure propagates to the original 500 path so the
-        // user isn't stuck in a silent loop.
-        if (isPortClosedError(err)) {
-          console.warn(
-            `[company s=${id}] Resume hit port_closed; worker likely crashed mid-RPC. ` +
-              `Evicting + retrying once after ${PORT_CLOSED_RETRY_DELAY_MS}ms.`,
-          );
-          deleteCompanyOrchestrator(id);
-          await new Promise((r) => setTimeout(r, PORT_CLOSED_RETRY_DELAY_MS));
-          try {
-            result = await attemptSpawnAndResume();
-            console.log(`[company s=${id}] Resume retry after port_closed: success.`);
-          } catch (err2) {
-            const msg2 = err2 instanceof Error ? err2.message : String(err2);
-            console.error(`[company s=${id}] Resume retry after port_closed failed:`, msg2);
-            deleteCompanyOrchestrator(id);
-            return {
-              kind: 'reject',
-              status: 500,
-              body: {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[company s=${id}] Resume failed:`, msg);
+        // Once the command is bound, changing to a second worker/bus would
+        // violate immutable command↔executor correlation and could repeat a
+        // partially delivered message. Fail this command explicitly; a new
+        // user action gets a new idempotency key and may spawn a fresh worker.
+        await evictCompanyOrchestrator(id);
+        return {
+          kind: 'reject',
+          status: 500,
+          body: isMutationOutcomeUnknownError(err)
+            ? {
                 error:
-                  `Resume failed after retry: ${msg2}. The worker thread crashed twice — ` +
-                  'check the previous logs for the original cause (OOM, uncaught exception, etc.) ' +
-                  'before retrying.',
-              },
-            };
-          }
-        } else {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[company s=${id}] Resume failed:`, msg);
-          // Do NOT evict the worker here. Post-decoupling the slow sandbox
-          // provision + runCoder boot run in the background (off this RPC),
-          // so a synchronous throw here is a fast-path/spawn error — killing
-          // a worker that may be mid-provision (its build streams over SSE)
-          // would just force a wasteful cold rebuild on retry. `port_closed`
-          // (handled above) is the only case where the worker is already
-          // dead and an evict + retry is warranted.
-          return { kind: 'reject', status: 500, body: { error: `Resume failed: ${msg}` } };
-        }
+                  `Resume outcome is unknown: ${msg}. ` +
+                  'The mutating RPC was not replayed.',
+                code: 'OUTCOME_UNKNOWN',
+              }
+            : { error: `Resume failed: ${msg}` },
+        };
       }
 
-      if (dedupeKey) recentMessageKeys.record(id, dedupeKey, result.bus, -1);
       return { kind: 'fresh', orchestrator: result.orchestrator, bus: result.bus };
     });
 
     if (decision.kind === 'reject') {
+      const outcomeUnknown = decision.body.code === 'OUTCOME_UNKNOWN';
+      settleResumeFailure(
+        outcomeUnknown
+          ? 'outcome_unknown'
+          : decision.body.code === 'MASTER_MESSAGE_DELIVERY_FAILED'
+            ? 'company-resume-setup-failed'
+          : decision.status === 409 ? 'company-command-conflict' : 'company-resume-failed',
+        decision.body.code,
+      );
       return c.json(decision.body, decision.status);
     }
     if (decision.kind === 'replay') {
@@ -521,29 +1060,42 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
     }
     if (decision.kind === 'attach') {
-      return pumpBusToSSE(c, decision.bus, {
+      const response = pumpBusToSSE(c, decision.bus, {
         since: decision.since,
       });
+      commandSettled = true;
+      return response;
     }
-    return pumpBusToSSE(c, decision.bus, {
+    const response = pumpBusToSSE(c, decision.bus, {
       since: -1,
       // Worker pool handles eviction via TTL sweep.
       onDone: () => undefined,
     });
+    commandSettled = true;
+    return response;
+    } catch (error) {
+      settleResumeFailure('company-resume-setup-failed');
+      throw error;
+    }
   });
 
   /**
    * Abort the entire company session — stops all runners.
    */
-  app.post('/api/company/sessions/:id/abort', (c) => {
+  app.post('/api/company/sessions/:id/abort', async (c) => {
     const id = parseIdParam(c);
     const session = companyStore.getCompanySession(id);
     if (!session) return notFound(c);
     if (isAppOwnedCompanySession(companyStore, id)) {
       return appOwnedControlPlaneConflict(c, 'session abort');
     }
-    const result = abortCompanyRuntime(id);
-    if (!result.ok) return c.json({ error: 'No active orchestrator' }, 404);
+    const result = await abortCompanyRuntime(id);
+    if (!result.ok) {
+      if (result.reason === 'outcome_unknown') {
+        return c.json({ error: result.error, code: result.code }, 500);
+      }
+      return c.json({ error: 'No active orchestrator' }, 404);
+    }
     return c.json({ ok: true });
   });
 
@@ -591,7 +1143,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         return c.json({ error: `Provider swap failed: ${msg}` }, 500);
       }
       if (body.role_assignments) {
-        orchestrator.updateRoleConfigs(body.role_assignments);
+        await orchestrator.updateRoleConfigs(body.role_assignments);
       }
     }
 
@@ -619,38 +1171,206 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Live path.
     const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
-      const resolved = orchestrator.respondToMasterPlan(body.approved, body.feedback, body.prompt_id);
+      let resolved: MasterPrompt | null;
+      try {
+        resolved = await orchestrator.respondToMasterPlan(
+          body.approved,
+          body.feedback,
+          body.prompt_id,
+          { retryOutcomeUnknown: body.retry_outcome_unknown },
+        );
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code;
+        if (code === 'PROMPT_DELIVERY_PAYLOAD_CONFLICT') {
+          return c.json({
+            error: error instanceof Error ? error.message : String(error),
+            code,
+          }, 409);
+        }
+        return c.json({
+          error:
+            `${error instanceof Error ? error.message : String(error)}. ` +
+            'The delivery outcome is unknown; retry only with ' +
+            '{"retry_outcome_unknown":true} and the identical response payload.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
       if (!resolved) {
         return c.json(
-          { error: 'No pending master plan to respond to (already resolved or session ended)' },
+          {
+            error:
+              'No pending master plan accepted the response ' +
+              '(already resolved, runner not waiting, or session ended)',
+            code: 'MASTER_INPUT_NOT_ACCEPTED',
+          },
           409,
         );
       }
       return c.json({ ok: true, prompt: resolved });
     }
 
-    // Dead orchestrator: resolve the plan prompt + re-spawn + resume, delivering
-    // the verdict as a continuation (dangling submit_plan auto-sealed on resume).
-    let resolvedPlan: MasterPrompt | null = null;
-    try {
-      const pid = body.prompt_id ?? companyStore.getPendingMasterPrompt(id, 'plan')?.id;
-      if (pid != null) {
-        resolvedPlan = companyStore.resolveMasterPrompt(pid, { kind: 'plan', approved: body.approved, feedback: body.feedback });
-      }
-    } catch { /* best-effort bookkeeping */ }
-    // IDEMPOTENCY — see /answer: only the call that actually resolves the pending
-    // plan proceeds; a duplicate/racing submit no-ops instead of double-posting.
-    if (!resolvedPlan) {
-      return c.json({ ok: true, duplicate: true });
+    // Dead orchestrator: one critical section spans the durable delivery claim,
+    // worker effect, and token-bound completion. The durable claim survives a
+    // process restart; an uncertain RPC is fenced until an explicit,
+    // same-payload retry is requested.
+    const delivery = await withSessionLock(
+      id,
+      async (): Promise<PersistedPromptDeliveryResult> => {
+        const pendingPlan = companyStore.getPendingMasterPrompt(id, 'plan');
+        const promptId = body.prompt_id ?? pendingPlan?.id;
+        if (promptId == null) {
+          return {
+            ok: false,
+            error: 'Plan prompt is no longer pending',
+            code: 'PROMPT_ALREADY_RESOLVED',
+            status: 409,
+          };
+        }
+
+        const deliveryToken = randomUUID();
+        let claim: ReturnType<typeof companyStore.claimMasterPromptDelivery>;
+        try {
+          claim = companyStore.claimMasterPromptDelivery(
+            promptId,
+            id,
+            'plan',
+            deliveryToken,
+            hashControlPlanePayload({
+              kind: 'plan',
+              approved: body.approved!,
+              feedback: body.feedback ?? null,
+            }),
+            { retryOutcomeUnknown: body.retry_outcome_unknown },
+          );
+        } catch (error) {
+          return {
+            ok: false,
+            error:
+              `Could not acquire durable plan-delivery authority: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+            code: 'PROMPT_DELIVERY_AUTHORITY_UNAVAILABLE',
+            status: 500,
+          };
+        }
+        if (claim.kind === 'not_pending') {
+          return {
+            ok: false,
+            error: 'Plan prompt is no longer pending',
+            code: 'PROMPT_ALREADY_RESOLVED',
+            status: 409,
+          };
+        }
+        if (claim.kind === 'payload_conflict') {
+          return {
+            ok: false,
+            error: 'The explicit retry payload differs from the uncertain plan delivery',
+            code: 'PROMPT_DELIVERY_PAYLOAD_CONFLICT',
+            status: 409,
+          };
+        }
+        if (claim.kind !== 'claimed') {
+          return {
+            ok: false,
+            error:
+              'Plan delivery is in progress or has an unknown outcome. ' +
+              'Retry only with {"retry_outcome_unknown":true} and the identical payload.',
+            code: 'OUTCOME_UNKNOWN',
+            status: 409,
+          };
+        }
+
+        const verdict = body.approved
+          ? `[plano APROVADO]${body.feedback ? ` ${body.feedback}` : ''}`
+          : `[plano REJEITADO]${body.feedback ? ` ${body.feedback}` : ''}`;
+        const res = await ensureCompanyMasterLiveLocked(id, deps, { message: verdict });
+        if ('error' in res) {
+          if (res.code === 'OUTCOME_UNKNOWN') {
+            try {
+              companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            } catch { /* the response remains outcome-unknown */ }
+            return {
+              ok: false,
+              error:
+                `${res.error} Retry only with {"retry_outcome_unknown":true} ` +
+                'and the identical payload.',
+              code: 'OUTCOME_UNKNOWN',
+              status: res.status,
+            };
+          }
+          try {
+            if (!companyStore.releaseMasterPromptDelivery(promptId, deliveryToken)) {
+              return {
+                ok: false,
+                error: 'Plan delivery failed and its durable reservation could not be released',
+                code: 'OUTCOME_UNKNOWN',
+                status: 500,
+              };
+            }
+          } catch (error) {
+            return {
+              ok: false,
+              error:
+                `Plan delivery failed and reservation release was not confirmed: ` +
+                `${error instanceof Error ? error.message : String(error)}`,
+              code: 'OUTCOME_UNKNOWN',
+              status: 500,
+            };
+          }
+          return {
+            ok: false,
+            error: res.error,
+            code: res.code ?? 'MASTER_RESUME_FAILED',
+            status: res.status,
+          };
+        }
+
+        let prompt: MasterPrompt | null;
+        try {
+          prompt = companyStore.completeMasterPromptDelivery(
+            promptId,
+            deliveryToken,
+            {
+              kind: 'plan',
+              approved: body.approved!,
+              feedback: body.feedback,
+            },
+          );
+        } catch (error) {
+          try {
+            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+          } catch { /* preserve primary failure */ }
+          return {
+            ok: false,
+            error:
+              `Plan was delivered but its durable prompt update failed: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+            code: 'OUTCOME_UNKNOWN',
+            status: 500,
+          };
+        }
+        if (!prompt) {
+          try {
+            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+          } catch { /* response remains outcome-unknown */ }
+          return {
+            ok: false,
+            error: 'Plan was delivered but its durable completion was not confirmed',
+            code: 'OUTCOME_UNKNOWN',
+            status: 500,
+          };
+        }
+        return { ok: true, prompt, orchestrator: res.orchestrator };
+      },
+    );
+    if (!delivery.ok) {
+      return c.json({
+        error: delivery.error,
+        code: delivery.code,
+      }, delivery.status);
     }
-    const verdict = body.approved
-      ? `[plano APROVADO]${body.feedback ? ` ${body.feedback}` : ''}`
-      : `[plano REJEITADO]${body.feedback ? ` ${body.feedback}` : ''}`;
-    const res = await ensureCompanyMasterLive(id, deps, { message: verdict });
-    if ('error' in res) return c.json({ error: res.error }, res.status);
-    try { await res.orchestrator.postToBoard('human', null, 'decision', `Plan ${body.approved ? 'APPROVED' : 'REJECTED'}${body.feedback ? `: ${body.feedback}` : ''}`); }
+    try { await delivery.orchestrator.postToBoard('human', null, 'decision', `Plan ${body.approved ? 'APPROVED' : 'REJECTED'}${body.feedback ? `: ${body.feedback}` : ''}`); }
     catch { /* best-effort */ }
-    return c.json({ ok: true, resumed: true, prompt: resolvedPlan });
+    return c.json({ ok: true, resumed: true, prompt: delivery.prompt });
   });
 
   /**
@@ -684,11 +1404,28 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       if (orchestrator.metaBus.ended) {
         return c.json({ error: 'Session has ended. Please start a new session.' }, 410);
       }
-      const result = orchestrator.sendMessageToMaster(message, {
-        interject: body.interject,
-        attachments,
-        thinking: body.thinking,
-      });
+      let result: { ok: boolean; pending?: 'interactive_wait' };
+      try {
+        result = await orchestrator.sendMessageToMaster(message, {
+          interject: body.interject,
+          attachments,
+          thinking: body.thinking,
+        });
+      } catch (error) {
+        if (isMutationOutcomeUnknownError(error)) {
+          await evictCompanyOrchestrator(id);
+          return c.json({
+            error:
+              'Master message outcome is unknown because its worker acknowledgement ' +
+              'was lost. The mutating RPC was not replayed.',
+            code: 'OUTCOME_UNKNOWN',
+          }, 500);
+        }
+        return c.json({
+          error: error instanceof Error ? error.message : String(error),
+          code: 'MASTER_MESSAGE_DELIVERY_FAILED',
+        }, 502);
+      }
       if (!result.ok && result.pending === 'interactive_wait') {
         return c.json(
           {
@@ -698,6 +1435,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           409,
         );
       }
+      if (!result.ok) {
+        return c.json({
+          error: 'master did not accept the message',
+          code: 'MASTER_MESSAGE_NOT_ACCEPTED',
+        }, 503);
+      }
       return c.json({ ok: true });
     }
 
@@ -706,9 +1449,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const res = await ensureCompanyMasterLive(id, deps, {
       message,
       attachments,
+      interject: body.interject,
       thinking: body.thinking,
     });
-    if ('error' in res) return c.json({ error: res.error }, res.status);
+    if ('error' in res) {
+      return c.json({
+        error: res.error,
+        ...(res.code ? { code: res.code } : {}),
+      }, res.status);
+    }
     return c.json({ ok: true, resumed: true });
   });
 
@@ -718,7 +1467,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/company/sessions/:id/answer', async (c) => {
     const id = parseIdParam(c);
-    const body = await parseJsonBody<{ answer: string; prompt_id?: number }>(c);
+    const body = await parseJsonBody<{
+      answer: string;
+      prompt_id?: number;
+      retry_outcome_unknown?: boolean;
+    }>(c);
     if (!body.answer) {
       return c.json({ error: 'answer required' }, 400);
     }
@@ -726,43 +1479,194 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     // Live path — master runner is in the pool: deliver to its waitForUserInput.
     const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
-      const resolved = orchestrator.respondToMasterQuestion(body.answer, body.prompt_id);
+      let resolved: MasterPrompt | null;
+      try {
+        resolved = await orchestrator.respondToMasterQuestion(
+          body.answer,
+          body.prompt_id,
+          { retryOutcomeUnknown: body.retry_outcome_unknown },
+        );
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code;
+        if (code === 'PROMPT_DELIVERY_PAYLOAD_CONFLICT') {
+          return c.json({
+            error: error instanceof Error ? error.message : String(error),
+            code,
+          }, 409);
+        }
+        return c.json({
+          error:
+            `${error instanceof Error ? error.message : String(error)}. ` +
+            'The delivery outcome is unknown; retry only with ' +
+            '{"retry_outcome_unknown":true} and the identical answer.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
       if (!resolved) {
         return c.json(
-          { error: 'No pending question to answer (already resolved or session ended)' },
+          {
+            error:
+              'No pending question accepted the answer ' +
+              '(already resolved, runner not waiting, or session ended)',
+            code: 'MASTER_INPUT_NOT_ACCEPTED',
+          },
           409,
         );
       }
       return c.json({ ok: true, prompt: resolved });
     }
 
-    // Dead orchestrator (idle-evicted OR process/dev restart): re-spawn + resume
-    // the master and deliver the answer as a continuation. The dangling ask_user
-    // tool_use is auto-sealed on resume (runner.ts "Safety net 2"). Resolve the
-    // master prompt (so the question card flips to answered) and RETURN it so the
-    // dashboard applies it — exactly like the live path does.
-    let resolvedPrompt: MasterPrompt | null = null;
-    try {
-      const pid = body.prompt_id ?? companyStore.getPendingMasterPrompt(id, 'question')?.id;
-      if (pid != null) resolvedPrompt = companyStore.resolveMasterPrompt(pid, { kind: 'question', answer: body.answer });
-    } catch { /* best-effort bookkeeping */ }
-    // IDEMPOTENCY: only the call that ACTUALLY resolves a pending prompt proceeds
-    // to spawn the resume + post to the board. A duplicate/racing submit (the
-    // triple-click bug) finds the prompt already resolved — `resolveMasterPrompt`
-    // returns null — so we no-op instead of spawning a 2nd master and posting a
-    // 3rd "Human answered" board entry.
-    if (!resolvedPrompt) {
-      return c.json({ ok: true, duplicate: true });
+    const delivery = await withSessionLock(
+      id,
+      async (): Promise<PersistedPromptDeliveryResult> => {
+        const pendingPrompt = companyStore.getPendingMasterPrompt(id, 'question');
+        const promptId = body.prompt_id ?? pendingPrompt?.id;
+        if (promptId == null) {
+          return {
+            ok: false,
+            error: 'Question prompt is no longer pending',
+            code: 'PROMPT_ALREADY_RESOLVED',
+            status: 409,
+          };
+        }
+
+        const deliveryToken = randomUUID();
+        let claim: ReturnType<typeof companyStore.claimMasterPromptDelivery>;
+        try {
+          claim = companyStore.claimMasterPromptDelivery(
+            promptId,
+            id,
+            'question',
+            deliveryToken,
+            hashControlPlanePayload({ kind: 'question', answer: body.answer }),
+            { retryOutcomeUnknown: body.retry_outcome_unknown },
+          );
+        } catch (error) {
+          return {
+            ok: false,
+            error:
+              `Could not acquire durable answer-delivery authority: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+            code: 'PROMPT_DELIVERY_AUTHORITY_UNAVAILABLE',
+            status: 500,
+          };
+        }
+        if (claim.kind === 'not_pending') {
+          return {
+            ok: false,
+            error: 'Question prompt is no longer pending',
+            code: 'PROMPT_ALREADY_RESOLVED',
+            status: 409,
+          };
+        }
+        if (claim.kind === 'payload_conflict') {
+          return {
+            ok: false,
+            error: 'The explicit retry payload differs from the uncertain answer delivery',
+            code: 'PROMPT_DELIVERY_PAYLOAD_CONFLICT',
+            status: 409,
+          };
+        }
+        if (claim.kind !== 'claimed') {
+          return {
+            ok: false,
+            error:
+              'Answer delivery is in progress or has an unknown outcome. ' +
+              'Retry only with {"retry_outcome_unknown":true} and the identical answer.',
+            code: 'OUTCOME_UNKNOWN',
+            status: 409,
+          };
+        }
+
+        const res = await ensureCompanyMasterLiveLocked(id, deps, {
+          message: `[resposta à pergunta do Master] ${body.answer}`,
+        });
+        if ('error' in res) {
+          if (res.code === 'OUTCOME_UNKNOWN') {
+            try {
+              companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            } catch { /* the response remains outcome-unknown */ }
+            return {
+              ok: false,
+              error:
+                `${res.error} Retry only with {"retry_outcome_unknown":true} ` +
+                'and the identical answer.',
+              code: 'OUTCOME_UNKNOWN',
+              status: res.status,
+            };
+          }
+          try {
+            if (!companyStore.releaseMasterPromptDelivery(promptId, deliveryToken)) {
+              return {
+                ok: false,
+                error: 'Answer delivery failed and its durable reservation could not be released',
+                code: 'OUTCOME_UNKNOWN',
+                status: 500,
+              };
+            }
+          } catch (error) {
+            return {
+              ok: false,
+              error:
+                `Answer delivery failed and reservation release was not confirmed: ` +
+                `${error instanceof Error ? error.message : String(error)}`,
+              code: 'OUTCOME_UNKNOWN',
+              status: 500,
+            };
+          }
+          return {
+            ok: false,
+            error: res.error,
+            code: res.code ?? 'MASTER_RESUME_FAILED',
+            status: res.status,
+          };
+        }
+
+        let prompt: MasterPrompt | null;
+        try {
+          prompt = companyStore.completeMasterPromptDelivery(
+            promptId,
+            deliveryToken,
+            { kind: 'question', answer: body.answer! },
+          );
+        } catch (error) {
+          try {
+            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+          } catch { /* preserve primary failure */ }
+          return {
+            ok: false,
+            error:
+              `Answer was delivered but its durable prompt update failed: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+            code: 'OUTCOME_UNKNOWN',
+            status: 500,
+          };
+        }
+        if (!prompt) {
+          try {
+            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+          } catch { /* response remains outcome-unknown */ }
+          return {
+            ok: false,
+            error: 'Answer was delivered but its durable completion was not confirmed',
+            code: 'OUTCOME_UNKNOWN',
+            status: 500,
+          };
+        }
+        return { ok: true, prompt, orchestrator: res.orchestrator };
+      },
+    );
+    if (!delivery.ok) {
+      return c.json({
+        error: delivery.error,
+        code: delivery.code,
+      }, delivery.status);
     }
-    const res = await ensureCompanyMasterLive(id, deps, {
-      message: `[resposta à pergunta do Master] ${body.answer}`,
-    });
-    if ('error' in res) return c.json({ error: res.error }, res.status);
     // Mirror the live path: record the human's answer on the PERSISTENT board so
     // it survives close/open (board_entries in SQLite).
-    try { await res.orchestrator.postToBoard('human', null, 'decision', `Human answered: ${body.answer}`); }
+    try { await delivery.orchestrator.postToBoard('human', null, 'decision', `Human answered: ${body.answer}`); }
     catch { /* best-effort */ }
-    return c.json({ ok: true, resumed: true, prompt: resolvedPrompt });
+    return c.json({ ok: true, resumed: true, prompt: delivery.prompt });
   });
 
   /**

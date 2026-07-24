@@ -1,8 +1,8 @@
 /**
  * Minimal OpenAI-compatible chat helper.
  *
- * The classifier pipeline needs to invoke an LLM for a single-shot
- * classification — system prompt + one user message → assistant text.
+ * Several helper pipelines need a single-shot LLM call — system prompt plus
+ * one user message to assistant text.
  * Reaching into the full `OpenAIChatProvider` would be overkill (it
  * handles streaming, tool-use, retries for a multi-turn conversation).
  *
@@ -135,8 +135,8 @@ export function resolveBaseUrl(binding: ResolvedBinding, override?: string): str
  * Make one OpenAI-compatible chat completion call using a `ResolvedBinding`.
  *
  * Designed to be safe to call from a pipeline scorer: never throws — on
- * any error returns `{ content: '', errorBody }` and lets the caller
- * decide whether to treat that as `verdict: 'error'`.
+ * any error returns `{ content: '', errorBody }` and lets the caller decide
+ * how to handle it.
  */
 export async function openAiCompatibleChat(
   binding: ResolvedBinding,

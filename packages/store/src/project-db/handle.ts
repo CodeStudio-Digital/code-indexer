@@ -45,7 +45,7 @@ export class ProjectDb {
     return this.db.transaction(fn)();
   }
 
-  /** Flush + shrink the WAL to zero, then close. Called by the pool on evict/idle. */
+  /** Flush + shrink the WAL to zero, then close. Reserved for controlled shutdown. */
   checkpointAndClose(): void {
     try {
       this.db.pragma('wal_checkpoint(TRUNCATE)');

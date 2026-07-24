@@ -11,7 +11,6 @@ import {
   WorkbenchToolbar,
 } from '../../components/workbench/index.js';
 import { cn } from '../../lib/utils.js';
-import { QualityPanel } from '../admin/QualityPanel.js';
 import { SupervisorPanel } from '../admin/SupervisorPanel.js';
 import { CompletionQualityPanel } from './CompletionQualityPanel.js';
 import { SINCE_PRESETS, sinceForKey } from './since.js';
@@ -131,8 +130,8 @@ interface ProjectOption { id: number; name: string }
  * Top-level `/telemetry` page.
  *
  * Previously a flat "session telemetry" dashboard, now wrapped in tabs so
- * the panels that used to live in the admin tray (quality classifiers,
- * agent supervisor) live next to the global stats they relate to.
+ * the panels that used to live in the admin tray (such as the agent
+ * supervisor) live next to the global stats they relate to.
  * Operators land here when they want observability — every dashboard-shaped
  * panel is one click away instead of spread between `/admin` and `/telemetry`.
  *
@@ -142,11 +141,10 @@ interface ProjectOption { id: number; name: string }
  * Tab list:
  *   - overview   : global session stats (cost, tokens, top tools)
  *   - prices     : per-model price table + sync/backfill
- *   - quality    : 5-classifier verdict distribution + counterfactual stats
  *   - completion : AI ghost-text quality (accept rate, latency, per-model)
  *   - supervisor : live AgentSupervisor status + incidents
  */
-const TELEMETRY_TABS = ['overview', 'prices', 'quality', 'completion', 'supervisor'] as const;
+const TELEMETRY_TABS = ['overview', 'prices', 'completion', 'supervisor'] as const;
 
 export function TelemetryDashboard() {
   const { t } = useTranslation(['telemetry', 'common']);
@@ -179,12 +177,6 @@ export function TelemetryDashboard() {
           </WorkbenchSurface>
         </TabsContent>
 
-        <TabsContent value="quality" className="m-0 min-h-0 flex-1 p-1.5">
-          <WorkbenchSurface className="h-full overflow-y-auto p-3">
-          <QualityPanel />
-          </WorkbenchSurface>
-        </TabsContent>
-
         <TabsContent value="completion" className="m-0 min-h-0 flex-1 p-1.5">
           <WorkbenchSurface className="h-full overflow-y-auto p-3">
           <CompletionQualityPanel />
@@ -203,8 +195,8 @@ export function TelemetryDashboard() {
 
 /**
  * Original `/telemetry` flat-page content, kept verbatim — overall session
- * stats with project + since filters. Lives as a sibling tab to the
- * pipeline / quality panels above.
+ * stats with project + since filters. Lives as a sibling tab to the other
+ * telemetry panels above.
  */
 function TelemetryOverview() {
   const { t } = useTranslation(['telemetry', 'common']);

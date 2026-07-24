@@ -7,8 +7,9 @@
  * between transports.
  */
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { normalizeCoderTerminalSignal } from '@mcp/agent-runtime-contracts';
 import {
-  publish,
+  publish as publishRaw,
   markEnded,
   type CoderRunBus,
 } from '../coder-bus.js';
@@ -18,8 +19,21 @@ export function wireRunnerEventsToBus(
   bus: CoderRunBus,
   opts: { deferTerminalEvent?: boolean } = {},
 ): void {
+  let wiringClosed = false;
+
+  // Deltas remain semantic rows inside the worker. The single authoritative
+  // 16 ms coalescer lives immediately before the worker -> main MessagePort,
+  // where it can batch text, thinking and input JSON without stacking latency.
+  const publish = (target: CoderRunBus, event: string, data: unknown) => {
+    // A late tool heartbeat/provider callback can race runner teardown. Once
+    // `done` sealed this wiring, no semantic row may appear after the terminal
+    // boundary (or during the worker's deferred persistence window).
+    if (wiringClosed) return;
+    publishRaw(target, event, data);
+  };
+
   runner.on('text_delta', (text) => {
-    publish(bus, 'text', { text });
+    if (text.length > 0) publish(bus, 'text', { text });
   });
   runner.on('thinking_delta', (text) => {
     publish(bus, 'thinking', { text });
@@ -28,7 +42,29 @@ export function wireRunnerEventsToBus(
     publish(bus, 'tool_call_start', { id, name, input });
   });
   runner.on('tool_call_result', (id, name, result, durationMs) => {
-    publish(bus, 'tool_call_result', { id, name, result, duration_ms: durationMs });
+    const awaitsGoalPersistence =
+      opts.deferTerminalEvent
+      && !result.isError
+      && (name === 'create_goal' || name === 'update_goal');
+    publish(bus, 'tool_call_result', {
+      id,
+      name,
+      result,
+      duration_ms: durationMs,
+      ...(awaitsGoalPersistence ? { persistence: 'pending' } : {}),
+    });
+  });
+  // Goal-tool success is provisional until runCoder commits the goal mutation
+  // and its tool evidence in one transaction. These acknowledgements are
+  // allowed through the runner's deferred-done persistence window so the card
+  // becomes green only after the durable write, or is compensated to red.
+  runner.on('goal_mutations_persisted', (payload) => {
+    if (!opts.deferTerminalEvent) return;
+    publishRaw(bus, 'goal_mutations_persisted', payload);
+  });
+  runner.on('goal_mutations_persistence_failed', (payload) => {
+    if (!opts.deferTerminalEvent) return;
+    publishRaw(bus, 'goal_mutations_persistence_failed', payload);
   });
   // Periodic heartbeat (and explicit progress notes from cooperating tools)
   // emitted while a tool is in flight. Riding the same bus → bridge highway
@@ -93,6 +129,9 @@ export function wireRunnerEventsToBus(
   });
   runner.on('task_run_task_finished', (payload) => {
     publish(bus, 'task_run_task_finished', payload);
+  });
+  runner.on('budget_request', (payload) => {
+    publish(bus, 'budget_request', payload);
   });
   runner.on('task_run_finished', (payload) => {
     publish(bus, 'task_run_finished', payload);
@@ -170,13 +209,11 @@ export function wireRunnerEventsToBus(
   runner.on('tool_loop_intervention', (payload) => {
     publish(bus, 'tool_loop_intervention', payload);
   });
-  runner.on('quality_watchdog_alert', (payload) => {
-    publish(bus, 'quality_watchdog_alert', payload);
-  });
   runner.on('bt_state_dwell', (payload) => {
     publish(bus, 'bt_state_dwell', payload);
   });
   runner.on('done', (reason, error) => {
+    wiringClosed = true;
     if (error) {
       console.error(`[coder] session run failed (${reason}):`, error.message);
       if (error.stack) console.error(error.stack);
@@ -185,7 +222,11 @@ export function wireRunnerEventsToBus(
     // final assistant/tool transaction is durable. Publishing here lets the
     // renderer refetch one microtask too early and produces a stale transcript.
     if (opts.deferTerminalEvent) return;
-    publish(bus, 'done', { reason, error: error?.message });
-    markEnded(bus, 'done', { reason, error: error?.message });
+    const terminal = normalizeCoderTerminalSignal('done', {
+      reason,
+      error: error?.message,
+    });
+    publishRaw(bus, terminal.event, terminal.data);
+    markEnded(bus, terminal.event, terminal.data);
   });
 }

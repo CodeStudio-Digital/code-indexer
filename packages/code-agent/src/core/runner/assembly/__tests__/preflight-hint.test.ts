@@ -22,6 +22,14 @@ describe('renderPreflightHint', () => {
     expect(hint).toBe([
       '<preflight>',
       'task_kind: bugfix',
+      'goal_lifecycle: for non-trivial work, when both create_goal and update_goal are available, include create_goal in the first assistant tool-call batch before substantive tools; do not defer it until completion.',
+      'bug_workflow: reproduce the defect BEFORE touching production code. ' +
+        '1) build a reproduction that fails for the expected reason; ' +
+        '2) find the root cause with evidence; ' +
+        '3) make the smallest fix; ' +
+        '4) confirm the reproduction now passes and the previously-passing tests still pass; ' +
+        '5) check boundary and negative cases. ' +
+        'When a unit test is not viable, a sanitized captured request, fixture, replay, script, browser scenario, integration test or benchmark is an acceptable oracle.',
       'toolset seeded for this task: profile=navigate; prioritized: read_file, edit_file',
       'likely linked projects — verify before editing:',
       '- poa-intranet-angular — task names intranet',
@@ -35,10 +43,23 @@ describe('renderPreflightHint', () => {
     ].join('\n'));
   });
 
+  it('omits the bug workflow for non-bugfix task kinds', () => {
+    const hint = renderPreflightHint({ taskKind: 'feature' });
+    expect(hint).toContain('task_kind: feature');
+    expect(hint).not.toContain('bug_workflow');
+  });
+
+  it('suppresses the bug workflow when the kill switch is off', () => {
+    const hint = renderPreflightHint({ taskKind: 'bugfix' }, { bugWorkflow: false });
+    expect(hint).toContain('task_kind: bugfix');
+    expect(hint).not.toContain('bug_workflow');
+  });
+
   it('memories-only seed omits the toolset and task_kind lines', () => {
     const hint = renderPreflightHint({ memories: [{ title: 'X', reason: 'y' }] });
     expect(hint).not.toContain('toolset seeded');
     expect(hint).not.toContain('task_kind');
+    expect(hint).not.toContain('goal_lifecycle');
     expect(hint).toContain('- "X" — y');
   });
 

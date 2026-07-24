@@ -4,14 +4,15 @@
  * An INDEPENDENT read-only second agent that confirms the ORIGINAL goal was
  * actually met before the run is allowed to finish (or before a company
  * subordinate is finalized). Mirrors `review-subagent`'s clean-context design:
- * the verifier NEVER sees the executor's transcript — only goal + plan + diff +
- * test summary — so it cannot rubber-stamp the executor's own reasoning. This
- * is the "stop-condition verifier" half of Claude Code's two-agent split
- * (verification executor + stop-condition verifier).
+ * the verifier NEVER sees the executor's transcript — only the persisted goal,
+ * plan, scoped files, and recorded verification evidence — so it cannot
+ * rubber-stamp the executor's own reasoning. This is the "stop-condition
+ * verifier" half of Claude Code's two-agent split (verification executor +
+ * stop-condition verifier).
  *
- * It COMPLEMENTS, and does not replace, the cheap post-turn
- * `quality_completeness` classifier: that one is an advisory signal; this one
- * gates CleanFinish (see executing.ts, behind CODER_GOAL_VERIFY).
+ * This is not a consultative classifier: it gates `update_goal(complete)`.
+ * It is baseline behavior for top-level runs and can be disabled explicitly
+ * with CODER_GOAL_VERIFY=0.
  *
  * Output contract — the verifier's LAST message contains:
  *   <verdict>{"goal_met": bool, "gaps": [{"description": "...", "severity": "high|medium|low"}]}</verdict>
@@ -24,12 +25,14 @@ import { REVIEW_ALLOWLIST } from '@mcp/code-agent/tools/review-subagent.js';
 
 const VERIFY_SYSTEM_PROMPT = `You are a COMPLETION VERIFIER subagent. An implementation agent claims a task is DONE. Your job is to independently confirm whether the ORIGINAL goal was actually achieved — BEFORE the work ships.
 
-You have read-only access to the project. You CANNOT see the implementer's conversation or reasoning — only the goal, the plan (if any), the diff, and the test outcome. That is intentional: you bring fresh eyes and must not rubber-stamp their thinking. Read the actual files when you need to confirm a claim; do not trust the diff alone.
+You have read-only access to the project. You CANNOT see the implementer's conversation or reasoning — only the goal, the plan (if any), the diff, and recorded verification evidence. That is intentional: you bring fresh eyes and must not rubber-stamp their thinking. Read the actual files when you need to confirm a claim; do not trust the diff alone.
 
 # Your job
 Decide: was the goal MET end-to-end? "Met" means the behavior the user asked for actually works — not merely that code was added or that it compiles.
 - Check every concrete requirement in the goal/plan against the diff and the current code.
+- A substantive goal may intentionally have no code diff (for example, analysis or validation). In that case, judge the persisted goal against the available read-only project state and recorded evidence instead of skipping verification.
 - A requirement that is only partially done, stubbed, left as a TODO, or untested is NOT met — list it as a gap.
+- Treat missing, failed, stale, or ambiguous verification evidence as a gap when executable validation should exist for the changed code. A prose-only change may instead state why no executable oracle applies.
 - If a requirement's evidence is ambiguous, read the relevant file to confirm. If it is still unclear whether a MATERIAL requirement is satisfied, treat the goal as NOT met (be conservative).
 - Do NOT invent new requirements beyond the goal/plan, and do NOT block on pure style or hypotheticals.
 
@@ -62,6 +65,16 @@ export interface VerifyRunOptions {
   defaultMaxTurns?: number;
 }
 
+interface GoalVerificationStateLike {
+  goal: { text: string } | null;
+  filesChanged: ReadonlyArray<string>;
+}
+
+export interface GoalVerificationScope {
+  goal: string;
+  files: ReadonlyArray<string>;
+}
+
 export interface VerifyGap {
   description: string;
   severity: 'high' | 'medium' | 'low';
@@ -85,6 +98,35 @@ export interface VerifyResult {
 }
 
 const MAX_DIFF_CHARS = 80_000;
+export const DEFAULT_GOAL_VERIFY_MAX_TURNS = 12;
+export const GOAL_VERIFY_HARD_MAX_TURNS = 50;
+
+/**
+ * Baseline policy for the semantic completion verifier. Merely constructing
+ * the callback does not run it: the Executing gate invokes it only for an
+ * in-progress goal attempting `update_goal(status=complete)`, so greetings and
+ * other trivial text-only turns do not spend a verifier request.
+ */
+export function shouldEnableGoalCompletionVerifier(
+  configured: string | undefined,
+  companyContext: boolean,
+): boolean {
+  return !companyContext && configured?.trim() !== '0';
+}
+
+/**
+ * Resolve the persisted goal and its optional file scope. An empty file list
+ * is valid: analysis, validation, and other substantive goals can complete
+ * without producing a diff.
+ */
+export function resolveGoalVerificationScope(
+  state: GoalVerificationStateLike | null | undefined,
+  stagedGoal?: { text: string } | null,
+): GoalVerificationScope | null {
+  const goal = (stagedGoal?.text ?? state?.goal?.text)?.trim();
+  if (!goal) return null;
+  return { goal, files: state?.filesChanged ?? [] };
+}
 
 export function buildVerifyInitialMessage(input: VerifyInput): string {
   const plan = input.plan && input.plan.trim() ? input.plan.trim() : '(no explicit plan was recorded)';
@@ -95,7 +137,7 @@ export function buildVerifyInitialMessage(input: VerifyInput): string {
           ? `${input.diff.slice(0, MAX_DIFF_CHARS)}\n\n[diff truncated at ${MAX_DIFF_CHARS} chars — read the files directly to verify the rest]`
           : input.diff
       }\n\`\`\``
-    : '# Diff\n(not provided — run `git_diff` yourself to see the pending changes, then read the affected files to verify them.)';
+    : '# Diff\n(not provided — this may be a no-diff goal. Inspect the recorded evidence and project state directly; run `git_diff` if pending changes are relevant.)';
   const scopedFiles = (input.files ?? []).map((file) => file.trim()).filter(Boolean);
   const scopeBlock = scopedFiles.length > 0
     ? `# Session-owned file scope\n${scopedFiles.map((file) => `- \`${file}\``).join('\n')}\n\n` +
@@ -108,7 +150,7 @@ ${input.goal.trim()}
 # Plan
 ${plan}
 
-# Test summary
+# Recorded verification evidence
 ${tests}
 
 ${scopeBlock}
@@ -120,11 +162,15 @@ Verify whether the goal is met per the rules in your system prompt, reading file
 
 export function resolveVerifyMaxTurns(
   configured: string | undefined,
-  defaultMaxTurns = 0,
+  defaultMaxTurns = DEFAULT_GOAL_VERIFY_MAX_TURNS,
 ): number {
-  if (configured == null || configured.trim() === '') return Math.max(0, defaultMaxTurns);
+  const fallback = Number.isFinite(defaultMaxTurns) && defaultMaxTurns > 0
+    ? Math.min(GOAL_VERIFY_HARD_MAX_TURNS, Math.max(1, Math.floor(defaultMaxTurns)))
+    : DEFAULT_GOAL_VERIFY_MAX_TURNS;
+  if (configured == null || configured.trim() === '') return fallback;
   const parsed = Number(configured);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : Math.max(0, defaultMaxTurns);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(GOAL_VERIFY_HARD_MAX_TURNS, Math.max(1, Math.floor(parsed)));
 }
 
 /**

@@ -357,6 +357,15 @@ function anyToolAvailable(available: ReadonlySet<string> | undefined, names: rea
   return available === undefined || names.some((name) => available.has(name));
 }
 
+function goalLifecycleSection(available?: ReadonlySet<string>): string {
+  if (!toolAvailable(available, 'create_goal') || !toolAvailable(available, 'update_goal')) {
+    return '';
+  }
+  return `# Goal lifecycle
+Before non-trivial work, call \`create_goal\`. Verify, then complete. On explicit pivot, supersede with a reason, then create a replacement.
+  `;
+}
+
 function nativeToolsSection(available?: ReadonlySet<string>): string {
   const lines: string[] = [];
   const writes = ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']
@@ -505,7 +514,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const preamble = providerPreamble(ctx.providerFamily ?? 'generic');
 
   // Main body — loaded from src/core/coder/prompts/base.txt. Placeholders:
-  //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}, {{mcpSection}}
+  //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}, {{mcpSection}},
+  //   {{goalLifecycleSection}}
   // tierHint here is the profile-only text; customTiers render below the
   // boundary because the registered MCP-server tier set is volatile.
   const displayName = ctx.workspace?.displayName ?? ctx.projectName;
@@ -541,6 +551,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     subagentsSection: subagentsSection(ctx.availableTools),
     visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages) : '',
     memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
+    goalLifecycleSection: goalLifecycleSection(ctx.availableTools),
   });
 
   // Plan section — optional, only when planMode is true AND the active agent

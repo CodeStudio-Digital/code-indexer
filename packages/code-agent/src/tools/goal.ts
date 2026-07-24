@@ -15,13 +15,18 @@
  * subagents), the tool falls back to a per-runner WeakMap so existing
  * call-sites continue to work without a database.
  */
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type {
+  CoderTool,
+  GoalStatus,
+  ToolContext,
+  ToolResult,
+} from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 interface GoalState {
   text: string;
-  status: 'in_progress' | 'complete';
+  status: GoalStatus;
   createdAt: string;
   updatedAt: string;
   budgetTokens: number | null;
@@ -31,18 +36,10 @@ interface GoalState {
 const GOAL_BY_RUNNER = new WeakMap<object, GoalState>();
 
 /**
- * Per-runner burst tracker for create_goal. Resets when the gap between
- * calls exceeds CREATE_BURST_WINDOW_MS. After CREATE_BURST_THRESHOLD
- * supersedes inside the window we stop accepting further create_goal
- * calls and return a hard "STOP, execute" error. Catches the failure
- * mode where a model — instead of writing code — keeps re-stating the
- * goal in slightly different wording (observed in session 656: 26
- * consecutive create_goal calls across multiple "Continue" messages
- * with no intervening real work). The runner-level fuzzy doom-loop
- * guard misses this because each user message restarts the runner
- * with fresh signature state; the burst tracker is keyed on the runner
- * instance so it survives intra-run loops, and the timestamp window
- * lets it forgive legitimate pivots when separated by actual work.
+ * Per-runner burst tracker for redundant create_goal calls against the SAME
+ * active objective. It is reset whenever a goal is created or closed, so
+ * several legitimate objectives completed inside 90 seconds never consume
+ * one another's quota.
  */
 const CREATE_BURST_BY_RUNNER = new WeakMap<object, { count: number; lastAt: number }>();
 const CREATE_BURST_THRESHOLD = 3;
@@ -96,15 +93,26 @@ function readGoal(ctx: ToolContext): GoalState | null {
   return GOAL_BY_RUNNER.get(key) ?? null;
 }
 
-function writeGoal(ctx: ToolContext, goal: GoalState): void {
+async function writeGoal(
+  ctx: ToolContext,
+  goal: GoalState,
+  toolName: 'create_goal' | 'update_goal',
+): Promise<void> {
   if (ctx.upsertGoalState) {
-    ctx.upsertGoalState({
+    const toolUseId = ctx.currentToolUseId;
+    if (!toolUseId) {
+      throw new Error(`${toolName} requires a direct attributed tool_use id`);
+    }
+    await ctx.upsertGoalState({
       text: goal.text,
       status: goal.status,
       budgetTokens: goal.budgetTokens,
       completionNote: goal.completionNote,
       createdAt: goal.createdAt,
       updatedAt: goal.updatedAt,
+    }, {
+      toolUseId,
+      toolName,
     });
     return;
   }
@@ -113,19 +121,25 @@ function writeGoal(ctx: ToolContext, goal: GoalState): void {
   GOAL_BY_RUNNER.set(key, goal);
 }
 
+function resetCreateBurst(ctx: ToolContext): void {
+  const key = readKey(ctx);
+  if (key) CREATE_BURST_BY_RUNNER.delete(key);
+}
+
 const CREATE_GOAL_DESC =
-  'Record the session goal at the start of a run when the user explicitly states one. ' +
-  'Call this ONCE per objective. If a goal is already in_progress, do NOT call it again — execute the task; to set a different objective, call update_goal (status=complete) first. ' +
+  'For non-trivial top-level work, record the session goal in the FIRST assistant tool-call batch, before substantive tools. ' +
+  'Call this ONCE per objective. If a goal is already in_progress, do NOT call it again — execute the task; after an explicit user pivot, close the old goal with update_goal(status="superseded") first. ' +
   'Survives turn boundaries (and compaction) so the original ask is recoverable. ' +
-  'Bootstrap in ONE turn: emit create_goal and todo_write together in the same assistant turn (parallel tool calls are supported) instead of spending a turn on each.';
+  'Bootstrap in ONE turn: emit create_goal and task_list together in the same assistant tool-call batch when a checklist is useful, instead of spending a turn on each.';
 
 const GET_GOAL_DESC =
   'Return the current session goal and its status. Use BEFORE making a non-trivial decision to confirm you are still aligned with the original objective. ' +
   'Returns "(no goal set)" when none has been created.';
 
 const UPDATE_GOAL_DESC =
-  'Mark the session goal complete. Use ONLY when the objective has actually been achieved AND no required follow-up work remains. ' +
-  'If you are tempted to mark complete because you are stuck, call ask_user instead.';
+  'Close the session goal. Use status="complete" ONLY when the objective has actually been achieved AND no required follow-up work remains. ' +
+  'Use status="superseded" only after the user explicitly pivots to a different objective; include a short reason and then create_goal for the new objective. ' +
+  'If you are stuck, use the escalation tool available to your role (ask_user or ask_master) instead of claiming completion.';
 
 const createGoal: CoderTool = {
   name: 'create_goal',
@@ -134,6 +148,10 @@ const createGoal: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'read',
+  // Session-local persistence changes the value returned by get_goal. Mark
+  // the invocation mutating for cache/epoch purposes without treating it as a
+  // workspace write that plan/spec permission gates should block.
+  repeatPolicy: 'mutating',
   parameters: {
     type: 'object',
     properties: {
@@ -156,23 +174,12 @@ const createGoal: CoderTool = {
       return err('create_goal requires runner context');
     }
 
-    // Burst-loop guard: if the agent calls create_goal more than
-    // CREATE_BURST_THRESHOLD times inside CREATE_BURST_WINDOW_MS, refuse
-    // hard. This is the failure mode where a model that doesn't know what
-    // to do next keeps re-wording the goal instead of executing —
-    // observed in session 656 (26 calls in a row across multiple user
-    // "Continue" messages with no intervening real work). The runner's
-    // fuzzy doom-loop guard misses this because each user message restarts
-    // the runner with fresh signature state.
-    const burst = bumpCreateBurst(ctx);
-    if (burst.count > CREATE_BURST_THRESHOLD) {
-      return err(
-        `Refused: create_goal has been called ${burst.count} times in the last ${Math.round(CREATE_BURST_WINDOW_MS / 1000)}s ` +
-          `with no intervening real work. The goal is already set — call get_goal to re-read it if needed, ` +
-          `then EXECUTE the actual task (write files, run commands, edit code). ` +
-          `Calling create_goal more is not progress; it is a stuck-loop signal. ` +
-          `Stop revising the goal and start the work.`,
-      );
+    let existing: GoalState | null;
+    try {
+      existing = readGoal(ctx);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return err(`create_goal: failed to read persisted goal state: ${reason}`);
     }
 
     // A goal already in_progress is NOT superseded silently. `create_goal`
@@ -181,27 +188,42 @@ const createGoal: CoderTool = {
     // redundantly; we reject firmly here instead. This is the primary loop
     // guard now that the tool is no longer hidden from the surface: re-stating
     // the goal is not progress. To genuinely pivot, the model must close the
-    // current goal with update_goal(status=complete) first.
-    const existing = readGoal(ctx);
+    // current goal with update_goal(status=superseded) first.
     if (existing && existing.status === 'in_progress') {
+      const burst = bumpCreateBurst(ctx);
+      if (burst.count > CREATE_BURST_THRESHOLD) {
+        return err(
+          `Refused: create_goal has been called ${burst.count} times in the last ${Math.round(CREATE_BURST_WINDOW_MS / 1000)}s ` +
+            `against the same active goal. The goal is already set — call get_goal to re-read it if needed, ` +
+            `then EXECUTE the actual task (write files, run commands, edit code). ` +
+            `Calling create_goal more is not progress; it is a stuck-loop signal. ` +
+            `Stop revising the goal and start the work.`,
+        );
+      }
       const oldPreview = existing.text.length > 120 ? `${existing.text.slice(0, 120)}…` : existing.text;
       return err(
         `Refused: a goal is already in_progress ("${oldPreview}"). Do NOT call create_goal again — ` +
           `execute the actual task now. To replace the objective (a real pivot), call ` +
-          `update_goal(status="complete") first, then create the new goal.`,
+          `update_goal(status="superseded", note="<reason>") first, then create the new goal.`,
       );
     }
 
     const now = new Date().toISOString();
     const budget = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : null;
-    writeGoal(ctx, {
-      text,
-      status: 'in_progress',
-      createdAt: now,
-      updatedAt: now,
-      budgetTokens: budget,
-      completionNote: null,
-    });
+    try {
+      await writeGoal(ctx, {
+        text,
+        status: 'in_progress',
+        createdAt: now,
+        updatedAt: now,
+        budgetTokens: budget,
+        completionNote: null,
+      }, 'create_goal');
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return err(`create_goal: failed to persist goal state: ${reason}`);
+    }
+    resetCreateBurst(ctx);
     // Quiet success message. The redundant-call loop is handled by the
     // in_progress rejection above plus `bumpCreateBurst`, so no nudge is
     // needed in the result body (an in-body nudge paradoxically reinforced
@@ -224,7 +246,13 @@ const getGoal: CoderTool = {
     if (!ctx.getGoalState && !readKey(ctx)) {
       return err('get_goal requires runner context');
     }
-    const g = readGoal(ctx);
+    let g: GoalState | null;
+    try {
+      g = readGoal(ctx);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return err(`get_goal: failed to read persisted goal state: ${reason}`);
+    }
     if (!g) return ok('(no goal set)');
     const lines: string[] = [
       `Status: ${g.status}`,
@@ -237,9 +265,13 @@ const getGoal: CoderTool = {
     // Without this nudge the model that doesn't know what to do next falls
     // back to re-checking the goal indefinitely (real loop seen in the
     // wild — get_goal called 30+ times after update_goal).
-    if (g.status === 'complete') {
+    if (g.status !== 'in_progress') {
       lines.push('');
-      lines.push('IMPORTANT: This goal is already marked complete. Do NOT call get_goal again — there is nothing new to read. Write your final summary to the user (or post your deliverable) and end the run.');
+      lines.push(
+        g.status === 'complete'
+          ? 'IMPORTANT: This goal is already marked complete. Do NOT call get_goal again — there is nothing new to read. Write your final summary to the user (or post your deliverable) and end the run.'
+          : 'IMPORTANT: This goal was superseded by an explicit user pivot. Do NOT resume it; create or continue the replacement objective.',
+      );
     }
     return ok(lines.join('\n'));
   },
@@ -252,32 +284,83 @@ const updateGoal: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'read',
+  repeatPolicy: 'mutating',
   parameters: {
     type: 'object',
     properties: {
-      status: { type: 'string', enum: ['complete'], description: 'Only "complete" is valid — goals start in_progress and end complete.' },
-      note: { type: 'string', description: 'Optional 1-2 sentence completion note.' },
+      status: {
+        type: 'string',
+        enum: ['complete', 'superseded'],
+        description: 'Use "complete" only when verified; use "superseded" only for an explicit user pivot.',
+      },
+      note: { type: 'string', description: 'Completion note, or required reason when superseding.' },
     },
     required: ['status'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    if (args.status !== 'complete') return err('update_goal: only status="complete" is allowed');
+    const requestedStatus = args.status;
+    if (requestedStatus !== 'complete' && requestedStatus !== 'superseded') {
+      return err('update_goal: status must be "complete" or "superseded"');
+    }
+    const suppliedNote = typeof args.note === 'string' ? args.note.trim() : '';
+    if (requestedStatus === 'superseded') {
+      if (ctx.goalLifecycleIntent !== 'required_pivot') {
+        return err(
+          'update_goal: status="superseded" requires an explicit user pivot to a fresh objective',
+        );
+      }
+      if (!suppliedNote) {
+        return err('update_goal: status="superseded" requires a short reason in note');
+      }
+    }
     if (!ctx.upsertGoalState && !readKey(ctx)) {
       return err('update_goal requires runner context');
     }
-    const g = readGoal(ctx);
-    if (!g) return err('No goal set. Call create_goal first.');
-    if (g.status === 'complete') return err('Goal is already complete.');
-    const note = typeof args.note === 'string' && args.note.trim() ? args.note.trim() : g.completionNote;
+    let g: GoalState | null;
+    try {
+      g = readGoal(ctx);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return err(`update_goal: failed to read persisted goal state: ${reason}`);
+    }
+    if (!g) {
+      return err(
+        'No goal set. Do NOT finish with prose. In the next assistant turn call create_goal first. ' +
+          'If the objective is already achieved, call update_goal(status="complete") second in the SAME assistant tool-call batch.',
+      );
+    }
+    if (g.status !== 'in_progress') return err(`Goal is already ${g.status}.`);
+    if (
+      requestedStatus === 'superseded'
+      && (
+        ctx.goalLifecyclePivotGoalCreatedAt === undefined
+        || g.createdAt !== ctx.goalLifecyclePivotGoalCreatedAt
+      )
+    ) {
+      return err(
+        'update_goal: status="superseded" may close only the inherited goal explicitly targeted by the user pivot; the current goal was created afterward',
+      );
+    }
+    const note = suppliedNote || g.completionNote;
     const updated: GoalState = {
       ...g,
-      status: 'complete',
+      status: requestedStatus,
       updatedAt: new Date().toISOString(),
       completionNote: note,
     };
-    writeGoal(ctx, updated);
-    return ok(`Goal marked complete${updated.completionNote ? `: ${updated.completionNote}` : '.'}`);
+    try {
+      await writeGoal(ctx, updated, 'update_goal');
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return err(`update_goal: failed to persist goal state: ${reason}`);
+    }
+    resetCreateBurst(ctx);
+    return ok(
+      requestedStatus === 'complete'
+        ? `Goal marked complete${updated.completionNote ? `: ${updated.completionNote}` : '.'}`
+        : `Goal superseded: ${updated.completionNote}`,
+    );
   },
 };
 

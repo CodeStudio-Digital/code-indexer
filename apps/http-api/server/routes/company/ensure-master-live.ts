@@ -11,17 +11,19 @@
  * `ask_user`/`submit_plan` tool_use on resume (runner.ts "Safety net 2"), so
  * delivering the answer as a follow-up message is safe.
  *
- * Mirrors the spawn-and-resume core of `POST /resume` (incl. the one-shot
- * `port_closed` retry) but returns the orchestrator instead of an SSE stream, so
- * the JSON interaction routes can reuse it. Serialized via `withSessionLock` so
- * two concurrent interactions can't each spawn a master.
+ * Mirrors the spawn-and-resume core of `POST /resume` but returns the
+ * orchestrator instead of an SSE stream, so the JSON interaction routes can
+ * reuse it. A lost RPC acknowledgement is never replayed automatically: the
+ * original worker may already have applied the message. Serialized via
+ * `withSessionLock` so two concurrent interactions can't each spawn a master.
  */
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
-import { isPortClosedError } from '@mcp/orchestrator-host';
+import type { WorkerBackedOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import type { ServerDeps } from '../../deps.js';
 import {
   getCompanyOrchestrator,
-  deleteCompanyOrchestrator,
+  evictCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { withSessionLock } from '../coder/sessionLock.js';
@@ -29,95 +31,161 @@ import { resolveAndRunMaster } from './master-resolve.js';
 import { routeAllowsCompanySurface } from './runtime-capabilities.js';
 import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
 
-const PORT_CLOSED_RETRY_DELAY_MS = 600;
-
 export interface EnsureMasterOpts {
   /** Delivered to the master as a continuation (the answer / message / plan verdict). */
   message: string;
   attachments?: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
+  interject?: boolean;
   thinking?: boolean;
 }
 
 export type EnsureMasterResult =
-  | { orchestrator: CompanyOrchestrator; resumed: boolean }
-  | { error: string; status: 400 | 404 | 500 };
+  | { orchestrator: WorkerBackedOrchestrator; resumed: boolean }
+  | {
+      error: string;
+      status: 400 | 404 | 409 | 500 | 503;
+      code?:
+        | 'OUTCOME_UNKNOWN'
+        | 'MASTER_RESUME_FAILED'
+        | 'INTERACTION_PENDING'
+        | 'MASTER_MESSAGE_NOT_ACCEPTED';
+    };
 
 export async function ensureCompanyMasterLive(
   id: number,
   deps: Pick<ServerDeps, 'companyStore'>,
   opts: EnsureMasterOpts,
 ): Promise<EnsureMasterResult> {
+  return withSessionLock(id, () => ensureCompanyMasterLiveLocked(id, deps, opts));
+}
+
+/**
+ * Lock-free core for routes that need one critical section spanning their
+ * durable prompt claim, worker delivery, and prompt resolution.
+ *
+ * The caller MUST already own this session's `withSessionLock`. Calling the
+ * public wrapper from inside that lock would deadlock because the lock is not
+ * re-entrant.
+ */
+export async function ensureCompanyMasterLiveLocked(
+  id: number,
+  deps: Pick<ServerDeps, 'companyStore'>,
+  opts: EnsureMasterOpts,
+): Promise<EnsureMasterResult> {
   const { companyStore } = deps;
 
-  return withSessionLock(id, async (): Promise<EnsureMasterResult> => {
-    const existing = getCompanyOrchestrator(id);
-    if (existing) return { orchestrator: existing, resumed: false };
-
-    const session = companyStore.getCompanySession(id);
-    if (!session) return { error: 'Not found', status: 404 };
-
-    let config: {
-      role_assignments?: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
-    } = {};
-    try { config = JSON.parse(session.config_json); } catch { /* defaults below */ }
-    const roleConfigs = config.role_assignments ?? [];
-    let masterRuntime;
+  const existing = getCompanyOrchestrator(id);
+  if (existing) {
     try {
-      masterRuntime = resolveEffectiveMasterRuntime({
-        configJson: session.config_json,
-        runtimeKind: session.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+      const delivery = await existing.sendMessageToMaster(opts.message, {
+        interject: opts.interject,
+        attachments: opts.attachments,
+        thinking: opts.thinking,
       });
-    } catch (error) {
+      if (!delivery.ok) {
+        const interactionPending = delivery.pending === 'interactive_wait';
+        return {
+          error: interactionPending
+            ? 'Master is waiting for an interactive answer'
+            : 'Master did not accept the message',
+          status: interactionPending ? 409 : 503,
+          code: interactionPending
+            ? 'INTERACTION_PENDING'
+            : 'MASTER_MESSAGE_NOT_ACCEPTED',
+        };
+      }
+      return { orchestrator: existing, resumed: false };
+    } catch (err) {
+      // A concurrent request may have recreated the worker after the route's
+      // optimistic pool check but before this lock was acquired. Delivery is
+      // still a mutating RPC, so a closed port means its outcome is unknown;
+      // do not replay it on a replacement worker.
+      if (isMutationOutcomeUnknownError(err)) {
+        await evictCompanyOrchestrator(id);
+        return {
+          error:
+            'Master message outcome_unknown: the worker acknowledgement was lost; ' +
+            'the mutating RPC was not replayed.',
+          status: 500,
+          code: 'OUTCOME_UNKNOWN',
+        };
+      }
       return {
-        error: error instanceof Error ? error.message : String(error),
-        status: 400,
+        error: `Master message failed: ${err instanceof Error ? err.message : String(err)}`,
+        status: 500,
+        code: 'MASTER_RESUME_FAILED',
       };
     }
+  }
 
-    // A session that has a master run RESUMES it (reuses coder_session_id);
-    // a brand-new sub-session with no master run cold-starts.
-    const masterRun = companyStore.listAgentRuns(id).filter((r) => r.role === 'master').pop();
+  const session = companyStore.getCompanySession(id);
+  if (!session) return { error: 'Not found', status: 404 };
 
-    const attemptSpawnAndResume = async (): Promise<CompanyOrchestrator> => {
-      const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
-      if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
-        void orchestrator.pipelineRecoverRunning().catch((err) => {
-          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-        });
-      }
-      await resolveAndRunMaster(orchestrator, !!masterRun, {
-        userMessage: opts.message,
-        provider: masterRuntime.provider,
-        model: masterRuntime.model,
-        maxTurns: 100,
-        roleConfigs,
-        attachments: opts.attachments,
-        thinking: opts.thinking ?? masterRuntime.thinking,
-        thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
-        temperature: masterRuntime.temperature,
-        reasoningEffort: masterRuntime.reasoningEffort,
-        fallbackModels: masterRuntime.fallbackModels,
-      });
-      return orchestrator;
+  let config: {
+    role_assignments?: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
+  } = {};
+  try { config = JSON.parse(session.config_json); } catch { /* defaults below */ }
+  const roleConfigs = config.role_assignments ?? [];
+  let masterRuntime;
+  try {
+    masterRuntime = resolveEffectiveMasterRuntime({
+      configJson: session.config_json,
+      runtimeKind: session.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
+    });
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      status: 400,
     };
+  }
 
-    try {
-      return { orchestrator: await attemptSpawnAndResume(), resumed: true };
-    } catch (err) {
-      // `port_closed`: the worker exited mid-RPC while WorkerHost was already
-      // restarting it. Evict the dead handle and retry ONCE with a fresh spawn.
-      if (isPortClosedError(err)) {
-        console.warn(`[company s=${id}] ensureMasterLive hit port_closed; evict + retry once.`);
-        deleteCompanyOrchestrator(id);
-        await new Promise((r) => setTimeout(r, PORT_CLOSED_RETRY_DELAY_MS));
-        try {
-          return { orchestrator: await attemptSpawnAndResume(), resumed: true };
-        } catch (err2) {
-          deleteCompanyOrchestrator(id);
-          return { error: `Resume failed after retry: ${err2 instanceof Error ? err2.message : String(err2)}`, status: 500 };
-        }
-      }
-      return { error: `Resume failed: ${err instanceof Error ? err.message : String(err)}`, status: 500 };
+  // A session that has a master run RESUMES it (reuses coder_session_id);
+  // a brand-new sub-session with no master run cold-starts.
+  const masterRun = companyStore.listAgentRuns(id).filter((r) => r.role === 'master').pop();
+
+  const attemptSpawnAndResume = async (): Promise<WorkerBackedOrchestrator> => {
+    const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
+    if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+      void orchestrator.pipelineRecoverRunning().catch((err) => {
+        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
+      });
     }
-  });
+    await resolveAndRunMaster(orchestrator, !!masterRun, {
+      userMessage: opts.message,
+      provider: masterRuntime.provider,
+      model: masterRuntime.model,
+      maxTurns: 100,
+      roleConfigs,
+      attachments: opts.attachments,
+      thinking: opts.thinking ?? masterRuntime.thinking,
+      thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
+      temperature: masterRuntime.temperature,
+      reasoningEffort: masterRuntime.reasoningEffort,
+      fallbackModels: masterRuntime.fallbackModels,
+    });
+    return orchestrator;
+  };
+
+  try {
+    return { orchestrator: await attemptSpawnAndResume(), resumed: true };
+  } catch (err) {
+    // The worker may have applied start/resume and lost only the ACK. Replaying
+    // that mutating RPC could duplicate the master/message, so fence the
+    // handle and require an explicit new user action.
+    await evictCompanyOrchestrator(id);
+    if (isMutationOutcomeUnknownError(err)) {
+      return {
+        error:
+          'Master resume outcome_unknown: the worker acknowledgement was lost; ' +
+          'the mutating RPC was not replayed.',
+        status: 500,
+        code: 'OUTCOME_UNKNOWN',
+      };
+    }
+    return {
+      error: `Resume failed: ${err instanceof Error ? err.message : String(err)}`,
+      status: 500,
+      code: 'MASTER_RESUME_FAILED',
+    };
+  }
 }

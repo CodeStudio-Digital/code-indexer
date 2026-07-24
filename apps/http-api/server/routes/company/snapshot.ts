@@ -15,7 +15,11 @@ import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import { SessionSnapshotService, type FileSummary } from '@mcp/services/services/session-snapshots.js';
 import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
-import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
+import {
+  evictCompanyOrchestrator,
+  getCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 
 interface AgentRunRow {
   coder_session_id: number | null;
@@ -154,7 +158,25 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
     // POST /api/company/sessions/:id/message); the master then decides to
     // fix directly or forward to subordinates via the inbox. `{ ok: false }`
     // when no worker is spawned so the UI can flag a non-delivery.
-    deliverMessage: (sessionId, message) =>
-      getCompanyOrchestrator(sessionId)?.sendMessageToMaster(message) ?? { ok: false },
+    deliverMessage: async (sessionId, message) => {
+      const orchestrator = getCompanyOrchestrator(sessionId);
+      if (!orchestrator) return { ok: false };
+      try {
+        return await orchestrator.sendMessageToMaster(message);
+      } catch (error) {
+        if (!isMutationOutcomeUnknownError(error)) throw error;
+        // The worker may have accepted the review message before its ACK was
+        // lost. Fence the stale handle and surface uncertainty; never replay
+        // this mutating RPC automatically on a replacement worker.
+        await evictCompanyOrchestrator(sessionId);
+        return {
+          ok: false,
+          code: 'OUTCOME_UNKNOWN',
+          error:
+            'Review delivery outcome is unknown because its worker acknowledgement ' +
+            'was lost; the message was not replayed.',
+        };
+      }
+    },
   });
 }

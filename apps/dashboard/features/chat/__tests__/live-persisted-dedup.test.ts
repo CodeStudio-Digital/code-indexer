@@ -9,12 +9,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapTestI18n } from '../../../i18n/test-bootstrap.js';
 import {
+  buildPersistedLiveReconciliation,
   collectLatestPersistedInteractivePromptSignatures,
   collectPersistedToolResultIds,
   collectPersistedToolUseIds,
+  groupMessages,
   isLiveTurnDuplicatedInHistory,
   liveTurnCoversPersistedAssistantRun,
   liveBlockPersistedId,
+  liveTurnReconciliationRevision,
+  suppressLatestPersistedAssistantRun,
   visibleLiveBlocks,
 } from '../utils.js';
 import type { StreamBlock } from '../../../hooks/useAgentStream.js';
@@ -183,6 +187,31 @@ describe('liveBlockPersistedId', () => {
   });
 });
 
+describe('liveTurnReconciliationRevision', () => {
+  it('does not invalidate history assembly for each token in the same text block', () => {
+    const text: Extract<StreamBlock, { type: 'text' }> = { type: 'text', text: 'a' };
+    const turn: { blocks: StreamBlock[] } = { blocks: [text] };
+    const first = liveTurnReconciliationRevision(turn);
+
+    text.text = 'a much longer streamed chunk';
+    expect(liveTurnReconciliationRevision(turn)).toBe(first);
+
+    turn.blocks.push(toolBlock('tool-1'));
+    expect(liveTurnReconciliationRevision(turn)).not.toBe(first);
+  });
+
+  it('invalidates once when a text-only replay reaches the durable tail length', () => {
+    const text: Extract<StreamBlock, { type: 'text' }> = { type: 'text', text: 'short' };
+    const turn: { blocks: StreamBlock[] } = { blocks: [text] };
+    const streaming = liveTurnReconciliationRevision(turn, 10);
+
+    text.text = '123456789';
+    expect(liveTurnReconciliationRevision(turn, 10)).toBe(streaming);
+    text.text = '1234567890';
+    expect(liveTurnReconciliationRevision(turn, 10)).not.toBe(streaming);
+  });
+});
+
 describe('collectPersistedToolUseIds', () => {
   it('gathers only assistant tool_use ids', () => {
     const ids = collectPersistedToolUseIds([
@@ -238,6 +267,32 @@ describe('visibleLiveBlocks', () => {
     )).toEqual(blocks);
   });
 
+  it('cuts a replayed persisted prefix before appending a fresh live suffix', () => {
+    const messages = [
+      assistantTextAndTool('Second cycle', 'tool-2'),
+      toolResult('tool-2'),
+      assistantTextAndTool('Third cycle', 'tool-3'),
+      toolResult('tool-3'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages, 784504);
+    const fresh = textBlock('Fourth cycle is still streaming');
+
+    expect(visibleLiveBlocks(
+      [
+        textBlock('Second cycle'),
+        toolBlock('tool-2'),
+        textBlock('Third cycle'),
+        toolBlock('tool-3'),
+        fresh,
+      ],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      false,
+      reconciliation,
+    )).toEqual([fresh]);
+  });
+
   it('drops a live decision_gate when the latest persisted turn has the same prompt but a different tool_use id', () => {
     const persisted = [
       assistantTextAndDecisionGate(
@@ -263,6 +318,58 @@ describe('visibleLiveBlocks', () => {
       const signatures = collectLatestPersistedInteractivePromptSignatures([persisted]);
       expect(visibleLiveBlocks([live], new Set(), signatures)).toEqual([]);
     }
+  });
+
+  it('keeps a new byte-identical plan when the matching persisted plan is already resolved', () => {
+    const live = roadmapPlanBlock('plan_new_pending');
+    const resolvedMessages = [
+      assistantTextAndInteractiveTool('Please review', 'toolu_old', 'submit_plan', planInput),
+      toolResult('toolu_old'),
+    ];
+    const signatures = collectLatestPersistedInteractivePromptSignatures(resolvedMessages);
+
+    expect(signatures.size).toBe(0);
+    expect(visibleLiveBlocks(
+      [live],
+      collectPersistedToolUseIds(resolvedMessages),
+      signatures,
+      collectPersistedToolResultIds(resolvedMessages),
+    )).toEqual([live]);
+    expect(isLiveTurnDuplicatedInHistory({ blocks: [live] }, resolvedMessages)).toBe(false);
+  });
+
+  it('uses a signature only for the latest pending copy after an identical plan was resolved', () => {
+    const live = roadmapPlanBlock('plan_runtime_pending');
+    const messages = [
+      assistantTextAndInteractiveTool('Please review', 'toolu_old', 'submit_plan', planInput),
+      toolResult('toolu_old'),
+      assistantTextAndInteractiveTool('Please review', 'toolu_new', 'submit_plan', planInput),
+    ];
+    const signatures = collectLatestPersistedInteractivePromptSignatures(messages);
+
+    expect(signatures.size).toBe(1);
+    expect(visibleLiveBlocks(
+      [live],
+      collectPersistedToolUseIds(messages),
+      signatures,
+      collectPersistedToolResultIds(messages),
+    )).toEqual([]);
+  });
+
+  it('treats an audit fallback result as resolved when the tool_result row is missing', () => {
+    const messages = [
+      assistantTextAndInteractiveTool('Please review', 'toolu_old', 'submit_plan', planInput),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages, null, ['toolu_old']);
+
+    expect(reconciliation.persistedToolResultIds.has('toolu_old')).toBe(true);
+    expect(reconciliation.pendingInteractivePromptSignatures.size).toBe(0);
+    expect(visibleLiveBlocks(
+      [roadmapPlanBlock('plan_new_pending')],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+    )).toEqual([roadmapPlanBlock('plan_new_pending')]);
   });
 
   it('returns the input unchanged when nothing is persisted yet (fast path)', () => {
@@ -466,6 +573,49 @@ describe('liveTurnCoversPersistedAssistantRun', () => {
         toolResult('tool-1'),
       ],
     )).toBe(false);
+  });
+
+  it('uses preceding_user_message_id to reconcile a tail window that starts mid-turn', () => {
+    const persistedTail = [
+      assistantTextAndTool('Second cycle', 'tool-2'),
+      toolResult('tool-2'),
+      assistantText('Third cycle'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(persistedTail, 784504);
+    const completeLiveRun = {
+      blocks: [
+        textBlock('First cycle'),
+        toolBlock('tool-1'),
+        textBlock('Second cycle'),
+        toolBlock('tool-2'),
+        textBlock('Third cycle'),
+      ],
+    };
+    const replaySuffix = {
+      blocks: [
+        textBlock('Second cycle'),
+        toolBlock('tool-2'),
+        textBlock('Third cycle'),
+      ],
+    };
+
+    expect(reconciliation.startsMidTurn).toBe(true);
+    expect(liveTurnCoversPersistedAssistantRun(completeLiveRun, reconciliation)).toBe(true);
+    expect(isLiveTurnDuplicatedInHistory(completeLiveRun, reconciliation)).toBe(false);
+    expect(isLiveTurnDuplicatedInHistory(replaySuffix, reconciliation)).toBe(true);
+  });
+
+  it('suppresses the loaded assistant suffix when its user boundary is just before the tail', () => {
+    const persistedTail = [
+      assistantTextAndTool('Second cycle', 'tool-2'),
+      toolResult('tool-2'),
+      assistantText('Third cycle'),
+    ];
+    const groups = groupMessages(persistedTail, []);
+
+    expect(groups.every((group) => group.kind === 'assistant')).toBe(true);
+    expect(suppressLatestPersistedAssistantRun(groups)).toBe(groups);
+    expect(suppressLatestPersistedAssistantRun(groups, 784504)).toEqual([]);
   });
 });
 

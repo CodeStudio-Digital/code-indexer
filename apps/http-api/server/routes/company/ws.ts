@@ -2,10 +2,10 @@
  * Company-session WebSocket gateway (P14).
  *
  * Parallel transport that mirrors the SSE stream — same events, same
- * envelopes, same `Last-Event-ID` replay semantics — over a single
- * bidirectional connection. SSE remains the default; this route is
- * opt-in via the dashboard's `?transport=ws` query parameter so we
- * can ship both side-by-side and deprecate SSE in a later release.
+ * envelopes, same cursor replay semantics — over a single bidirectional
+ * connection. The dashboard currently uses SSE exclusively; this separate
+ * `/ws` endpoint is available to explicit WS consumers and is not selected by
+ * a dashboard `transport` query parameter.
  *
  * Protocol:
  *
@@ -33,11 +33,17 @@ import type { Duplex } from 'node:stream';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { subscribe, waitEnded } from '../../../coder-bus.js';
 import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import {
+  SerializedWriteQueue,
+  streamDrainTimeoutMs,
+  streamQueueLimits,
+} from '../../../sse/SerializedWriteQueue.js';
+import { effectiveSinceForBus } from '../../../sse/pumpBusToSSE.js';
 
 // Narrow `ws` surface — typed locally because `@types/ws` is not a
 // project dependency. The runtime module is the published `ws`
 // package (`node_modules/ws`).
-interface WsLike {
+export interface WsLike {
   readyState: number;
   readonly OPEN: number;
   readonly CONNECTING: number;
@@ -63,9 +69,10 @@ const wsModule = require('ws') as {
   WebSocketServer: new (opts: { noServer: boolean }) => WebSocketServerLike;
 };
 
-interface WsContext {
+export interface WsContext {
   sessionId: number;
   sinceSeq: number;
+  busId: string | null;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
@@ -97,7 +104,7 @@ export function attachCompanyStreamUpgrade(server: HttpServer): void {
   });
 }
 
-function parseUpgradeRequest(req: IncomingMessage): WsContext | null {
+export function parseUpgradeRequest(req: IncomingMessage): WsContext | null {
   if (req.method !== 'GET') return null;
   const url = req.url ?? '';
   const m = PATH_RE.exec(url);
@@ -105,6 +112,7 @@ function parseUpgradeRequest(req: IncomingMessage): WsContext | null {
   const sessionId = Number(m[1]);
   if (!Number.isFinite(sessionId)) return null;
   let sinceSeq = -1;
+  let busId: string | null = null;
   if (m[2]) {
     const params = new URLSearchParams(m[2]);
     const raw = params.get('sinceSeq');
@@ -112,8 +120,10 @@ function parseUpgradeRequest(req: IncomingMessage): WsContext | null {
       const n = Number(raw);
       if (Number.isFinite(n)) sinceSeq = n;
     }
+    const rawBusId = params.get('busId')?.trim();
+    if (rawBusId && rawBusId.length <= 256) busId = rawBusId;
   }
-  return { sessionId, sinceSeq };
+  return { sessionId, sinceSeq, busId };
 }
 
 function writeUpgradeFailure(socket: Duplex, status: number, reason: string): void {
@@ -130,19 +140,64 @@ function writeUpgradeFailure(socket: Duplex, status: number, reason: string): vo
   }
 }
 
-function handleConnection(
+export function handleConnection(
   ws: WsLike,
   ctx: WsContext,
   bus: Parameters<typeof subscribe>[0],
 ): void {
+  let unsubscribe = (): void => undefined;
+
+  const sendQueue = new SerializedWriteQueue<string>(
+    (frame) => new Promise<void>((resolve, reject) => {
+      if (ws.readyState !== ws.OPEN) return resolve();
+      ws.send(frame, (err) => err ? reject(err) : resolve());
+    }),
+    {
+      ...streamQueueLimits(),
+      onOverflow: () => {
+        // Stop this subscriber immediately; the company bus remains alive and
+        // the client can reconnect with its last consumed `sinceSeq`.
+        try { unsubscribe(); } catch { /* best-effort */ }
+        try { ws.close(1013, 'slow consumer'); } catch { /* best-effort */ }
+      },
+      onWriteError: () => {
+        try { ws.close(1011, 'send failed'); } catch { /* best-effort */ }
+      },
+    },
+  );
+
+  const enqueueSend = (frame: string): void => {
+    void sendQueue.enqueue(frame, Buffer.byteLength(frame, 'utf8'))
+      .catch(() => undefined);
+  };
+
+  const sinceSeq = effectiveSinceForBus(
+    ctx.sinceSeq,
+    bus.nextSeq,
+    ctx.busId,
+    bus.busId,
+  );
+  enqueueSend(JSON.stringify({
+    v: 1,
+    type: 'bus_info',
+    data: {
+      bus_id: bus.busId,
+      first_replay_seq: bus.buffer.find((event) => event.seq > sinceSeq)?.seq ?? bus.nextSeq,
+      dropped_replay_events: bus.droppedBufferEvents ?? 0,
+    },
+  }));
+
   // Heartbeat — keeps proxies/load balancers from idling out the
   // connection AND lets the server detect a half-open client quickly
   // via the missing pong response.
   const heartbeat = setInterval(() => {
     if (ws.readyState !== ws.OPEN) return;
     try {
+      // Native ping is a WebSocket control frame and intentionally bypasses
+      // the application-data queue; the textual heartbeat below does not.
       ws.ping();
-      ws.send(JSON.stringify({ v: 1, type: 'ping' }));
+      // The text heartbeat shares the same serialized, bounded path as data.
+      enqueueSend(JSON.stringify({ v: 1, type: 'ping' }));
     } catch {
       /* connection broken; cleanup happens on `close` */
     }
@@ -151,30 +206,14 @@ function handleConnection(
     (heartbeat as { unref: () => void }).unref();
   }
 
-  // Sequential write queue so backpressure during a burst doesn't
-  // interleave frames or drop any. `ws.send` is async via the
-  // socket buffer; chaining sends keeps order.
-  let drainChain: Promise<void> = Promise.resolve();
-  const enqueueSend = (frame: string): void => {
-    drainChain = drainChain.then(
-      () => new Promise<void>((resolve) => {
-        if (ws.readyState !== ws.OPEN) return resolve();
-        ws.send(frame, (err) => {
-          if (err) {
-            try { ws.close(1011, 'send failed'); } catch { /* best-effort */ }
-          }
-          resolve();
-        });
-      }),
-    );
-  };
-
-  const unsubscribe = subscribe(
+  let terminalEnqueued = false;
+  unsubscribe = subscribe(
     bus,
     (ev) => {
+      if (ev.event === 'done' || ev.event === 'error') terminalEnqueued = true;
       enqueueSend(JSON.stringify({ v: 1, seq: ev.seq, type: ev.event, data: ev.data }));
     },
-    ctx.sinceSeq,
+    sinceSeq,
   );
 
   ws.on('message', (raw: string | Buffer) => {
@@ -194,6 +233,7 @@ function handleConnection(
   const cleanup = (): void => {
     clearInterval(heartbeat);
     try { unsubscribe(); } catch { /* best-effort */ }
+    sendQueue.stop();
   };
 
   ws.on('close', cleanup);
@@ -204,9 +244,31 @@ function handleConnection(
 
   // Notify the bus end → emit a final close. Don't await — the
   // `close` listener already wires cleanup if the client drops first.
-  void waitEnded(bus, makeAbortFromWs(ws)).then(() => {
+  void waitEnded(bus, makeAbortFromWs(ws)).then(async () => {
+    // Freeze the queue before taking its drain snapshot. Otherwise a heartbeat
+    // tick could append behind the terminal event while waitForIdle is active.
+    clearInterval(heartbeat);
+    try { unsubscribe(); } catch { /* best-effort */ }
+    if (
+      bus.endReason
+      && !terminalEnqueued
+      && (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING)
+    ) {
+      terminalEnqueued = true;
+      enqueueSend(JSON.stringify({
+        v: 1,
+        type: bus.endReason.event,
+        data: bus.endReason.data ?? {},
+      }));
+    }
+    const drained = await sendQueue.waitForIdle(streamDrainTimeoutMs());
     if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) {
-      try { ws.close(1000, 'stream ended'); } catch { /* best-effort */ }
+      try {
+        ws.close(
+          drained ? 1000 : 1011,
+          drained ? 'stream ended' : 'terminal drain timed out',
+        );
+      } catch { /* best-effort */ }
     }
   }).catch(() => undefined);
 }

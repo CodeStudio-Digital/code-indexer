@@ -151,11 +151,16 @@ export function mountAppStudioTeamRuntimeRoutes(app: Hono, deps: ServerDeps): vo
   // Generic Company intentionally blocks destructive control of App-owned
   // sessions. The App facade performs the link authorization above, then calls
   // the shared abort primitive directly.
-  app.post('/api/app-studio/apps/:id/team/commands/abort', (c) => {
+  app.post('/api/app-studio/apps/:id/team/commands/abort', async (c) => {
     const binding = bindingOrResponse(c, deps);
     if (binding instanceof Response) return binding;
-    const result = abortCompanyRuntime(binding.companySessionId);
-    if (!result.ok) return c.json({ error: 'No active orchestrator' }, 404);
+    const result = await abortCompanyRuntime(binding.companySessionId);
+    if (!result.ok) {
+      if (result.reason === 'outcome_unknown') {
+        return c.json({ error: result.error, code: result.code }, 500);
+      }
+      return c.json({ error: 'No active orchestrator' }, 404);
+    }
     return c.json({ ok: true });
   });
 }

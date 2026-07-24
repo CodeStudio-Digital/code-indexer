@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -101,6 +101,25 @@ describe('coder session filesystem-root routes', () => {
     });
     expect(inside.status).toBe(400);
     expect(await inside.json()).toMatchObject({ error: expect.stringContaining('already inside') });
+  });
+
+  it('labels exact attachment grants as files in the listing', async () => {
+    const { app, roots } = fixture();
+    const attachment = join(externalRoot, 'trace.tmp');
+    writeFileSync(attachment, 'trace');
+    roots.push({
+      id: 1,
+      session_id: 1,
+      root_path: attachment,
+      access: 'read',
+      created_at: 'now',
+      updated_at: 'now',
+    });
+
+    const listed = await app.request('/api/coder/sessions/1/filesystem-roots');
+    expect(await listed.json()).toMatchObject({
+      roots: [{ root_path: attachment, access: 'read', kind: 'file' }],
+    });
   });
 
   it('rejects manual grant changes while a session is running', async () => {

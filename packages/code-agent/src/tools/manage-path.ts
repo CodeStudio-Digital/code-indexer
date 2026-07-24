@@ -167,6 +167,7 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
 
 export const managePathTool: CoderTool = {
   name: 'manage_path',
+  effectBoundary: 'filesystem',
   description: maybeTerse(MANAGE_PATH_DESC),
   source: 'native',
   mutates: true,

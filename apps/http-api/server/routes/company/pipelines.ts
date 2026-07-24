@@ -1,6 +1,8 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import { activeOrchestrators } from './stream.js';
+import { evictCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { parseIdParam, parseJsonBody, notFound, resolveRootSessionId } from '../_helpers.js';
 import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
 import { generateAiPipeline } from '@mcp/api-handlers';
@@ -193,7 +195,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       }
       const orchestrator = activeOrchestrators.get(body.session_id);
       if (orchestrator) {
-        const roleSummary = orchestrator.pipelineValidate(graph);
+        const roleSummary = await orchestrator.pipelineValidate(graph);
         return c.json(roleSummary);
       }
       // Active orchestrator unavailable — fall back to structural validation.
@@ -229,11 +231,21 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       const exec = await orchestrator.pipelineStart(pipelineId, initialInput, 'human');
       return c.json(exec, 201);
     } catch (e) {
+      if (isMutationOutcomeUnknownError(e)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error:
+            'Pipeline start outcome is unknown because its worker acknowledgement ' +
+            'was lost; the execution was not started again.',
+          code: 'OUTCOME_UNKNOWN',
+          pipeline_id: pipelineId,
+        }, 500);
+      }
       return c.json({ error: (e as Error).message }, 400);
     }
   });
 
-  app.get('/api/company/sessions/:id/pipelines/executions', (c) => {
+  app.get('/api/company/sessions/:id/pipelines/executions', async (c) => {
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     if (pipelinesUnavailable(sessionId)) return c.json([]);
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -242,7 +254,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     const pipelineId = pipelineRaw ? parseInt(pipelineRaw, 10) : undefined;
 
     if (orchestrator) {
-      return c.json(orchestrator.pipelineListExecutions({
+      return c.json(await orchestrator.pipelineListExecutions({
         pipelineId: Number.isFinite(pipelineId ?? NaN) ? pipelineId : undefined,
         status,
       }));
@@ -255,7 +267,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     }));
   });
 
-  app.get('/api/company/sessions/:id/pipelines/executions/:execId', (c) => {
+  app.get('/api/company/sessions/:id/pipelines/executions/:execId', async (c) => {
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
     if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
@@ -264,7 +276,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
 
     const orchestrator = activeOrchestrators.get(sessionId);
     if (orchestrator) {
-      const result = orchestrator.pipelineStatus(execId);
+      const result = await orchestrator.pipelineStatus(execId);
       if (!result) return notFound(c, 'Execution not found');
       return c.json(result);
     }
@@ -288,12 +300,24 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
         error: 'Session is not running; cannot abort. Reload the session and try again.',
       }, 409);
     }
-    const ok = orchestrator.pipelineAbort(execId, body.reason);
+    let ok: boolean;
+    try {
+      ok = await orchestrator.pipelineAbort(execId, body.reason);
+    } catch (error) {
+      if (isMutationOutcomeUnknownError(error)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error: 'Pipeline abort outcome is unknown because the worker acknowledgement was lost.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
+      throw error;
+    }
     if (!ok) return c.json({ error: 'Execution is not abortable (not found or already terminal).' }, 409);
     return c.json({ ok: true });
   });
 
-  app.post('/api/company/sessions/:id/pipelines/executions/:execId/pause', (c) => {
+  app.post('/api/company/sessions/:id/pipelines/executions/:execId/pause', async (c) => {
     const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
     const execId = parseIdParam(c, 'execId');
     if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
@@ -303,7 +327,19 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     if (!orchestrator) {
       return c.json({ error: 'Session is not running.' }, 409);
     }
-    const ok = orchestrator.pipelinePause(execId);
+    let ok: boolean;
+    try {
+      ok = await orchestrator.pipelinePause(execId);
+    } catch (error) {
+      if (isMutationOutcomeUnknownError(error)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error: 'Pipeline pause outcome is unknown because the worker acknowledgement was lost.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
+      throw error;
+    }
     if (!ok) return c.json({ error: 'Only running executions can be paused.' }, 409);
     return c.json({ ok: true });
   });
@@ -323,6 +359,15 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       if (!ok) return c.json({ error: 'Only paused executions can be resumed.' }, 409);
       return c.json({ ok: true });
     } catch (e) {
+      if (isMutationOutcomeUnknownError(e)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error:
+            'Pipeline resume outcome is unknown because its worker acknowledgement ' +
+            'was lost; execution was not resumed again.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
       return c.json({ error: (e as Error).message }, 400);
     }
   });
@@ -342,6 +387,15 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       if (!ok) return c.json({ error: 'Execution is not paused awaiting confirmation.' }, 409);
       return c.json({ ok: true });
     } catch (e) {
+      if (isMutationOutcomeUnknownError(e)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error:
+            'Pipeline confirmation outcome is unknown because its worker ' +
+            'acknowledgement was lost; confirmation was not replayed.',
+          code: 'OUTCOME_UNKNOWN',
+        }, 500);
+      }
       return c.json({ error: (e as Error).message }, 400);
     }
   });

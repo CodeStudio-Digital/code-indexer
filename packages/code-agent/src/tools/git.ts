@@ -45,6 +45,7 @@ export function withManagedCommitAttribution(
 
 const gitStatus: CoderTool = {
   name: 'git_status',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_STATUS_DESC),
   source: 'native',
   repeatPolicy: 'volatile',
@@ -54,6 +55,7 @@ const gitStatus: CoderTool = {
 
 const gitDiff: CoderTool = {
   name: 'git_diff',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_DIFF_DESC),
   source: 'native',
   repeatPolicy: 'volatile',
@@ -75,6 +77,7 @@ const gitDiff: CoderTool = {
 
 const gitLog: CoderTool = {
   name: 'git_log',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_LOG_DESC),
   source: 'native',
   parameters: {
@@ -92,6 +95,7 @@ const gitLog: CoderTool = {
 
 const gitAdd: CoderTool = {
   name: 'git_add',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_ADD_DESC),
   source: 'native',
   parameters: {
@@ -111,6 +115,7 @@ const gitAdd: CoderTool = {
 
 const gitCommit: CoderTool = {
   name: 'git_commit',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_COMMIT_DESC),
   source: 'native',
   parameters: {
@@ -130,6 +135,7 @@ const gitCommit: CoderTool = {
 
 const gitBranch: CoderTool = {
   name: 'git_branch',
+  effectBoundary: 'shell',
   description: maybeTerse(GIT_BRANCH_DESC),
   source: 'native',
   parameters: {

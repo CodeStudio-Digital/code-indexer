@@ -8,7 +8,7 @@
  * path — the pipeline never breaks a turn.
  *
  * Mirror of `setGlobalToolSelectionFilter` /
- * `setGlobalQualityClassifierPipeline` patterns.
+ * the other process-wide pipeline holders.
  */
 import type { CandidatePipeline } from '@mcp/candidate-pipeline';
 import {

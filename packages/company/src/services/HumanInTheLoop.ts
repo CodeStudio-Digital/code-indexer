@@ -13,7 +13,9 @@
  * two services stay decoupled.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
 import type {
   IAgentStatusUpdater,
   IBoardPoster,
@@ -95,7 +97,6 @@ export class HumanInTheLoop {
    */
   private currentMasterPlanPromptId: number | null = null;
   private currentMasterQuestionPromptId: number | null = null;
-
   constructor(
     private readonly bus: IMetaBusPublisher,
     private readonly board: IBoardPoster,
@@ -165,6 +166,7 @@ export class HumanInTheLoop {
     approved: boolean,
     feedback?: string,
     promptId?: number,
+    deliveryOpts?: { retryOutcomeUnknown?: boolean },
   ): MasterPrompt | null {
     const handle = this.master.handle;
     if (!handle) return null;
@@ -174,17 +176,74 @@ export class HumanInTheLoop {
       ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'plan')?.id
       ?? null;
     if (targetId == null) return null;
-
-    const updated = this.ctx.companyStore.resolveMasterPrompt(targetId, {
-      kind: 'plan', approved, feedback,
-    });
-    if (!updated) return null; // Already resolved/cancelled — don't double-deliver.
-
     const response = JSON.stringify({ approved, feedback: feedback ?? '' });
-    const delivered = handle.runner.provideUserInput(response);
+    const deliveryToken = randomUUID();
+    const claim = this.ctx.companyStore.claimMasterPromptDelivery(
+      targetId,
+      this.ctx.companySessionId,
+      'plan',
+      deliveryToken,
+      hashControlPlanePayload({
+        kind: 'plan',
+        approved,
+        feedback: feedback ?? null,
+      }),
+      deliveryOpts,
+    );
+    if (claim.kind === 'not_pending') return null;
+    if (claim.kind === 'payload_conflict') {
+      throw this.deliveryPayloadConflictError(targetId, 'plan');
+    }
+    if (claim.kind !== 'claimed') {
+      throw this.outcomeUnknownError(
+        targetId,
+        'plan',
+        claim.kind === 'delivery_in_progress'
+          ? 'another delivery is in progress or its acknowledgement was lost'
+          : 'a previous delivery was not durably recorded',
+      );
+    }
+
+    let updated: MasterPrompt | null;
+    let delivered: boolean;
+    try {
+      delivered = handle.runner.provideUserInput(response);
+    } catch (error) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(
+        targetId,
+        'plan',
+        `runner delivery threw before acknowledgement: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     if (!delivered) {
-      // Runner wasn't actually waiting (rare). Persisted state is correct;
-      // just publish the resolution event for clients.
+      // `false` is an authoritative pre-effect refusal. Leave the durable
+      // prompt pending so the caller can safely retry once the runner waits.
+      if (!this.ctx.companyStore.releaseMasterPromptDelivery(targetId, deliveryToken)) {
+        throw this.outcomeUnknownError(targetId, 'plan', 'the delivery reservation could not be released');
+      }
+      return null;
+    }
+
+    try {
+      updated = this.ctx.companyStore.completeMasterPromptDelivery(
+        targetId,
+        deliveryToken,
+        { kind: 'plan', approved, feedback },
+      );
+    } catch (error) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(
+        targetId,
+        'plan',
+        `durable update failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!updated) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(targetId, 'plan', 'durable compare-and-set was rejected');
     }
     if (this.currentMasterPlanPromptId === targetId) this.currentMasterPlanPromptId = null;
 
@@ -199,7 +258,11 @@ export class HumanInTheLoop {
     return updated;
   }
 
-  respondToMasterQuestion(answer: string, promptId?: number): MasterPrompt | null {
+  respondToMasterQuestion(
+    answer: string,
+    promptId?: number,
+    deliveryOpts?: { retryOutcomeUnknown?: boolean },
+  ): MasterPrompt | null {
     const handle = this.master.handle;
     if (!handle) return null;
 
@@ -208,14 +271,73 @@ export class HumanInTheLoop {
       ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'question')?.id
       ?? null;
     if (targetId == null) return null;
-
-    const updated = this.ctx.companyStore.resolveMasterPrompt(targetId, {
-      kind: 'question', answer,
-    });
-    if (!updated) return null;
-
     const response = JSON.stringify({ answer });
-    handle.runner.provideUserInput(response);
+    const deliveryToken = randomUUID();
+    const claim = this.ctx.companyStore.claimMasterPromptDelivery(
+      targetId,
+      this.ctx.companySessionId,
+      'question',
+      deliveryToken,
+      hashControlPlanePayload({ kind: 'question', answer }),
+      deliveryOpts,
+    );
+    if (claim.kind === 'not_pending') return null;
+    if (claim.kind === 'payload_conflict') {
+      throw this.deliveryPayloadConflictError(targetId, 'question');
+    }
+    if (claim.kind !== 'claimed') {
+      throw this.outcomeUnknownError(
+        targetId,
+        'question',
+        claim.kind === 'delivery_in_progress'
+          ? 'another delivery is in progress or its acknowledgement was lost'
+          : 'a previous delivery was not durably recorded',
+      );
+    }
+
+    let updated: MasterPrompt | null;
+    let delivered: boolean;
+    try {
+      delivered = handle.runner.provideUserInput(response);
+    } catch (error) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(
+        targetId,
+        'question',
+        `runner delivery threw before acknowledgement: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (!delivered) {
+      if (!this.ctx.companyStore.releaseMasterPromptDelivery(targetId, deliveryToken)) {
+        throw this.outcomeUnknownError(
+          targetId,
+          'question',
+          'the delivery reservation could not be released',
+        );
+      }
+      return null;
+    }
+
+    try {
+      updated = this.ctx.companyStore.completeMasterPromptDelivery(
+        targetId,
+        deliveryToken,
+        { kind: 'question', answer },
+      );
+    } catch (error) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(
+        targetId,
+        'question',
+        `durable update failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!updated) {
+      this.markOutcomeUnknown(targetId, deliveryToken);
+      throw this.outcomeUnknownError(targetId, 'question', 'durable compare-and-set was rejected');
+    }
     if (this.currentMasterQuestionPromptId === targetId) {
       this.currentMasterQuestionPromptId = null;
     }
@@ -228,6 +350,40 @@ export class HumanInTheLoop {
     this.board.post('human', null, 'decision', `Human answered: ${answer}`);
     this.bus.publish('master_question_resolved', { prompt: updated });
     return updated;
+  }
+
+  private markOutcomeUnknown(promptId: number, deliveryToken: string): void {
+    try {
+      this.ctx.companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+    } catch {
+      // The original post-effect failure remains OUTCOME_UNKNOWN. A failed
+      // secondary write must never turn into an automatic replay decision.
+    }
+  }
+
+  private deliveryPayloadConflictError(
+    promptId: number,
+    kind: 'plan' | 'question',
+  ): Error {
+    const error = new Error(
+      `Master ${kind} prompt ${promptId} has an uncertain delivery with a different payload`,
+    ) as Error & { code: 'PROMPT_DELIVERY_PAYLOAD_CONFLICT' };
+    error.name = 'MasterPromptDeliveryPayloadConflictError';
+    error.code = 'PROMPT_DELIVERY_PAYLOAD_CONFLICT';
+    return error;
+  }
+
+  private outcomeUnknownError(
+    promptId: number,
+    kind: 'plan' | 'question',
+    detail: string,
+  ): Error {
+    const error = new Error(
+      `Master ${kind} response outcome is unknown for prompt ${promptId}: ${detail}`,
+    ) as Error & { code: 'OUTCOME_UNKNOWN' };
+    error.name = 'MasterPromptOutcomeUnknownError';
+    error.code = 'OUTCOME_UNKNOWN';
+    return error;
   }
 
   /**

@@ -78,6 +78,25 @@ describe('getSessionTelemetrySummary', () => {
     expect(summary.estimated_cost_usd).toBe(0);
   });
 
+  it('normalizes split Anthropic cache usage into a real prompt hit ratio', () => {
+    db.exec(`
+      INSERT INTO coder_turn_telemetry
+        (session_id, provider, input_tokens, output_tokens,
+         cache_read_input_tokens, cache_creation_input_tokens)
+      VALUES
+        (1221, 'claude-code', 2, 2934, 0, 527617),
+        (1221, 'claude-code', 2, 9005, 27487, 500786),
+        (1221, 'claude-code', 2, 5976, 528273, 7741);
+    `);
+
+    const summary = getSessionTelemetrySummary(db, 1221);
+    const promptTotal = 527_619 + 528_275 + 536_016;
+    expect(summary.total_input_tokens).toBe(promptTotal);
+    expect(summary.peak_context_tokens).toBe(536_016);
+    expect(summary.cache_hit_ratio).toBeCloseTo((27_487 + 528_273) / promptTotal);
+    expect(summary.savings.cacheHitRatio).toBeCloseTo((27_487 + 528_273) / promptTotal);
+  });
+
   it('does not double-count a nested refusal propagated through code_exec', () => {
     db.exec(`
       INSERT INTO coder_messages (id, session_id, role) VALUES (1, 1221, 'assistant');

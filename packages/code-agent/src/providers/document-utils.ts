@@ -1,9 +1,15 @@
 import type { DocumentBlock } from '@mcp/provider-sdk';
 
-/** Render extracted document text with escaped attributes and a CDATA boundary. */
-export function renderTextDocument(block: Pick<DocumentBlock, 'name' | 'mediaType' | 'text'>): string {
+/** Render extracted text or a lazy local reference without embedding file bytes. */
+export function renderTextDocument(block: Pick<DocumentBlock, 'name' | 'mediaType' | 'path' | 'text'>): string {
   const name = escapeXmlAttribute(block.name || 'attachment');
   const mediaType = escapeXmlAttribute(block.mediaType || 'application/octet-stream');
+  if (block.path) {
+    const path = escapeXmlAttribute(block.path);
+    return `<file_reference name="${name}" mediaType="${mediaType}" path="${path}">\n` +
+      'The file content is not embedded. Use read_file with this exact absolute path only when its contents are needed.\n' +
+      '</file_reference>';
+  }
   const text = (block.text ?? '').replace(/\]\]>/g, ']]]]><![CDATA[>');
   return `<document name="${name}" mediaType="${mediaType}">\n<![CDATA[\n${text}\n]]>\n</document>`;
 }

@@ -33,8 +33,9 @@ import {
  * Tools that must NEVER be trimmed by the model cap. The discovery core
  * (find_tools/expand_toolset/code_exec), the minimal read pair, the
  * interaction/lifecycle tools a session cannot function without, and
- * `update_goal` (a bootstrap session with an in-progress goal and no
- * update_goal is deadlocked — see tiers.ts goal-tools note).
+ * both goal lifecycle transitions. A bootstrap session cannot establish the
+ * runtime contract without `create_goal`, and an in-progress goal with no
+ * `update_goal` is deadlocked — see tiers.ts goal-tools note.
  *
  * `task_list` is the ONE always-on task/checklist tool (the todos+tasks
  * merge — see BOOTSTRAP_TOOLS in tiers.ts). The pre-merge solo aliases
@@ -64,6 +65,7 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'task_list',
   'submit_plan_to_master',
   'submit_tasks_to_master',
+  'create_goal',
   'update_goal',
   // Agent Memory (migration 181) — the ONE durable write + read must survive the
   // catalog cap so weak models always have memory on turn 1. (The proactive

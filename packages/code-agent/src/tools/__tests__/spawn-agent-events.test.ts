@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 
 vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@mcp/code-agent/tools/implement-subagent.js')>();
-  return { ...actual, runSubagent: vi.fn() };
+  return { ...actual, runSubagent: vi.fn(), runParallelAgents: vi.fn() };
 });
 
 vi.mock('@mcp/services/sub-agent-cache/index.js', async (importOriginal) => {
@@ -18,10 +19,11 @@ vi.mock('@mcp/services/sub-agent-cache/index.js', async (importOriginal) => {
 });
 
 const { buildSpawnAgentTool } = await import('@mcp/code-agent/tools/spawn-agent.js');
-const { runSubagent } = await import('@mcp/code-agent/tools/implement-subagent.js');
+const { runSubagent, runParallelAgents } = await import('@mcp/code-agent/tools/implement-subagent.js');
 const { isGlobalSubAgentCacheEnabled, tryGlobalSubAgentRead } = await import('@mcp/services/sub-agent-cache/index.js');
 
 const runSingle = runSubagent as unknown as ReturnType<typeof vi.fn>;
+const runParallel = runParallelAgents as unknown as ReturnType<typeof vi.fn>;
 const cacheEnabled = isGlobalSubAgentCacheEnabled as unknown as ReturnType<typeof vi.fn>;
 const cacheRead = tryGlobalSubAgentRead as unknown as ReturnType<typeof vi.fn>;
 
@@ -46,6 +48,7 @@ function payloadFor(emit: ReturnType<typeof vi.fn>, event: string): Record<strin
 
 beforeEach(() => {
   runSingle.mockReset();
+  runParallel.mockReset();
   cacheEnabled.mockReset();
   cacheEnabled.mockReturnValue(false);
   cacheRead.mockReset();
@@ -156,6 +159,132 @@ describe('spawn_agent single-agent live events', () => {
       partialCount: 0,
       failedCount: 1,
     });
+  });
+
+  it('returns a structured partial error while preserving a single child cutoff report and usage', async () => {
+    const usage = { input_tokens: 13, output_tokens: 7 };
+    runSingle.mockResolvedValue({
+      reason: 'tool_budget',
+      finalText: 'Useful work before the tool budget ended.',
+      usage,
+      sandboxViolations: [],
+      collected: { memos: [], snapshots: [], boardPosts: [] },
+      transcript: [{ role: 'user', content: [{ type: 'text', text: 'inspect' }] }],
+      toolCallCount: 12,
+    });
+    const { ctx, tool } = setup();
+
+    const result = await tool.handler({ agents: [{ task: 'Inspect deeply', label: 'budget scout' }] }, ctx);
+    const ledgerEntry = new ToolCallLedger().record({
+      name: 'spawn_agent',
+      args: { agents: [{ task: 'Inspect deeply', label: 'budget scout' }] },
+      content: String(result.content),
+      isError: result.isError === true,
+      executionClass: 'control',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({
+      code: 'SPAWN_AGENT_PARTIAL',
+      kind: 'tool_error',
+      retryable: true,
+    });
+    expect(result.structuredData).toMatchObject({
+      kind: 'spawn_agent_result',
+      status: 'partial',
+      agentCount: 1,
+      completedCount: 0,
+      partialCount: 1,
+      failedCount: 0,
+      stillFailed: 1,
+      resumableCount: 1,
+    });
+    expect(result.subUsage).toEqual(usage);
+    expect(String(result.content)).toContain('Useful work before the tool budget ended.');
+    expect(String(result.content)).toContain('resume_agent');
+    expect(ledgerEntry.outcome).toBe('tool_error');
+  });
+
+  it('returns a structured failed error when the child terminates with a timeout failure', async () => {
+    const usage = { input_tokens: 5, output_tokens: 2 };
+    runSingle.mockResolvedValue({
+      reason: 'error',
+      finalText: 'subagent hard timeout reached',
+      failureDetail: 'subagent hard timeout reached',
+      usage,
+      sandboxViolations: [],
+      collected: { memos: [], snapshots: [], boardPosts: [] },
+      transcript: [{ role: 'user', content: [{ type: 'text', text: 'verify' }] }],
+      toolCallCount: 0,
+    });
+    const { ctx, tool } = setup();
+
+    const result = await tool.handler({ agents: [{ task: 'Verify slowly', label: 'timeout probe' }] }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.error?.code).toBe('SPAWN_AGENT_FAILED');
+    expect(result.structuredData).toMatchObject({
+      status: 'failed',
+      completedCount: 0,
+      partialCount: 0,
+      failedCount: 1,
+      stillFailed: 1,
+    });
+    expect(result.subUsage).toEqual(usage);
+    expect(String(result.content)).toContain('subagent hard timeout reached');
+  });
+
+  it('returns a structured partial error when any child in a parallel group is incomplete', async () => {
+    const completedUsage = { input_tokens: 4, output_tokens: 2 };
+    const failedUsage = { input_tokens: 6, output_tokens: 3 };
+    const totalUsage = { input_tokens: 10, output_tokens: 5 };
+    runParallel.mockResolvedValue({
+      results: [
+        {
+          reason: 'completed',
+          finalText: 'First child completed.',
+          usage: completedUsage,
+          sandboxViolations: [],
+          collected: { memos: [], snapshots: [], boardPosts: [] },
+          label: 'first',
+          toolCallCount: 2,
+        },
+        {
+          reason: 'error',
+          finalText: 'Second child failed.',
+          usage: failedUsage,
+          sandboxViolations: [],
+          collected: { memos: [], snapshots: [], boardPosts: [] },
+          transcript: [{ role: 'user', content: [{ type: 'text', text: 'second' }] }],
+          label: 'second',
+          toolCallCount: 1,
+        },
+      ],
+      totalUsage,
+    });
+    const { ctx, tool } = setup();
+
+    const result = await tool.handler({
+      agents: [
+        { task: 'First task', label: 'first' },
+        { task: 'Second task', label: 'second' },
+      ],
+    }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.error?.code).toBe('SPAWN_AGENT_PARTIAL');
+    expect(result.structuredData).toMatchObject({
+      status: 'partial',
+      agentCount: 2,
+      completedCount: 1,
+      partialCount: 0,
+      failedCount: 1,
+      stillFailed: 1,
+      resumableCount: 1,
+    });
+    expect(result.subUsage).toEqual(totalUsage);
+    expect(String(result.content)).toContain('First child completed.');
+    expect(String(result.content)).toContain('Second child failed.');
   });
 
   it('materializes and completes a live row for cache hits without spawning a child', async () => {

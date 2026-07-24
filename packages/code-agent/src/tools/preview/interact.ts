@@ -26,6 +26,7 @@ async function run(
 
 export const previewClickTool: CoderTool = {
   name: 'preview_click',
+  effectBoundary: 'control',
   description:
     'Click an element in the preview page — dispatches a REAL mouse click at its center (fires React/JS handlers, unlike eval). Use to press buttons, links, tabs. Follow with preview_wait_for / preview_screenshot to verify the result.',
   source: 'native',
@@ -44,6 +45,7 @@ export const previewClickTool: CoderTool = {
 
 export const previewFillTool: CoderTool = {
   name: 'preview_fill',
+  effectBoundary: 'control',
   description:
     'Fill a form field by snapshot ref or selector — focuses it, selects existing content, and types `value` (real input → controlled React inputs update). Ideal for login/email/password fields. Use preview_press({key:"Enter"}) or preview_click to submit.',
   source: 'native',
@@ -64,6 +66,7 @@ export const previewFillTool: CoderTool = {
 
 export const previewTypeTool: CoderTool = {
   name: 'preview_type',
+  effectBoundary: 'control',
   description:
     'Type text at the current caret (or into `selector` if given) — appends rather than replacing. For replacing a field value prefer preview_fill.',
   source: 'native',
@@ -85,6 +88,7 @@ export const previewTypeTool: CoderTool = {
 
 export const previewPressTool: CoderTool = {
   name: 'preview_press',
+  effectBoundary: 'control',
   description:
     'Press a keyboard key in the preview: a single character, a named key, or a modifier combo.\n' +
     'Examples: "k", Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, "Meta+k", "Control+a", "Shift+Tab". Optionally focus `selector` first. Use Enter to submit a focused form, or combos for app shortcuts (Cmd/Ctrl+K command palette).',

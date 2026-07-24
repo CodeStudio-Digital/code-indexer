@@ -19,6 +19,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ResolvedSkill, SkillContextMode } from '@mcp/code-agent/skills/types.js';
 import { SkillStore, toResolved, type UpsertSkillInput } from '@mcp/store/skill-store.js';
 import { evalSkillTriggers } from '@mcp/code-agent/tools/skill-trigger-eval.js';
+import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 const SKILL_ID_RE = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$/;
 const CONTEXT_MODES: SkillContextMode[] = ['auto', 'tool', 'both'];
@@ -39,6 +40,7 @@ function strArray(v: unknown): string[] | undefined {
 export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
   return {
     name: 'create_skill',
+    effectBoundary: 'control',
     source: 'native',
     mutates: true,
     riskLevel: 'write',
@@ -70,7 +72,7 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
       required: ['id', 'name', 'description', 'prompt_body'],
       additionalProperties: false,
     },
-    handler: async (args): Promise<ToolResult> => {
+    handler: async (args, ctx): Promise<ToolResult> => {
       const id = String(args.id ?? '').trim();
       const name = String(args.name ?? '').trim();
       const description = String(args.description ?? '').trim();
@@ -158,6 +160,11 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
           version: typeof args.version === 'string' && args.version.trim() ? args.version.trim() : '1.0.0',
           source: 'user',
         };
+        assertMutationFence(ctx.mutationFence, {
+          kind: 'control',
+          operation: 'create_skill.upsert',
+          resource: id,
+        });
         store.upsertSkill(upsert);
 
         return ok(`${reportText}\n\n✓ ${isUpdate ? 'Updated' : 'Created'} and saved (scope=${scope === 'global' ? 'global' : 'project'}). ${slashCommand ? `Available as /${slashCommand}.` : 'Discoverable via get_skills_list.'}`);

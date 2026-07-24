@@ -16,8 +16,12 @@
  */
 import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
-import { getOrSpawnCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import {
+  evictCompanyOrchestrator,
+  getOrSpawnCompanyOrchestrator,
+} from '../../../sse/companyOrchestrator.js';
 import { recommendRolesForSession } from './recommend-core.js';
 import {
   companySurfaceConflict,
@@ -49,7 +53,22 @@ export function mountCompanyKanbanDispatchRoutes(app: Hono, deps: ServerDeps): v
 
     // The dispatch spawns a subordinate — it needs the session's worker alive.
     const { orchestrator } = await getOrSpawnCompanyOrchestrator(sessionId);
-    const result = await orchestrator.dispatchCard(cardId, role);
+    let result: Awaited<ReturnType<typeof orchestrator.dispatchCard>>;
+    try {
+      result = await orchestrator.dispatchCard(cardId, role);
+    } catch (error) {
+      if (isMutationOutcomeUnknownError(error)) {
+        await evictCompanyOrchestrator(sessionId);
+        return c.json({
+          error:
+            'Card dispatch outcome is unknown because its worker acknowledgement ' +
+            'was lost; no subordinate was spawned again.',
+          code: 'OUTCOME_UNKNOWN',
+          cardId,
+        }, 500);
+      }
+      throw error;
+    }
     if (result.ok) {
       return c.json({ ok: true, agentRunId: result.agentRunId, role: result.role });
     }

@@ -17,144 +17,11 @@ import type {
   KanbanComment,
   KanbanTag,
 } from '@mcp/company/types.js';
-import {
-  QualityClassificationStore,
-  type QualityClassificationRow,
-} from '@mcp/store/quality-classification-store.js';
-
-/**
- * Wire #3 — Quality gate window. Verdicts older than this don't trigger
- * the gate (the card may have been worked, then sat for hours/days while
- * humans reviewed, and stale verdicts about prior work should not block
- * a confident move). Tunable per environment.
- */
-const QUALITY_GATE_WINDOW_MS = Number(
-  process.env.MCP_KANBAN_QUALITY_GATE_WINDOW_MS ?? 60 * 60_000,
-);
-
-/** Minimum confidence for a verdict to count toward the gate. */
-const QUALITY_GATE_MIN_CONFIDENCE = Number(
-  process.env.MCP_KANBAN_QUALITY_GATE_MIN_CONFIDENCE ?? 0.7,
-);
-
 export class KanbanService implements IKanbanNotifier {
-  /**
-   * Lazy quality store — constructed on first access. Reuses the session
-   * context's DB handle so we don't open a second connection. Kept as a
-   * cached private so repeated `moveCard` calls don't re-instantiate.
-   */
-  private _qualityStore: QualityClassificationStore | null | undefined;
-
   constructor(
     private readonly ctx: SessionContext,
     private readonly bus: IMetaBusPublisher,
   ) {}
-
-  /**
-   * Wire #3 — Resolve the quality store. Returns `null` (cached) when
-   * the DB doesn't have the `quality_classifications` table (migration
-   * not run — tests, fresh installs, etc.). Falsy results from this
-   * lookup are treated as "gate disabled" by `moveCard`.
-   */
-  private getQualityStore(): QualityClassificationStore | null {
-    if (this._qualityStore !== undefined) return this._qualityStore;
-    try {
-      const raw = this.ctx.db.raw();
-      // Sanity check — the table must exist. Older / freshly-bootstrapped
-      // DBs may not have run the migration yet.
-      const row = raw
-        .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='quality_classifications'`)
-        .get();
-      if (!row) { this._qualityStore = null; return null; }
-      this._qualityStore = new QualityClassificationStore(raw);
-    } catch {
-      this._qualityStore = null;
-    }
-    return this._qualityStore;
-  }
-
-  /**
-   * Wire #3 — Quality gate decision.
-   *
-   * When a card is being moved TO `done`, look up every agent that worked
-   * the card and fetch their recent verdicts. If any verdict in the window
-   * is `warn` or `flagged` above the confidence floor, return the gate
-   * details. The caller redirects to `review` with a comment so the
-   * master sees WHY it didn't reach `done`.
-   *
-   * Movement FROM `review` to `done` skips the gate — the explicit
-   * pass through `review` represents a human review-cycle, so a second
-   * gate-block would be obnoxious.
-   *
-   * Never throws.
-   */
-  private evaluateQualityGate(
-    cardId: number,
-    targetColumn: KanbanColumn,
-    fromColumn: KanbanColumn | undefined,
-  ): { advisory: false } | { advisory: true; offendingVerdicts: QualityClassificationRow[] } {
-    if (targetColumn !== 'done') return { advisory: false };
-    if (fromColumn === 'review') return { advisory: false };
-    const store = this.getQualityStore();
-    if (!store) return { advisory: false };
-
-    let agentRunIds: number[] = [];
-    try {
-      const cardFull = this.ctx.companyStore.getKanbanCardFull(cardId);
-      if (!cardFull) return { advisory: false };
-      agentRunIds = cardFull.agents
-        .map((a) => a.agent_run_id)
-        .filter((id) => Number.isFinite(id));
-    } catch {
-      return { advisory: false };
-    }
-    if (agentRunIds.length === 0) return { advisory: false };
-
-    let rows: QualityClassificationRow[] = [];
-    try {
-      rows = store.findRecentByAgentRunIds(agentRunIds, {
-        sinceMs: QUALITY_GATE_WINDOW_MS,
-        limit: 200,
-      });
-    } catch {
-      return { advisory: false };
-    }
-    const offending = rows.filter(
-      (r) =>
-        r.scope === 'run_final' &&
-        r.source === 'terminal_llm' &&
-        r.system_error === 0 &&
-        (r.verdict === 'warn' || r.verdict === 'flagged') &&
-        (r.confidence ?? 0) >= QUALITY_GATE_MIN_CONFIDENCE,
-    );
-    if (offending.length === 0) return { advisory: false };
-    return { advisory: true, offendingVerdicts: offending };
-  }
-
-  /**
-   * Wire #3 — Build a markdown comment summarizing why the gate redirected
-   * the move. Added to the card so the master sees the blocking verdicts
-   * without having to open another dashboard panel.
-   */
-  private buildGateComment(verdicts: ReadonlyArray<QualityClassificationRow>): string {
-    const lines: string[] = [
-      'Quality recommends reviewing this delivery; the move to `done` was not blocked.',
-      '',
-      'Recent quality verdicts on this card\'s agent(s):',
-    ];
-    // Dedupe by classifier_name (most recent wins — rows are DESC).
-    const seen = new Set<string>();
-    for (const v of verdicts) {
-      if (seen.has(v.classifier_name)) continue;
-      seen.add(v.classifier_name);
-      const conf = v.confidence != null ? ` (${Math.round(v.confidence * 100)}%)` : '';
-      const reason = v.reason ? ` — "${v.reason.replace(/\s+/g, ' ').trim().slice(0, 200)}"` : '';
-      lines.push(`- \`${v.classifier_name}\` = **${v.verdict}**${conf}${reason}`);
-    }
-    lines.push('');
-    lines.push('This is consultative evidence. Objective dependency and permission gates remain authoritative.');
-    return lines.join('\n');
-  }
 
   createCard(input: {
     title: string;
@@ -235,9 +102,8 @@ export class KanbanService implements IKanbanNotifier {
   moveCard(cardId: number, column: KanbanColumn, position?: number): KanbanCard {
     const before = this.ctx.companyStore.getKanbanCard(cardId);
 
-    // Dependency gate runs FIRST: a blocked card isn't advancing, so the
-    // quality gate (which only fires on a move TO `done`) is moot. When
-    // blocked we snap back to the card's current column and explain why.
+    // A blocked card isn't advancing: snap back to the current column and
+    // explain why.
     const depBlock = this.evaluateDependencyGate(cardId, column, before?.column);
     if (depBlock.blocked) {
       const stayColumn = before?.column ?? 'todo';
@@ -265,45 +131,13 @@ export class KanbanService implements IKanbanNotifier {
       return card;
     }
 
-    // Semantic quality is advisory only: keep the requested destination and
-    // attach the evidence as a review recommendation.
-    const effectiveColumn = column;
-    let gateBlock: ReturnType<typeof this.evaluateQualityGate> = { advisory: false };
-    try {
-      gateBlock = this.evaluateQualityGate(cardId, column, before?.column);
-    } catch {
-      // Gate evaluation must never break a kanban move.
-      gateBlock = { advisory: false };
-    }
-
-    const card = this.ctx.companyStore.moveKanbanCard(cardId, effectiveColumn, position);
+    const card = this.ctx.companyStore.moveKanbanCard(cardId, column, position);
     this.bus.publish('kanban_card_moved', {
       cardId,
       fromColumn: before?.column,
-      toColumn: effectiveColumn,
+      toColumn: column,
       position: card.position,
-      ...(gateBlock.advisory
-        ? { qualityAdvisory: true, advisoryVerdictCount: gateBlock.offendingVerdicts.length }
-        : {}),
     });
-
-    // Post the gate explanation as a comment AFTER the move so the move
-    // and the explanation arrive in order on the SSE channel. Failures
-    // here don't roll back the move.
-    if (gateBlock.advisory) {
-      try {
-        const comment = this.ctx.companyStore.addKanbanComment(
-          cardId,
-          'quality-advisory',
-          null,
-          this.buildGateComment(gateBlock.offendingVerdicts),
-        );
-        this.bus.publish('kanban_comment_added', { cardId, comment });
-      } catch {
-        /* swallow — already moved, comment is best-effort */
-      }
-    }
-
     return card;
   }
 

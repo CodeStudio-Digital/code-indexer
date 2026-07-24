@@ -16,10 +16,8 @@
  *
  * Architecture choices:
  *
- *   • In-process orchestrator only. Worker-backed orchestrators retain
- *     stale MessageBridge ports after eviction; the DB is the source of
- *     truth so a fresh local orchestrator reads everything the previous
- *     master saw.
+ *   • Workers-only orchestration. The stale worker is fully evicted first;
+ *     a fresh worker then rebuilds its runtime from the durable DB state.
  *
  *   • The recovery briefing is the FIRST USER MESSAGE, not a system
  *     prompt override. The master's normal system prompt (loaded via
@@ -30,10 +28,11 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Hono } from 'hono';
+import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import {
-  deleteCompanyOrchestrator,
+  evictCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
@@ -138,7 +137,7 @@ export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
     // coder_session row stays in DB as history — kanban + board state
     // are loaded via the orchestrator's services which talk to the same
     // SQLite file.
-    deleteCompanyOrchestrator(id);
+    await evictCompanyOrchestrator(id);
 
     const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
 
@@ -155,11 +154,21 @@ export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
         roleConfigs,
       });
     } catch (e) {
+      const outcomeUnknown = isMutationOutcomeUnknownError(e);
+      await evictCompanyOrchestrator(id);
       return c.json(
-        {
-          error: 'master_start_failed',
-          detail: e instanceof Error ? e.message : String(e),
-        },
+        outcomeUnknown
+          ? {
+              error: 'outcome_unknown',
+              code: 'OUTCOME_UNKNOWN',
+              detail:
+                'The recovery master may have started before its acknowledgement was lost; ' +
+                'the start RPC was not replayed.',
+            }
+          : {
+              error: 'master_start_failed',
+              detail: e instanceof Error ? e.message : String(e),
+            },
         500,
       );
     }

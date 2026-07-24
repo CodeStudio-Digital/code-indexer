@@ -11,7 +11,7 @@
  *     never pinned (closes the historical disabled-tools-execute hole)
  *   - goal-gated create_goal → refusal redirecting to update_goal
  *   - visible tool → untouched
- *   - CODER_TOOL_PIN_DISABLE=1 → all of the above off (legacy behavior)
+ *   - CODER_TOOL_PIN_DISABLE=1 → hidden-call pinning off; hard blocks remain
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -154,16 +154,54 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
-  it('CODER_TOOL_PIN_DISABLE=1 restores legacy behavior (no suffix, no pin, no block)', async () => {
+  it('CODER_TOOL_PIN_DISABLE=1 disables pinning but preserves hard blocks', async () => {
     process.env.CODER_TOOL_PIN_DISABLE = '1';
     const registry = new ToolRegistry();
-    registry.register(makeTool('hidden_tool'));
+    let ran = false;
+    registry.register(makeTool('hidden_tool', {
+      handler: async () => {
+        ran = true;
+        return { content: 'ok' };
+      },
+    }));
     const args = pinArgs(registry, {
       isToolBlocked: () => '[tool-disabled] nope',
     });
     const r = await dispatchTools(args);
-    expect(r.results[0].isError).toBe(false);
+    expect(r.results[0].isError).toBe(true);
+    expect(r.results[0].content).toContain('[tool-disabled]');
     expect(r.results[0].content).not.toContain('[toolset]');
+    expect(ran).toBe(false);
     expect(args._pins.size).toBe(0);
+  });
+
+  it('preserves nested capability hard blocks when pinning is disabled', async () => {
+    process.env.CODER_TOOL_PIN_DISABLE = '1';
+    const registry = new ToolRegistry();
+    const hidden = makeTool('hidden_tool');
+    registry.register(hidden);
+    registry.register(makeTool('code_exec', {
+      handler: async (_input, ctx) => {
+        const refusal = await ctx.nestedCapabilityDispatch?.preflight?.({
+          tool: hidden,
+          toolUseId: 'nested-1',
+          toolName: hidden.name,
+          toolInput: {},
+          toolMutates: false,
+          turn: 1,
+        });
+        return { content: refusal?.content ?? 'not blocked' };
+      },
+    }));
+    const args = pinArgs(registry, {
+      toolUses: [{ id: 'parent-1', name: 'code_exec', input: {} }],
+      visibleToolNames: new Set(['code_exec']),
+      isToolBlocked: (name) =>
+        name === 'hidden_tool' ? '[tool-disabled] nested nope' : null,
+    });
+
+    const result = await dispatchTools(args);
+    expect(result.results[0].isError).toBe(false);
+    expect(result.results[0].content).toContain('[tool-disabled] nested nope');
   });
 });

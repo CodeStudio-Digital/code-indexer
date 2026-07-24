@@ -244,8 +244,12 @@ describe('spawn_agent profiles', () => {
     expect(specs[2].systemPrompt).toContain('VERIFY subagent');
     expect(allowed(specs[0].allowlist!, tool('run_command'))).toBe(false);
     expect(allowed(specs[2].allowlist!, tool('run_command'))).toBe(true);
-    expect(result.content).toContain('[type=review reason=completed tools=0 input=1 output=1]');
-    expect(result.content).toContain('[type=verify reason=completed tools=0 input=1 output=1]');
+    expect(result.content).toContain(
+      '[type=review reason=completed tools=0 input=1 output=1 max_tools=80]',
+    );
+    expect(result.content).toContain(
+      '[type=verify reason=completed tools=0 input=1 output=1 max_tools=80]',
+    );
   });
 
   it('adds global workspace context to parallel subagent tasks', async () => {

@@ -22,20 +22,66 @@ export function GoalCallBlock({ call }: GoalCallBlockProps) {
   const isCreate = call.name === 'create_goal';
   const isUpdate = call.name === 'update_goal';
   const isGet = call.name === 'get_goal';
+  const isSupersede = isUpdate && input.status === 'superseded';
   const goalText = typeof input.goal === 'string' ? input.goal : '';
   const note = typeof input.note === 'string' ? input.note : '';
   const budget = typeof input.budget_tokens === 'number' ? input.budget_tokens : null;
 
-  const heading = isCreate
+  const completedHeading = isCreate
     ? t('messages.goalCreated')
     : isUpdate
-      ? t('messages.goalUpdated')
+      ? isSupersede
+        ? t('messages.goalSuperseded')
+        : t('messages.goalUpdated')
       : t('messages.goalRead');
+  const failedHeading = isCreate
+    ? t('messages.goalCreateFailed')
+    : isUpdate
+      ? t('messages.goalUpdateFailed')
+      : t('messages.goalReadFailed');
+  const runningHeading = isCreate
+    ? t('messages.goalCreating')
+    : isUpdate
+      ? isSupersede
+        ? t('messages.goalSuperseding')
+        : t('messages.goalUpdating')
+      : t('messages.goalReading');
+  const heading = call.status === 'error'
+    ? failedHeading
+    : call.status === 'running'
+      ? runningHeading
+      : completedHeading;
 
-  const accent = isCreate ? 'border-warning/40 bg-warning/5' : isUpdate ? 'border-success/40 bg-success/5' : 'border-info/30 bg-info/5';
-  const iconColor = isCreate ? 'text-warning' : isUpdate ? 'text-success' : 'text-info';
+  const accent = call.status === 'error'
+    ? 'border-destructive/40 bg-destructive/5'
+    : call.status === 'running'
+      ? 'border-warning/40 bg-warning/5'
+      : isCreate
+        ? 'border-warning/40 bg-warning/5'
+        : isSupersede
+          ? 'border-muted-foreground/30 bg-muted/30'
+          : isUpdate
+          ? 'border-success/40 bg-success/5'
+          : 'border-info/30 bg-info/5';
+  const iconColor = call.status === 'error'
+    ? 'text-destructive'
+    : call.status === 'running'
+      ? 'text-warning'
+      : isCreate
+        ? 'text-warning'
+        : isSupersede
+          ? 'text-muted-foreground'
+          : isUpdate
+          ? 'text-success'
+          : 'text-info';
   const StatusIcon = call.status === 'running' ? Loader2 : call.status === 'error' ? X : Check;
-  const statusColor = call.status === 'error' ? 'text-destructive' : call.status === 'running' ? 'text-warning' : 'text-success';
+  const statusColor = call.status === 'error'
+    ? 'text-destructive'
+    : call.status === 'running'
+      ? 'text-warning'
+      : isSupersede
+        ? 'text-muted-foreground'
+        : 'text-success';
 
   return (
     <div className={cn('my-2 rounded-lg border p-3', accent)}>
@@ -57,13 +103,13 @@ export function GoalCallBlock({ call }: GoalCallBlockProps) {
           {t('messages.goalBudget', { tokens: formatK(budget) })}
         </div>
       )}
-      {call.result && !goalText && (
+      {call.result && !goalText && !call.result.isError && (
         // get_goal returns the current state in result.content — show it
         // as plain text so the user can see what the model just read.
         <pre className="text-[11px] font-mono text-foreground whitespace-pre-wrap mt-1">{call.result.content}</pre>
       )}
       {call.result?.isError && (
-        <div className="text-xs text-destructive mt-1">{call.result.content}</div>
+        <div role="alert" className="text-xs text-destructive mt-1">{call.result.content}</div>
       )}
     </div>
   );

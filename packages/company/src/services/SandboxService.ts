@@ -237,7 +237,10 @@ export class SandboxService {
     private readonly ctx: SessionContext,
     private readonly publisher: MetaBusPublisher,
   ) {
-    this.sessionKey = String(ctx.companySessionId);
+    // Sub-sessions share the root's project-wide sandbox. Each worker
+    // reconciles that persisted container into a local binding/driver rather
+    // than trying to pass a non-serializable SandboxBinding across MessagePort.
+    this.sessionKey = String(ctx.effectiveSessionId);
   }
 
   /** @returns the current sandbox binding, or `null` when the session isn't in builder mode. */

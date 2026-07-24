@@ -66,9 +66,8 @@ import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
 import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
-// PipelineTelemetryPanel / QualityPanel were moved to the `/telemetry`
-// page (they're observability surfaces, not config). The Pipelines tab
-// below is the only one that stays here.
+// Pipeline telemetry moved to `/telemetry`; the Pipelines configuration
+// tab remains here.
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -167,7 +166,7 @@ export default function Admin() {
     { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle, group: 'models',
       hint: 'Modelos rodando em fallback de context window' },
     { id: 'ai-geral',          label: 'IA Geral',                 icon: Activity,      group: 'models',
-      hint: 'Quality watchdog, intervention policies' },
+      hint: 'Modelo padrão e políticas gerais' },
     { id: 'agents',            label: t('admin:customAgents.tab'), icon: Bot,           group: 'models',
       hint: t('admin:customAgents.tabHint') },
     // Busca & Conhecimento

@@ -89,6 +89,8 @@ export interface OpenStreamOpts {
   method: 'POST' | 'GET';
   body?: Record<string, unknown>;
   lastEventId?: number;
+  /** Bus instance paired with `lastEventId`; a seq is unsafe without it. */
+  lastEventBusId?: string;
   reattach?: boolean;
   /** Existing blocks already covered by `lastEventId`. Cursor reattach must
    *  continue from these instead of rebuilding an impossible partial turn. */
@@ -106,6 +108,8 @@ export interface OpenStreamDeps {
    * 50+/s for a value nothing renders.
    */
   lastSeenSeqMap: Map<number, number>;
+  /** Bus instance paired with each persisted sequence cursor. */
+  lastSeenBusIdMap: Map<number, string>;
 }
 
 /**
@@ -151,12 +155,28 @@ export async function openStream(
   const ctrl = new AbortController();
   abortMap.set(sid, ctrl);
 
-  // Track the most recent SSE id so reconnects resume from the right point.
-  let lastSeenSeq = typeof opts.lastEventId === 'number' && opts.lastEventId >= 0
+  // A numeric sequence is scoped to one bus. Never send an unpaired cursor:
+  // a new run restarts seq at zero and may already be beyond the old value.
+  let lastSeenBusId = typeof opts.lastEventBusId === 'string' && opts.lastEventBusId
+    ? opts.lastEventBusId
+    : null;
+  let lastSeenSeq = lastSeenBusId
+    && typeof opts.lastEventId === 'number'
+    && opts.lastEventId >= 0
     ? opts.lastEventId
     : -1;
   // Throttle the `lastEventAt` commit (stall detector only needs ~1s).
-  let lastEventAtCommit = 0;
+  // Transport heartbeats use this same path but never enter the event queue,
+  // transcript, worker log, or replay cursor.
+  let lastEventAtCommit = Number.NEGATIVE_INFINITY;
+  const commitLiveness = (receivedAt: number): void => {
+    // A superseded reader can finish parsing a chunk after abort. It must not
+    // refresh the replacement stream's liveness slot.
+    if (ctrl.signal.aborted || abortMap.get(sid) !== ctrl) return;
+    if (receivedAt - lastEventAtCommit < 1000) return;
+    lastEventAtCommit = receivedAt;
+    updateSession(sid, { lastEventAt: receivedAt });
+  };
   const shouldCaptureWorkerLog = createWorkerLogCapturePolicy();
   // Clear the "Analyzing the task…" (preflight) indicator once the run actually
   // starts streaming — the first event means preflight finished and the model
@@ -248,13 +268,17 @@ export async function openStream(
           first_replay_seq?: number;
           dropped_replay_events?: number;
         };
-        if (info.bus_id && noteWorkerLogBus(sid, info.bus_id)) {
-          // Bus changed under the same stream (a reconnect crossed a run
-          // boundary): seq restarted at 0 on the new bus, so zero the
-          // cursor — the next reconnect must replay the new bus from the
-          // start instead of skipping past a stale high Last-Event-ID.
-          lastSeenSeq = -1;
-          lastSeenSeqMap.delete(sid);
+        if (info.bus_id) {
+          if (info.bus_id !== lastSeenBusId) {
+            // The server already compared the request's X-MCP-Bus-ID and
+            // full-replayed this new bus. Reset locally before its seq 0 is
+            // processed; future reconnects now carry the new pair.
+            lastSeenSeq = -1;
+            lastSeenSeqMap.delete(sid);
+          }
+          lastSeenBusId = info.bus_id;
+          deps.lastSeenBusIdMap.set(sid, info.bus_id);
+          noteWorkerLogBus(sid, info.bus_id);
         }
         // Replay-gap visibility: the pump reports how many buffered events
         // were evicted before this attach. When our cursor is older than
@@ -316,10 +340,7 @@ export async function openStream(
     }
     // Stall detector (StuckBanner) only needs ~1s granularity — throttle
     // the lastEventAt commit so it isn't a per-event re-render of AgentChat.
-    if (receivedAt - lastEventAtCommit >= 1000) {
-      lastEventAtCommit = receivedAt;
-      updateSession(sid, { lastEventAt: receivedAt });
-    }
+    commitLiveness(receivedAt);
     if (!preflightCleared) {
       preflightCleared = true;
       updateSession(sid, { preflight: null });
@@ -370,6 +391,7 @@ export async function openStream(
     body: opts.body,
     signal: ctrl.signal,
     getLastEventId: () => lastSeenSeq,
+    getLastEventBusId: () => lastSeenBusId,
     // Never reconnect over a stale cursor: `lastSeenSeq` advances at
     // processing time, so a retry racing an in-flight drain would ask the
     // server to replay events still sitting in the queue (double delivery
@@ -380,6 +402,7 @@ export async function openStream(
       eventQueue.push(ev);
       if (!draining) drainDone = drainEventQueue();
     },
+    onHeartbeat: commitLiveness,
     isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
   });
 
@@ -434,9 +457,15 @@ export async function openStream(
                 error: 'Session was interrupted by a server / worker crash. Send a new message to resume.',
               });
             } else {
-              // status=idle or completed → the run actually finished or
-              // never started. No error UI needed.
-              updateSession(sid, { error: null });
+              // status=idle/completed/terminal → the run actually finished or
+              // never started. A process-owned live turn may have survived the
+              // React surface that originally consumed it; once the bus is
+              // gone it can no longer contribute new events and must not be
+              // resurrected as a duplicate on every remount.
+              lastSeenSeqMap.delete(sid);
+              deps.lastSeenBusIdMap.delete(sid);
+              updateSession(sid, { error: null, currentTurn: null });
+              onMessageComplete?.();
             }
           } else {
             updateSession(sid, { error: 'No active run on this session.' });

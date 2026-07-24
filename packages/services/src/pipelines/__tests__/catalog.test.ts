@@ -10,17 +10,19 @@ describe('semantic profile catalog ownership', () => {
     expect(hyde).toHaveLength(1);
     expect(hyde[0]).toMatchObject({
       capabilityKind: 'text_llm',
-      recommendedDefault: { config: { max_tokens: 180 } },
+      recommendedDefault: {
+        providerKind: 'cloudflare',
+        modelHint: '@cf/meta/llama-3.2-3b-instruct',
+        config: { max_tokens: 180 },
+      },
     });
     expect(hyde[0].comingSoon).toBeUndefined();
     expect(hyde[0].description).toContain('leave it unconfigured or disabled');
   });
 
-  it('keeps every embedder informational and out of guided setup', () => {
+  it('omits semantic-profile embedders from the provider-binding catalog', () => {
     const embedders = PIPELINE_CATALOG.filter((entry) => entry.bindingRole === 'embedder');
-    expect(embedders.length).toBeGreaterThan(0);
-    expect(embedders.every((entry) => entry.setupEligible === false)).toBe(true);
-    expect(embedders.every((entry) => entry.description.startsWith('INFORMATIONAL ONLY'))).toBe(true);
+    expect(embedders).toEqual([]);
     expect(setupTargetsForCapability('embeddings')).toEqual([]);
   });
 
@@ -35,11 +37,35 @@ describe('semantic profile catalog ownership', () => {
       (entry) => entry.pipelineName === 'memory_recall' && entry.bindingRole === 'reranker',
     );
 
-    expect(code).toMatchObject({ setupEligible: false });
-    expect(docs).toMatchObject({ setupEligible: false });
-    expect(code?.description).toMatch(/^INFORMATIONAL ONLY/);
-    expect(docs?.description).toMatch(/^INFORMATIONAL ONLY/);
+    expect(code).toBeUndefined();
+    expect(docs).toBeUndefined();
     expect(memory?.setupEligible).not.toBe(false);
     expect(setupTargetsForCapability('reranking')).toContainEqual(memory);
+  });
+
+  it('keeps retired and no-effect targets out of the catalog', () => {
+    const retiredPairs = new Set([
+      'indexer_search::embedder',
+      'indexer_search::reranker',
+      'tool_selection::embedder',
+      'context_relevance::embedder',
+      'todo_priority::embedder',
+      'sub_agent_cache::embedder',
+      'role_pipeline::embedder',
+      'kanban_priority::embedder',
+      'quality_off_topic::classifier',
+      'quality_completeness::classifier',
+      'quality_code::classifier',
+      'quality_policy::classifier',
+      'quality_tool_misuse::classifier',
+      'doc_ingest::embedder',
+      'doc_search::reranker',
+    ]);
+    const catalogPairs = new Set(
+      PIPELINE_CATALOG.map((entry) => `${entry.pipelineName}::${entry.bindingRole}`),
+    );
+
+    expect(PIPELINE_CATALOG).toHaveLength(21);
+    for (const pair of retiredPairs) expect(catalogPairs.has(pair)).toBe(false);
   });
 });

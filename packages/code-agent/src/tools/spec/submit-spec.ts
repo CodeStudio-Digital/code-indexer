@@ -19,8 +19,13 @@ const SUBMIT_SPEC_DESC =
  */
 export const submitSpec: CoderTool = {
   name: 'submit_spec',
+  effectBoundary: 'filesystem',
   description: SUBMIT_SPEC_DESC,
   source: 'native',
+  // Deliberately false: submit_spec is the approval primitive that must be
+  // reachable while spec mode still blocks ordinary mutators. Its durable
+  // artifact is fenced separately by effectBoundary.
+  mutates: false,
   parameters: {
     type: 'object',
     properties: {

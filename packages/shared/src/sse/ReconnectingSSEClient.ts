@@ -8,7 +8,8 @@
  *     the last seen seq across reconnects)
  *   - Automatic reconnect with pluggable backoff when the stream drops
  *     before a terminal event
- *   - Heartbeat events (`event: ping`) are silently discarded
+ *   - Heartbeat events (`event: ping`) are surfaced as transport liveness,
+ *     never mixed into the semantic event stream
  *   - AbortSignal support for clean cancellation
  *
  * Completes successfully when the stream emits an event deemed terminal
@@ -32,6 +33,7 @@ import { ExponentialBackoff, sleep, type BackoffStrategy } from './BackoffStrate
  *   - `disconnected` when the connection breaks mid-stream (before the next retry)
  */
 export type SSEConnectionPhase = 'connecting' | 'replaying' | 'live' | 'disconnected';
+export const LAST_EVENT_BUS_ID_HEADER = 'X-MCP-Bus-ID';
 
 export interface ReconnectingSSEOpts {
   /** Target URL for the request. */
@@ -42,6 +44,12 @@ export interface ReconnectingSSEOpts {
   body?: unknown;
   /** Called for every non-ping, non-empty event. Synchronous. */
   onEvent: (ev: SSEEvent) => void;
+  /**
+   * Called when a transport heartbeat is received. The numeric argument is
+   * the local receipt time; heartbeat frames never flow through `onEvent`.
+   * Exceptions are swallowed so diagnostics/UI cannot break the stream.
+   */
+  onHeartbeat?: (receivedAt: number) => void;
   /** Invoked before each reconnect attempt (attempt >= 1). */
   onReconnect?: (attempt: number) => void | Promise<void>;
   /**
@@ -52,10 +60,17 @@ export interface ReconnectingSSEOpts {
   onPhase?: (phase: SSEConnectionPhase) => void;
   /** Returns the latest seen event id for Last-Event-ID on reconnect. */
   getLastEventId?: () => number;
+  /** Returns the bus instance that allocated the latest event id. */
+  getLastEventBusId?: () => string | null | undefined;
   /** AbortSignal for cancellation. */
   signal: AbortSignal;
   /** Backoff for reconnect attempts. Defaults to exponential 1s..16s, 5 tries. */
   backoff?: BackoffStrategy;
+  /**
+   * A connection that stays open for this long replenishes the retry budget
+   * even when its events have no numeric ids. Defaults to 30 seconds.
+   */
+  reconnectBudgetResetMs?: number;
   /** Predicate marking a terminal event. Default: `event === 'done'`. */
   isTerminal?: (ev: SSEEvent) => boolean;
   /** Extra request headers. */
@@ -73,18 +88,33 @@ const defaultParseErrorDiagnostic: SSEFrameErrorHandler = (err) => {
   console.warn('[sse] dropping malformed event block', err.raw);
 };
 
+function retryAfterMs(response: Response): number | undefined {
+  const raw = response.headers.get('Retry-After')?.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+}
+
 export class ReconnectingSSEClient {
   private readonly opts: ReconnectingSSEOpts;
   private readonly backoff: BackoffStrategy;
   private readonly isTerminal: (ev: SSEEvent) => boolean;
   private readonly parseErrorHandler: SSEFrameErrorHandler;
+  private readonly reconnectBudgetResetMs: number;
   private terminalSeen = false;
+  private highestEventIdSeen = Number.NEGATIVE_INFINITY;
+  private highestEventIdBusId: string | null = null;
+  private connectionMadeProgress = false;
+  private connectionOpenedAt = 0;
 
   constructor(opts: ReconnectingSSEOpts) {
     this.opts = opts;
     this.backoff = opts.backoff ?? new ExponentialBackoff();
     this.isTerminal = opts.isTerminal ?? defaultIsTerminal;
     this.parseErrorHandler = opts.onParseError ?? defaultParseErrorDiagnostic;
+    this.reconnectBudgetResetMs = opts.reconnectBudgetResetMs ?? 30_000;
   }
 
   /**
@@ -94,15 +124,17 @@ export class ReconnectingSSEClient {
   async run(): Promise<void> {
     let attempt = 0;
     while (!this.opts.signal.aborted && !this.terminalSeen) {
+      this.connectionMadeProgress = false;
+      this.connectionOpenedAt = 0;
       try {
         if (attempt > 0) {
           await this.opts.onReconnect?.(attempt);
         }
         await this.connectOnce();
-        // If we got here without throwing and without a terminal event,
-        // the server closed the stream gracefully (e.g., bus ended). Treat
-        // as terminal to avoid reconnect loops.
-        if (!this.terminalSeen) return;
+        // A transport EOF is not an application-level outcome. Proxies and
+        // half-open sockets can close cleanly while the run is still active;
+        // only an explicit done/error contract may complete the client.
+        if (!this.terminalSeen) throw new SSEStreamEndedWithoutTerminalError();
         return;
       } catch (err) {
         if (this.opts.signal.aborted) return;
@@ -110,13 +142,32 @@ export class ReconnectingSSEClient {
         if (isAbortError(err)) return;
         if ((err as { nonRetryable?: boolean }).nonRetryable) throw err;
 
+        // Retry budgets describe consecutive failures without progress, not
+        // the entire lifetime of a long-running stream. A strictly newer
+        // event id is real replay/live progress. For id-less feeds, a stable
+        // open interval is sufficient. Replayed duplicate ids do NOT reset
+        // the budget, preventing an endless EOF/replay loop.
+        if (
+          this.connectionMadeProgress
+          || (
+            this.connectionOpenedAt > 0
+            && Date.now() - this.connectionOpenedAt >= this.reconnectBudgetResetMs
+          )
+        ) {
+          attempt = 0;
+        }
+
         // Phase: connection broke mid-stream. The next iteration of the
         // loop will re-emit `connecting`/`replaying` once the backoff
         // has elapsed.
         this.emitPhase('disconnected');
 
-        const delay = this.backoff.nextDelay(attempt);
-        if (delay === null) throw err;
+        const budgetDelay = this.backoff.nextDelay(attempt);
+        if (budgetDelay === null) throw err;
+        const serverDelay = (err as { retryAfterMs?: unknown }).retryAfterMs;
+        const delay = typeof serverDelay === 'number' && serverDelay >= 0
+          ? serverDelay
+          : budgetDelay;
         try {
           await sleep(delay, this.opts.signal);
         } catch {
@@ -136,6 +187,15 @@ export class ReconnectingSSEClient {
     }
   }
 
+  private emitHeartbeat(receivedAt: number): void {
+    if (!this.opts.onHeartbeat) return;
+    try {
+      this.opts.onHeartbeat(receivedAt);
+    } catch {
+      /* best-effort */
+    }
+  }
+
   private async connectOnce(): Promise<void> {
     const headers: Record<string, string> = {
       Accept: 'text/event-stream',
@@ -143,8 +203,14 @@ export class ReconnectingSSEClient {
     };
     if (this.opts.method === 'POST') headers['Content-Type'] = 'application/json';
     const lastId = this.opts.getLastEventId?.();
+    const requestedBusId = normalizedBusId(this.opts.getLastEventBusId?.());
     if (typeof lastId === 'number' && lastId >= 0) {
       headers['Last-Event-ID'] = String(lastId);
+      if (requestedBusId) headers[LAST_EVENT_BUS_ID_HEADER] = requestedBusId;
+    }
+    if (requestedBusId && this.highestEventIdBusId !== requestedBusId) {
+      this.highestEventIdBusId = requestedBusId;
+      this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
     }
 
     // Emit `replaying` when we're asking the server to catch us up;
@@ -171,8 +237,10 @@ export class ReconnectingSSEClient {
         nonRetryable: res.status >= 400 && res.status < 500,
         status: res.status,
         httpBody,
+        retryAfterMs: retryAfterMs(res),
       });
     }
+    this.connectionOpenedAt = Date.now();
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -188,7 +256,17 @@ export class ReconnectingSSEClient {
       buffer = rest;
 
       for (const ev of events) {
-        if (ev.event === 'ping') continue;
+        if (ev.event === 'ping') {
+          // A heartbeat proves the fetch/reader path is live even when the
+          // agent has no semantic output (long thinking/tool wait). Keep it
+          // out of onEvent so it cannot enter transcripts or advance cursors.
+          if (!firstEventSeen) {
+            this.emitPhase('live');
+            firstEventSeen = true;
+          }
+          this.emitHeartbeat(Date.now());
+          continue;
+        }
         if (!firstEventSeen) {
           // First real event over this connection — we're live now,
           // any replay buffer has started flowing.
@@ -196,6 +274,15 @@ export class ReconnectingSSEClient {
           firstEventSeen = true;
         }
         this.opts.onEvent(ev);
+        const currentBusId = normalizedBusId(this.opts.getLastEventBusId?.());
+        if (currentBusId && this.highestEventIdBusId !== currentBusId) {
+          this.highestEventIdBusId = currentBusId;
+          this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
+        }
+        if (typeof ev.id === 'number' && ev.id > this.highestEventIdSeen) {
+          this.highestEventIdSeen = ev.id;
+          this.connectionMadeProgress = true;
+        }
         if (this.isTerminal(ev)) {
           this.terminalSeen = true;
           try { await reader.cancel(); } catch { /* ignore */ }
@@ -206,6 +293,21 @@ export class ReconnectingSSEClient {
   }
 }
 
+export class SSEStreamEndedWithoutTerminalError extends Error {
+  readonly code = 'SSE_STREAM_ENDED_WITHOUT_TERMINAL';
+
+  constructor() {
+    super('SSE stream ended without a terminal event');
+    this.name = 'SSEStreamEndedWithoutTerminalError';
+  }
+}
+
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
+}
+
+function normalizedBusId(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= 256 ? trimmed : null;
 }

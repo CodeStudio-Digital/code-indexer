@@ -19,6 +19,7 @@ import { classifyResumeKind } from '@mcp/code-agent/tools/resume-nudges.js';
 import { relaunchResumedAgents } from '@mcp/code-agent/tools/resume-run.js';
 import {
   getGroup,
+  reloadGroupUnderLease,
   tryAcquireResume,
   releaseResume,
   type ResumableAgentState,
@@ -37,11 +38,21 @@ function attemptCap(state: ResumableAgentState): number {
   return classifyResumeKind(state.reason, state.failureNote) === 'quality' ? QUALITY_MAX_ATTEMPTS : MAX_ATTEMPTS;
 }
 
+function canResume(state: ResumableAgentState): boolean {
+  return state.reason !== 'completed'
+    && !!state.transcript
+    && state.attempt < attemptCap(state);
+}
+
 export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
   return {
     name: 'resume_agent',
+    effectBoundary: 'nested',
     description: RESUME_DESC,
     source: 'native',
+    parallelSafe: false,
+    riskLevel: 'admin',
+    executionClass: 'execute',
     parameters: {
       type: 'object',
       properties: {
@@ -62,23 +73,35 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
       const sessionId = ctx.runner?.sessionId;
       if (sessionId == null) return err('resume_agent: no active session.');
 
-      const group = getGroup(sessionId, spawnId);
-      if (!group) {
+      const observed = getGroup(sessionId, spawnId, deps.sessionStore);
+      if (!observed) {
         return err(
           `resume_agent: spawn '${spawnId}' not found — resumable states live ~45min in this session only. ` +
           `Re-run the task with spawn_agent instead.`,
         );
       }
-      if (!tryAcquireResume(sessionId, spawnId)) {
+      if (!tryAcquireResume(sessionId, spawnId, deps.sessionStore)) {
         return err(`resume_agent: spawn '${spawnId}' is already being resumed. Wait for it to finish.`);
       }
 
       try {
+        // The cache-first observation above is only an existence hint. A
+        // different executor may commit and release between that read and our
+        // CAS, so target selection must use a fresh snapshot under the lease.
+        const group = reloadGroupUnderLease(sessionId, spawnId, deps.sessionStore);
+        if (!group) {
+          return err(
+            `resume_agent: spawn '${spawnId}' changed while acquiring its recovery checkpoint; ` +
+            'nothing was relaunched.',
+          );
+        }
         // Completed agents may ALSO carry a transcript now (observability
-        // retention — read_agent_transcript). Resumable = non-completed only.
-        const resumable = group.agents.filter((a) => a.transcript && a.reason !== 'completed');
-        if (resumable.length === 0) {
-          return ok(`resume_agent: nothing to resume in '${spawnId}' — all agents completed or their state expired.`);
+        // retention — read_agent_transcript). Only a fully completed roster is
+        // a successful no-op; unfinished agents with expired/capped state must
+        // remain an error so the root ledger cannot treat them as recovered.
+        const unfinished = group.agents.filter((a) => a.reason !== 'completed');
+        if (unfinished.length === 0) {
+          return ok(`resume_agent: nothing to resume in '${spawnId}' — all agents completed.`);
         }
 
         const explicit = Array.isArray(args.agents)
@@ -87,11 +110,15 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
 
         const skipped: string[] = [];
         const targets: ResumableAgentState[] = [];
-        for (const state of resumable) {
+        for (const state of unfinished) {
           const kind = classifyResumeKind(state.reason, state.failureNote);
           const chosen = explicit ? explicit.has(state.agentIndex) : kind !== 'aborted' && kind !== 'quality';
           if (!chosen) {
             if (!explicit) skipped.push(`#${state.agentIndex + 1} ${state.label} (${kind} — name it in \`agents\` to retry)`);
+            continue;
+          }
+          if (!state.transcript) {
+            skipped.push(`#${state.agentIndex + 1} ${state.label} (resume state expired — re-spawn or decompose the task)`);
             continue;
           }
           if (state.attempt >= attemptCap(state)) {
@@ -103,15 +130,90 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
 
         if (targets.length === 0) {
           const why = skipped.length ? `\nSkipped: ${skipped.join('; ')}` : '';
-          return ok(`resume_agent: no eligible agents to resume in '${spawnId}'.${why}`);
+          const retryable = unfinished.some(canResume);
+          const status = group.agents.some((state) => state.reason === 'completed')
+            ? 'partial'
+            : 'failed';
+          return {
+            content: `resume_agent: no eligible agents to resume in '${spawnId}'.${why}`,
+            isError: true,
+            error: {
+              code: retryable ? 'RESUME_AGENT_INCOMPLETE' : 'RESUME_AGENT_EXHAUSTED',
+              kind: 'tool_error',
+              retryable,
+              suggestedAction: retryable
+                ? `Retry resume_agent with spawn_id '${spawnId}' and explicitly select the unfinished agents.`
+                : 'No unfinished agent has a resumable attempt left; decompose the task or spawn narrowly scoped replacement work.',
+            },
+            structuredData: {
+              kind: 'resume_agent_result',
+              status,
+              spawnId,
+              relaunchedCount: 0,
+              completedCount: 0,
+              partialCount: 0,
+              failedCount: 0,
+              stillFailed: unfinished.length,
+              remainingCount: unfinished.length,
+              skippedCount: skipped.length,
+            },
+          };
         }
 
         const guidance = typeof args.guidance === 'string' ? args.guidance : undefined;
-        const { text, usage } = await relaunchResumedAgents(deps, ctx, group, targets, guidance);
+        const outcome = await relaunchResumedAgents(deps, ctx, group, targets, guidance);
         const tail = skipped.length ? `\n\n[also skipped: ${skipped.join('; ')}]` : '';
-        return { ...ok(text + tail), subUsage: usage };
+        const content = outcome.text + tail;
+        const remaining = group.agents.filter((state) => state.reason !== 'completed');
+        const remainingCount = remaining.length;
+        const status = remainingCount === 0
+          ? 'completed'
+          : outcome.completedCount > 0
+              || outcome.partialCount > 0
+              || group.agents.some((state) => state.reason === 'completed')
+            ? 'partial'
+            : 'failed';
+        const structuredData = {
+          kind: 'resume_agent_result',
+          status,
+          spawnId,
+          relaunchedCount: outcome.relaunchedCount,
+          completedCount: outcome.completedCount,
+          partialCount: outcome.partialCount,
+          failedCount: outcome.failedCount,
+          stillFailed: remainingCount,
+          remainingCount,
+          skippedCount: skipped.length,
+        };
+        if (remainingCount > 0) {
+          const partial = status === 'partial';
+          const retryable = remaining.some(canResume);
+          const incompleteBecauseSkipped = outcome.stillFailed === 0;
+          const errorCode = incompleteBecauseSkipped
+            ? retryable ? 'RESUME_AGENT_INCOMPLETE' : 'RESUME_AGENT_EXHAUSTED'
+            : partial ? 'RESUME_AGENT_PARTIAL' : 'RESUME_AGENT_FAILED';
+          return {
+            content,
+            isError: true,
+            error: {
+              code: errorCode,
+              kind: 'tool_error',
+              retryable,
+              suggestedAction: retryable
+                ? `Retry resume_agent with spawn_id '${spawnId}' to continue only the unfinished agents.`
+                : 'No unfinished agent has a resumable attempt left; decompose or narrow the task before spawning replacement work.',
+            },
+            structuredData,
+            subUsage: outcome.usage,
+          };
+        }
+        return {
+          ...ok(content),
+          structuredData,
+          subUsage: outcome.usage,
+        };
       } finally {
-        releaseResume(sessionId, spawnId);
+        releaseResume(sessionId, spawnId, deps.sessionStore);
       }
     },
   };

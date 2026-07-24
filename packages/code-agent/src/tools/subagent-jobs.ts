@@ -155,6 +155,19 @@ export class SubagentJobManager {
     return this.activeCount(sessionId) > 0;
   }
 
+  /**
+   * A terminal notification is intentionally not an acknowledgement: the
+   * compact reminder does not contain the full findings. Goal completion must
+   * remain fenced until collect_agents has delivered the terminal payload.
+   */
+  hasUncollectedTerminalJobs(sessionId: number): boolean {
+    this.sweep(sessionId);
+    for (const job of this.bySession.get(sessionId)?.values() ?? []) {
+      if (job.status !== 'running' && job.delivery !== 'collected') return true;
+    }
+    return false;
+  }
+
   activeCount(sessionId: number): number {
     let n = 0;
     for (const j of this.bySession.get(sessionId)?.values() ?? []) if (j.status === 'running') n++;
@@ -233,7 +246,17 @@ export class SubagentJobManager {
     const now = Date.now();
     const ttl = collectedTtlMs();
     for (const [id, j] of groups) {
-      if (j.status !== 'running' && j.finishedAt != null && now - j.finishedAt > ttl) groups.delete(id);
+      // The TTL is post-ack cleanup only. Expiring an uncollected terminal
+      // would discard its full report and silently release the completion
+      // gate merely because the compact notification got old.
+      if (
+        j.status !== 'running'
+        && j.delivery === 'collected'
+        && j.finishedAt != null
+        && now - j.finishedAt > ttl
+      ) {
+        groups.delete(id);
+      }
     }
     if (groups.size === 0) this.bySession.delete(sessionId);
   }

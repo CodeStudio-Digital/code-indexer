@@ -3,7 +3,7 @@
  *
  * Mounts the coder session routes with a STUB sessionStore (no DB) so the
  * test is ABI-free — the /agent handler uses a stub session store. Validates
- * persistence plus the hidden transition reminder for built-in/custom/null
+ * persistence plus the coalesced pending transition for built-in/custom/null
  * targets, idempotence, the unknown-agent 400, and the unknown-session 404.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -24,14 +24,29 @@ function setup() {
   const calls: Array<{ id: number; agent: string | null }> = [];
   const messages: Array<{ id: number; message: Record<string, unknown> }> = [];
   const inputs: Array<Record<string, unknown>> = [];
+  const pendingTransitions = new Map<number, {
+    sessionId: number;
+    fromAgent: string | null;
+    toAgent: string | null;
+  }>();
   const sessions = new Map<number, { id: number; agent: string | null }>([
     [1, { id: 1, agent: 'explore' }],
   ]);
   const sessionStore = {
-    setSessionAgent: (id: number, agent: string | null) => {
+    stageManualAgentTransition: (id: number, agent: string | null) => {
       calls.push({ id, agent });
       const s = sessions.get(id);
-      if (s) s.agent = agent;
+      if (!s) return null;
+      const existing = pendingTransitions.get(id);
+      const fromAgent = existing?.fromAgent ?? s.agent;
+      s.agent = agent;
+      if (fromAgent === agent) {
+        pendingTransitions.delete(id);
+        return null;
+      }
+      const pending = { sessionId: id, fromAgent, toAgent: agent };
+      pendingTransitions.set(id, pending);
+      return pending;
     },
     getSession: (id: number) => sessions.get(id) ?? null,
     appendMessage: (id: number, message: Record<string, unknown>) => {
@@ -71,56 +86,73 @@ function setup() {
       body: JSON.stringify({ agent }),
     });
 
-  return { app, calls, messages, inputs, patchAgent, customAgent };
+  return { app, calls, messages, inputs, pendingTransitions, patchAgent, customAgent };
 }
 
 describe('coder PATCH /sessions/:id/agent', () => {
-  it('persists a valid agent and echoes the updated session', async () => {
-    const { calls, inputs, messages, patchAgent } = setup();
+  it('persists a valid agent and stages the reminder for the next run', async () => {
+    const { calls, inputs, messages, pendingTransitions, patchAgent } = setup();
     const r = await patchAgent(1, 'build');
     expect(r.status).toBe(200);
     const body = (await r.json()) as { agent: string };
     expect(body.agent).toBe('build');
     expect(calls).toEqual([{ id: 1, agent: 'build' }]);
-    expect(messages).toEqual([{
-      id: 1,
-      message: {
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: expect.stringContaining('Agent transition: explore → build.'),
-        }],
-        isMeta: true,
-      },
-    }]);
-    expect(inputs).toEqual([expect.objectContaining({
-      session_id: 1,
-      kind: 'system_reminder',
-      source_label: 'reminder:agent-transition',
-      content: expect.stringContaining('The active agent is now build.'),
-    })]);
+    expect(pendingTransitions.get(1)).toEqual({
+      sessionId: 1,
+      fromAgent: 'explore',
+      toAgent: 'build',
+    });
+    expect(messages).toEqual([]);
+    expect(inputs).toEqual([]);
   });
 
   it('accepts null to clear the column', async () => {
-    const { calls, messages, patchAgent } = setup();
+    const { calls, messages, pendingTransitions, patchAgent } = setup();
     const r = await patchAgent(1, null);
     expect(r.status).toBe(200);
     expect(calls).toEqual([{ id: 1, agent: null }]);
-    expect(messages[0]?.message).toMatchObject({
-      isMeta: true,
-      content: [{ text: expect.stringContaining('explore → session-default') }],
+    expect(pendingTransitions.get(1)).toEqual({
+      sessionId: 1,
+      fromAgent: 'explore',
+      toAgent: null,
     });
+    expect(messages).toEqual([]);
   });
 
   it('accepts an enabled custom agent selection id', async () => {
-    const { calls, customAgent, messages, patchAgent } = setup();
+    const { calls, customAgent, messages, pendingTransitions, patchAgent } = setup();
     const selectionId = `custom:${customAgent.id}`;
     const r = await patchAgent(1, selectionId);
     expect(r.status).toBe(200);
     expect(calls).toEqual([{ id: 1, agent: selectionId }]);
-    expect(messages[0]?.message).toMatchObject({
-      content: [{ text: expect.stringContaining(`explore → ${selectionId}`) }],
+    expect(pendingTransitions.get(1)).toEqual({
+      sessionId: 1,
+      fromAgent: 'explore',
+      toAgent: selectionId,
     });
+    expect(messages).toEqual([]);
+  });
+
+  it('coalesces selector churn into the final transition only', async () => {
+    const { messages, pendingTransitions, patchAgent } = setup();
+    await patchAgent(1, 'build');
+    await patchAgent(1, 'plan');
+
+    expect(pendingTransitions.get(1)).toEqual({
+      sessionId: 1,
+      fromAgent: 'explore',
+      toAgent: 'plan',
+    });
+    expect(messages).toEqual([]);
+  });
+
+  it('cancels the pending reminder when selection returns to the original agent', async () => {
+    const { messages, pendingTransitions, patchAgent } = setup();
+    await patchAgent(1, 'build');
+    await patchAgent(1, 'explore');
+
+    expect(pendingTransitions.has(1)).toBe(false);
+    expect(messages).toEqual([]);
   });
 
   it('does not append another reminder when the selected agent is unchanged', async () => {

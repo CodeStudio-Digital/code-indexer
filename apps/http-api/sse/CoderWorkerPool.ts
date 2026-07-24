@@ -52,13 +52,188 @@ import {
   exitBackgroundActivity,
 } from '../server/perf/freeze-log.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
-import type { ControlPlaneRunContext, ControlPlaneStore } from '@mcp/store/control-plane/index.js';
+import { createHash } from 'node:crypto';
 import {
+  classifyCoderTerminalOutcome,
+  normalizeCoderTerminalSignal,
+  type ControlPlaneEventType,
+} from '@mcp/agent-runtime-contracts';
+import {
+  compareRunTerminalState,
+  type ControlPlaneDivergenceStore,
+  type ControlPlaneRunContext,
+  type ControlPlaneStore,
+} from '@mcp/store/control-plane/index.js';
+import {
+  coderControlPlaneShadowEnabled,
   markLocalCoderRunStarted,
+  mirrorLocalCoderLifecycleEvent,
   mirrorLocalCoderToolBoundary,
+  recordLocalCoderShadowDivergences,
   renewLocalCoderRunLease,
   terminalizeLocalCoderRun,
 } from '../control-plane-shadow.js';
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+const strOrNull = (value: unknown): string | null => typeof value === 'string' ? value : null;
+const numOrNull = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+const strOrUndef = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined;
+const hashOrNull = (value: unknown): string | null => strOrUndef(value) ? sha256Hex(value as string) : null;
+
+interface LifecycleMirror {
+  type: ControlPlaneEventType;
+  payload: (data: Record<string, unknown>) => Record<string, unknown>;
+  idempotencyKey?: (data: Record<string, unknown>) => string | undefined;
+}
+
+/**
+ * Extended A–C runner vocabulary mirrored to the journal shadow (Fase 1C).
+ * Every payload is reduced to ids, hashes and counts — never raw text.
+ */
+const LIFECYCLE_MIRRORS: Record<string, LifecycleMirror> = {
+  tool_approval_request: {
+    type: 'tool.approval.requested',
+    idempotencyKey: (d) => strOrUndef(d.toolUseId),
+    payload: (d) => ({
+      toolUseId: strOrNull(d.toolUseId),
+      parentToolUseId: strOrNull(d.parentToolUseId),
+      toolName: strOrNull(d.toolName),
+      riskClass: strOrNull(d.riskClass),
+      approvalKind: strOrNull(d.approvalKind),
+      turn: numOrNull(d.turn),
+      nested: d.nested === true,
+    }),
+  },
+  tool_approval_resolved: {
+    type: 'tool.approval.resolved',
+    idempotencyKey: (d) => strOrUndef(d.toolUseId),
+    payload: (d) => ({
+      toolUseId: strOrNull(d.toolUseId),
+      toolName: strOrNull(d.toolName),
+      approved: d.approved === true,
+      source: strOrNull(d.source),
+    }),
+  },
+  awaiting_input: {
+    type: 'interaction.requested',
+    idempotencyKey: (d) => strOrUndef(d.askId),
+    payload: (d) => ({ askId: strOrNull(d.askId) }),
+  },
+  provider_swapped: {
+    type: 'provider.swapped',
+    payload: (d) => ({ provider: strOrNull(d.provider), model: strOrNull(d.model) }),
+  },
+  fallback_activated: {
+    type: 'provider.fallback',
+    payload: (d) => {
+      const from = d.from && typeof d.from === 'object' ? d.from as Record<string, unknown> : {};
+      const to = d.to && typeof d.to === 'object' ? d.to as Record<string, unknown> : {};
+      return {
+        fromProvider: strOrNull(from.provider),
+        fromModel: strOrNull(from.model),
+        toProvider: strOrNull(to.provider),
+        toModel: strOrNull(to.model),
+        errorHash: hashOrNull(d.error),
+      };
+    },
+  },
+  history_compacted: {
+    type: 'history.compacted',
+    payload: (d) => ({
+      strategy: strOrNull(d.strategy),
+      prunedMessages: numOrNull(d.pruned_messages),
+      prunedChars: numOrNull(d.pruned_chars),
+      totalCharsBefore: numOrNull(d.total_chars_before),
+      totalCharsAfter: numOrNull(d.total_chars_after),
+      autoContinue: numOrNull(d.auto_continue),
+      trigger: strOrNull(d.trigger),
+    }),
+  },
+  workflow_run_started: {
+    type: 'workflow.run.started',
+    idempotencyKey: (d) => `${strOrNull(d.workflow_id) ?? 'unknown'}:started`,
+    payload: (d) => ({
+      workflowId: strOrNull(d.workflow_id),
+      name: strOrNull(d.name),
+      resumed: d.resumed === true,
+      totalWaves: numOrNull(d.total_waves),
+      stepCount: Array.isArray(d.steps) ? d.steps.length : null,
+    }),
+  },
+  workflow_run_finished: {
+    type: 'workflow.run.finished',
+    idempotencyKey: (d) => `${strOrNull(d.workflow_id) ?? 'unknown'}:finished`,
+    payload: (d) => ({
+      workflowId: strOrNull(d.workflow_id),
+      status: strOrNull(d.status),
+      completedCount: numOrNull(d.completed_count),
+      failedCount: numOrNull(d.failed_count),
+      skippedCount: numOrNull(d.skipped_count),
+    }),
+  },
+  agents_group_start: {
+    type: 'agents.group.started',
+    idempotencyKey: (d) => `${strOrNull(d.groupId) ?? 'unknown'}:started`,
+    payload: (d) => ({
+      groupId: strOrNull(d.groupId),
+      toolUseId: strOrNull(d.toolUseId),
+      provider: strOrNull(d.provider),
+      model: strOrNull(d.model),
+      background: d.background === true,
+      resumed: d.resumed === true,
+      agentCount: Array.isArray(d.agents) ? d.agents.length : null,
+    }),
+  },
+  agents_group_end: {
+    type: 'agents.group.finished',
+    idempotencyKey: (d) => `${strOrNull(d.groupId) ?? 'unknown'}:finished`,
+    payload: (d) => ({
+      groupId: strOrNull(d.groupId),
+      status: strOrNull(d.status),
+      agentCount: numOrNull(d.agentCount),
+      successCount: numOrNull(d.successCount),
+      completedCount: numOrNull(d.completedCount),
+      partialCount: numOrNull(d.partialCount),
+      failedCount: numOrNull(d.failedCount),
+      resumableCount: numOrNull(d.resumableCount),
+    }),
+  },
+  worktree_entered: {
+    type: 'worktree.entered',
+    idempotencyKey: (d) => `${strOrUndef(d.path) ? sha256Hex(d.path as string) : 'unknown'}:entered`,
+    payload: (d) => ({
+      pathHash: hashOrNull(d.path),
+      originalCwdHash: hashOrNull(d.originalCwd),
+    }),
+  },
+  worktree_exited: {
+    type: 'worktree.exited',
+    idempotencyKey: (d) => `${strOrUndef(d.path) ? sha256Hex(d.path as string) : 'unknown'}:exited`,
+    payload: (d) => ({ pathHash: hashOrNull(d.path) }),
+  },
+};
+
+function mirrorBusLifecycleEvent(
+  store: ControlPlaneStore | null,
+  context: ControlPlaneRunContext,
+  event: string,
+  data: unknown,
+): void {
+  const mirror = LIFECYCLE_MIRRORS[event];
+  if (!mirror) return;
+  const record = data && typeof data === 'object' && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : {};
+  void mirrorLocalCoderLifecycleEvent(store, context, {
+    type: mirror.type,
+    idempotencyKey: mirror.idempotencyKey?.(record),
+    payload: mirror.payload(record),
+  });
+}
 
 /**
  * Optional doc-corpus deps the host wires AFTER `boot/createApp` has built
@@ -133,8 +308,14 @@ export interface CoderWorkerPoolOpts {
    * `McpServerManager` path alive (covers boot-race + tests).
    */
   getMcpExternalPool?: () => McpExternalPool | null;
-  /** Late-bound main-thread store for the default-off coder control-plane shadow. */
+  /**
+   * Late-bound main-thread control-plane store. Command authority is always
+   * wired; AgentRun/journal writes still require an accepted run context and
+   * their respective feature flags.
+   */
   getControlPlaneStore?: () => ControlPlaneStore | null;
+  /** Audit sink for the shadow run-state comparator (Fase 1D). */
+  getControlPlaneDivergenceStore?: () => ControlPlaneDivergenceStore | null;
 }
 
 interface PoolEntry {
@@ -161,9 +342,14 @@ interface PoolEntry {
    * sequential runs while the worker stays warm.
    */
   runInProgress: boolean;
-  qualityEnabled: boolean;
   controlPlaneRunContext: ControlPlaneRunContext | null;
-  lastControlPlaneLeaseRenewalAt: number;
+  /**
+   * Root AgentRun authority is leased for ten minutes. Renewal must be driven
+   * by an owner-scoped timer rather than bus traffic: a provider/tool may be
+   * legitimately silent for longer than the lease. The callback additionally
+   * checks this entry + currentRunId + executor owner/fence before every write.
+   */
+  controlPlaneLeaseRenewTimer: ReturnType<typeof setInterval> | null;
 }
 
 export interface RunFreshOpts {
@@ -217,7 +403,11 @@ export interface RunFreshOpts {
    * spawn a fresh worker that resumes from the tool_result just appended.
    */
   resume?: boolean;
-  /** Main-process-only shadow context; stripped before the worker RPC. */
+  /**
+   * Main-process-only AgentRun authority context; stripped before the worker
+   * RPC. Only its opaque agentRunId is forwarded, never actor/owner/fencing
+   * credentials.
+   */
   controlPlaneRunContext?: ControlPlaneRunContext;
 }
 
@@ -228,6 +418,8 @@ export interface RunFreshOpts {
  * 2 GB before V8 applies pressure. Operators can still override this limit.
  */
 export const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
+/** Keep a wide safety margin below the 10-minute executor lease. */
+export const CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS = 60_000;
 
 export class CoderWorkerPool {
   private readonly entries = new Map<number, PoolEntry>();
@@ -311,52 +503,6 @@ export class CoderWorkerPool {
     return Promise.all(jobs);
   }
 
-  qualitySnapshot(): Array<{ sessionId: number; enabled: boolean }> {
-    return [...this.entries.entries()].map(([sessionId, entry]) => ({
-      sessionId,
-      enabled: entry.qualityEnabled,
-    }));
-  }
-
-  async refreshQualityStatus(timeoutMs = 2_000): Promise<Array<{ sessionId: number; enabled: boolean }>> {
-    await Promise.all([...this.entries.values()].map(async (entry) => {
-      try {
-        const status = await entry.host.requireBridge().request<{ enabled: boolean }>(
-          'quality.status',
-          {},
-          { timeoutMs },
-        );
-        entry.qualityEnabled = status.enabled === true;
-      } catch {
-        entry.qualityEnabled = false;
-      }
-    }));
-    return this.qualitySnapshot();
-  }
-
-  async setQualityEnabled(enabled: boolean, timeoutMs = 5_000): Promise<{
-    total: number;
-    acknowledged: number;
-    failed: number;
-  }> {
-    const entries = [...this.entries.values()];
-    let acknowledged = 0;
-    await Promise.all(entries.map(async (entry) => {
-      try {
-        const ack = await entry.host.requireBridge().request<{ enabled: boolean }>(
-          'quality.setEnabled',
-          { enabled },
-          { timeoutMs },
-        );
-        if (ack.enabled === enabled) {
-          entry.qualityEnabled = enabled;
-          acknowledged += 1;
-        }
-      } catch { /* reflected in failed */ }
-    }));
-    return { total: entries.length, acknowledged, failed: entries.length - acknowledged };
-  }
-
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
   async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
     const entry = this.entries.get(sessionId);
@@ -376,7 +522,7 @@ export class CoderWorkerPool {
     try {
       entry = await this.ensureEntry(sessionId);
     } catch (error) {
-      terminalizeLocalCoderRun(
+      void terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         controlPlaneRunContext,
         {
@@ -388,7 +534,7 @@ export class CoderWorkerPool {
       throw error;
     }
     if (entry.runInProgress && !entry.bus.ended) {
-      terminalizeLocalCoderRun(
+      void terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         controlPlaneRunContext,
         {
@@ -400,21 +546,32 @@ export class CoderWorkerPool {
       throw new Error(`coder-pool: run already in progress for session ${sessionId}`);
     }
     this.cancelPostRunEvict(entry);
+    // A sequential run may reuse the warm worker entry. Retire the previous
+    // run's timer before changing either the run id or authority context so a
+    // queued stale callback cannot renew the replacement.
+    this.stopControlPlaneLeaseRenewal(entry);
     entry.lastTouchedAt = Date.now();
     const runId = this.nextRunId++;
     this.prepareRunBus(entry, sessionId, runId);
     entry.controlPlaneRunContext = controlPlaneRunContext ?? null;
-    entry.lastControlPlaneLeaseRenewalAt = Date.now();
     // (B) — mark the run in-progress so the idle sweep keeps hands off
     // until the worker emits its terminal `done`/`error` via the bus
     // event mirror below.
     entry.runInProgress = true;
+    if (controlPlaneRunContext) {
+      this.startControlPlaneLeaseRenewal(entry, sessionId, runId, controlPlaneRunContext);
+    }
     const bridge = entry.host.requireBridge();
     try {
-      await bridge.request('runFresh', { ...workerOpts, runId }, { timeoutMs: 60_000 });
+      await bridge.request('runFresh', {
+        ...workerOpts,
+        runId,
+        controlPlaneParentAgentRunId: controlPlaneRunContext?.agentRunId,
+      }, { timeoutMs: 60_000 });
     } catch (err) {
+      this.stopControlPlaneLeaseRenewal(entry);
       entry.runInProgress = false;
-      terminalizeLocalCoderRun(
+      void terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         entry.controlPlaneRunContext,
         { event: 'error', data: { message: err instanceof Error ? err.message : String(err) }, mode: 'worker_start_failure' },
@@ -465,6 +622,128 @@ export class CoderWorkerPool {
     if (!entry.postRunEvictTimer) return;
     clearTimeout(entry.postRunEvictTimer);
     entry.postRunEvictTimer = null;
+  }
+
+  private stopControlPlaneLeaseRenewal(entry: PoolEntry): void {
+    const timer = entry.controlPlaneLeaseRenewTimer;
+    if (!timer) return;
+    entry.controlPlaneLeaseRenewTimer = null;
+    clearInterval(timer);
+  }
+
+  private ownsControlPlaneLease(
+    sessionId: number,
+    entry: PoolEntry,
+    runId: number,
+    context: ControlPlaneRunContext,
+  ): boolean {
+    const current = this.entries.get(sessionId);
+    const active = current?.controlPlaneRunContext;
+    return current === entry
+      && current.currentRunId === runId
+      && current.runInProgress
+      && active?.agentRunId === context.agentRunId
+      && active.attemptId === context.attemptId
+      && active.executorOwnerId === context.executorOwnerId
+      && active.fencingEpoch === context.fencingEpoch;
+  }
+
+  /**
+   * Renew root execution authority independently from stream activity.
+   *
+   * Claude's lifecycle keeps ownership/permission state outside presentation
+   * traffic; the same principle matters here because an otherwise healthy
+   * provider or tool may emit nothing for longer than the 10-minute lease.
+   */
+  private startControlPlaneLeaseRenewal(
+    entry: PoolEntry,
+    sessionId: number,
+    runId: number,
+    context: ControlPlaneRunContext,
+  ): void {
+    this.stopControlPlaneLeaseRenewal(entry);
+    const timer = setInterval(() => {
+      if (!this.ownsControlPlaneLease(sessionId, entry, runId, context)) {
+        // A queued callback from an ended/replaced run may still enter once.
+        // Clear only its own handle; never clobber the replacement's timer.
+        clearInterval(timer);
+        if (entry.controlPlaneLeaseRenewTimer === timer) {
+          entry.controlPlaneLeaseRenewTimer = null;
+        }
+        return;
+      }
+      const renewed = renewLocalCoderRunLease(
+        this.opts.getControlPlaneStore?.() ?? null,
+        context,
+        new Date().toISOString(),
+      );
+      if (!renewed) {
+        this.handleControlPlaneAuthorityLost(sessionId, entry, runId, context);
+      }
+    }, CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS);
+    entry.controlPlaneLeaseRenewTimer = timer;
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+      (timer as { unref: () => void }).unref();
+    }
+  }
+
+  /**
+   * A failed renewal means this executor no longer has proof of authority.
+   * Fence locally before asking the worker to abort, publish one explicit
+   * terminal, and evict the isolate so a failed/cooperative abort cannot keep
+   * mutating behind the control plane's back.
+   */
+  private handleControlPlaneAuthorityLost(
+    sessionId: number,
+    entry: PoolEntry,
+    runId: number,
+    context: ControlPlaneRunContext,
+  ): void {
+    if (!this.ownsControlPlaneLease(sessionId, entry, runId, context)) return;
+    this.stopControlPlaneLeaseRenewal(entry);
+
+    // Clear the context first. A racing worker terminal must never turn this
+    // already-fenced attempt into a successful terminal.
+    entry.controlPlaneRunContext = null;
+    entry.runInProgress = false;
+    const terminalData = {
+      reason: 'control-plane-authority-lost',
+      authorityLost: true,
+      sessionId,
+      runId,
+    };
+    if (!entry.bus.ended) {
+      emitWorkerLog(entry.bus, 'error', 'lifecycle', 'executor authority lost; fencing worker', {
+        sessionId,
+        runId,
+      });
+      publish(entry.bus, 'error', terminalData);
+      markEnded(entry.bus, 'error', terminalData);
+    }
+    terminalizeLocalCoderRun(
+      this.opts.getControlPlaneStore?.(),
+      context,
+      { event: 'error', data: terminalData, mode: 'authority_lost' },
+    );
+
+    try {
+      void entry.host.requireBridge().request(
+        'abort',
+        { reason: 'control-plane-authority-lost' },
+        { timeoutMs: 1_000 },
+      ).catch((error) => {
+        this.log(
+          'warn',
+          `[coder-pool] authority-lost abort failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    } catch (error) {
+      this.log(
+        'warn',
+        `[coder-pool] authority-lost abort dispatch failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    void this.evict(sessionId);
   }
 
   private prepareRunBus(entry: PoolEntry, sessionId: number, runId: number): void {
@@ -585,7 +864,8 @@ export class CoderWorkerPool {
   async evict(sessionId: number): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
-    terminalizeLocalCoderRun(
+    this.stopControlPlaneLeaseRenewal(entry);
+    void terminalizeLocalCoderRun(
       this.opts.getControlPlaneStore?.(),
       entry.controlPlaneRunContext,
       { event: 'error', data: { reason: 'worker-evicted' }, mode: 'evicted' },
@@ -622,6 +902,47 @@ export class CoderWorkerPool {
     }
     const ids = Array.from(this.entries.keys());
     await Promise.all(ids.map((id) => this.evict(id)));
+  }
+
+  /**
+   * Fase 1D — compare the legacy terminal signal with the persisted
+   * control-plane state after the terminal mirror. Best-effort audit:
+   * mismatches are counted and persisted; failures never affect the run.
+   */
+  private compareShadowTerminalState(
+    sessionId: number,
+    context: ControlPlaneRunContext | null,
+    event: 'done' | 'error',
+    data: unknown,
+  ): void {
+    const store = this.opts.getControlPlaneStore?.() ?? null;
+    if (!store || !context || !coderControlPlaneShadowEnabled()) return;
+    try {
+      const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+      const terminal = classifyCoderTerminalOutcome({
+        event,
+        reason: record.reason,
+        error: record.error,
+        message: record.message,
+      });
+      const command = store.commands.get(context.commandId);
+      const run = store.runs.get(context.agentRunId);
+      const divergences = compareRunTerminalState({
+        legacy: { event: terminal.event, reason: terminal.reason },
+        command: command ?? null,
+        run: run ?? null,
+      });
+      if (divergences.length === 0) return;
+      recordLocalCoderShadowDivergences(divergences.length);
+      this.opts.getControlPlaneDivergenceStore?.()?.recordMany({
+        sessionId: context.sessionId,
+        legacySessionId: context.legacySessionId,
+        commandId: context.commandId,
+        agentRunId: context.agentRunId,
+      }, divergences);
+    } catch (error) {
+      this.log('warn', `[coder-pool] control-plane comparator failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private sweep(): void {
@@ -713,11 +1034,16 @@ export class CoderWorkerPool {
           });
         }
         if (entry) {
+          this.stopControlPlaneLeaseRenewal(entry);
           terminalizeLocalCoderRun(
             this.opts.getControlPlaneStore?.(),
             entry.controlPlaneRunContext,
             { event: 'error', data: { reason: 'worker-crashed', message: err.message }, mode: 'worker_crash' },
           );
+          const terminalContext = entry.controlPlaneRunContext;
+          setImmediate(() => {
+            this.compareShadowTerminalState(sessionId, terminalContext, 'error', { reason: 'worker-crashed' });
+          });
           entry.controlPlaneRunContext = null;
         }
         closePreviewSession(sessionId);
@@ -753,13 +1079,6 @@ export class CoderWorkerPool {
       bootMs,
     });
     const bridge = host.requireBridge();
-    let effectiveQualityEnabled = false;
-    try {
-      const status = await bridge.request<{ enabled: boolean }>('quality.status', {}, { timeoutMs: 5_000 });
-      effectiveQualityEnabled = status.enabled === true;
-    } catch {
-      // Keep false: status must reflect an ACK, never the desired spawn input.
-    }
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     // `rag_search_docs` runs in the worker. Only structural navigation and
     // deep research cross this bridge; the navigation verbs are short SQLite
@@ -897,7 +1216,10 @@ export class CoderWorkerPool {
     const offEvent = bridge.on('bus.event', (payload) => {
       const env = payload as { runId?: number; event: string; data: unknown };
       const e = this.entries.get(sessionId);
-      if (!e || env.runId !== e.currentRunId) return;
+      if (!e || env.runId !== e.currentRunId || e.bus.ended) return;
+      const forwarded = env.event === 'done' || env.event === 'error'
+        ? normalizeCoderTerminalSignal(env.event, env.data)
+        : { event: env.event, data: env.data };
       // (A) — worker activity refreshes the idle timer. Without this, a
       // slow provider (LLM thinking 6+ min on a fat prompt) looks idle
       // to the sweep and gets evicted mid-turn (session 798 symptom).
@@ -919,7 +1241,7 @@ export class CoderWorkerPool {
         } else if (env.event === 'tool_call_start') {
           const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
           if (typeof data.id === 'string' && typeof data.name === 'string') {
-            mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
+            void mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
               phase: 'started',
               toolUseId: data.id,
               toolName: data.name,
@@ -929,7 +1251,7 @@ export class CoderWorkerPool {
         } else if (env.event === 'tool_call_result') {
           const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
           if (typeof data.id === 'string' && typeof data.name === 'string') {
-            mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
+            void mirrorLocalCoderToolBoundary(controlPlaneStore, context, {
               phase: 'completed',
               toolUseId: data.id,
               toolName: data.name,
@@ -937,27 +1259,35 @@ export class CoderWorkerPool {
               durationMs: typeof data.duration_ms === 'number' ? data.duration_ms : undefined,
             });
           }
-        }
-        const now = Date.now();
-        if (now - e.lastControlPlaneLeaseRenewalAt >= 60_000) {
-          renewLocalCoderRunLease(controlPlaneStore, context, new Date(now).toISOString());
-          e.lastControlPlaneLeaseRenewalAt = now;
+        } else {
+          mirrorBusLifecycleEvent(controlPlaneStore, context, env.event, env.data);
         }
       }
-      publish(e.bus, env.event, env.data);
+      publish(e.bus, forwarded.event, forwarded.data);
     });
     const offEnd = bridge.on('bus.end', (payload) => {
       const env = payload as { runId?: number; event: 'done' | 'error'; data: unknown };
       const e = this.entries.get(sessionId);
       if (!e || env.runId !== e.currentRunId) return;
+      this.stopControlPlaneLeaseRenewal(e);
+      // Mixed-version workers may still report a failure-class runner outcome
+      // as `done`. Normalize before the mirrored bus and durable ledger observe
+      // it so neither layer can record a false success.
+      const terminal = normalizeCoderTerminalSignal(env.event, env.data);
       if (!e.bus.ended) {
-        markEnded(e.bus, env.event, env.data);
+        markEnded(e.bus, terminal.event, terminal.data);
       }
+      const terminalContext = e.controlPlaneRunContext;
       terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
-        e.controlPlaneRunContext,
-        { event: env.event, data: env.data },
+        terminalContext,
+        terminal,
       );
+      // The bus terminal is already visible to SSE above and authority is now
+      // committed. Keep diagnostic comparison off this event turn.
+      setImmediate(() => {
+        this.compareShadowTerminalState(sessionId, terminalContext, terminal.event, terminal.data);
+      });
       e.controlPlaneRunContext = null;
       // (B) — terminal event: run is no longer in progress; sweep may
       // now consider this entry for eviction once ttlMs elapses without
@@ -995,9 +1325,8 @@ export class CoderWorkerPool {
       // bumped by `ensureEntry`, but the explicit `false` documents
       // intent.
       runInProgress: false,
-      qualityEnabled: effectiveQualityEnabled,
       controlPlaneRunContext: null,
-      lastControlPlaneLeaseRenewalAt: 0,
+      controlPlaneLeaseRenewTimer: null,
       detachBusMirror: () => {
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }

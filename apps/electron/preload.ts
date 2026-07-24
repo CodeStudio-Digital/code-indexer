@@ -16,7 +16,7 @@
  * + a handler entry in `mountIpcHandlers` — preload requires no change.
  */
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // ─── Streaming pump ────────────────────────────────────────────
 //
@@ -358,6 +358,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Open a bidirectional MessagePort stream. See openDuplex above. */
   openDuplexStream: (channel: string, payload: unknown) => openDuplex(`api:${channel}`, payload),
   openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
+  /**
+   * Resolve an OS-backed File selected/dropped in the renderer without reading
+   * its bytes. Synthetic clipboard Files intentionally resolve to an empty
+   * string and keep using the inline attachment path.
+   */
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   /** SFTP upload source — native open-file dialog, returns absolute paths (or []). */
   openFiles: () => ipcRenderer.invoke('dialog:openFiles') as Promise<string[]>,
   /** SFTP download target — native save dialog, returns absolute path (or null). */

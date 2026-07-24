@@ -16,6 +16,7 @@ import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js'
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
 import { apiBaseUrl } from '../lib/api-client.js';
+import { confirm } from '../components/ui/prompt-dialog.js';
 
 import type { AgentAttachment } from './agent-stream/types.js';
 import { useAgentControls } from './useAgentControls.js';
@@ -50,7 +51,116 @@ export interface CompanyStreamTransport {
   keepAttachedWhileOrchestratorLive: boolean;
 }
 
+export interface CompanyStreamCursor {
+  seq: number;
+  busId: string | null;
+}
+
+/** Pure cursor reducer used by SSE today and reusable by explicit WS consumers. */
+export function advanceCompanyStreamCursor(
+  current: CompanyStreamCursor,
+  event: SSEEvent,
+  parsedData: unknown,
+): CompanyStreamCursor {
+  if (event.event === 'bus_info') {
+    const busId = parsedData && typeof parsedData === 'object'
+      && typeof (parsedData as { bus_id?: unknown }).bus_id === 'string'
+      ? (parsedData as { bus_id: string }).bus_id
+      : null;
+    if (!busId) return current;
+    return {
+      busId,
+      seq: busId === current.busId ? current.seq : -1,
+    };
+  }
+  return typeof event.id === 'number' && event.id > current.seq
+    ? { ...current, seq: event.id }
+    : current;
+}
+
 interface MutableCurrent<T> { current: T }
+
+const COMPANY_EVENT_BATCH_SIZE = 50;
+
+function yieldCompanyStreamTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
+export function isCompanyStreamOwner(
+  lifecycleGenerationRef: MutableCurrent<number>,
+  abortRef: MutableCurrent<AbortController | null>,
+  generation: number,
+  controller: AbortController,
+): boolean {
+  return lifecycleGenerationRef.current === generation
+    && abortRef.current === controller
+    && !controller.signal.aborted;
+}
+
+export interface CompanyStreamEventPump {
+  enqueue(event: SSEEvent): void;
+  flush(): Promise<void>;
+  discard(): void;
+}
+
+/**
+ * Ordered, yielding event pump for replay bursts.
+ *
+ * The cursor is advanced by the supplied processor, after its state mutation
+ * succeeds. A superseded/aborted owner drops its queue, so late frames from an
+ * older fetch cannot mutate the replacement stream.
+ */
+export function createCompanyStreamEventPump(opts: {
+  isActive: () => boolean;
+  processEvent: (event: SSEEvent) => void;
+  yieldTurn?: () => Promise<void>;
+  batchSize?: number;
+}): CompanyStreamEventPump {
+  const queue: SSEEvent[] = [];
+  const yieldTurn = opts.yieldTurn ?? yieldCompanyStreamTurn;
+  const batchSize = Math.max(1, opts.batchSize ?? COMPANY_EVENT_BATCH_SIZE);
+  let draining = false;
+  let drainDone: Promise<void> = Promise.resolve();
+
+  const drain = async (): Promise<void> => {
+    draining = true;
+    try {
+      do {
+        await yieldTurn();
+        if (!opts.isActive()) {
+          queue.length = 0;
+          return;
+        }
+        const batch = queue.splice(0, batchSize);
+        for (const event of batch) {
+          if (!opts.isActive()) {
+            queue.length = 0;
+            return;
+          }
+          opts.processEvent(event);
+        }
+      } while (queue.length > 0);
+    } finally {
+      draining = false;
+    }
+  };
+
+  return {
+    enqueue(event) {
+      if (!opts.isActive()) return;
+      queue.push(event);
+      if (!draining) drainDone = drain();
+    },
+    async flush() {
+      await drainDone;
+    },
+    discard() {
+      queue.length = 0;
+    },
+  };
+}
 
 /** Shared teardown primitive for unmount and session rotation. */
 export function disposeCompanyStreamLifecycle(
@@ -58,9 +168,8 @@ export function disposeCompanyStreamLifecycle(
   abortRef: MutableCurrent<AbortController | null>,
   generation: number,
 ): void {
-  if (lifecycleGenerationRef.current === generation) {
-    lifecycleGenerationRef.current += 1;
-  }
+  if (lifecycleGenerationRef.current !== generation) return;
+  lifecycleGenerationRef.current += 1;
   abortRef.current?.abort();
   abortRef.current = null;
 }
@@ -174,6 +283,7 @@ export function useCompanyStream(
   const abortRef = useRef<AbortController | null>(null);
   const lifecycleGenerationRef = useRef(0);
   const lastSeenSeqRef = useRef<number>(-1);
+  const lastSeenBusIdRef = useRef<string | null>(null);
   const receivedDoneRef = useRef<boolean>(false);
 
   // A rail can be closed while reattach is still awaiting its snapshot. Abort
@@ -431,9 +541,6 @@ export function useCompanyStream(
 
   const onSSEEvent = useCallback(
     (ev: SSEEvent) => {
-      if (ev.id !== undefined && ev.id > lastSeenSeqRef.current) {
-        lastSeenSeqRef.current = ev.id;
-      }
       let parsed: unknown = null;
       if (ev.data) {
         try {
@@ -442,7 +549,18 @@ export function useCompanyStream(
           parsed = null;
         }
       }
-      handleSSEEvent(ev.event, parsed);
+      if (ev.event !== 'bus_info') {
+        handleSSEEvent(ev.event, parsed);
+      }
+      // Commit replay progress only after the handler has applied the event.
+      // A reconnect can therefore never skip a frame that was merely parsed
+      // or queued but not reflected in the store yet.
+      const nextCursor = advanceCompanyStreamCursor({
+        seq: lastSeenSeqRef.current,
+        busId: lastSeenBusIdRef.current,
+      }, ev, parsed);
+      lastSeenSeqRef.current = nextCursor.seq;
+      lastSeenBusIdRef.current = nextCursor.busId;
     },
     [handleSSEEvent],
   );
@@ -517,6 +635,13 @@ export function useCompanyStream(
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      const generation = lifecycleGenerationRef.current;
+      const isActive = () => isCompanyStreamOwner(
+        lifecycleGenerationRef,
+        abortRef,
+        generation,
+        ctrl,
+      );
       receivedDoneRef.current = false;
 
       // Stamp a stable idempotency key on POST bodies (same object reused
@@ -532,32 +657,63 @@ export function useCompanyStream(
         }
       }
 
+      const eventPump = createCompanyStreamEventPump({
+        isActive,
+        processEvent: onSSEEvent,
+      });
       const client = new ReconnectingSSEClient({
         url: opts.url,
         method: opts.method,
         body: opts.body,
-        onEvent: onSSEEvent,
+        onEvent: (event) => eventPump.enqueue(event),
         getLastEventId: () => lastSeenSeqRef.current,
+        getLastEventBusId: () => lastSeenBusIdRef.current,
         signal: ctrl.signal,
         onReconnect: async (attempt) => {
+          // Do not request replay from a cursor whose event is still queued.
+          await eventPump.flush();
+          if (!isActive()) return;
           await loadKanbanFromDB();
+          if (!isActive()) return;
           await opts.onReconnect?.(attempt);
         },
-        onPhase: (phase) => streamSetConnectionPhase(companySessionId, phase),
+        onPhase: (phase) => {
+          if (isActive()) streamSetConnectionPhase(companySessionId, phase);
+        },
         isTerminal: (ev) => ev.event === 'done' || ev.event === 'error',
       });
 
       try {
-        await client.run();
+        try {
+          await client.run();
+        } finally {
+          if (!isActive()) eventPump.discard();
+          await eventPump.flush();
+        }
       } catch (e) {
         if ((e as Error).name === 'AbortError') return;
+        if (!isActive()) return;
         if (opts.suppressError?.(e as Error)) return;
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       } finally {
-        streamSetConnected(companySessionId, false);
+        // A superseded stream must never tear down the replacement connection.
+        if (
+          lifecycleGenerationRef.current === generation
+          && abortRef.current === ctrl
+        ) {
+          abortRef.current = null;
+          streamSetConnected(companySessionId, false);
+        }
       }
     },
-    [companySessionId, onSSEEvent, loadKanbanFromDB, streamSetConnected, streamSetError],
+    [
+      companySessionId,
+      onSSEEvent,
+      loadKanbanFromDB,
+      streamSetConnected,
+      streamSetConnectionPhase,
+      streamSetError,
+    ],
   );
 
   // ─── Public actions ──────────────────────────────────────────
@@ -566,6 +722,7 @@ export function useCompanyStream(
     async (userMessage: string, attachments?: AgentAttachment[], opts?: { thinking?: boolean }) => {
       if (companySessionId == null) return;
       lastSeenSeqRef.current = -1;
+      lastSeenBusIdRef.current = null;
       streamReset(companySessionId);
       streamSetStarted(companySessionId, true);
       streamSetConnected(companySessionId, true);
@@ -757,21 +914,64 @@ export function useCompanyStream(
     async (promptId: number, approved: boolean, feedback?: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(routeUrl('/plan-response'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approved, feedback, prompt_id: promptId }),
-        });
-        if (res.ok) {
-          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt; resumed?: boolean } | null;
-          if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
-          if (body?.resumed) { streamSetStarted(companySessionId, true); void reattach(); }
-        } else if (res.status !== 409) {
-          const body = await res.text().catch(() => '');
-          streamSetError(companySessionId, `Failed to respond to plan (${res.status}): ${body}`);
-        }
+        const submit = async (retryOutcomeUnknown = false): Promise<void> => {
+          const res = await fetch(routeUrl('/plan-response'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              approved,
+              feedback,
+              prompt_id: promptId,
+              retry_outcome_unknown: retryOutcomeUnknown || undefined,
+            }),
+          });
+          const responseBody = (await res.json().catch(() => null)) as {
+            prompt?: MasterPrompt;
+            resumed?: boolean;
+            error?: string;
+            code?: string;
+          } | null;
+          if (res.ok) {
+            if (responseBody?.prompt) {
+              streamApplyMasterPrompt(companySessionId, responseBody.prompt);
+            }
+            if (responseBody?.resumed) {
+              streamSetStarted(companySessionId, true);
+              void reattach();
+            }
+            return;
+          }
+          if (responseBody?.code === 'OUTCOME_UNKNOWN' && !retryOutcomeUnknown) {
+            const retry = await confirm({
+              title: 'Plan response delivery is uncertain',
+              description:
+                'The worker may already have received this response, but its acknowledgement ' +
+                'was lost. Retrying can deliver it twice. Retry the identical response?',
+              confirmLabel: 'Retry same response',
+              cancelLabel: 'Keep pending',
+              tone: 'destructive',
+            });
+            if (retry) await submit(true);
+            else {
+              streamSetError(
+                companySessionId,
+                responseBody.error ?? 'Plan response delivery outcome is unknown.',
+              );
+            }
+            return;
+          }
+          if (res.status === 409 && responseBody?.code === 'PROMPT_ALREADY_RESOLVED') return;
+          streamSetError(
+            companySessionId,
+            `Failed to respond to plan (${res.status}): ${
+              responseBody?.error ?? 'unknown error'
+            }`,
+          );
+        };
+        await submit();
       } catch (e) {
         console.error('Failed to respond to master plan:', e);
+        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
       }
     },
     [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
@@ -781,24 +981,62 @@ export function useCompanyStream(
     async (promptId: number, answer: string) => {
       if (companySessionId == null) return;
       try {
-        const res = await fetch(routeUrl('/answer'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ answer, prompt_id: promptId }),
-        });
-        if (res.ok) {
-          const body = (await res.json().catch(() => null)) as { prompt?: MasterPrompt; resumed?: boolean } | null;
-          if (body?.prompt) streamApplyMasterPrompt(companySessionId, body.prompt);
-          // The orchestrator had been evicted/restarted; the backend re-spawned
-          // and resumed the master. Re-establish the SSE so the continuation streams.
-          if (body?.resumed) { streamSetStarted(companySessionId, true); void reattach(); }
-        } else if (res.status !== 409) {
-          const body = await res.text().catch(() => '');
+        const submit = async (retryOutcomeUnknown = false): Promise<void> => {
+          const res = await fetch(routeUrl('/answer'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              answer,
+              prompt_id: promptId,
+              retry_outcome_unknown: retryOutcomeUnknown || undefined,
+            }),
+          });
+          const responseBody = (await res.json().catch(() => null)) as {
+            prompt?: MasterPrompt;
+            resumed?: boolean;
+            error?: string;
+            code?: string;
+          } | null;
+          if (res.ok) {
+            if (responseBody?.prompt) {
+              streamApplyMasterPrompt(companySessionId, responseBody.prompt);
+            }
+            // The orchestrator had been evicted/restarted; the backend re-spawned
+            // and resumed the master. Re-establish the SSE so the continuation streams.
+            if (responseBody?.resumed) {
+              streamSetStarted(companySessionId, true);
+              void reattach();
+            }
+            return;
+          }
+          if (responseBody?.code === 'OUTCOME_UNKNOWN' && !retryOutcomeUnknown) {
+            const retry = await confirm({
+              title: 'Answer delivery is uncertain',
+              description:
+                'The worker may already have received this answer, but its acknowledgement ' +
+                'was lost. Retrying can deliver it twice. Retry the identical answer?',
+              confirmLabel: 'Retry same answer',
+              cancelLabel: 'Keep pending',
+              tone: 'destructive',
+            });
+            if (retry) await submit(true);
+            else {
+              streamSetError(
+                companySessionId,
+                responseBody.error ?? 'Answer delivery outcome is unknown.',
+              );
+            }
+            return;
+          }
+          if (res.status === 409 && responseBody?.code === 'PROMPT_ALREADY_RESOLVED') return;
           const errorMsg = res.status === 404
             ? 'Session is no longer active. Your answer could not be delivered.'
-            : `Failed to answer (${res.status}): ${body}`;
+            : `Failed to answer (${res.status}): ${
+              responseBody?.error ?? 'unknown error'
+            }`;
           streamSetError(companySessionId, errorMsg);
-        }
+        };
+        await submit();
       } catch (e) {
         console.error('Failed to answer master question:', e);
         streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
@@ -847,6 +1085,7 @@ export function useCompanyStream(
     if (companySessionId == null) return;
     abortRef.current?.abort();
     lastSeenSeqRef.current = -1;
+    lastSeenBusIdRef.current = null;
     receivedDoneRef.current = false;
     streamReset(companySessionId);
   }, [companySessionId, streamReset]);

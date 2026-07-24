@@ -54,7 +54,7 @@ function advanceRemote(remote: string, file: string, contents: string): string {
 
 function handlers(root: string, managedGit?: ManagedGitClient) {
   return createProjectGitHandlers({
-    db: { getProject: (id: number) => id === 1 ? { id, name: 'Push repo', root_path: root } : null },
+    db: { getProjectRootPath: (id: number) => id === 1 ? root : undefined },
     managedGit,
   } as never);
 }

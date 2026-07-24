@@ -31,10 +31,25 @@ import { captureInvestigation } from '@mcp/code-agent/tools/investigation-captur
 import { buildContinuationNudge } from '@mcp/code-agent/tools/resume-nudges.js';
 import { appendResearchContract } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import {
+  assertResumeLease,
   replaceAgentState,
+  startResumeLeaseKeepalive,
   type ResumableAgentState,
   type ResumableGroup,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
+
+export type ResumeRunStatus = 'completed' | 'partial' | 'failed';
+
+export interface ResumeRunOutcome {
+  text: string;
+  usage: ChatUsage;
+  status: ResumeRunStatus;
+  relaunchedCount: number;
+  completedCount: number;
+  partialCount: number;
+  failedCount: number;
+  stillFailed: number;
+}
 
 function reasonToStatus(reason: StopReason): 'completed' | 'partial' | 'aborted' | 'error' {
   if (reason === 'completed') return 'completed';
@@ -76,15 +91,17 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
   };
 }
 
-export async function relaunchResumedAgents(
+async function relaunchResumedAgentsOwned(
   deps: SubagentDeps,
   ctx: ToolContext,
   group: ResumableGroup,
   targets: ResumableAgentState[],
   guidance: string | undefined,
-): Promise<{ text: string; usage: ChatUsage; stillFailed: number }> {
+  controllers: AbortController[],
+): Promise<ResumeRunOutcome> {
   const sessionId = group.sessionId;
   const toolUseId = ctx.currentToolUseId;
+  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
   const profiles = targets.map(profileFor);
   const targetIdx = new Set(targets.map((t) => t.agentIndex));
   // Per-target provider resolved from each retained agent's profile (memoized).
@@ -97,6 +114,9 @@ export async function relaunchResumedAgents(
     ? (agentInfos[0] ?? describeProvider(deps.provider))
     : { provider: 'mixed', model: distinctLabels.join(', '), label: distinctLabels.join(', ') };
 
+  // Provider/profile resolution may perform asynchronous setup. Revalidate
+  // immediately before publishing the start boundary.
+  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
   ctx.runner?.emit('agents_group_start', {
     groupId: group.spawnId,
     toolUseId,
@@ -126,13 +146,16 @@ export async function relaunchResumedAgents(
     ...specFor(state, profiles[i], guidance),
     provider: targetProviders[i],
     reasoningEffort: effortForProfile(deps, profiles[i]),
+    signal: controllers[i].signal,
   }));
+  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
   const { results, totalUsage } = await runParallelAgents(
     {
       provider: deps.provider,
       tools: deps.parentTools,
       ctx,
       sessionId,
+      sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
       toolSelectionFilter: deps.toolSelectionFilter,
       externalToolTiers: deps.externalToolTiers,
@@ -155,6 +178,9 @@ export async function relaunchResumedAgents(
       });
     },
   );
+  // Prevent a stale executor from publishing/committing results after another
+  // process acquired the expired resume checkpoint.
+  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
 
   const renderables = results.map((r, i) => {
     const state = targets[i];
@@ -167,7 +193,7 @@ export async function relaunchResumedAgents(
       // could still retry). Completed resumes keep theirs too — replaceAgentState
       // applies the retention policy (readable via read_agent_transcript).
       const nextTranscript = r.transcript ?? state.transcript;
-      replaceAgentState(sessionId, group.spawnId, {
+      const persisted = replaceAgentState(sessionId, group.spawnId, {
         ...state,
         reason: r.reason,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
@@ -178,7 +204,10 @@ export async function relaunchResumedAgents(
         attempt,
         capturedAt: Date.now(),
         approxBytes: 0,
-      });
+      }, deps.sessionStore);
+      if (!persisted) {
+        throw new Error(`resume_agent '${group.spawnId}' checkpoint commit was fenced`);
+      }
     }
     if (r.reason === 'completed') {
       captureInvestigation(
@@ -204,6 +233,20 @@ export async function relaunchResumedAgents(
   });
 
   const outcomeCounts = countSubagentOutcomes(results);
+  const stillFailed = results.filter((r) => r.reason !== 'completed').length;
+  const status: ResumeRunStatus = stillFailed === 0
+    ? 'completed'
+    : outcomeCounts.completedCount > 0 || outcomeCounts.partialCount > 0
+      ? 'partial'
+      : 'failed';
+  const header = `[resume group=${group.spawnId}: ${targets.length} agent(s) relaunched]\n\n`
+    + renderParallelHeader(results.length, info, totalUsage, group.spawnId);
+  const body = renderParallelBody(renderables);
+  const hint = stillFailed > 0 ? renderResumeHint(group.spawnId, stillFailed) : '';
+  const text = header + body + hint;
+  // Final result/event is the resume ACK boundary. A stale executor may have
+  // completed physical child calls, but it must not publish or return them.
+  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
   ctx.runner?.emit('agents_group_end', {
     groupId: group.spawnId,
     totalUsage,
@@ -212,11 +255,49 @@ export async function relaunchResumedAgents(
     ...outcomeCounts,
     resumableCount: results.filter((r) => r.reason !== 'completed' && (r.transcript?.length ?? 0) > 0).length,
   });
+  return {
+    text,
+    usage: totalUsage,
+    status,
+    relaunchedCount: targets.length,
+    ...outcomeCounts,
+    stillFailed,
+  };
+}
 
-  const stillFailed = results.filter((r) => r.reason !== 'completed').length;
-  const header = `[resume group=${group.spawnId}: ${targets.length} agent(s) relaunched]\n\n`
-    + renderParallelHeader(results.length, info, totalUsage, group.spawnId);
-  const body = renderParallelBody(renderables);
-  const hint = stillFailed > 0 ? renderResumeHint(group.spawnId, stillFailed) : '';
-  return { text: header + body + hint, usage: totalUsage, stillFailed };
+export async function relaunchResumedAgents(
+  deps: SubagentDeps,
+  ctx: ToolContext,
+  group: ResumableGroup,
+  targets: ResumableAgentState[],
+  guidance: string | undefined,
+): Promise<ResumeRunOutcome> {
+  const controllers = targets.map(() => new AbortController());
+  const stopLeaseKeepalive = startResumeLeaseKeepalive(
+    group.sessionId,
+    group.spawnId,
+    deps.sessionStore,
+    (error) => {
+      for (const controller of controllers) {
+        try { controller.abort(error); } catch { /* already terminal */ }
+      }
+    },
+  );
+  try {
+    return await relaunchResumedAgentsOwned(
+      deps,
+      ctx,
+      group,
+      targets,
+      guidance,
+      controllers,
+    );
+  } finally {
+    stopLeaseKeepalive();
+    for (const controller of controllers) {
+      if (!controller.signal.aborted) {
+        try { controller.abort(new Error('resume executor stopped')); } catch { /* terminal */ }
+      }
+    }
+  }
 }

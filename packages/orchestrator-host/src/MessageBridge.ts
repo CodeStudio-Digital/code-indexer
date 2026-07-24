@@ -71,11 +71,11 @@ export class ErrPortClosed extends Error {
 /**
  * Type guard for "the worker port closed under me" errors. Use in catch
  * blocks of any RPC call into a worker — when true, the WorkerHost
- * supervisor is (a) auto-restarting the worker (default backoff
- * 500ms ↗ 8s, capped by maxRestarts=3) OR (b) was deliberately evicted
- * and the caller can choose to re-spawn fresh. Either way the original
- * request is no longer in flight and a single retry with a fresh
- * orchestrator/bridge is the standard recovery.
+ * supervisor may be restarting the worker. For read-only RPCs a caller can
+ * choose to retry; for mutating RPCs this means OUTCOME_UNKNOWN because the
+ * worker may have applied the effect before its acknowledgement was lost.
+ * Mutating callers must fence/evict the stale handle and never replay
+ * automatically.
  *
  * Defensive: recognises BOTH `instanceof ErrPortClosed` AND the
  * `code === 'port_closed'` shape so structured-cloned errors crossing
@@ -96,6 +96,30 @@ export class ErrRequestTimeout extends Error {
     super(message);
     this.name = 'ErrRequestTimeout';
   }
+}
+
+/**
+ * A mutating RPC has an unknown outcome when its acknowledgement can no
+ * longer be correlated, even though the worker may already have applied the
+ * effect. This includes a closed port, a request timeout, and an
+ * `unserializable_response`. A request timeout removes the pending
+ * correlation entry without cancelling the handler, while response
+ * serialization happens only after the handler has returned its post-effect
+ * value.
+ *
+ * Callers must fence/evict the stale executor and must not automatically
+ * replay the mutation. Read-only RPCs may use narrower retry policies.
+ */
+export function isMutationOutcomeUnknownError(err: unknown): boolean {
+  if (isPortClosedError(err)) return true;
+  return (
+    typeof err === 'object'
+    && err !== null
+    && (
+      (err as { code?: unknown }).code === 'request_timeout'
+      || (err as { code?: unknown }).code === 'unserializable_response'
+    )
+  );
 }
 
 export class MessageBridge {

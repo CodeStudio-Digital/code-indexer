@@ -237,7 +237,6 @@ export interface WorkerLogPayload {
     | 'worker'
     | 'runner'
     | 'tool'
-    | 'quality'
     | 'provider'
     | 'lifecycle'
     | 'message'
@@ -344,7 +343,8 @@ export const REPLAY_STATE_KINDS = new Set<string>([
   // live run's completed turns from the UI — the client rebuilds turns it
   // hasn't refetched from these events, not only from the GET). The real
   // volume is in text/thinking deltas + worker_log, which stay excluded.
-  'message_complete', 'tool_call_start', 'tool_call_result', 'provider_call',
+  'message_complete', 'tool_call_start', 'tool_call_result',
+  'goal_mutations_persisted', 'goal_mutations_persistence_failed', 'provider_call',
   // Interactive gates / cards that may still be pending from an older turn.
   'tool_approval_request', 'tool_approval_resolved',
   'plan', 'spec', 'question', 'decision',
@@ -369,42 +369,45 @@ export const REPLAY_STATE_KINDS = new Set<string>([
 
 export const DEFAULT_ATTACH_REPLAY_MAX_EVENTS = 600;
 
-/** Hard safety cap for the trimmed attach replay (most-recent wins). */
+/** Hard safety cap for reconstructible cross-turn state (most-recent wins). */
 export function attachReplayCap(): number {
   const n = Number.parseInt(process.env.CODER_ATTACH_REPLAY_MAX_EVENTS ?? '', 10);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_ATTACH_REPLAY_MAX_EVENTS;
 }
 
 /**
- * OPT-IN (CODER_ATTACH_REPLAY_TRIM=1). Default OFF after the 2026-07-20
- * incident: the first cut also dropped transcript-bearing kinds and a mid-run
- * attach lost the run's visible history. The kind list above is fixed, but
- * the trim stays flagged until a live Electron E2E (attach mid-run, continue,
- * session switch) proves the client rebuilds everything. The renderer-side
- * chunked drain already removes most of the freeze regardless.
+ * Bounded semantic replay is the safe default for coder attaches. The original
+ * opt-in implementation dropped transcript-bearing kinds; buildAttachReplay
+ * now retains those kinds plus the complete live tail. Keep an explicit
+ * emergency compatibility switch (`CODER_ATTACH_REPLAY_TRIM=0`) without
+ * making every cursorless remount pay for the whole 2,000-row ring.
  */
 export function attachReplayTrimEnabled(): boolean {
-  return process.env.CODER_ATTACH_REPLAY_TRIM === '1';
+  return process.env.CODER_ATTACH_REPLAY_TRIM !== '0';
 }
 
 /**
  * The trimmed `since=-1` replay window: cross-turn state kinds from the whole
  * buffer + everything from the last `message_complete` (inclusive — it may
  * not have hit the DB yet when the client GETs the transcript), in strict
- * buffer order, bounded by `attachReplayCap()` keeping the most recent.
+ * buffer order. Only the reconstructible cross-turn prefix is capped. The
+ * live tail is already bounded by the bus ring and must remain complete:
+ * dropping its beginning creates an assistant/tool pair that exists in
+ * neither the persisted transcript nor the replay.
  */
 export function buildAttachReplay(bus: CoderRunBus): BufferedEvent[] {
   let boundary = 0;
   for (let i = bus.buffer.length - 1; i >= 0; i--) {
     if (bus.buffer[i].event === 'message_complete') { boundary = i; break; }
   }
-  const out: BufferedEvent[] = [];
-  for (let i = 0; i < bus.buffer.length; i++) {
+  const prefix: BufferedEvent[] = [];
+  for (let i = 0; i < boundary; i++) {
     const ev = bus.buffer[i];
-    if (i >= boundary || REPLAY_STATE_KINDS.has(ev.event)) out.push(ev);
+    if (REPLAY_STATE_KINDS.has(ev.event)) prefix.push(ev);
   }
   const cap = attachReplayCap();
-  return out.length > cap ? out.slice(-cap) : out;
+  const boundedPrefix = prefix.length > cap ? prefix.slice(-cap) : prefix;
+  return [...boundedPrefix, ...bus.buffer.slice(boundary)];
 }
 
 /**

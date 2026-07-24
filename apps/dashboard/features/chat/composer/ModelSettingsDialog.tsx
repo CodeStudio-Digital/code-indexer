@@ -10,6 +10,7 @@
  * same per-session state threaded down from AgentChat, so changes apply
  * immediately to the next turn.
  */
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Gauge, Languages, Layers, Repeat, Sparkles, Thermometer } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
@@ -88,6 +89,18 @@ interface ModelSettingsDialogProps {
 export function ModelSettingsDialog({
   open,
   onOpenChange,
+  ...contentProps
+}: ModelSettingsDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <ModelSettingsDialogBody {...contentProps} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ModelSettingsDialogBody({
   showAgent = true,
   agent,
   setAgent,
@@ -119,17 +132,28 @@ export function ModelSettingsDialog({
   fallbackModel,
   onFallbackChange,
   getModelsForProvider,
-}: ModelSettingsDialogProps) {
+}: Omit<ModelSettingsDialogProps, 'open' | 'onOpenChange'>) {
   const { t } = useTranslation(['chat', 'common']);
   const fixedTemperature = fixedTemperatureForModel(model);
+  const providerComboboxOptions = useMemo(
+    () => providerOptions.map((p) => ({ value: p.id, label: p.label })),
+    [providerOptions],
+  );
+  const modelComboboxOptions = useMemo(
+    () => currentProviderModels.map<ComboboxOption>((m) => ({
+      value: m.mode ? `${m.id}::${m.mode}` : m.id,
+      label: m.id,
+      hint: m.mode,
+    })),
+    [currentProviderModels],
+  );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{t('chat:toolbar.modelSettings')}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
+    <>
+      <DialogHeader>
+        <DialogTitle>{t('chat:toolbar.modelSettings')}</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
           {showAgent && (
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">{t('chat:toolbar.agent', { defaultValue: 'Agent' })}</label>
@@ -141,7 +165,7 @@ export function ModelSettingsDialog({
             <Combobox
               value={provider}
               onChange={(v) => onSwitchProvider(v, '')}
-              options={providerOptions.map((p) => ({ value: p.id, label: p.label }))}
+              options={providerComboboxOptions}
               placeholder={t('chat:toolbar.provider')}
               searchPlaceholder={t('chat:toolbar.searchProvider')}
               emptyLabel={t('chat:toolbar.noProvider')}
@@ -153,11 +177,7 @@ export function ModelSettingsDialog({
               <Combobox
                 value={model}
                 onChange={(v) => { setModel(v); onSwitchProvider(provider, v); }}
-                options={currentProviderModels.map<ComboboxOption>((m) => ({
-                  value: m.mode ? `${m.id}::${m.mode}` : m.id,
-                  label: m.id,
-                  hint: m.mode,
-                }))}
+                options={modelComboboxOptions}
                 placeholder={t('chat:toolbar.defaultModel')}
                 searchPlaceholder={t('chat:toolbar.searchModel')}
                 emptyLabel={t('chat:toolbar.noModel')}
@@ -359,8 +379,7 @@ export function ModelSettingsDialog({
               onChange={onFallbackChange}
             />
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </>
   );
 }

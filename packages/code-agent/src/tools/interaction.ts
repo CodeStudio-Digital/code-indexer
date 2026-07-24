@@ -72,6 +72,13 @@ export const askUser: CoderTool = {
           properties: {
             label: { type: 'string', description: 'Button label shown in the UI. Keep ≤24 chars.' },
             value: { type: 'string', description: 'Value returned to the agent when the user picks this option. snake_case preferred.' },
+            goal_lifecycle_resolution: {
+              type: 'string',
+              enum: ['accept_out_of_scope_validation'],
+              description:
+                'Set only on the approval option when asking whether already-observed failed validation may be treated as out of scope. ' +
+                'If the user selects it, update_goal may waive those earlier validation failures; it never waives failed writes or non-validation executions.',
+            },
           },
           required: ['label', 'value'],
         },

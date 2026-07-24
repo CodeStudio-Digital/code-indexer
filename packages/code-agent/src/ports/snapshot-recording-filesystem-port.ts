@@ -21,6 +21,10 @@ import type {
   PortDirent,
   PortStats,
 } from '@mcp/code-agent/ports/filesystem-port.js';
+import {
+  assertMutationFence,
+} from '@mcp/code-agent/core/mutation-fence.js';
+import type { ToolMutationFence } from '@mcp/code-agent/core/tool.js';
 import { createHash } from 'node:crypto';
 import {
   type CreateBaselineInput,
@@ -218,12 +222,18 @@ export class SnapshotRecorder {
 }
 
 export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
+  private mutationFenceSource?: () => ToolMutationFence | undefined;
+
   constructor(
     private readonly inner: IFilesystemPort,
     private readonly recorder: SnapshotRecorder,
     /** Tag set by the caller so we can carry the most recent tool name into the audit row. */
     private currentToolName: string = 'write_file',
   ) {}
+
+  get mutationFenceAttested(): true | undefined {
+    return this.inner.mutationFenceAttested;
+  }
 
   /**
    * Tools that know their own name set it via this helper before issuing
@@ -233,11 +243,21 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
     this.currentToolName = name;
   }
 
+  setMutationFenceSource(source: () => ToolMutationFence | undefined): void {
+    this.mutationFenceSource = source;
+    this.inner.setMutationFenceSource?.(source);
+  }
+
   async writeFile(absPath: string, data: string): Promise<void> {
     const prepared = await this.recorder.record(absPath, this.inner, {
       tool: this.currentToolName,
       expectedAfter: data,
       isDelete: false,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'writeFile',
+      resource: absPath,
     });
     await this.inner.writeFile(absPath, data);
     this.recorder.complete(prepared);
@@ -249,6 +269,11 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       expectedAfter: null,
       isDelete: true,
     });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'unlink',
+      resource: absPath,
+    });
     await this.inner.unlink(absPath);
     this.recorder.complete(prepared);
   }
@@ -257,6 +282,11 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
     return this.inner.readFile(absPath);
   }
   mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'mkdir',
+      resource: absPath,
+    });
     return this.inner.mkdir(absPath, options);
   }
   access(absPath: string): Promise<void> {
@@ -286,6 +316,16 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       expectedAfter,
       isDelete: false,
     });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rename',
+      resource: oldAbsPath,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rename',
+      resource: newAbsPath,
+    });
     await this.inner.rename(oldAbsPath, newAbsPath);
     this.recorder.complete(oldPrepared);
     this.recorder.complete(newPrepared);
@@ -295,6 +335,11 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       tool: this.currentToolName,
       expectedAfter: null,
       isDelete: true,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), {
+      kind: 'filesystem',
+      operation: 'rm',
+      resource: absPath,
     });
     await this.inner.rm(absPath, options);
     this.recorder.complete(prepared);

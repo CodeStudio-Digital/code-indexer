@@ -449,6 +449,7 @@ function AttachmentDoc({
 }) {
   const [pendingOpen, setPendingOpen] = useState(false);
   const hasData = !!block.base64;
+  const hasPath = !!block.path;
   const src = hasData ? `data:${block.mediaType};base64,${block.base64}` : null;
 
   useEffect(() => {
@@ -459,6 +460,10 @@ function AttachmentDoc({
   }, [pendingOpen, src]);
 
   const handleClick = () => {
+    if (hasPath && block.path) {
+      window.electronAPI?.openPath?.(block.path);
+      return;
+    }
     if (src) {
       window.open(src, '_blank', 'noopener,noreferrer');
       return;
@@ -474,7 +479,7 @@ function AttachmentDoc({
       type="button"
       onClick={handleClick}
       className="text-[11px] px-2 py-0.5 rounded-md bg-primary-foreground/15 inline-flex items-center gap-1 hover:bg-primary-foreground/25 transition-colors"
-      title={hasData ? 'Open document' : 'Load document'}
+      title={hasPath ? block.path : hasData ? 'Open document' : 'Load document'}
     >
       {busy ? (
         <Loader2 className="h-3 w-3 animate-spin" />

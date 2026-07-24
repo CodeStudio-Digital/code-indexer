@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createHash } from 'node:crypto';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
@@ -73,6 +74,10 @@ export class OpenAIChatProvider implements ChatProvider {
       ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
       ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
       ...(opts.defaultQuery ? { defaultQuery: opts.defaultQuery } : {}),
+      // The behavior-tree runner owns retries/backoff/circuit breaking for
+      // every OpenAI-compatible vendor. One adapter call maps to one physical
+      // request so attempt telemetry remains truthful.
+      maxRetries: 0,
       // Route through undici (native fetch) instead of the SDK's bundled
       // node-fetch@2 so installLlmDispatcher's bodyTimeout:0 applies to the
       // reasoning phase. See native-fetch.ts.
@@ -157,15 +162,19 @@ export class OpenAIChatProvider implements ChatProvider {
       fuguExtras.reasoning_effort = req.reasoningEffort;
     }
 
-    // Stable cache hint per session. OpenAI accepts `prompt_cache_key`
-    // (https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-key)
-    // and routes the request to a server that has the prefix cached. DeepSeek
-    // and other OpenAI-compatible vendors silently ignore unknown params, so
-    // there's no harm sending it everywhere — when the vendor honors it we
-    // get the cache hit, when it doesn't, no behavior change. Mirrors the
-    // wiring already in kimi-code.ts for GLM-Code.
+    // Stable cache/routing hint per session. OpenRouter Chat Completions uses
+    // `session_id` as its documented sticky-routing key; OpenAI uses
+    // `prompt_cache_key`. Do not rely on OpenRouter silently accepting the
+    // OpenAI-only field: without session_id a cold first request does not pin
+    // the follow-up to the endpoint that owns the newly-written cache.
+    const stableSessionId =
+      req.sessionId != null ? `coder-session-${req.sessionId}` : null;
     const cacheKeyExtras: Record<string, unknown> =
-      req.sessionId != null ? { prompt_cache_key: `coder-session-${req.sessionId}` } : {};
+      stableSessionId == null
+        ? {}
+        : this.vendor === 'openrouter'
+          ? { session_id: stableSessionId }
+          : { prompt_cache_key: stableSessionId };
 
     // OpenAI o-series and gpt-5 reasoning variants reject `temperature !== 1`.
     // The runner's resolver already filters these models, but guard here too
@@ -186,6 +195,61 @@ export class OpenAIChatProvider implements ChatProvider {
     if (isKimiK3 && req.reasoningEffort) {
       kimiK3Extras.reasoning_effort = req.reasoningEffort;
     }
+
+    const attemptStartedAt = Date.now();
+    let attemptReported = false;
+    let generationId: string | null = null;
+    let upstreamProvider: string | null = null;
+    let inputTokens: number | null = null;
+    let outputTokens: number | null = null;
+    let cachedTokens: number | null = null;
+    let costUsd: number | null = null;
+    let providerTerminalSeen = false;
+
+    const reportAttempt = async (
+      attempt: Omit<import('@mcp/provider-sdk').ProviderAttemptTelemetry, 'durationMs'>,
+    ): Promise<void> => {
+      if (attemptReported || !req.onAttempt) return;
+      attemptReported = true;
+      try {
+        await req.onAttempt({
+          ...attempt,
+          durationMs: Math.max(0, Date.now() - attemptStartedAt),
+        });
+      } catch {
+        // Telemetry must never break the provider stream.
+      }
+    };
+
+    const reportFailure = async (raw: unknown): Promise<void> => {
+      const error = raw as {
+        status?: unknown;
+        code?: unknown;
+        request_id?: unknown;
+        headers?: unknown;
+        message?: unknown;
+      };
+      const status = typeof error.status === 'number' ? error.status : null;
+      const requestId = typeof error.request_id === 'string' ? error.request_id : null;
+      const headerGenerationId = readHeader(error.headers, 'x-generation-id');
+      await reportAttempt({
+        status,
+        ok: false,
+        generationId: headerGenerationId ?? generationId,
+        requestId: requestId ?? readHeader(error.headers, 'x-request-id'),
+        upstreamProvider:
+          readHeader(error.headers, 'x-openrouter-provider') ?? upstreamProvider,
+        inputTokens,
+        outputTokens,
+        cachedTokens,
+        costUsd,
+        retryAfter: readHeader(error.headers, 'retry-after'),
+        errorCode: safeProviderErrorCode(error.code),
+        // Provider messages can echo prompt fragments, URLs or credentials.
+        // Persist only an error class plus a correlation hash.
+        errorMessage: opaqueProviderErrorMessage(raw),
+      });
+    };
 
     let stream;
     try {
@@ -221,18 +285,31 @@ export class OpenAIChatProvider implements ChatProvider {
         params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
       );
     } catch (apiErr: any) {
+      await reportFailure(apiErr);
       throw apiErr;
     }
 
     // Tool calls arrive in deltas indexed by `tool_calls[i].index`.
     const toolAcc = new Map<number, { id: string; name: string; argsAcc: string; emittedStart: boolean }>();
 
-    for await (const chunk of stream) {
-      const choice = chunk.choices[0];
-      const delta = choice?.delta;
-      if (delta?.content) {
-        yield { type: 'text_delta', text: delta.content };
-      }
+    try {
+      for await (const chunk of stream) {
+        const rawChunk = chunk as unknown as {
+          id?: unknown;
+          provider?: unknown;
+          usage?: unknown;
+        };
+        if (generationId == null && typeof rawChunk.id === 'string') {
+          generationId = rawChunk.id;
+        }
+        if (upstreamProvider == null && typeof rawChunk.provider === 'string') {
+          upstreamProvider = rawChunk.provider;
+        }
+        const choice = chunk.choices[0];
+        const delta = choice?.delta;
+        if (delta?.content) {
+          yield { type: 'text_delta', text: delta.content };
+        }
       // GLM / DeepSeek-R1 expose chain-of-thought via reasoning_content on the
       // delta. Field is absent on vanilla OpenAI responses.
       const reasoning = (delta as { reasoning_content?: unknown })?.reasoning_content;
@@ -271,32 +348,38 @@ export class OpenAIChatProvider implements ChatProvider {
           }
         }
       }
-      if (chunk.usage) {
+        if (chunk.usage) {
         // OpenAI / ZAI / GLM return cached prompt tokens in prompt_tokens_details.
         // DeepSeek uses a different shape (prompt_cache_hit_tokens) — read both.
-        const u = chunk.usage as unknown as {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          prompt_tokens_details?: { cached_tokens?: number };
-          prompt_cache_hit_tokens?: number;
-          completion_tokens_details?: { reasoning_tokens?: number };
-          reasoning_tokens?: number;
-        };
-        const cachedRead = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0;
-        const reasoningTokens = u.completion_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
-        yield {
-          type: 'usage',
-          usage: {
-            input_tokens: u.prompt_tokens ?? 0,
-            output_tokens: u.completion_tokens ?? 0,
-            cache_read_input_tokens: cachedRead,
-            // OpenAI-style: prompt_tokens already INCLUDES cached tokens.
-            prompt_tokens_total: u.prompt_tokens ?? 0,
-            ...(reasoningTokens ? { thinking_tokens: reasoningTokens } : {}),
-          },
-        };
-      }
-      if (choice?.finish_reason) {
+          const u = chunk.usage as unknown as {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            prompt_tokens_details?: { cached_tokens?: number };
+            prompt_cache_hit_tokens?: number;
+            completion_tokens_details?: { reasoning_tokens?: number };
+            reasoning_tokens?: number;
+            cost?: number;
+          };
+          const cachedRead = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0;
+          const reasoningTokens = u.completion_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
+          inputTokens = u.prompt_tokens ?? 0;
+          outputTokens = u.completion_tokens ?? 0;
+          cachedTokens = cachedRead;
+          costUsd = typeof u.cost === 'number' && Number.isFinite(u.cost) ? u.cost : null;
+          yield {
+            type: 'usage',
+            usage: {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cache_read_input_tokens: cachedRead,
+              // OpenAI-style: prompt_tokens already INCLUDES cached tokens.
+              prompt_tokens_total: inputTokens,
+              ...(reasoningTokens ? { thinking_tokens: reasoningTokens } : {}),
+            },
+          };
+        }
+        if (choice?.finish_reason) {
+        providerTerminalSeen = true;
         // Flush all tool calls now that the message is complete
         for (const acc of toolAcc.values()) {
           let input: Record<string, unknown> = {};
@@ -308,10 +391,97 @@ export class OpenAIChatProvider implements ChatProvider {
           yield { type: 'tool_call_end', id: acc.id, name: acc.name, input };
         }
         toolAcc.clear();
-        yield { type: 'done', stop_reason: choice.finish_reason };
+          yield { type: 'done', stop_reason: choice.finish_reason };
+        }
+      }
+      if (providerTerminalSeen) {
+        yield {
+          type: 'response_meta',
+          meta: {
+            path: '/chat/completions',
+            response: {
+              status: 200,
+              ok: true,
+              // Chat-completion `id` is a generation id, not proof of an
+              // upstream request id. Keep the identities distinct.
+              request_id: null,
+            },
+          },
+        };
+      }
+    } catch (streamErr) {
+      await reportFailure(streamErr);
+      throw streamErr;
+    } finally {
+      if (!attemptReported) {
+        if (providerTerminalSeen) {
+          await reportAttempt({
+            status: 200,
+            ok: true,
+            generationId,
+            requestId: null,
+            upstreamProvider,
+            inputTokens,
+            outputTokens,
+            cachedTokens,
+            costUsd,
+            retryAfter: null,
+            errorCode: null,
+            errorMessage: null,
+          });
+        } else {
+          await reportAttempt({
+            status: req.signal?.aborted ? 499 : null,
+            ok: false,
+            generationId,
+            requestId: null,
+            upstreamProvider,
+            inputTokens,
+            outputTokens,
+            cachedTokens,
+            costUsd,
+            retryAfter: null,
+            errorCode: req.signal?.aborted ? 'ABORTED' : 'STREAM_ENDED_NO_TERMINAL',
+            errorMessage: req.signal?.aborted
+              ? 'AbortError:provider-attempt-aborted'
+              : 'ProviderStreamProtocolError:stream-ended-no-terminal',
+          });
+        }
       }
     }
   }
+}
+
+function safeProviderErrorCode(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const safe = value.trim().replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 128);
+  return safe || null;
+}
+
+function opaqueProviderErrorMessage(raw: unknown): string {
+  const name = raw instanceof Error && raw.name
+    ? raw.name.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 64)
+    : 'ProviderError';
+  const message = raw && typeof raw === 'object'
+    && typeof (raw as { message?: unknown }).message === 'string'
+    ? (raw as { message: string }).message
+    : typeof raw === 'string'
+      ? raw
+      : Object.prototype.toString.call(raw);
+  const hash = createHash('sha256').update(message).digest('hex');
+  return `${name || 'ProviderError'}:sha256:${hash}`;
+}
+
+function readHeader(headers: unknown, name: string): string | null {
+  if (!headers || typeof headers !== 'object') return null;
+  const getter = (headers as { get?: unknown }).get;
+  if (typeof getter === 'function') {
+    const value = getter.call(headers, name);
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+  const record = headers as Record<string, unknown>;
+  const value = record[name] ?? record[name.toLowerCase()];
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 type OAIMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -359,7 +529,7 @@ export function toOpenAIMessages(system: string, messages: AgentMessage[], vendo
               file_data: `data:${b.mediaType};base64,${b.base64}`,
             },
           });
-        } else if (b.type === 'document' && b.text) {
+        } else if (b.type === 'document' && (b.text || b.path)) {
           parts.push({
             type: 'text',
             text: renderTextDocument(b),

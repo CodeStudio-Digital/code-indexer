@@ -107,6 +107,9 @@ export interface TaskRunProgressMeta {
 export interface TaskRunResult {
   task: CoderTask;
   status: TaskStatus;
+  /** A skipped task can still satisfy the run when its inputs match a prior
+   *  successful execution. Budget/dependency skips leave this false. */
+  satisfiesGoal?: boolean;
   summary: string;
   error?: string;
   usage: ChatUsage;

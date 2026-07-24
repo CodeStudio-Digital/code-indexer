@@ -54,6 +54,76 @@ describe('applyAgentEvent — live activity per agent', () => {
     expect(s.subordinateStates.get(7)?.activity?.status).toBe('completed');
   });
 
+  it('keeps a goal tool running until persistence acknowledges it', () => {
+    let s = send(base(), {
+      ...SUB,
+      event: 'tool_call_start',
+      data: { id: 'goal-1', name: 'create_goal' },
+    });
+    s = send(s, {
+      ...SUB,
+      event: 'tool_call_result',
+      data: {
+        id: 'goal-1',
+        duration_ms: 12,
+        status: 'running',
+        persistence: 'pending',
+      },
+    });
+
+    expect(s.subordinateStates.get(7)?.toolCalls[0]).toMatchObject({
+      status: 'running',
+      awaitingPersistence: true,
+    });
+    expect(s.subordinateStates.get(7)?.activity?.status).toBe('running');
+
+    s = send(s, {
+      ...SUB,
+      event: 'goal_mutations_persisted',
+      data: { toolUseIds: ['goal-1'] },
+    });
+
+    expect(s.subordinateStates.get(7)?.toolCalls[0]).toMatchObject({
+      status: 'done',
+      awaitingPersistence: false,
+    });
+    expect(s.subordinateStates.get(7)?.activity?.status).toBe('completed');
+  });
+
+  it('compensates a provisional goal success to an explicit error', () => {
+    let s = send(base(), {
+      ...SUB,
+      event: 'tool_call_start',
+      data: { id: 'goal-2', name: 'update_goal' },
+    });
+    s = send(s, {
+      ...SUB,
+      event: 'tool_call_result',
+      data: {
+        id: 'goal-2',
+        duration_ms: 9,
+        status: 'running',
+        persistence: 'pending',
+      },
+    });
+    s = send(s, {
+      ...SUB,
+      event: 'goal_mutations_persistence_failed',
+      data: { toolUseIds: ['goal-2'], message: 'stale goal generation' },
+    });
+
+    expect(s.subordinateStates.get(7)?.toolCalls[0]).toMatchObject({
+      status: 'error',
+      awaitingPersistence: false,
+      error: 'stale goal generation',
+    });
+    expect(s.subordinateStates.get(7)?.activity).toMatchObject({
+      status: 'failed',
+      note: 'stale goal generation',
+    });
+    expect(s.subordinateStates.get(7)?.statusMessage).toBe('stale goal generation');
+  });
+
   it('clears the activity on message_complete and on done', () => {
     let s = send(base(), {
       ...SUB,

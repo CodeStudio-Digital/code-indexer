@@ -6,6 +6,11 @@ import type { AgentDecisionGuidance, AgentDecisionTelemetry } from '@mcp/code-ag
 import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CoderProfile, ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { CompactionSummaryV3 } from '@mcp/code-agent/core/summarizer.js';
+import type { DispatchArgs } from './nodes/executing-dispatch.js';
+import type {
+  PolicyShadowPort,
+  PolicyShadowSessionContext,
+} from '@mcp/code-agent/core/policy-shadow-adapter.js';
 
 /**
  * Recovery transition kinds (PR-4, Row 3 from
@@ -107,6 +112,22 @@ export interface RunnerOptions {
   /** Plan mode: agent must call submit_plan and get approval before mutating tools. */
   planMode?: boolean;
   /**
+   * Fase 2.5 Policy Engine shadow port (default-off). Composed by `runCoder`
+   * via `createPolicyShadowPort` when any `CODER_*` policy flag is on;
+   * absent by default so the dispatch path stays byte-identical to legacy.
+   */
+  policyShadow?: DispatchArgs['policyShadow'];
+  /**
+   * Child-scope compositor over the same policy authority. Unlike passing the
+   * root port directly, this binds the child's background mode and task scope.
+   */
+  policyShadowScopeFactory?: (sessionContext: PolicyShadowSessionContext) => PolicyShadowPort;
+  /**
+   * Per-run lifecycle HookBus. Absent when CODER_HOOK_BUS_V1 is off, keeping
+   * provider/capability/run paths byte-identical to the legacy runtime.
+   */
+  hookBus?: import('@mcp/code-agent/core/hook-bus.js').HookBus;
+  /**
    * Ultra execution identity for this run — 'session' when the sticky
    * execution mode is Ultra, 'turn' when the `ultracode` keyword upgraded
    * only this run. Surfaced in `run_started` so the dashboard renders the
@@ -174,9 +195,15 @@ export interface RunnerOptions {
    * rendered `<preflight>` block injected on turn 1 and re-injected after
    * compaction; `sessionToolCap` caps the visible tool list at
    * `min(model cap, sessionToolCap)` for the whole session.
-   */
+  */
   preflightHint?: string;
   sessionToolCap?: number;
+  /**
+   * Whether this objective must establish and close a durable session goal
+   * even before the current-run tool ledger becomes substantive. Derived from
+   * validated fresh preflight or a still-pending cached objective on resume.
+   */
+  goalLifecycleIntent?: import('./goal-lifecycle-intent.js').GoalLifecycleIntent;
   /** Compact Agent Decision Engine guidance for this task/turn, when enabled by the host. */
   agentDecisionGuidance?: AgentDecisionGuidance | null;
   /** Compact Agent Decision Engine telemetry for recommendation-vs-outcome logging. */
@@ -381,14 +408,28 @@ export interface RunnerOptions {
    * the stop-guard, and the auto-continue recap.
    */
   agentLoopV2?: boolean;
+  /** Enable the one-shot completion-evidence nudge for this run/cohort. */
+  verificationEvidenceEnabled?: boolean;
+  /** Persisted cross-run verification evidence; current-run ordering uses ToolCallLedger. */
+  collectVerifyEvidence?: () => import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence | null;
   /**
    * A1 — independent goal-completion verifier (host-built closure). The bridge
-   * forwards it to the Executing node, which calls it at a text-only finish to
-   * gate CleanFinish. Returns null when disabled / not applicable / on error
-   * (fail-open). See index.ts (CODER_GOAL_VERIFY) for the implementation.
+   * forwards it to the Executing node, which calls it before persisting
+   * update_goal(complete). Returns null when disabled / not applicable / on
+   * error (fail-open). See index.ts for the baseline policy.
    */
-  verifyGoalCompletion?: () => Promise<{
+  verifyGoalCompletion?: (
+    evidence?: import('./nodes/executing-verification-gate.js').VerificationReadiness,
+  ) => Promise<{
     goalMet: boolean;
     gaps: ReadonlyArray<{ description: string; severity: string }>;
   } | null>;
+  /**
+   * Host-owned durability barrier at an Executing turn boundary. The runner
+   * emits `turn_start` first so the host can enqueue the previous turn's
+   * transcript/goal transaction, then awaits this callback before invoking
+   * the provider. A rejection is execution authority: the BT fails closed and
+   * no provider or tool from the new turn may run.
+   */
+  awaitTurnPersistence?: () => Promise<void>;
 }

@@ -1,4 +1,3 @@
-import { getCompanyOrchestrator } from '@apps/http-api/sse/companyOrchestrator.js';
 import type { SandboxBinding } from '@mcp/company/types.js';
 import type { SandboxService } from '../services/SandboxService.js';
 
@@ -16,14 +15,13 @@ export interface SandboxPeer {
  */
 export function getSandboxBinding(
   sandboxService: SandboxService,
-  parentSessionId: number | null,
+  _parentSessionId: number | null,
 ): SandboxBinding | null {
-  const own = sandboxService.getBinding();
-  if (own) return own;
-  if (parentSessionId != null) {
-    return getCompanyOrchestrator(parentSessionId)?.getSandboxBinding() ?? null;
-  }
-  return null;
+  // SandboxService is keyed by SessionContext.effectiveSessionId, so a child
+  // worker reconciles the root's persisted container into its own serializable
+  // local binding. A SandboxBinding contains a driver and must never be fetched
+  // through the main-side MessageBridge proxy.
+  return sandboxService.getBinding();
 }
 
 /**
@@ -34,15 +32,10 @@ export function getSandboxBinding(
  */
 export function getSandboxServiceBinding(
   sandboxService: SandboxService,
-  parentSessionId: number | null,
+  _parentSessionId: number | null,
   serviceId: string,
 ): SandboxBinding | null {
-  const own = sandboxService.getServiceBinding(serviceId);
-  if (own) return own;
-  if (parentSessionId != null) {
-    return getCompanyOrchestrator(parentSessionId)?.getSandboxServiceBinding(serviceId) ?? null;
-  }
-  return null;
+  return sandboxService.getServiceBinding(serviceId);
 }
 
 /**
@@ -56,15 +49,9 @@ export function getSandboxServiceBinding(
  */
 export function listSandboxPeers(
   sandboxService: SandboxService,
-  parentSessionId: number | null,
+  _parentSessionId: number | null,
   selfServiceId?: string | null,
 ): SandboxPeer[] {
-  if (parentSessionId != null) {
-    const parent = getCompanyOrchestrator(parentSessionId);
-    if (parent) return parent.listSandboxPeers(selfServiceId);
-    return [];
-  }
-
   const devPort = Number(process.env.MCP_SANDBOX_DEV_PORT ?? 5173);
   const peers: SandboxPeer[] = [];
 
@@ -99,13 +86,8 @@ export function listSandboxPeers(
  */
 export async function provisionSandboxIfNeeded(
   sandboxService: SandboxService,
-  parentSessionId: number | null,
+  _parentSessionId: number | null,
   signal?: AbortSignal,
 ): Promise<SandboxBinding | null> {
-  if (parentSessionId != null) {
-    const parent = getCompanyOrchestrator(parentSessionId);
-    if (!parent) return null;
-    return await parent.provisionSandboxIfNeeded(signal);
-  }
   return await sandboxService.provisionIfNeeded({ signal });
 }

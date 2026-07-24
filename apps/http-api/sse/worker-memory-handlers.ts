@@ -17,6 +17,7 @@
  */
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
 import type { InvestigationSemanticIndexPort } from '@mcp/code-agent/tools/investigation-embedder.js';
+import { timeCall } from '../server/perf/slow-ipc.js';
 
 export interface WorkerMemoryDeps {
   /** Structural project-memory retrieval port (agent_memory-backed in deps.ts). */
@@ -84,6 +85,129 @@ interface ExtractPayload {
   input: Parameters<RunEndMemory['extractAndPersist']>[2];
 }
 
+type MemorySaveResult = { created: number; merged: number; skipped: number };
+type MemorySaveOperation =
+  | { state: 'pending'; promise: Promise<MemorySaveResult>; updatedAt: number }
+  | { state: 'completed'; result: MemorySaveResult; updatedAt: number }
+  | { state: 'failed'; error: string; code?: string; updatedAt: number };
+
+const MEMORY_SAVE_OPERATION_TTL_MS = 5 * 60_000;
+const MEMORY_SAVE_OPERATION_LIMIT = 512;
+const memorySaveOperations = new Map<string, MemorySaveOperation>();
+type MemoryForgetResult = { archived: number };
+type MemoryForgetOperation =
+  | { state: 'pending'; promise: Promise<MemoryForgetResult>; updatedAt: number }
+  | { state: 'completed'; result: MemoryForgetResult; updatedAt: number }
+  | { state: 'failed'; error: string; code?: string; updatedAt: number };
+const memoryForgetOperations = new Map<string, MemoryForgetOperation>();
+
+function operationError(message: string, code: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+function pruneMemorySaveOperations(now = Date.now()): void {
+  for (const [id, operation] of memorySaveOperations) {
+    if (operation.state !== 'pending' && now - operation.updatedAt > MEMORY_SAVE_OPERATION_TTL_MS) {
+      memorySaveOperations.delete(id);
+    }
+  }
+  if (memorySaveOperations.size <= MEMORY_SAVE_OPERATION_LIMIT) return;
+  for (const [id, operation] of memorySaveOperations) {
+    if (operation.state === 'pending') continue;
+    memorySaveOperations.delete(id);
+    if (memorySaveOperations.size <= MEMORY_SAVE_OPERATION_LIMIT) break;
+  }
+}
+
+function runMemorySaveOperation(
+  operationId: string,
+  save: () => Promise<MemorySaveResult | null>,
+): Promise<MemorySaveResult> {
+  pruneMemorySaveOperations();
+  const existing = memorySaveOperations.get(operationId);
+  if (existing?.state === 'pending') return existing.promise;
+  if (existing?.state === 'completed') return Promise.resolve(existing.result);
+  if (existing?.state === 'failed') {
+    return Promise.reject(operationError(existing.error, existing.code ?? 'memory_save_failed'));
+  }
+
+  const promise = timeCall('worker-rpc:memorySave', async () => {
+    const result = await save();
+    if (!result) throw operationError('Project memory persistence is unavailable', 'memory_unavailable');
+    return result;
+  });
+  memorySaveOperations.set(operationId, { state: 'pending', promise, updatedAt: Date.now() });
+  void promise.then(
+    (result) => {
+      memorySaveOperations.set(operationId, { state: 'completed', result, updatedAt: Date.now() });
+    },
+    (error: unknown) => {
+      memorySaveOperations.set(operationId, {
+        state: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        ...(
+          typeof (error as { code?: unknown } | null)?.code === 'string'
+            ? { code: (error as { code: string }).code }
+            : {}
+        ),
+        updatedAt: Date.now(),
+      });
+    },
+  );
+  return promise;
+}
+
+export function clearMemorySaveOperationRegistryForTests(): void {
+  memorySaveOperations.clear();
+  memoryForgetOperations.clear();
+}
+
+function runMemoryForgetOperation(
+  operationId: string,
+  forget: () => Promise<MemoryForgetResult>,
+): Promise<MemoryForgetResult> {
+  const now = Date.now();
+  for (const [id, operation] of memoryForgetOperations) {
+    if (operation.state !== 'pending' && now - operation.updatedAt > MEMORY_SAVE_OPERATION_TTL_MS) {
+      memoryForgetOperations.delete(id);
+    }
+  }
+  const existing = memoryForgetOperations.get(operationId);
+  if (existing?.state === 'pending') return existing.promise;
+  if (existing?.state === 'completed') return Promise.resolve(existing.result);
+  if (existing?.state === 'failed') {
+    return Promise.reject(operationError(existing.error, existing.code ?? 'memory_forget_failed'));
+  }
+  if (memoryForgetOperations.size >= MEMORY_SAVE_OPERATION_LIMIT) {
+    for (const [id, operation] of memoryForgetOperations) {
+      if (operation.state === 'pending') continue;
+      memoryForgetOperations.delete(id);
+      break;
+    }
+  }
+
+  const promise = timeCall('worker-rpc:memoryForget', forget);
+  memoryForgetOperations.set(operationId, { state: 'pending', promise, updatedAt: now });
+  void promise.then(
+    (result) => {
+      memoryForgetOperations.set(operationId, { state: 'completed', result, updatedAt: Date.now() });
+    },
+    (error: unknown) => {
+      memoryForgetOperations.set(operationId, {
+        state: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        ...(
+          typeof (error as { code?: unknown } | null)?.code === 'string'
+            ? { code: (error as { code: string }).code }
+            : {}
+        ),
+        updatedAt: Date.now(),
+      });
+    },
+  );
+  return promise;
+}
+
 /**
  * Register the three memory handlers on a worker bridge. Returns a single
  * disposer that detaches all of them (call it from the pool's
@@ -97,7 +221,8 @@ export function registerWorkerMemoryHandlers(
     const retriever = getDeps()?.memoryRetriever;
     if (!retriever) return [];
     const { projectId, projectName, taskText } = payload as RetrievePayload;
-    return retriever.retrieve(projectId, projectName, taskText);
+    return timeCall('worker-rpc:memoryRetrieve', () =>
+      retriever.retrieve(projectId, projectName, taskText));
   });
 
   const offQuerySynth = bridge.handle('memoryQuerySynth', async (payload) => {
@@ -113,7 +238,10 @@ export function registerWorkerMemoryHandlers(
     const { projectId, projectName, input } = payload as ExtractPayload;
     // Pass the aggregate counts back so worker-side callers (harvest) can
     // observe what landed; older shims simply ignore the value.
-    return (await runEnd.extractAndPersist(projectId, projectName, input)) ?? undefined;
+    return timeCall(
+      'worker-rpc:memoryExtract',
+      async () => (await runEnd.extractAndPersist(projectId, projectName, input)) ?? undefined,
+    );
   });
 
   const offIsConfigured = bridge.handle('memoryIsConfigured', async () => {
@@ -124,12 +252,34 @@ export function registerWorkerMemoryHandlers(
 
   const offSave = bridge.handle('memorySave', async (payload) => {
     const pm = getDeps()?.projectMemory;
-    if (!pm) return null;
-    const { projectId, projectName, entry } = payload as {
+    if (!pm) throw operationError('Project memory persistence is unavailable', 'memory_unavailable');
+    const { operationId, projectId, projectName, entry } = payload as {
+      operationId: string;
       projectId: number; projectName: string;
       entry: { title: string; content: string; category: string };
     };
-    return pm.save(projectId, projectName, entry);
+    if (typeof operationId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(operationId)) {
+      throw operationError('memorySave requires a valid operationId', 'invalid_operation_id');
+    }
+    return runMemorySaveOperation(
+      operationId,
+      () => pm.save(projectId, projectName, entry),
+    );
+  });
+
+  const offSaveStatus = bridge.handle('memorySaveStatus', async (payload) => {
+    const { operationId } = payload as { operationId?: unknown };
+    if (typeof operationId !== 'string') return { state: 'unknown' };
+    pruneMemorySaveOperations();
+    const operation = memorySaveOperations.get(operationId);
+    if (!operation) return { state: 'unknown' };
+    if (operation.state === 'pending') return { state: 'pending' };
+    if (operation.state === 'completed') return { state: 'completed', result: operation.result };
+    return {
+      state: 'failed',
+      error: operation.error,
+      ...(operation.code ? { code: operation.code } : {}),
+    };
   });
 
   const offRecall = bridge.handle('memoryRecall', async (payload) => {
@@ -138,7 +288,8 @@ export function registerWorkerMemoryHandlers(
     const { projectId, projectName, query, limit } = payload as {
       projectId: number; projectName: string; query: string; limit?: number;
     };
-    return pm.recall(projectId, projectName, query, limit);
+    return timeCall('worker-rpc:memoryRecall', () =>
+      pm.recall(projectId, projectName, query, limit));
   });
 
   const offList = bridge.handle('memoryList', async (payload) => {
@@ -152,11 +303,31 @@ export function registerWorkerMemoryHandlers(
 
   const offForget = bridge.handle('memoryForget', async (payload) => {
     const pm = getDeps()?.projectMemory;
-    if (!pm?.forget) return { archived: 0 };
-    const { projectId, projectName, target } = payload as {
-      projectId: number; projectName: string; target: string;
+    if (!pm?.forget) throw operationError('Project memory persistence is unavailable', 'memory_unavailable');
+    const { operationId, projectId, projectName, target } = payload as {
+      operationId: string; projectId: number; projectName: string; target: string;
     };
-    return pm.forget(projectId, projectName, target);
+    if (typeof operationId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(operationId)) {
+      throw operationError('memoryForget requires a valid operationId', 'invalid_operation_id');
+    }
+    return runMemoryForgetOperation(
+      operationId,
+      () => pm.forget!(projectId, projectName, target),
+    );
+  });
+
+  const offForgetStatus = bridge.handle('memoryForgetStatus', async (payload) => {
+    const { operationId } = payload as { operationId?: unknown };
+    if (typeof operationId !== 'string') return { state: 'unknown' };
+    const operation = memoryForgetOperations.get(operationId);
+    if (!operation) return { state: 'unknown' };
+    if (operation.state === 'pending') return { state: 'pending' };
+    if (operation.state === 'completed') return { state: 'completed', result: operation.result };
+    return {
+      state: 'failed',
+      error: operation.error,
+      ...(operation.code ? { code: operation.code } : {}),
+    };
   });
 
   const offInvestigationSearch = bridge.handle('investigationSearch', async (payload) => {
@@ -179,9 +350,11 @@ export function registerWorkerMemoryHandlers(
     try { offExtract(); } catch { /* best-effort */ }
     try { offIsConfigured(); } catch { /* best-effort */ }
     try { offSave(); } catch { /* best-effort */ }
+    try { offSaveStatus(); } catch { /* best-effort */ }
     try { offRecall(); } catch { /* best-effort */ }
     try { offList(); } catch { /* best-effort */ }
     try { offForget(); } catch { /* best-effort */ }
+    try { offForgetStatus(); } catch { /* best-effort */ }
     try { offInvestigationSearch(); } catch { /* best-effort */ }
     try { offInvestigationWake(); } catch { /* best-effort */ }
   };

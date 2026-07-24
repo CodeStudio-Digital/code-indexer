@@ -62,41 +62,70 @@ export const CHATGPT_CODEX_BASE_URL =
 export const CHATGPT_SEED_MODELS: {
   model_id: string;
   name: string;
+  context_window: number;
   default_reasoning_level?: string;
   supported_reasoning_levels?: string[];
   apply_patch_tool_type?: string;
 }[] = [
-  // GPT-5.6 family (Sol / Terra / Luna) — mirrored from the upstream Codex
-  // catalog (codex-rs/models-manager/models.json): 372K context, `freeform`
-  // apply_patch and native reasoning efforts through `max`. Ultra is a local
-  // execution profile and must never be advertised as a wire effort.
-  // Sol is the flagship (the `gpt-5.6` alias routes to Sol); Terra is the
-  // balanced mid-tier; Luna the small/fast tier. Live discovery overrides.
-  { model_id: 'gpt-5.6-sol',        name: 'GPT-5.6 Sol',
-    default_reasoning_level: 'low',    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'], apply_patch_tool_type: 'freeform' },
-  { model_id: 'gpt-5.6-terra',      name: 'GPT-5.6 Terra',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'], apply_patch_tool_type: 'freeform' },
-  { model_id: 'gpt-5.6-luna',       name: 'GPT-5.6 Luna',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'], apply_patch_tool_type: 'freeform' },
-  // GPT-5.x families on the Codex Responses backend all accept the standard
-  // four reasoning efforts. `xhigh` is gated per-model and is left to live
-  // discovery to populate when the upstream `/models` call advertises it.
-  { model_id: 'gpt-5.4',            name: 'GPT-5.4',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.4-mini',       name: 'GPT-5.4 mini',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.3-codex',      name: 'GPT-5.3 Codex',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.2',            name: 'GPT-5.2',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.2-codex',      name: 'GPT-5.2 Codex',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.1-codex',      name: 'GPT-5.1 Codex',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.1-codex-max',  name: 'GPT-5.1 Codex max',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
-  { model_id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex mini',
-    default_reasoning_level: 'medium', supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'] },
+  // Keep the offline fallback aligned with the account-scoped Codex `/models`
+  // catalog. `supported_in_api` describes the separate public API surface and
+  // therefore does not exclude Codex-only entries such as Spark.
+  {
+    model_id: 'gpt-5.6-sol',
+    name: 'GPT-5.6-Sol',
+    context_window: 272_000,
+    default_reasoning_level: 'low',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.6-terra',
+    name: 'GPT-5.6-Terra',
+    context_window: 272_000,
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.6-luna',
+    name: 'GPT-5.6-Luna',
+    context_window: 272_000,
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.5',
+    name: 'GPT-5.5',
+    context_window: 272_000,
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    context_window: 272_000,
+    default_reasoning_level: 'high',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.4-mini',
+    name: 'GPT-5.4-Mini',
+    context_window: 272_000,
+    default_reasoning_level: 'high',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+    apply_patch_tool_type: 'freeform',
+  },
+  {
+    model_id: 'gpt-5.3-codex-spark',
+    name: 'GPT-5.3-Codex-Spark',
+    context_window: 128_000,
+    default_reasoning_level: 'high',
+    supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'],
+    apply_patch_tool_type: 'freeform',
+  },
 ];
 
 interface PendingFlow {

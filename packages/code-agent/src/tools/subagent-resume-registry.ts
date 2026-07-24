@@ -1,13 +1,12 @@
 /**
- * subagent-resume-registry — in-memory, session-keyed retention of failed
+ * subagent-resume-registry — session-keyed retention of failed
  * ephemeral subagents so `resume_agent` can relaunch them FROM WHERE THEY
  * STOPPED (transcript preserved) instead of re-spawning from zero.
  *
- * In-memory on purpose: resuming is only meaningful while the parent
- * session process is alive — after an app restart the parent's recovery
- * path is a fresh spawn informed by the investigation ledger. Same
- * module-global-per-realm pattern as company's resume-guard: spawn /
- * collect / resume all execute in the realm that runs `runCoder`.
+ * The hot path remains in-memory, with a bounded/redacted private checkpoint
+ * for explicit resume after executor recreation. The checkpoint is not a
+ * claim that the old execution continued: it only preserves transcript +
+ * identity so a new fenced attempt can be launched.
  *
  * Transcripts are sanitized (repairToolPairing) at RETAIN time so stored
  * state is always provider-safe and byte-capped from the FRONT (never the
@@ -20,6 +19,14 @@ import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
 import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
 import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
+import {
+  sanitizeCheckpointValue,
+  sanitizeMessagesForCheckpoint,
+} from '@mcp/code-agent/tools/orchestration-checkpoint-redaction.js';
+import {
+  createOrchestrationLeaseGuard,
+  type OrchestrationLeaseGuard,
+} from '@mcp/code-agent/tools/orchestration-lease-guard.js';
 
 export interface ResumableAgentState {
   /** 0-based; matches agent_progress.agentIndex and the original roster. */
@@ -80,10 +87,66 @@ function maxSessionBytes(): number {
 function ttlMs(): number {
   return Number(process.env.CODER_RESUME_TTL_MS ?? 45 * 60_000) || 45 * 60_000;
 }
+function leaseMs(): number {
+  const configured = Number(process.env.CODER_ORCHESTRATION_LEASE_MS ?? 120_000);
+  return Number.isFinite(configured) && configured >= 60_000
+    ? Math.floor(configured)
+    : 120_000;
+}
 
 const bySession = new Map<number, Map<string, ResumableGroup>>();
 const inFlightResumes = new Set<string>();
+const resumeLeaseTokens = new Map<string, string>();
+const resumeLeaseGuards = new Map<string, OrchestrationLeaseGuard>();
 let touchSeq = 0;
+const checkpointEnforced = (): boolean => process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
+
+export interface ResumeCheckpointStore {
+  saveOrchestrationCheckpoint(input: {
+    sessionId: number;
+    kind: 'subagent_resume';
+    scopeId: string;
+    privacyClass: 'session_private_redacted';
+    payloadJson: string;
+    expiresAt: string;
+    leaseToken?: string;
+  }): boolean;
+  loadOrchestrationCheckpoint(
+    sessionId: number,
+    kind: 'subagent_resume',
+    scopeId: string,
+  ): { payloadJson: string } | null;
+  listOrchestrationCheckpoints(
+    sessionId: number,
+    kind: 'subagent_resume',
+    limit?: number,
+  ): Array<{ scopeId: string; payloadJson: string }>;
+  removeOrchestrationCheckpoint(
+    sessionId: number,
+    kind: 'subagent_resume',
+    scopeId: string,
+    leaseToken?: string,
+  ): void;
+  tryAcquireOrchestrationCheckpoint(
+    sessionId: number,
+    kind: 'subagent_resume',
+    scopeId: string,
+    leaseMs?: number,
+  ): string | null;
+  releaseOrchestrationCheckpoint(
+    sessionId: number,
+    kind: 'subagent_resume',
+    scopeId: string,
+    leaseToken: string,
+  ): void;
+  renewOrchestrationCheckpoint(
+    sessionId: number,
+    kind: 'subagent_resume',
+    scopeId: string,
+    leaseToken: string,
+    leaseMs?: number,
+  ): boolean;
+}
 
 /** Stamp freshness — wall-clock for TTL, monotonic seq for deterministic LRU. */
 function touch(group: ResumableGroup): void {
@@ -93,6 +156,84 @@ function touch(group: ResumableGroup): void {
 
 function approxBytesOf(value: unknown): number {
   try { return JSON.stringify(value)?.length ?? 0; } catch { return 0; }
+}
+
+function durableProjection(group: ResumableGroup): ResumableGroup {
+  const projected = {
+    ...group,
+    agents: group.agents.map((agent) => ({
+      ...agent,
+      // Completed transcripts are useful in the current process but are not
+      // needed to resume and therefore never enter the durable checkpoint.
+      transcript: agent.reason === 'completed' || !agent.transcript
+        ? undefined
+        : sanitizeMessagesForCheckpoint(agent.transcript),
+    })),
+  };
+  return sanitizeCheckpointValue(projected);
+}
+
+function parsePersistedGroup(
+  payloadJson: string,
+  sessionId: number,
+  spawnId: string,
+): ResumableGroup | undefined {
+  try {
+    const group = JSON.parse(payloadJson) as ResumableGroup;
+    if (!group || group.sessionId !== sessionId || group.spawnId !== spawnId
+      || !Array.isArray(group.agents)
+      || !group.agents.every((agent) =>
+        agent && typeof agent.agentIndex === 'number'
+        && typeof agent.label === 'string'
+        && typeof agent.task === 'string'
+        && typeof agent.reason === 'string'
+        && typeof agent.attempt === 'number')) {
+      return undefined;
+    }
+    for (const agent of group.agents) {
+      if (agent.transcript) {
+        agent.transcript = sanitizeTranscriptForResume(agent.transcript, agent.reason);
+        agent.approxBytes = approxBytesOf(agent.transcript);
+      }
+    }
+    return group;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistGroup(store: ResumeCheckpointStore | undefined, group: ResumableGroup): boolean {
+  if (!store || typeof store.saveOrchestrationCheckpoint !== 'function') return true;
+  const key = `${group.sessionId}:${group.spawnId}`;
+  const leaseToken = resumeLeaseTokens.get(key);
+  if (leaseToken?.startsWith('compat:')) return !checkpointEnforced();
+  const projection = durableProjection(group);
+  // Keep a transcript-free completed roster as a short-lived tombstone. It
+  // prevents a stale executor that loaded before the winning commit from
+  // relaunching an already-completed child after it later wins the lease.
+  try {
+    const saved = store.saveOrchestrationCheckpoint({
+      sessionId: group.sessionId,
+      kind: 'subagent_resume',
+      scopeId: group.spawnId,
+      privacyClass: 'session_private_redacted',
+      payloadJson: JSON.stringify(projection),
+      expiresAt: new Date(Date.now() + ttlMs()).toISOString(),
+      leaseToken,
+    });
+    const rows = store.listOrchestrationCheckpoints(
+      group.sessionId,
+      'subagent_resume',
+      MAX_GROUPS_PER_SESSION + 20,
+    );
+    for (const row of rows.slice(MAX_GROUPS_PER_SESSION)) {
+      store.removeOrchestrationCheckpoint(group.sessionId, 'subagent_resume', row.scopeId);
+    }
+    return saved;
+  } catch {
+    // Memory retention remains available in the current executor.
+    return false;
+  }
 }
 
 /**
@@ -196,7 +337,11 @@ export function retainCompletedTranscripts(): boolean {
  * so `resume_agent` can use them verbatim. Completed agents keep theirs too
  * (observability) unless CODER_RESUME_RETAIN_COMPLETED=0.
  */
-export function retainGroup(sessionId: number, group: ResumableGroup): void {
+export function retainGroup(
+  sessionId: number,
+  group: ResumableGroup,
+  store?: ResumeCheckpointStore,
+): void {
   const retainCompleted = retainCompletedTranscripts();
   for (const agent of group.agents) {
     if (agent.transcript && (agent.reason !== 'completed' || retainCompleted)) {
@@ -213,22 +358,76 @@ export function retainGroup(sessionId: number, group: ResumableGroup): void {
   }
   touch(group);
   groups.set(group.spawnId, group);
+  persistGroup(store, group);
   sweep(sessionId);
 }
 
-export function getGroup(sessionId: number, spawnId: string): ResumableGroup | undefined {
+export function getGroup(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+): ResumableGroup | undefined {
   sweep(sessionId);
-  const group = bySession.get(sessionId)?.get(spawnId);
+  let group = bySession.get(sessionId)?.get(spawnId);
+  if (!group && store) {
+    const row = store.loadOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId);
+    group = row ? parsePersistedGroup(row.payloadJson, sessionId, spawnId) : undefined;
+    if (group) {
+      let groups = bySession.get(sessionId);
+      if (!groups) {
+        groups = new Map();
+        bySession.set(sessionId, groups);
+      }
+      groups.set(spawnId, group);
+    }
+  }
   if (group) touch(group);
   return group;
 }
 
+/**
+ * Reload the roster after acquiring the durable lease. `getGroup` is
+ * intentionally cache-first for read/observability callers, but execution
+ * must discard any pre-CAS snapshot before selecting resume targets.
+ */
+export function reloadGroupUnderLease(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+): ResumableGroup | undefined {
+  assertResumeLease(sessionId, spawnId, store);
+  const cached = bySession.get(sessionId)?.get(spawnId);
+  const leaseToken = resumeLeaseTokens.get(`${sessionId}:${spawnId}`);
+  const restored = store && !leaseToken?.startsWith('compat:')
+    ? (() => {
+        const row = store.loadOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId);
+        return row ? parsePersistedGroup(row.payloadJson, sessionId, spawnId) : undefined;
+      })()
+    : cached
+      ? parsePersistedGroup(JSON.stringify(cached), sessionId, spawnId)
+      : undefined;
+  if (!restored) return undefined;
+  let groups = bySession.get(sessionId);
+  if (!groups) {
+    groups = new Map();
+    bySession.set(sessionId, groups);
+  }
+  touch(restored);
+  groups.set(spawnId, restored);
+  return restored;
+}
+
 /** Swap an agent's state after a resume attempt (failed again → new transcript/attempt). */
-export function replaceAgentState(sessionId: number, spawnId: string, next: ResumableAgentState): void {
+export function replaceAgentState(
+  sessionId: number,
+  spawnId: string,
+  next: ResumableAgentState,
+  store?: ResumeCheckpointStore,
+): boolean {
   const group = bySession.get(sessionId)?.get(spawnId);
-  if (!group) return;
+  if (!group) return false;
   const idx = group.agents.findIndex((a) => a.agentIndex === next.agentIndex);
-  if (idx === -1) return;
+  if (idx === -1) return false;
   if (next.transcript && (next.reason !== 'completed' || retainCompletedTranscripts())) {
     next.transcript = sanitizeTranscriptForResume(next.transcript, next.reason);
   } else {
@@ -237,7 +436,9 @@ export function replaceAgentState(sessionId: number, spawnId: string, next: Resu
   next.approxBytes = next.transcript ? approxBytesOf(next.transcript) : 0;
   group.agents[idx] = next;
   touch(group);
+  const persisted = persistGroup(store, group);
   sweep(sessionId);
+  return persisted;
 }
 
 export function listResumable(
@@ -278,18 +479,96 @@ export function listReadableGroups(
   return out.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function clearSession(sessionId: number): void {
+export function clearSession(sessionId: number, store?: ResumeCheckpointStore): void {
   bySession.delete(sessionId);
+  if (store) {
+    for (const row of store.listOrchestrationCheckpoints(sessionId, 'subagent_resume', 200)) {
+      store.removeOrchestrationCheckpoint(sessionId, 'subagent_resume', row.scopeId);
+    }
+  }
 }
 
 /** Per-spawnId in-flight lock so concurrent resume_agent calls can't double-run. */
-export function tryAcquireResume(sessionId: number, spawnId: string): boolean {
+export function tryAcquireResume(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+): boolean {
   const key = `${sessionId}:${spawnId}`;
   if (inFlightResumes.has(key)) return false;
+  const duration = leaseMs();
+  const leaseToken = store?.tryAcquireOrchestrationCheckpoint(
+    sessionId,
+    'subagent_resume',
+    spawnId,
+    duration,
+  );
+  if (store && !leaseToken) return false;
+  if (leaseToken?.startsWith('compat:') && checkpointEnforced()) {
+    throw new Error(`resume_agent '${spawnId}' requires migration 259 while AgentRun enforcement is enabled`);
+  }
   inFlightResumes.add(key);
+  if (leaseToken) {
+    resumeLeaseTokens.set(key, leaseToken);
+    resumeLeaseGuards.set(key, createOrchestrationLeaseGuard({
+      label: `resume_agent '${spawnId}'`,
+      leaseMs: duration,
+      renew: () => typeof store?.renewOrchestrationCheckpoint !== 'function'
+        || store.renewOrchestrationCheckpoint(
+          sessionId,
+          'subagent_resume',
+          spawnId,
+          leaseToken,
+          duration,
+        ),
+    }));
+  }
   return true;
 }
 
-export function releaseResume(sessionId: number, spawnId: string): void {
-  inFlightResumes.delete(`${sessionId}:${spawnId}`);
+/** Renew/verify the resume operation immediately before dispatch or ACK. */
+export function assertResumeLease(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+): void {
+  if (!store || typeof store.renewOrchestrationCheckpoint !== 'function') return;
+  const guard = resumeLeaseGuards.get(`${sessionId}:${spawnId}`);
+  if (!guard) {
+    throw new Error(`resume_agent '${spawnId}' executor lease was fenced or expired`);
+  }
+  guard.assertOwned();
+}
+
+/** Renew the short lease while resumed children are inside provider/tools. */
+export function startResumeLeaseKeepalive(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+  onLost?: (error: Error) => void,
+): () => void {
+  if (!store || typeof store.renewOrchestrationCheckpoint !== 'function') return () => {};
+  const guard = resumeLeaseGuards.get(`${sessionId}:${spawnId}`);
+  if (!guard) throw new Error(`resume_agent '${spawnId}' executor lease was fenced or expired`);
+  return guard.start(onLost);
+}
+
+export function resumeLeaseKeepaliveActiveForTests(sessionId: number, spawnId: string): boolean {
+  return resumeLeaseGuards.get(`${sessionId}:${spawnId}`)?.isRunning() ?? false;
+}
+
+export function releaseResume(
+  sessionId: number,
+  spawnId: string,
+  store?: ResumeCheckpointStore,
+): void {
+  const key = `${sessionId}:${spawnId}`;
+  inFlightResumes.delete(key);
+  resumeLeaseGuards.get(key)?.stop();
+  resumeLeaseGuards.delete(key);
+  const leaseToken = resumeLeaseTokens.get(key);
+  resumeLeaseTokens.delete(key);
+  if (store && leaseToken) {
+    store.releaseOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId, leaseToken);
+  }
 }

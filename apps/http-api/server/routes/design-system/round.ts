@@ -17,7 +17,7 @@
  */
 import type { Hono } from 'hono';
 import {
-  deleteCompanyOrchestrator,
+  evictCompanyOrchestrator,
   getCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
@@ -42,7 +42,7 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     );
   });
 
-  app.post('/api/design-system/sessions/:id/abort', (c) => {
+  app.post('/api/design-system/sessions/:id/abort', async (c) => {
     const id = parseIdParam(c);
     const dsSession = designSystemStore.getSession(id);
     if (!dsSession) return notFound(c);
@@ -53,8 +53,8 @@ export function mountDesignSystemRoundRoutes(app: Hono, deps: ServerDeps): void 
     }
     const orch = getCompanyOrchestrator(companySessionId);
     if (!orch) return c.json({ ok: true, was_running: false });
-    orch.abortAll();
-    deleteCompanyOrchestrator(companySessionId);
+    await orch.abortAll();
+    await evictCompanyOrchestrator(companySessionId);
     companyStore.updateCompanySessionStatus(companySessionId, 'paused');
     return c.json({ ok: true, was_running: true });
   });

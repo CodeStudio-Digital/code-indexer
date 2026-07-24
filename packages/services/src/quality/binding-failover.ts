@@ -17,9 +17,8 @@
  *   - a pre-flight `bindingProblem()` (unsupported kind, missing credentials),
  *   - a chat result carrying `errorBody`,
  *   - an empty reply (no text) — matches the distiller's "no text = failure".
- * A parsed content verdict is the CALLER's concern: this layer only sees the
- * transport result, so a non-empty errorBody-free reply is always "success"
- * here and the caller decides whether the content itself is acceptable.
+ * Parsed content is the CALLER's concern: this layer only sees the transport
+ * result, so a non-empty errorBody-free reply is always "success" here.
  */
 import type { ResolvedBinding } from '../pipelines/index.js';
 import { bindingProblem } from './binding-chat.js';
@@ -29,9 +28,23 @@ import type { ChatCallResult } from './llm-chat.js';
 export interface FailoverOptions {
   /** Per-binding retry policy (passed straight to `withChatRetry`). */
   retry?: ChatRetryOptions;
-  /** Human label for `bindingProblem()` diagnostics (e.g. "code quality classifier"). */
+  /**
+   * Optional caller-owned content validator. Returning a message marks an
+   * otherwise successful non-empty response as failed while preserving its
+   * raw content for diagnostics and allowing the normal failover chain to run.
+   */
+  validateResult?: (
+    result: ChatCallResult,
+    binding: ResolvedBinding,
+  ) => string | null | undefined;
+  /**
+   * Extra attempts on the same binding after `validateResult` rejects content.
+   * Transport retries remain governed independently by `retry`. Default 0.
+   */
+  invalidResultRetries?: number;
+  /** Human label for `bindingProblem()` diagnostics (e.g. "docs relevance classifier"). */
   label?: string;
-  /** Namespace for machine-readable `bindingProblem()` codes (e.g. "quality_code"). */
+  /** Namespace for machine-readable `bindingProblem()` codes (e.g. "doc_ingest"). */
   codePrefix?: string;
   /** Skip the pre-flight `bindingProblem()` config check — for modalities it
    *  doesn't model (vision/transcription). Default false. */
@@ -79,6 +92,7 @@ export async function callChatWithFailover(
   let lastBinding: ResolvedBinding = chain[0];
   let lastIndex = 0;
   let providerCalls = 0;
+  const invalidResultRetries = Math.max(0, Math.floor(opts.invalidResultRetries ?? 0));
 
   for (let i = 0; i < chain.length; i++) {
     const binding = chain[i];
@@ -96,22 +110,41 @@ export async function callChatWithFailover(
       }
     }
 
-    let result: ChatCallResult;
-    try {
-      result = await withChatRetry(() => {
-        providerCalls += 1;
-        return runOne(binding);
-      }, opts.retry);
-    } catch (e) {
-      // A chat fn that throws (network layer, adapter bug) is a transport
-      // failure too — turn it into a result so we fail over instead of
-      // exploding, honoring the "never throws" contract.
-      result = { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: 0 };
-    }
-    last = result;
-    const usable = !result.errorBody && (!treatEmptyAsError || (result.content ?? '').trim().length > 0);
-    if (usable) {
-      return { result, binding, attemptIndex: i, failedOver: i > 0, providerCalls };
+    for (let invalidAttempt = 0; ; invalidAttempt++) {
+      let result: ChatCallResult;
+      try {
+        result = await withChatRetry(() => {
+          providerCalls += 1;
+          return runOne(binding);
+        }, opts.retry);
+      } catch (e) {
+        // A chat fn that throws (network layer, adapter bug) is a transport
+        // failure too — turn it into a result so we fail over instead of
+        // exploding, honoring the "never throws" contract.
+        result = { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: 0 };
+      }
+
+      const nonEmpty = (result.content ?? '').trim().length > 0;
+      if (!result.errorBody && nonEmpty && opts.validateResult) {
+        let validationError: string | null | undefined;
+        try {
+          validationError = opts.validateResult(result, binding);
+        } catch (e) {
+          validationError = e instanceof Error ? e.message : String(e);
+        }
+        if (validationError) {
+          result = { ...result, errorBody: validationError };
+          last = result;
+          if (invalidAttempt < invalidResultRetries) continue;
+        }
+      }
+
+      last = result;
+      const usable = !result.errorBody && (!treatEmptyAsError || nonEmpty);
+      if (usable) {
+        return { result, binding, attemptIndex: i, failedOver: i > 0, providerCalls };
+      }
+      break;
     }
     // errored / empty → fall over to the next binding (if any)
   }

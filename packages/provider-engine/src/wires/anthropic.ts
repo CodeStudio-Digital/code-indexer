@@ -1,5 +1,8 @@
 import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
-import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
+import {
+  ANTHROPIC_EXTENDED_CACHE_TTL_BETA,
+  AnthropicChatProvider,
+} from '@mcp/code-agent/providers/anthropic.js';
 import { buildClaudeCode } from './claude-code.js';
 
 type WireParts = Pick<
@@ -25,6 +28,10 @@ export function buildAnthropic(spec: ProviderSpec): WireParts {
         baseURL: creds.baseURL,
         model: model ?? spec.defaultModel,
         defaultThinking: spec.wireOpts?.defaultThinking,
+        defaultBetas: [ANTHROPIC_EXTENDED_CACHE_TTL_BETA],
+        useBetaMessages: true,
+        cacheMessages: true,
+        promptCacheTtl: '1h',
       }),
   };
 }

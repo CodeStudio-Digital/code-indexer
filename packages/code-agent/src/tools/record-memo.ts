@@ -54,6 +54,7 @@ const recordMemoSchema: JsonSchema = {
 
 export const recordMemoTool: CoderTool = {
   name: 'record_memo',
+  effectBoundary: 'control',
   description: RECORD_MEMO_DESC,
   parameters: recordMemoSchema,
   source: 'native',

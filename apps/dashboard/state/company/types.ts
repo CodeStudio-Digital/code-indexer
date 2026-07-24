@@ -48,6 +48,10 @@ export interface ToolCallState {
   name: string;
   status: 'running' | 'done' | 'error';
   durationMs?: number;
+  /** Successful create_goal/update_goal result awaiting its atomic DB commit. */
+  awaitingPersistence?: boolean;
+  /** Compensating persistence failure shown by richer consumers. */
+  error?: string;
 }
 
 /**

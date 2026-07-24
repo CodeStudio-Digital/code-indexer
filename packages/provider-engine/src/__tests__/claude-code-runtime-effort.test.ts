@@ -57,9 +57,13 @@ describe('claude-code runtime effort', () => {
     );
 
     expect(state.constructedWith.at(-1)?.model).toBe('claude-test');
+    expect(state.constructedWith.at(-1)).toMatchObject({
+      cacheMessages: true,
+      promptCacheTtl: '1h',
+    });
     expect(state.resolutions[0]).toEqual(expect.objectContaining({
       model: 'claude-test',
-      options: expect.objectContaining({ effort: 'high' }),
+      options: expect.objectContaining({ effort: 'high', promptCacheTtl: '1h' }),
     }));
 
     const resolveModel = state.constructedWith.at(-1)?.resolveModel as (
@@ -68,5 +72,6 @@ describe('claude-code runtime effort', () => {
     ) => unknown;
     resolveModel('claude-test', { tools: [], reasoningEffort: 'xhigh' });
     expect(state.resolutions[1]?.options.effort).toBe('xhigh');
+    expect(state.resolutions[1]?.options.promptCacheTtl).toBe('1h');
   });
 });

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type {
   AgentMemoryRow,
@@ -37,6 +38,27 @@ const MEMORY_OVERLAP_CHARS = 200;
 const MAX_MEMORY_CHUNKS = 4;
 const RRF_K = 60;
 
+interface MemoryMutationBatch {
+  /** One identity-discovery fence covers every INSERT in this namespace. */
+  identityFences: Map<string, SemanticMutationFence>;
+  /** Exact delete/update fences are kept separate, then settled in one tick. */
+  targetedFences: SemanticMutationFence[];
+  mutationError: unknown;
+}
+
+export interface AgentMemoryMutationExecution {
+  /**
+   * Execute one synchronous relational/fence section. Electron-main supplies a
+   * fail-fast busy-timeout wrapper; workers/tests use the direct default.
+   */
+  execute<T>(operation: () => T): T;
+  /**
+   * Optional async contention queue for batch settlement. It retries only the
+   * small synchronous callback and never holds the event loop while waiting.
+   */
+  retry?<T>(operation: () => T): Promise<T>;
+}
+
 /** Stable vector id for an agent-memory chunk (shape mirrors `sn_…`). */
 function memoryVecId(memoryId: number, chunk = 0): string {
   const seed = chunk === 0 ? `agent_memory:${memoryId}` : `agent_memory:${memoryId}:${chunk}`;
@@ -74,6 +96,7 @@ export interface AgentMemoryHit extends AgentMemoryRow {
 
 export class AgentMemoryService {
   private projectNameCache = new Map<number, string>();
+  private readonly mutationBatch = new AsyncLocalStorage<MemoryMutationBatch>();
 
   constructor(
     private readonly db: CodeIndexDB,
@@ -82,6 +105,9 @@ export class AgentMemoryService {
     private readonly queryEmbeddingService: EmbeddingService | null = embeddingService,
     private readonly semanticMutationSink: SemanticMutationSink | null = null,
     private readonly reranker: RerankerService | null = null,
+    private readonly mutationExecution: AgentMemoryMutationExecution = {
+      execute: <T>(operation: () => T): T => operation(),
+    },
   ) {}
 
   private noteMutation(
@@ -101,8 +127,58 @@ export class AgentMemoryService {
     inputs: readonly SemanticMutation[],
     mutation: () => T,
   ): T {
+    return this.mutationExecution.execute(() => {
+      const atomic = () => this.commitRelationalMutationNow(inputs, mutation);
+      // The durable fence store and agent_memory use the same central
+      // connection in every production composition. Keep fence start, source
+      // mutation, and fence settlement in one outer transaction so an async
+      // SQLITE_BUSY retry can never replay a partially committed memory save.
+      // Test/lightweight adapters that do not expose transaction retain the
+      // original ordered contract.
+      return typeof this.db.transaction === 'function'
+        ? this.db.transaction(atomic)
+        : atomic();
+    });
+  }
+
+  private commitRelationalMutationNow<T>(
+    inputs: readonly SemanticMutation[],
+    mutation: () => T,
+  ): T {
     const canFence = typeof this.semanticMutationSink?.beginMutation === 'function'
       && typeof this.semanticMutationSink?.settleMutation === 'function';
+    const batch = canFence ? this.mutationBatch.getStore() : undefined;
+    if (batch) {
+      try {
+        for (const input of inputs) {
+          const exactKeys = input.itemKeys.filter((key) => key !== '*');
+          if (input.itemKeys.includes('*') && !batch.identityFences.has(input.namespace)) {
+            const fence = this.semanticMutationSink!.beginMutation!({
+              namespace: input.namespace,
+              itemKeys: ['*'],
+              // Identity discovery is source-truth reconciliation. Keep it an
+              // upsert fence even if the caller also has exact delete keys, so
+              // a later INSERT in the same async batch cannot be filtered out.
+              operation: 'upsert',
+            });
+            if (fence) batch.identityFences.set(input.namespace, fence);
+          }
+          if (exactKeys.length > 0) {
+            const fence = this.semanticMutationSink!.beginMutation!({
+              namespace: input.namespace,
+              itemKeys: exactKeys,
+              operation: input.operation,
+            });
+            if (fence) batch.targetedFences.push(fence);
+          }
+        }
+        return mutation();
+      } catch (error) {
+        batch.mutationError ??= error;
+        throw error;
+      }
+    }
+
     const fences: SemanticMutationFence[] = [];
     if (canFence) {
       try {
@@ -136,6 +212,54 @@ export class AgentMemoryService {
     return result;
   }
 
+  /**
+   * Coalesce a logical extraction pass without weakening the pre-write
+   * activation barrier. INSERTs share one identity-discovery fence per
+   * namespace; exact archive/replace keys remain durable fences of their own.
+   * Every fence settles synchronously at the end, so the HTTP drain scheduler
+   * observes one namespace wake-up instead of one full pass per learned fact.
+   */
+  async runMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.mutationBatch.getStore()
+      || typeof this.semanticMutationSink?.beginMutation !== 'function'
+      || typeof this.semanticMutationSink?.settleMutation !== 'function') {
+      return operation();
+    }
+    const batch: MemoryMutationBatch = {
+      identityFences: new Map(),
+      targetedFences: [],
+      mutationError: null,
+    };
+    let result!: T;
+    let operationError: unknown = null;
+    try {
+      result = await this.mutationBatch.run(batch, operation);
+    } catch (error) {
+      operationError = error;
+      batch.mutationError ??= error;
+    }
+
+    let settleError: unknown = null;
+    const fences = [
+      ...batch.identityFences.values(),
+      ...batch.targetedFences,
+    ];
+    for (const fence of fences) {
+      try {
+        const settle = () =>
+          this.mutationExecution.execute(() =>
+            this.semanticMutationSink!.settleMutation!(fence, batch.mutationError));
+        if (this.mutationExecution.retry) await this.mutationExecution.retry(settle);
+        else settle();
+      } catch (error) {
+        settleError ??= error;
+      }
+    }
+    if (operationError) throw operationError;
+    if (settleError) throw settleError;
+    return result;
+  }
+
   /** Notify a bulk relational hygiene pass (duplicate consolidation/decay).
    * The coordinator performs a full idempotent reconciliation for the scope. */
   noteScopeMutation(scope: AgentMemoryScope, projectId: number): void {
@@ -150,9 +274,16 @@ export class AgentMemoryService {
     projectId: number,
     mutation: () => T,
   ): T {
+    const existingKeys = this.db
+      .listAgentMemoryForSemanticIndex(scope, projectId)
+      .map((row) => `agent_memory:${row.id}`);
     return this.commitRelationalMutation([{
       namespace: this.namespace(scope, projectId),
-      itemKeys: ['*'],
+      // The hygiene source set is known before SQLite changes. The store
+      // shrinks this delete fence to rows that actually became archived. Keep
+      // an identity watermark too, covering a concurrent cross-process INSERT
+      // that becomes visible before the hygiene transaction reads its source.
+      itemKeys: [...existingKeys, '*'],
       operation: 'delete',
     }], mutation);
   }
@@ -187,13 +318,11 @@ export class AgentMemoryService {
     }];
     if (old) {
       const oldNamespace = this.namespace(old.scope, old.project_id);
-      if (oldNamespace !== targetNamespace) {
-        inputs.unshift({
-          namespace: oldNamespace,
-          itemKeys: [`agent_memory:${old.id}`],
-          operation: 'delete',
-        });
-      }
+      inputs.unshift({
+        namespace: oldNamespace,
+        itemKeys: [`agent_memory:${old.id}`],
+        operation: 'delete',
+      });
     }
     return this.commitRelationalMutation(
       inputs,

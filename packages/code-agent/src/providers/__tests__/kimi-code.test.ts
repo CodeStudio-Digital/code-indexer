@@ -38,6 +38,7 @@ const {
   kimiCodeSeedUpsertModels,
   mapKimiCodeModels,
 } = await import('@mcp/services/services/kimi-code.js');
+const { consumeStream } = await import('../../core/runner/nodes/executing-stream.js');
 import type { AgentMessage, ChatDelta } from '../../core/messages.js';
 
 describe('isEffectivelyEmptyText', () => {
@@ -247,6 +248,30 @@ describe('KimiCodeChatProvider.chat() — H6 skip empty tool_call deltas', () =>
 
     const ends = deltas.filter((d) => d.type === 'tool_call_end');
     expect(ends).toHaveLength(0);
+  });
+
+  it('treats iterator EOF without finish_reason as a truncated provider attempt', async () => {
+    mockCreate.mockResolvedValueOnce(
+      (async function* () {
+        yield {
+          choices: [{ delta: { content: 'partial' }, finish_reason: null }],
+        };
+      })(),
+    );
+
+    const provider = new KimiCodeChatProvider({ apiKey: 'test' });
+
+    await expect(consumeStream({
+      stream: provider.chat({
+        system: 'sys',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        tools: [],
+      }),
+    })).rejects.toMatchObject({
+      name: 'ProviderStreamProtocolError',
+      status: 502,
+      code: 'stream_ended_no_result',
+    });
   });
 });
 

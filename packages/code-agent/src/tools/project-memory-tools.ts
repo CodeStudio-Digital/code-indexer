@@ -13,6 +13,7 @@
  */
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 const UNAVAILABLE =
   'Agent memory is not available in this context (no project or memory disabled).';
@@ -53,9 +54,10 @@ export const rememberTool: CoderTool = {
     'want you to work (applies to EVERY project).\n' +
     "DON'T save transient task state, progress notes, or file dumps. Re-saving a close duplicate is deduplicated.",
   source: 'native',
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'write',
+  effectBoundary: 'database',
   parameters: {
     type: 'object',
     properties: {
@@ -90,13 +92,25 @@ export const rememberTool: CoderTool = {
         const um = ctx.userMemory;
         if (!um) return err(`${UNAVAILABLE} (user scope)`);
         // User memory is preferences/feedback; the host maps 'feedback' → type 'preference'.
+        assertMutationFence(ctx.mutationFence, {
+          kind: 'database',
+          operation: 'remember.save',
+          resource: 'memory:user',
+        });
         const res = await um.save({ title, content, category: 'feedback' });
+        if (!res) return err('remember failed: user memory persistence is unavailable');
         const what = res && res.merged > 0 ? 'merged into existing user memory' : 'saved as user memory';
         return ok(`Remembered "${title}" — ${what}. It will inform you in EVERY project going forward.`);
       }
       const pm = ctx.projectMemory;
       if (!pm) return err(UNAVAILABLE);
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'database',
+        operation: 'remember.save',
+        resource: `memory:project:${ctx.projectName}`,
+      });
       const res = await pm.save({ title, content, category: TYPE_TO_PROJECT_CATEGORY[type] ?? 'note' });
+      if (!res) return err('remember failed: project memory persistence is unavailable');
       const what = res && res.merged > 0 ? 'merged into existing memory' : 'saved';
       return ok(`Remembered "${title}" — project memory ${what}. Future sessions on this codebase will recall it.`);
     } catch (e) {
@@ -191,9 +205,10 @@ export const forgetMemoryTool: CoderTool = {
     'WRONG or OBSOLETE. It is a logical (reversible) archive, not a hard delete. ' +
     'scope "project" (default) or "user". If unsure of the exact title, recall_memory(mode:"list") first.',
   source: 'native',
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'write',
+  effectBoundary: 'database',
   parameters: {
     type: 'object',
     properties: {
@@ -210,6 +225,11 @@ export const forgetMemoryTool: CoderTool = {
     const forget = scope === 'user' ? ctx.userMemory?.forget : ctx.projectMemory?.forget;
     if (!forget) return err(`forget_memory (${scope}) is not available in this context.`);
     try {
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'database',
+        operation: 'forget_memory.archive',
+        resource: scope === 'user' ? 'memory:user' : `memory:project:${ctx.projectName}`,
+      });
       const res = await forget(target);
       return res.archived > 0
         ? ok(`Forgot "${target}" — archived from ${scope} memory.`)

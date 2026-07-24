@@ -26,6 +26,7 @@ const SELECTOR_DESC = 'Prefer `ref=aN` from preview_snapshot. CSS or `text="visi
 
 export const previewScrollTool: CoderTool = {
   name: 'preview_scroll',
+  effectBoundary: 'control',
   description:
     'Scroll the preview window by x/y deltas, or scroll a specific element into view.\n' +
     'Pass `selector` to center that element in view, or `x`/`y` deltas to scroll the window (y:600 = down). Use for long pages / lazy-loaded content before screenshot/click.',
@@ -58,6 +59,7 @@ export const previewScrollTool: CoderTool = {
 
 export const previewHoverTool: CoderTool = {
   name: 'preview_hover',
+  effectBoundary: 'control',
   description:
     'Move the mouse over an element (real mouseover/mouseenter) — opens hover menus, tooltips, and reveals on-hover controls. Follow with preview_screenshot or preview_click.',
   source: 'native',
@@ -76,6 +78,7 @@ export const previewHoverTool: CoderTool = {
 
 export const previewDoubleClickTool: CoderTool = {
   name: 'preview_double_click',
+  effectBoundary: 'control',
   description: 'Double-click an element (real mouse, clickCount 2) — e.g. enter inline edit, select a word, open an item.',
   source: 'native',
   parameters: {
@@ -92,6 +95,7 @@ export const previewDoubleClickTool: CoderTool = {
 
 export const previewRightClickTool: CoderTool = {
   name: 'preview_right_click',
+  effectBoundary: 'control',
   description: 'Right-click an element (real mouse). App-rendered context menus remain interactable; native Chromium menus are outside the page and cannot be clicked by preview tools.',
   source: 'native',
   parameters: {

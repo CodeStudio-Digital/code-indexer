@@ -1,37 +1,3 @@
-import { createHash } from 'node:crypto';
-
-/**
- * Quality v2, D1 — short stable hash for nudge dedup. Uses sha1 hex
- * truncated to 16 chars (plenty of collision resistance for the 5-turn
- * window we compare against; we'd need >2^32 nudges in 5 turns to risk
- * a collision and that's not a real scenario).
- */
-export function hashShort(text: string): string {
-  try {
-    return createHash('sha1').update(text).digest('hex').slice(0, 16);
-  } catch {
-    // Fallback: length-based "hash" so we still have *something*; only
-    // hit when crypto isn't available which shouldn't happen in Node.
-    return `len-${text.length}`;
-  }
-}
-
-/**
- * Quality v2, C4 — Convert a `quality_classifications` row into the
- * verdict-snapshot shape the intervention store expects. Trims `reason`
- * to a reasonable length so the JSON column doesn't bloat.
- */
-export function rowToVerdictSnapshot(
-  row: import('@mcp/store/quality-classification-store.js').QualityClassificationRow,
-): import('@mcp/store/quality-intervention-store.js').InterventionVerdictSnapshot {
-  return {
-    classifierName: row.classifier_name,
-    verdict: row.verdict,
-    confidence: row.confidence,
-    reason: row.reason ? row.reason.slice(0, 500) : null,
-  };
-}
-
 /**
  * Compact preview of a tool call's input — first 80 chars of the
  * JSON-serialised args, with control chars stripped. Embedded in local

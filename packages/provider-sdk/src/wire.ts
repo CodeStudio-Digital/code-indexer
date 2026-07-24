@@ -76,6 +76,8 @@ export interface DocumentBlock {
   type: 'document';
   name: string;
   mediaType: string;
+  /** Local read-only reference; never serialized as file contents. */
+  path?: string;
   text?: string;
   base64?: string;
 }

@@ -3,7 +3,7 @@
  * buffer/flush semantics). Drives the extracted `noteChange` seam directly —
  * no chokidar handle is armed, so the suite is timing-tolerant and ABI-free.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { FileWatcherService, type WatcherFileEvent } from '../watcher.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,6 +37,31 @@ describe('FileWatcherService bulk-op suppression', () => {
       { path: 'D:/p/a.ts', kind: 'upsert', isDir: false },
       { path: 'D:/p/b.ts', kind: 'delete', isDir: false },
     ]]);
+  });
+
+  it('requeues a failed debounced batch and retries without an unhandled rejection', async () => {
+    const { internals, batches } = armed();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      let attempts = 0;
+      internals.events.set(1, {
+        onFileChanged: (events) => {
+          attempts++;
+          if (attempts === 1) throw new Error('SQLITE_BUSY');
+          batches.push(events);
+        },
+      });
+
+      internals.noteChange(1, 'D:/p/retry.ts', 'upsert', false, 1);
+
+      await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 1_000 });
+      expect(batches).toEqual([[
+        { path: 'D:/p/retry.ts', kind: 'upsert', isDir: false },
+      ]]);
+      expect(internals.pendingChanges.get(1)?.size).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('suspend discards the buffered burst and cancels the pending flush', async () => {

@@ -133,7 +133,6 @@ regress.
 | `@mcp/code-agent/todo-priority` | TodoPriorityPipeline | Reorder TodoWrite items by impact × urgency × dependencies | `MCP_PIPELINES_TODO_PRIORITY=1` |
 | `@mcp/company/role-pipeline` | RolePipeline | Recommend which subordinate role to spawn | Wired in company orchestrator |
 | `@mcp/company/kanban-priority` | KanbanPriorityPipeline | Order kanban cards by computed priority score | Wired in kanban service |
-| `@mcp/services/quality` | QualityClassifierPipeline | Run 5 LLM-backed classifiers in parallel on agent outputs | `MCP_PIPELINES_QUALITY_CLASSIFIERS=1` |
 | `@mcp/indexer/search` | HybridSearch | FTS + vector + RRF + cross-encoder rerank | Always on (mode picked by planner or caller) |
 | `@mcp/indexer/search` | RecentFilesSource (I2 — Thunder-style hot cache) | Optional 3rd stream in `mode='hybrid'` for recently-touched files | `MCP_PIPELINES_RECENT_FILES_SOURCE=1` + `touch()` calls wired |
 | `@mcp/services/services/docs/search` | DocSearch | Doc retrieval with QueryRewriter + Reranker | Wired in doc routes |

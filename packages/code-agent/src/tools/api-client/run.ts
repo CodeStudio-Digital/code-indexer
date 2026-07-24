@@ -10,9 +10,11 @@ import { executeRequest } from '@mcp/services/api-client/execute-request.js';
 import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 import { resolveApiCtx, jarForProject, resolveEnvFor } from './shared.js';
+import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 export const apiRunRequestTool: CoderTool = {
   name: 'api_run_request',
+  effectBoundary: 'control',
   description:
     'Send ONE request against the live dev server and return the real status, headers and body. Use this to probe an endpoint: a 400/422 usually means the spec omitted a required param (fix with api_update_request, then re-run); a 2xx that looks right → api_mark_verified. The per-project cookie jar persists logins across calls.',
   source: 'native',
@@ -39,6 +41,11 @@ export const apiRunRequestTool: CoderTool = {
     try {
       // Contain file-backed bodies to the project root — the agent must not be
       // able to read an arbitrary host file (e.g. ~/.ssh/id_rsa) and POST it out.
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'control',
+        operation: 'api_run_request.network',
+        resource: String(req.id),
+      });
       res = await executeRequest({
         request: req, baseUrl, variables, jar: jarForProject(r.projectId), signal: ctx.signal,
         fileRoot: ctx.cwd, allowAbsoluteFiles: false, maxBytes: apiClientReadCap(),
@@ -50,6 +57,11 @@ export const apiRunRequestTool: CoderTool = {
       }
       return err(`request failed: ${msg}`);
     }
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: 'api_run_request.write',
+      resource: String(req.id),
+    });
     r.store.updateRequest(req.id, { last_status: res.status, last_run_at: new Date().toISOString() });
 
     // Keep the full acquired body for the central model-aware finalizer. The
@@ -92,6 +104,7 @@ export const apiRunRequestTool: CoderTool = {
 
 export const apiRunCollectionTool: CoderTool = {
   name: 'api_run_collection',
+  effectBoundary: 'control',
   description:
     'Replay all VERIFIED requests in a collection through the non-LLM regression runner and report pass/fail. Mutating methods (POST/PUT/DELETE) are skipped unless includeMutating is true. Use this to confirm the whole surface is green after fixing.',
   source: 'native',
@@ -115,9 +128,19 @@ export const apiRunCollectionTool: CoderTool = {
     if (!r.store.getCollection(cid)) return err(`collection ${cid} not found`);
     const { baseUrl, variables, envId } = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
 
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: 'api_run_collection.create',
+      resource: String(cid),
+    });
     const runId = r.store.createRun(cid, envId, 'agent');
     let report;
     try {
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'control',
+        operation: 'api_run_collection.network',
+        resource: String(cid),
+      });
       report = await runCollection({
         requests: r.store.listRequests(cid),
         baseUrl, variables,
@@ -128,9 +151,19 @@ export const apiRunCollectionTool: CoderTool = {
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'control',
+        operation: 'api_run_collection.finish',
+        resource: String(runId),
+      });
       r.store.finishRun(runId, { status: 'error', total: 0, passed: 0, failed: 0, results_json: JSON.stringify([{ reason: message }]) });
       return err(`regression run failed: ${message}`);
     }
+    assertMutationFence(ctx.mutationFence, {
+      kind: 'control',
+      operation: 'api_run_collection.finish',
+      resource: String(runId),
+    });
     r.store.finishRun(runId, {
       status: report.status, total: report.total, passed: report.passed,
       failed: report.failed, results_json: JSON.stringify(report.results),
@@ -138,6 +171,11 @@ export const apiRunCollectionTool: CoderTool = {
     const ranResults = report.results.filter((x) => !x.skipped && x.actual != null);
     if (ranResults.length) {
       const now = new Date().toISOString();
+      assertMutationFence(ctx.mutationFence, {
+        kind: 'control',
+        operation: 'api_run_collection.update_requests',
+        resource: String(runId),
+      });
       r.store.transaction(() => {
         for (const x of ranResults) r.store.updateRequest(x.requestId, { last_status: x.actual, last_run_at: now });
       });

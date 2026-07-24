@@ -15,6 +15,7 @@ import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-rese
 import {
   retainCompletedTranscripts,
   retainGroup,
+  type ResumeCheckpointStore,
   type ResumableGroup,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
@@ -65,6 +66,7 @@ export function retainSpawnGroup(args: {
   provider: string;
   model: string;
   agents: SpawnRetentionAgent[];
+  store?: ResumeCheckpointStore;
 }): number {
   if (args.sessionId == null) return 0;
   const resumableCount = args.agents.filter((a) => a.reason !== 'completed' && (a.transcript?.length ?? 0) > 0).length;
@@ -99,6 +101,6 @@ export function retainSpawnGroup(args: {
       approxBytes: 0,
     })),
   };
-  retainGroup(args.sessionId, group);
+  retainGroup(args.sessionId, group, args.store);
   return resumableCount;
 }

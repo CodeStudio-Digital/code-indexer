@@ -39,6 +39,8 @@ import type { ProviderCapabilities } from '@mcp/provider-sdk';
 export interface RawAttachment {
   name?: string;
   mediaType: string;
+  /** Exact local path; content is intentionally loaded only through tools. */
+  path?: string;
   base64?: string;
   text?: string;
 }
@@ -47,6 +49,7 @@ export interface RawAttachment {
 export interface NormalizedAttachment {
   name: string;
   mediaType: string;
+  path?: string;
   base64?: string;
   text?: string;
 }
@@ -123,6 +126,11 @@ export async function extractAttachmentText(
   opts?: ExtractOptions,
 ): Promise<NormalizedAttachment[]> {
   const name = att.name && att.name.trim() ? att.name : 'attachment';
+  // Local references are already canonicalized + authorized by the coder
+  // route. Keep the path and never read/encode the file during normalization.
+  if (att.path) {
+    return [{ name, mediaType: att.mediaType, path: att.path }];
+  }
   // Nothing to decode: an image, a pre-decoded text file, or no payload.
   if (att.text != null || att.mediaType.startsWith('image/') || !att.base64) {
     return [{ name, mediaType: att.mediaType, base64: att.base64, text: att.text }];

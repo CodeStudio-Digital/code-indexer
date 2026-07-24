@@ -36,9 +36,48 @@ export function readDataUrlBase64(blob: Blob): Promise<string> {
   });
 }
 
-export function fileToAttachment(file: File): Promise<AgentAttachment> {
+export interface FileAttachmentOptions {
+  /** Prefer a local path reference for files that do not require inline bytes. */
+  preferFileReferences?: boolean;
+  /** Pre-resolved by filesToAttachments so the bridge is called only once. */
+  nativePath?: string;
+}
+
+/** Images and structured documents need bytes for vision/native parsers. */
+function requiresInlinePayload(kind: ReturnType<typeof classifyAttachment>): boolean {
+  return kind === 'image' || kind === 'pdf' || kind === 'office';
+}
+
+function nativeFileReference(file: File, prefer: boolean): string | undefined {
+  if (!prefer) return undefined;
+  try {
+    const bridge = (globalThis as typeof globalThis & {
+      electronAPI?: { getPathForFile?: (value: File) => string };
+    }).electronAPI;
+    const path = bridge?.getPathForFile?.(file)?.trim();
+    return path || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function fileToAttachment(
+  file: File,
+  options: FileAttachmentOptions = {},
+): Promise<AgentAttachment> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
   const kind = classifyAttachment(file.name, file.type);
+  const nativePath = options.nativePath
+    ?? (!requiresInlinePayload(kind)
+      ? nativeFileReference(file, options.preferFileReferences === true)
+      : undefined);
+  if (nativePath) {
+    return Promise.resolve({
+      name: file.name || nativePath.split(/[\\/]/).pop() || 'attachment',
+      mediaType: file.type || 'application/octet-stream',
+      path: nativePath,
+    });
+  }
   if (kind === 'unsupported') {
     return Promise.reject(new Error(`Unsupported attachment type: ${file.name}`));
   }
@@ -79,27 +118,37 @@ export function fileToAttachment(file: File): Promise<AgentAttachment> {
 export async function filesToAttachments(
   files: FileList | File[],
   existing: AgentAttachment[] = [],
+  options: Pick<FileAttachmentOptions, 'preferFileReferences'> = {},
 ): Promise<AgentAttachment[]> {
   const selected = Array.from(files);
   if (existing.length + selected.length > MAX_ATTACHMENTS_PER_MESSAGE) {
     throw new Error(`You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
   }
 
+  const planned = selected.map((file) => {
+    const kind = classifyAttachment(file.name, file.type);
+    const nativePath = !requiresInlinePayload(kind)
+      ? nativeFileReference(file, options.preferFileReferences === true)
+      : undefined;
+    return { file, kind, nativePath };
+  });
+
   let totalBytes = existing.reduce((sum, att) => sum + attachmentPayloadBytes(att), 0);
-  for (const file of selected) {
-    if (classifyAttachment(file.name, file.type) === 'unsupported') {
+  for (const { file, kind, nativePath } of planned) {
+    if (!nativePath && kind === 'unsupported') {
       throw new Error(`Unsupported attachment type: ${file.name}`);
     }
-    if (file.size > MAX_ATTACHMENT_BYTES) {
+    if (!nativePath && file.size > MAX_ATTACHMENT_BYTES) {
       throw new Error(`${file.name} exceeds the 10 MB attachment limit.`);
     }
-    totalBytes += file.size;
+    if (!nativePath) totalBytes += file.size;
   }
   if (totalBytes > MAX_ATTACHMENTS_TOTAL_BYTES) {
     throw new Error('Attachments exceed the 25 MB combined limit.');
   }
 
-  const converted = await Promise.all(selected.map(fileToAttachment));
+  const converted = await Promise.all(planned.map(({ file, nativePath }) =>
+    fileToAttachment(file, { ...options, nativePath })));
   const totalTextChars = [...existing, ...converted].reduce(
     (sum, att) => sum + (att.text?.length ?? 0),
     0,
@@ -177,6 +226,37 @@ export function liveBlockPersistedId(b: StreamBlock): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * Cheap structural revision for reconciliation work.
+ *
+ * Token deltas mutate the current text/thinking block in place, so rescanning
+ * the complete accumulated run on every frame is unnecessary. Durable-history
+ * changes still invalidate via their own reconciliation index; this revision
+ * changes when a block is added/replaced or an identity-bearing tail resolves.
+ */
+export function liveTurnReconciliationRevision(
+  turn: AssistantTurn | null,
+  tailTextLength = 0,
+  tailThinkingLength = 0,
+): string {
+  const blocks = turn?.blocks ?? [];
+  const last = blocks[blocks.length - 1];
+  if (!last) return '0';
+  const identity = liveBlockPersistedId(last) ?? last.type;
+  const status = last.type === 'tool'
+    ? last.call.status
+    : last.type === 'agents' ? last.group.status : '';
+  // A text-only replay adds no structural block after its final delta. Flip
+  // exactly once when that tail can cover the latest durable message, without
+  // invalidating on every intermediate token.
+  const tailReady = last.type === 'text' && tailTextLength > 0
+    ? (last.text.length >= tailTextLength ? 'text-ready' : 'text-streaming')
+    : last.type === 'thinking' && tailThinkingLength > 0
+      ? (last.text.length >= tailThinkingLength ? 'thinking-ready' : 'thinking-streaming')
+      : '';
+  return `${blocks.length}:${last.type}:${identity}:${status}:${tailReady}`;
 }
 
 /** All assistant tool_use ids already persisted to history. */
@@ -372,13 +452,31 @@ function liveBlockPersistedSignature(block: StreamBlock): string | undefined {
   }
 }
 
-/** Signatures of interactive prompts in the latest persisted assistant turn. */
-export function collectLatestPersistedInteractivePromptSignatures(messages: PersistedMessage[]): Set<string> {
+/**
+ * Signatures of PENDING interactive prompts in the latest persisted assistant
+ * turn. IDs are always the primary identity. A content signature is only a
+ * bridge between the provider's tool_use id and the richer runtime prompt id
+ * (for example `toolu_*` versus `plan_*`) while no tool_result exists yet.
+ *
+ * Resolved prompts must never participate in signature dedup: a newly submitted
+ * prompt may intentionally have byte-identical content.
+ */
+export function collectLatestPersistedInteractivePromptSignatures(
+  messages: PersistedMessage[],
+  persistedResultIds: Set<string> = collectPersistedToolResultIds(messages),
+): Set<string> {
   const signatures = new Set<string>();
-  const latestAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+  let latestAssistant: PersistedMessage | undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === 'assistant') {
+      latestAssistant = messages[index];
+      break;
+    }
+  }
   if (!latestAssistant) return signatures;
   for (const b of latestAssistant.content) {
     if (b.type !== 'tool_use') continue;
+    if (b.id && persistedResultIds.has(b.id)) continue;
     const signature = persistedInteractivePromptSignature(b.name, b.input);
     if (signature) signatures.add(signature);
   }
@@ -387,6 +485,114 @@ export function collectLatestPersistedInteractivePromptSignatures(messages: Pers
 
 export const collectLatestPersistedGateSignatures = collectLatestPersistedInteractivePromptSignatures;
 
+/**
+ * Immutable history-side index used by live/persisted reconciliation.
+ *
+ * Building this once per history refetch avoids rescanning every persisted
+ * message and rebuilding large joined strings on each token frame. The live
+ * side can still change every frame, but the usually much larger durable side
+ * remains O(1) to reuse.
+ */
+export interface PersistedLiveReconciliation {
+  assistantRun: PersistedMessage[];
+  /** The loaded window begins after its owning user message. */
+  startsMidTurn: boolean;
+  precedingUserMessageId: number | null;
+  persistedText: string;
+  persistedThinking: string;
+  persistedTextBlocks: Set<string>;
+  persistedThinkingBlocks: Set<string>;
+  /** Raw sizes of the newest durable assistant row for one-shot replay readiness. */
+  tailTextLength: number;
+  tailThinkingLength: number;
+  assistantRunToolUseCount: number;
+  /** All loaded tool identities/results, used for block-level dedup. */
+  persistedToolUseIds: Set<string>;
+  persistedToolResultIds: Set<string>;
+  /** Content fallback restricted to the latest still-pending interaction. */
+  pendingInteractivePromptSignatures: Set<string>;
+}
+
+export function buildPersistedLiveReconciliation(
+  messages: PersistedMessage[],
+  precedingUserMessageId: number | null | undefined = null,
+  fallbackResultIds: Iterable<string> = [],
+): PersistedLiveReconciliation {
+  const latestUserIndex = latestVisibleUserIndex(messages);
+  const startsMidTurn = latestUserIndex < 0 && precedingUserMessageId != null;
+  const assistantRun = messages
+    .slice(latestUserIndex + 1)
+    .filter((message) => message.role === 'assistant');
+  const persistedToolUseIds = new Set<string>();
+  const persistedToolResultIds = new Set<string>();
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      for (const block of message.content) {
+        if (block.type === 'tool_use' && block.id) persistedToolUseIds.add(block.id);
+      }
+    } else if (message.role === 'tool') {
+      for (const block of message.content) {
+        if (block.type === 'tool_result' && block.tool_use_id) {
+          persistedToolResultIds.add(block.tool_use_id);
+        }
+      }
+    }
+  }
+  for (const id of fallbackResultIds) {
+    if (id) persistedToolResultIds.add(id);
+  }
+
+  const textParts: string[] = [];
+  const thinkingParts: string[] = [];
+  const persistedTextBlocks = new Set<string>();
+  const persistedThinkingBlocks = new Set<string>();
+  let assistantRunToolUseCount = 0;
+  for (const message of assistantRun) {
+    const text = getPersistedAssistantText(message);
+    if (text.trim()) textParts.push(text);
+    const thinking = getPersistedAssistantThinkingText(message);
+    if (thinking.trim()) thinkingParts.push(thinking);
+    for (const block of message.content) {
+      if (block.type === 'text' && block.text) persistedTextBlocks.add(block.text);
+      if (block.type === 'thinking' && block.text) persistedThinkingBlocks.add(block.text);
+      if (block.type !== 'tool_use') continue;
+      assistantRunToolUseCount++;
+    }
+  }
+
+  return {
+    assistantRun,
+    startsMidTurn,
+    precedingUserMessageId: precedingUserMessageId ?? null,
+    persistedText: textParts.join('\n').trim(),
+    persistedThinking: thinkingParts.join('\n').trim(),
+    persistedTextBlocks,
+    persistedThinkingBlocks,
+    tailTextLength: assistantRun.length > 0
+      ? getPersistedAssistantText(assistantRun[assistantRun.length - 1]).length
+      : 0,
+    tailThinkingLength: assistantRun.length > 0
+      ? getPersistedAssistantThinkingText(assistantRun[assistantRun.length - 1]).length
+      : 0,
+    assistantRunToolUseCount,
+    persistedToolUseIds,
+    persistedToolResultIds,
+    pendingInteractivePromptSignatures: collectLatestPersistedInteractivePromptSignatures(
+      messages,
+      persistedToolResultIds,
+    ),
+  };
+}
+
+function persistedLiveReconciliation(
+  history: PersistedMessage[] | PersistedLiveReconciliation,
+  precedingUserMessageId?: number | null,
+): PersistedLiveReconciliation {
+  return Array.isArray(history)
+    ? buildPersistedLiveReconciliation(history, precedingUserMessageId)
+    : history;
+}
+
 /** Live blocks NOT yet represented in persisted history (dedup by id or prompt signature). */
 export function visibleLiveBlocks(
   blocks: StreamBlock[],
@@ -394,6 +600,7 @@ export function visibleLiveBlocks(
   persistedInteractivePromptSignatures: Set<string> = new Set(),
   persistedResultIds: Set<string> = new Set(),
   preferCompleteLiveRun = false,
+  reconciliation?: PersistedLiveReconciliation,
 ): StreamBlock[] {
   const hasTaskRun = blocks.some((block) => block.type === 'task_run');
   const liveAgentToolUseIds = new Set(
@@ -407,8 +614,44 @@ export function visibleLiveBlocks(
     persistedIds.size === 0
     && persistedInteractivePromptSignatures.size === 0
     && !hasPresentationOverlap
+    && !reconciliation?.startsMidTurn
   ) return blocks;
-  return blocks.filter((b) => {
+  // A cold replay can begin inside the durable tail and then continue with new
+  // events. In that case neither "all live" nor "all persisted" is canonical.
+  // Cut the proven persisted prefix at its last ordered identity/text match and
+  // append only the genuinely new live suffix after the durable transcript.
+  let persistedOverlapPrefixEnd = -1;
+  if (!preferCompleteLiveRun && reconciliation?.startsMidTurn) {
+    for (let index = 0; index < blocks.length; index++) {
+      const block = blocks[index];
+      const id = liveBlockPersistedId(block);
+      const signature = liveBlockPersistedSignature(block);
+      const matchesPersisted = Boolean(
+        (id && persistedIds.has(id))
+        || (
+          signature
+          && persistedInteractivePromptSignatures.has(signature)
+        )
+        || (
+          block.type === 'text'
+          && reconciliation.persistedTextBlocks.has(block.text)
+        )
+        || (
+          block.type === 'thinking'
+          && reconciliation.persistedThinkingBlocks.has(block.text)
+        )
+      );
+      if (matchesPersisted) {
+        persistedOverlapPrefixEnd = index;
+        continue;
+      }
+      // A new identity is a hard chronological boundary. Do not let repeated
+      // text later in the fresh suffix be mistaken for old durable content.
+      if (id) break;
+    }
+  }
+  return blocks.filter((b, index) => {
+    if (index <= persistedOverlapPrefixEnd) return false;
     if (b.type === 'agents') {
       if (b.group.groupId.startsWith('tasks-wave-')) return false;
       if (preferCompleteLiveRun) return true;
@@ -450,43 +693,19 @@ export function visibleLiveBlocks(
 
 export function isLiveTurnDuplicatedInHistory(
   turn: AssistantTurn | null,
-  messages: PersistedMessage[],
-  persistedIds: Set<string> = collectPersistedToolUseIds(messages),
+  history: PersistedMessage[] | PersistedLiveReconciliation,
+  persistedIds?: Set<string>,
+  precedingUserMessageId?: number | null,
 ): boolean {
   if (!turn || turn.blocks.length === 0) return false;
-
-  // A live buffer spans the complete run initiated by the latest visible user
-  // message. One run can contain many provider/tool cycles, persisted as many
-  // assistant rows. Compare against that whole assistant tail instead of only
-  // the final row; otherwise the accumulated live transcript can never clear
-  // after a multi-turn run and would duplicate the freshly refetched history.
-  let latestUserIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message.role === 'user' && !message.isMeta && !isToolImagePlumbing(message)) {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  const assistantRun = messages
-    .slice(latestUserIndex + 1)
-    .filter((message) => message.role === 'assistant');
-  if (assistantRun.length === 0) return false;
+  const reconciliation = persistedLiveReconciliation(history, precedingUserMessageId);
+  if (reconciliation.assistantRun.length === 0) return false;
+  const effectivePersistedIds = persistedIds ?? reconciliation.persistedToolUseIds;
 
   const liveText = getCurrentTurnText(turn).trim();
-  const persistedText = assistantRun
-    .map(getPersistedAssistantText)
-    .filter((text) => text.trim().length > 0)
-    .join('\n')
-    .trim();
+  const persistedText = reconciliation.persistedText;
   const liveThinking = getCurrentTurnThinkingText(turn).trim();
-  const persistedThinking = assistantRun
-    .map(getPersistedAssistantThinkingText)
-    .filter((text) => text.trim().length > 0)
-    .join('\n')
-    .trim();
-  const persistedInteractivePromptSignatures = collectLatestPersistedInteractivePromptSignatures(messages);
-  const persistedResultIds = collectPersistedToolResultIds(messages);
+  const persistedThinking = reconciliation.persistedThinking;
   let checkedText = false;
   let checkedThinking = false;
 
@@ -499,21 +718,35 @@ export function isLiveTurnDuplicatedInHistory(
       if (
         block.group.status === 'completed'
         && id
-        && persistedIds.has(id)
-        && persistedResultIds.has(id)
+        && effectivePersistedIds.has(id)
+        && reconciliation.persistedToolResultIds.has(id)
       ) continue;
       return false;
     }
     if (block.type === 'text') {
       if (!checkedText) {
-        if (!liveText || persistedText !== liveText) return false;
+        if (
+          !liveText
+          || (
+            reconciliation.startsMidTurn
+              ? !persistedText.endsWith(liveText)
+              : persistedText !== liveText
+          )
+        ) return false;
         checkedText = true;
       }
       continue;
     }
     if (block.type === 'thinking') {
       if (!checkedThinking) {
-        if (!liveThinking || persistedThinking !== liveThinking) return false;
+        if (
+          !liveThinking
+          || (
+            reconciliation.startsMidTurn
+              ? !persistedThinking.endsWith(liveThinking)
+              : persistedThinking !== liveThinking
+          )
+        ) return false;
         checkedThinking = true;
       }
       continue;
@@ -521,9 +754,12 @@ export function isLiveTurnDuplicatedInHistory(
 
     const id = liveBlockPersistedId(block);
     if (id) {
-      if (persistedIds.has(id)) continue;
+      if (effectivePersistedIds.has(id)) continue;
       const signature = liveBlockPersistedSignature(block);
-      if (signature && persistedInteractivePromptSignatures.has(signature)) continue;
+      if (
+        signature
+        && reconciliation.pendingInteractivePromptSignatures.has(signature)
+      ) continue;
       return false;
     }
 
@@ -543,12 +779,6 @@ function latestVisibleUserIndex(messages: PersistedMessage[]): number {
   return -1;
 }
 
-function persistedAssistantRun(messages: PersistedMessage[]): PersistedMessage[] {
-  return messages
-    .slice(latestVisibleUserIndex(messages) + 1)
-    .filter((message) => message.role === 'assistant');
-}
-
 /**
  * True when `currentTurn` still contains the complete assistant run that the
  * latest persisted history only checkpoints a prefix of. This is the normal
@@ -557,26 +787,32 @@ function persistedAssistantRun(messages: PersistedMessage[]): PersistedMessage[]
  */
 export function liveTurnCoversPersistedAssistantRun(
   turn: AssistantTurn | null,
-  messages: PersistedMessage[],
+  history: PersistedMessage[] | PersistedLiveReconciliation,
+  precedingUserMessageId?: number | null,
 ): boolean {
   if (!turn || turn.blocks.length === 0) return false;
-  const assistantRun = persistedAssistantRun(messages);
-  if (assistantRun.length === 0) return false;
-
-  const persistedText = assistantRun
-    .map(getPersistedAssistantText)
-    .filter((text) => text.trim().length > 0)
-    .join('\n')
-    .trim();
-  const persistedThinking = assistantRun
-    .map(getPersistedAssistantThinkingText)
-    .filter((text) => text.trim().length > 0)
-    .join('\n')
-    .trim();
+  const reconciliation = persistedLiveReconciliation(history, precedingUserMessageId);
+  if (reconciliation.assistantRun.length === 0) return false;
+  const persistedText = reconciliation.persistedText;
+  const persistedThinking = reconciliation.persistedThinking;
   const liveText = getCurrentTurnText(turn).trim();
   const liveThinking = getCurrentTurnThinkingText(turn).trim();
-  if (persistedText && !liveText.startsWith(persistedText)) return false;
-  if (persistedThinking && !liveThinking.startsWith(persistedThinking)) return false;
+  if (
+    persistedText
+    && (
+      reconciliation.startsMidTurn
+        ? !liveText.includes(persistedText)
+        : !liveText.startsWith(persistedText)
+    )
+  ) return false;
+  if (
+    persistedThinking
+    && (
+      reconciliation.startsMidTurn
+        ? !liveThinking.includes(persistedThinking)
+        : !liveThinking.startsWith(persistedThinking)
+    )
+  ) return false;
 
   const liveIds = new Set<string>();
   const liveSignatures = new Set<string>();
@@ -586,19 +822,25 @@ export function liveTurnCoversPersistedAssistantRun(
     const signature = liveBlockPersistedSignature(block);
     if (signature) liveSignatures.add(signature);
   }
-  let persistedToolCount = 0;
-  for (const message of assistantRun) {
+  for (const message of reconciliation.assistantRun) {
     for (const block of message.content) {
       if (block.type !== 'tool_use') continue;
-      persistedToolCount++;
       if (block.id && liveIds.has(block.id)) continue;
       const signature = persistedInteractivePromptSignature(block.name, block.input);
-      if (signature && liveSignatures.has(signature)) continue;
+      if (
+        signature
+        && reconciliation.pendingInteractivePromptSignatures.has(signature)
+        && liveSignatures.has(signature)
+      ) continue;
       return false;
     }
   }
 
-  return Boolean(persistedText || persistedThinking || persistedToolCount > 0);
+  return Boolean(
+    persistedText
+    || persistedThinking
+    || reconciliation.assistantRunToolUseCount > 0
+  );
 }
 
 /**
@@ -606,7 +848,10 @@ export function liveTurnCoversPersistedAssistantRun(
  * user turn. The complete live run is rendered in their place, preserving the
  * original text/tool order while an active session continues streaming.
  */
-export function suppressLatestPersistedAssistantRun(groups: VisualGroup[]): VisualGroup[] {
+export function suppressLatestPersistedAssistantRun(
+  groups: VisualGroup[],
+  precedingUserMessageId?: number | null,
+): VisualGroup[] {
   let latestUserGroup = -1;
   for (let index = groups.length - 1; index >= 0; index--) {
     const group = groups[index];
@@ -619,7 +864,11 @@ export function suppressLatestPersistedAssistantRun(groups: VisualGroup[]): Visu
       break;
     }
   }
-  if (latestUserGroup < 0) return groups;
+  if (latestUserGroup < 0) {
+    if (precedingUserMessageId == null) return groups;
+    const filtered = groups.filter((group) => group.kind !== 'assistant');
+    return filtered.length === groups.length ? groups : filtered;
+  }
   const filtered = groups.filter((group, index) => index <= latestUserGroup || group.kind !== 'assistant');
   return filtered.length === groups.length ? groups : filtered;
 }
@@ -685,6 +934,11 @@ export function groupMessages(
     const row = messageRows[i];
 
     if (msg.role === 'tool') continue;
+
+    // Meta inputs are model/runtime plumbing. They remain persisted and are
+    // still available to the runner and diagnostics, but must never be shown
+    // as if the user typed them.
+    if (msg.role === 'user' && msg.isMeta) continue;
 
     if (msg.role === 'user') {
       flushPending();

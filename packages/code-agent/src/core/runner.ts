@@ -84,9 +84,6 @@ import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js'
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
 import {
-  recordGlobalDeterministicQualitySignal,
-} from '@mcp/services/quality/index.js';
-import {
   isGlobalContextRelevanceEnabled,
   tryGlobalContextCompact,
 } from '@mcp/code-agent/context-relevance/index.js';
@@ -158,12 +155,6 @@ import {
 } from './runner/constants.js';
 export { canRunSummarizer };
 
-// (Wire #2 tool-misuse intervention block moved to './runner/intervention.ts'.)
-import {
-  INTERVENTION_COOLDOWN_TURNS,
-  buildToolMisuseInterventionBlock,
-} from './runner/intervention.js';
-
 // (Pre-class helpers + tunable constants extracted to ./runner/* sub-modules —
 // see the import block above. The corresponding doc-blocks live in those files.)
 import { envInt, doomLoopThreshold } from './runner/constants.js';
@@ -186,8 +177,8 @@ import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner
 // builds the BridgeCallbacks and hands off to `runBehaviorTree`.
 import { runBehaviorTree } from './runner/orchestrator.js';
 // Pure per-turn telemetry insert. Wrapped by `persistTurnTelemetryWrapper`
-// below with class-bound side effects (quality classifier + tool-
-// selection observer) and exposed to the BT via `BridgeCallbacks`.
+// below with the class-bound tool-selection observer and exposed to the BT via
+// `BridgeCallbacks`.
 import { persistTurnTelemetry as persistTurnTelemetryPure } from './runner/telemetry/persist-turn.js';
 import { checkTaskModeGate } from './runner/guards/task-mode-gate.js';
 import { dedupPolicyMode } from './runner/guards/tuple-hash-dedup.js';
@@ -650,8 +641,6 @@ export class CoderRunner extends EventEmitter {
    */
   private pendingDiffRereads: Map<string, { priorUseId: string; priorTurn: number; path: string }> = new Map();
 
-  private qualityRoundLedgerStart = 0;
-
   get currentTodos(): TodoItem[] {
     const ctx = this.opts.toolContext;
     return deriveTodosFromState(ctx.getTasksState ? ctx.getTasksState() : null);
@@ -754,6 +743,19 @@ export class CoderRunner extends EventEmitter {
   /** PR-6: exposed so subagent factories can propagate the v2 flag onto
    *  spawned subagents (read coverage, recovery, and framing). */
   public get agentLoopV2(): boolean { return this.opts.agentLoopV2 === true; }
+  /** Share the root run's ordered observation bus with in-process subagents. */
+  public getHookBus(): RunnerOptions['hookBus'] {
+    return this.opts.hookBus;
+  }
+  /** Compose the inherited policy authority with child-local execution facts. */
+  public createChildPolicyShadow(
+    sessionContext: import('@mcp/code-agent/core/policy-shadow-adapter.js').PolicyShadowSessionContext,
+  ): import('@mcp/code-agent/core/policy-shadow-adapter.js').PolicyShadowPort | undefined {
+    return this.opts.policyShadowScopeFactory?.(sessionContext);
+  }
+  public getPolicyShadowScopeFactory(): RunnerOptions['policyShadowScopeFactory'] {
+    return this.opts.policyShadowScopeFactory;
+  }
 
   /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
   public readonly sessionId: number | undefined;
@@ -798,75 +800,6 @@ export class CoderRunner extends EventEmitter {
       // best-effort
     }
   }
-
-
-  /** Semantic quality is terminal-only and never mutates the next prompt. */
-  private buildQualityFeedbackSuffix(): string {
-    return '';
-  }
-
-  /** Bounded terminal evidence; raw arguments and result bodies never leave the runner. */
-  public getTerminalQualityContext(): {
-    taskText: string;
-    outputText: string;
-    toolSummary: {
-      total: number;
-      success: number;
-      error: number;
-      timeout: number;
-      refusal: number;
-      tools: Array<{ name: string; calls: number; success: number; failures: number }>;
-    };
-    guardActions: Array<{ guard: string; tool?: string; count: number; action: string }>;
-    validationSignals: string[];
-  } {
-    const entries = this.opts.toolContext.toolCallLedger?.snapshot(this.qualityRoundLedgerStart) ?? [];
-    const byTool = new Map<string, { calls: number; success: number; failures: number }>();
-    for (const entry of entries) {
-      const current = byTool.get(entry.name) ?? { calls: 0, success: 0, failures: 0 };
-      current.calls += 1;
-      if (entry.outcome === 'success') current.success += 1;
-      else current.failures += 1;
-      byTool.set(entry.name, current);
-    }
-    const guardActions = entries
-      .filter((entry) => entry.outcome === 'refusal')
-      .map((entry) => ({
-        guard: entry.refusalKind ?? 'refusal',
-        tool: entry.name,
-        count: 1,
-        action: 'tool_call_refused',
-      }));
-    const validationSignals = [...new Set(entries
-      .map((entry) => entry.validationSignal)
-      .filter((signal): signal is string => signal != null))];
-    return {
-      taskText: this.getLastUserText(),
-      outputText: this.extractLastAssistantText(),
-      toolSummary: {
-        total: entries.length,
-        success: entries.filter((entry) => entry.outcome === 'success').length,
-        error: entries.filter((entry) => entry.outcome === 'tool_error').length,
-        timeout: entries.filter((entry) => entry.outcome === 'timeout').length,
-        refusal: entries.filter((entry) => entry.outcome === 'refusal').length,
-        tools: [...byTool.entries()].map(([name, counts]) => ({ name, ...counts })).slice(0, 40),
-      },
-      guardActions,
-      validationSignals,
-    };
-  }
-
-  private extractLastAssistantText(): string {
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      const m = this.messages[i];
-      if (m.role !== 'assistant') continue;
-      if (typeof m.content === 'string') return m.content;
-      const parts = m.content.filter((block) => block.type === 'text').map((block) => block.text);
-      if (parts.length > 0) return parts.join(' ');
-    }
-    return '';
-  }
-
   constructor(opts: RunnerOptions) {
     super();
     // `context_window` predates the runner-wide compaction plumbing. Keep one
@@ -1457,14 +1390,12 @@ export class CoderRunner extends EventEmitter {
     }
     if (extras?.roundMessageId != null) {
       this.roundMessageId = extras.roundMessageId;
-      this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
     }
     this.messages.push(msg);
   }
 
   setRoundMessageId(roundMessageId: number | null): void {
     this.roundMessageId = roundMessageId;
-    this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
   }
 
   /**
@@ -1548,8 +1479,8 @@ export class CoderRunner extends EventEmitter {
    * runtime executed the turn.
    *
    * Also wires the `BridgeCallbacks` so the BT delegates features still
-   * owned by this class: skills, active-context, quality-feedback suffix,
-   * temperature resolution, Responses-API state, plan/spec gates.
+   * owned by this class: skills, active-context, temperature resolution,
+   * Responses-API state and plan/spec gates.
    */
   private async runViaBehaviorTree(): Promise<RunResult> {
     const switchResult = await this.maybeAskAgentDecisionSwitch();
@@ -1569,10 +1500,9 @@ export class CoderRunner extends EventEmitter {
       opts: this.opts,
       emit: ((event: string, ...args: unknown[]) => {
         // Mirror the loop-local turn (RunContext.turn) into the public field
-        // (see the `turn` docstring) so Quality v2 turn-accounting
-        // (nudge/classify/backfill/dedup/holdout) isn't frozen at 0. Every
-        // `turn_start` flows through here for both the main runner and
-        // subagents, so this is the single point that keeps the mirror live.
+        // (see the `turn` docstring). Every `turn_start` flows through here
+        // for both the main runner and subagents, so this is the single point
+        // that keeps the mirror live.
         if (event === 'turn_start' && typeof args[0] === 'number') this.turn = args[0];
         (this as unknown as { emit: (e: string, ...a: unknown[]) => boolean }).emit(event, ...args);
       }) as never,
@@ -1585,7 +1515,6 @@ export class CoderRunner extends EventEmitter {
         buildActiveSkillsBlock: (history) => this.buildActiveSkillsBlockForLastUser(history),
         buildActiveContextBlock: () =>
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
-        buildQualityFeedbackSuffix: () => this.buildQualityFeedbackSuffix(),
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
         synthesizeMemoryQuery: this.opts.synthesizeMemoryQuery,
         getSessionStateData: this.opts.getSessionStateData,
@@ -1731,41 +1660,10 @@ export class CoderRunner extends EventEmitter {
         finalizeToolResult: (a) => this.finalizeToolResultForBridge(a),
         detectPollingStuck: (toolName, content, isError, isRepeatable, turn) =>
           this.detectPollingStuckForBridge(toolName, content, isError, isRepeatable, turn),
-        runQualityCheck: ({ toolResults }) => {
-          for (const result of toolResults) {
-            if (!result.refusalKind) continue;
-            recordGlobalDeterministicQualitySignal({
-              sessionId: this.sessionId ?? null,
-              companySessionId: this.opts.companySessionId ?? null,
-              agentRunId: this.opts.companyAgentRunId ?? null,
-              coderRunId: this.runId,
-              roundMessageId: this.roundMessageId,
-              classifierName: `runtime_${result.refusalKind}`,
-              verdict: result.refusalKind === 'user_denied' ? 'warn' : 'flagged',
-              reason: `Tool ${result.name} was refused by ${result.refusalKind}.`,
-              actionTaken: 'tool_call_refused',
-              evidence: {
-                tool: result.name,
-                guard: result.guardVerdict?.reason ?? result.refusalKind,
-                count: result.guardVerdict?.count ?? 1,
-              },
-            });
-          }
-        },
-        recordStrategyNudge: ({ guard, toolName, count }) => {
-          recordGlobalDeterministicQualitySignal({
-            sessionId: this.sessionId ?? null,
-            companySessionId: this.opts.companySessionId ?? null,
-            agentRunId: this.opts.companyAgentRunId ?? null,
-            coderRunId: this.runId,
-            roundMessageId: this.roundMessageId,
-            classifierName: 'runtime_strategy_nudge',
-            verdict: 'warn',
-            reason: `Strategy-change guidance emitted after ${guard}${toolName ? ` for ${toolName}` : ''}.`,
-            actionTaken: 'strategy_nudge',
-            evidence: { guard, tool: toolName ?? null, count: count ?? 1 },
-          });
-        },
+        // `turn_start` lets the host enqueue the prior assistant/tool/goal
+        // transaction synchronously; await it before this turn can reach the
+        // provider. A rejection is intentionally not contained here.
+        awaitTurnPersistence: this.opts.awaitTurnPersistence,
         // Drain queued user messages at the top of every Executing turn.
         // Without this, messages pushed by `runner.pushUserMessage`
         // (master forwards, SSE push from the dashboard) accumulate in
@@ -1787,6 +1685,8 @@ export class CoderRunner extends EventEmitter {
         // `hasActive()` is false there and the orchestrator never parks.
         backgroundJobs: this.isSubagent || this.sessionId == null ? undefined : {
           hasActive: () => getSubagentJobManager().hasActiveJobs(this.sessionId!),
+          hasUncollectedTerminal: () =>
+            getSubagentJobManager().hasUncollectedTerminalJobs(this.sessionId!),
           park: (signal: AbortSignal) => parkForBackgroundWork({
             manager: getSubagentJobManager(),
             sessionId: this.sessionId!,
@@ -1804,8 +1704,8 @@ export class CoderRunner extends EventEmitter {
         },
         // Per-turn telemetry persistence. The pure insert lives in
         // `core/runner/telemetry/persist-turn.ts`; the class-bound
-        // side-effects (quality classifier dispatch + tool-selection
-        // observer) stay here because they read `this.messages` and run state.
+        // tool-selection observer stays here because it reads `this.messages`
+        // and run state.
         // The wrapper also mirrors
         // the inserted id into `this.lastTurnTelemetryId` so the host's
         // `flushPendingTurn` in `index.ts` (which reads
@@ -1835,7 +1735,6 @@ export class CoderRunner extends EventEmitter {
       }
       if (pending.roundMessageId != null) {
         this.roundMessageId = pending.roundMessageId;
-        this.qualityRoundLedgerStart = this.opts.toolContext.toolCallLedger?.lastSeq ?? 0;
       }
       this.messages.push(msg);
     }
@@ -1843,17 +1742,14 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * Class-bound wrapper around `persistTurnTelemetryPure`. Owns the
-   * three side-effects that need access to instance state:
+   * two side-effects that need access to instance state:
    *   1. Stores the inserted id on `this.lastTurnTelemetryId` so
    *      `index.ts`'s `flushPendingTurn` can stamp the tool_call rows.
    *   2. Feeds the global ToolSelection observer (FeedbackCollector
    *      backfill).
-   *   3. Dispatches the quality classifier (adaptive sampling, v2
-   *      promise tracked so the next turn's nudge can await it).
-   *
    * Errors are swallowed at every layer — telemetry never breaks a real
    * turn. The pure helper already wraps its DB write in `try`; the
-   * observer + classifier blocks have their own `try/catch`.
+   * observer has its own `try/catch`.
    */
   private persistTurnTelemetryWrapper(input: {
     turn: number;
@@ -2391,7 +2287,50 @@ export class CoderRunner extends EventEmitter {
    * exclusively-legacy was removed.
    */
   async run(): Promise<RunResult> {
-    return this.runViaBehaviorTree();
+    const hookBus = this.opts.hookBus;
+    if (!hookBus) return this.runViaBehaviorTree();
+
+    const startedAt = Date.now();
+    const startStage = this.isSubagent ? 'agent_spawned' : 'run_started';
+    const terminalStage = this.isSubagent ? 'agent_terminal' : 'run_terminal';
+    // HookBus contains handler failures, but keep this boundary defensive so
+    // lifecycle observation can never become execution authority.
+    try {
+      await hookBus.fireObservation(startStage, {
+        runId: this.runId,
+        sessionId: this.sessionId ?? null,
+        agentId: this.opts.agentId ?? null,
+        subagent: this.isSubagent,
+      });
+    } catch {
+      // Observation only.
+    }
+
+    let outcome: { ok: boolean; reason?: string; errorType?: string } = { ok: false };
+    try {
+      const result = await this.runViaBehaviorTree();
+      outcome = { ok: true, reason: result.reason };
+      return result;
+    } catch (error) {
+      outcome = {
+        ok: false,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
+      };
+      throw error;
+    } finally {
+      try {
+        await hookBus.fireObservation(terminalStage, {
+          runId: this.runId,
+          sessionId: this.sessionId ?? null,
+          agentId: this.opts.agentId ?? null,
+          subagent: this.isSubagent,
+          durationMs: Date.now() - startedAt,
+          ...outcome,
+        });
+      } catch {
+        // Observation only.
+      }
+    }
   }
 }
 

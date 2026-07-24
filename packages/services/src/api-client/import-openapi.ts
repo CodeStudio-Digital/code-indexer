@@ -76,6 +76,7 @@ async function finalizeImport(
   raw: string,
   format: 'yaml' | 'json',
   sourceKey: string,
+  beforeWrite?: () => void,
 ): Promise<ImportOutcome | { error: string }> {
   let parsed;
   try { parsed = await parseOpenApi(raw, format); }
@@ -85,6 +86,7 @@ async function finalizeImport(
   // ~600 (insert/update per op + the collection upsert), turning a multi-hundred-ms
   // import into a single bulk write.
   return store.transaction(() => {
+    beforeWrite?.();
     const prior = store.listCollections(projectId).find((col) => col.spec_source === sourceKey);
     const specChanged = prior != null && prior.spec_hash !== parsed.hash;
     const collection = prior ?? store.createCollection({
@@ -103,24 +105,48 @@ async function finalizeImport(
 /** Probe the project root → import. Returns an error object on failure. */
 export async function importOpenApiInto(
   store: ApiClientStore,
-  opts: { projectId: number; rootPath: string; specPath?: string },
+  opts: {
+    projectId: number;
+    rootPath: string;
+    specPath?: string;
+    beforeWrite?: () => void;
+  },
 ): Promise<ImportOutcome | { error: string }> {
   const probed = await probeOpenApiOnHost(opts.rootPath, opts.specPath);
   if (!probed) return { error: 'no OpenAPI/Swagger spec found in the project root' };
-  return finalizeImport(store, opts.projectId, probed.raw, probed.format, probed.relPath);
+  return finalizeImport(
+    store,
+    opts.projectId,
+    probed.raw,
+    probed.format,
+    probed.relPath,
+    opts.beforeWrite,
+  );
 }
 
 /** Import from raw spec content (an uploaded file picked in the UI). Format is
  *  inferred from the filename extension, falling back to a content sniff. */
 export async function importOpenApiContent(
   store: ApiClientStore,
-  opts: { projectId: number; content: string; filename?: string },
+  opts: {
+    projectId: number;
+    content: string;
+    filename?: string;
+    beforeWrite?: () => void;
+  },
 ): Promise<ImportOutcome | { error: string }> {
   const raw = opts.content ?? '';
   if (!raw.trim()) return { error: 'the selected file is empty' };
   const format = detectFormat(opts.filename, raw);
   const name = opts.filename ? basename(opts.filename) : 'openapi';
-  return finalizeImport(store, opts.projectId, raw, format, `upload:${name}`);
+  return finalizeImport(
+    store,
+    opts.projectId,
+    raw,
+    format,
+    `upload:${name}`,
+    opts.beforeWrite,
+  );
 }
 
 function detectFormat(filename: string | undefined, raw: string): 'yaml' | 'json' {

@@ -101,6 +101,10 @@ function makeHarness(options: {
   existingGeneration?: Generation;
   existingGenerations?: Generation[];
   namespaceStates?: NamespaceState[];
+  recoverMutationFences?: (
+    prefixes: readonly string[],
+    currentOwner: string,
+  ) => Promise<number | null>;
 } = {}) {
   const projectIds = options.projects ?? [1];
   const fileCounts = options.fileCounts ?? Object.fromEntries(projectIds.map((id) => [id, 1]));
@@ -136,6 +140,7 @@ function makeHarness(options: {
   let db: any;
 
   const store = {
+    withBusyTimeout: vi.fn((_timeoutMs: number, operation: () => unknown) => operation()),
     getProfile: vi.fn((purpose: 'code' | 'docs' | 'memory'): {
       purpose: 'code' | 'docs' | 'memory';
       embedding_target: { kind: string; model?: string };
@@ -495,6 +500,7 @@ function makeHarness(options: {
       }))),
     listSnapshotsForSemanticIndex: vi.fn(() => []),
     listAgentMemoryForSemanticIndex: vi.fn(() => []),
+    getAgentMemoryById: vi.fn(() => undefined),
     deleteProject: vi.fn(),
   };
   const router = {
@@ -566,10 +572,12 @@ function makeHarness(options: {
   };
   const agentMemoryService = {
     backfillEmbeddings: vi.fn(async () => ({ embedded: 0, skipped: 0, failed: 0, total: 0 })),
+    embedAndUpsert: vi.fn(async () => ({ ok: true })),
   };
   const investigationSemanticIndex = {
     listProject: vi.fn((_projectId: number): Array<Record<string, unknown>> => []),
     backfillProject: vi.fn(async () => ({ embedded: 0, skipped: 0, failed: 0, total: 0 })),
+    embedAndUpsert: vi.fn(async () => ({ ok: true })),
   };
   const deps = {
     db,
@@ -587,6 +595,9 @@ function makeHarness(options: {
     docStore,
     docsIndexer,
     withProjectLock: vi.fn(async (_projectId: number, operation: () => Promise<unknown>) => operation()),
+    ...(options.recoverMutationFences
+      ? { recoverMutationFences: options.recoverMutationFences }
+      : {}),
   };
   const coordinator = new SemanticIndexCoordinator(deps as never);
   return {
@@ -835,6 +846,39 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(coalesced[0]).toMatchObject({ status: 'pending' });
     expect(h.embedding.embedQuery).not.toHaveBeenCalled();
     expect(retryEmbeddingsMock).not.toHaveBeenCalled();
+  });
+
+  it('fails fast on SQLITE_BUSY and retries a coalesced watcher delta', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.store.withBusyTimeout
+        .mockImplementationOnce(() => {
+          const error = new Error('database is locked') as Error & { code: string };
+          error.code = 'SQLITE_BUSY';
+          throw error;
+        })
+        .mockImplementation((_timeoutMs: number, operation: () => unknown) => operation());
+
+      expect(() => h.coordinator.noteCodeDelta(1, [
+        { kind: 'upsert', path: 'src/retry.ts' },
+      ])).not.toThrow();
+      h.coordinator.noteCodeDelta(1, [
+        { kind: 'delete', path: 'src/retry.ts' },
+        { kind: 'upsert', path: 'src/other.ts' },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(h.store.withBusyTimeout).toHaveBeenCalledWith(0, expect.any(Function));
+      const job = [...h.jobs.values()].find((row) => row.namespace === 'code:p1');
+      expect(job?.cursor?.events).toEqual([
+        { kind: 'delete', path: 'src/retry.ts' },
+        { kind: 'upsert', path: 'src/other.ts' },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses exact watcher paths and shares concurrent catch-up calls', async () => {
@@ -2145,6 +2189,24 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.docsIndexer.retryEmbeddings).toHaveBeenCalledOnce();
   });
 
+  it('retries failed off-main fence recovery before a later docs mutation', async () => {
+    const recoverMutationFences = vi.fn()
+      .mockRejectedValueOnce(new Error('maintenance worker restarted'))
+      .mockResolvedValueOnce(0);
+    const h = makeHarness({ docChunks: [], recoverMutationFences });
+
+    await expect(h.coordinator.beginDocsCollectionMutation(2, 'upsert'))
+      .rejects.toThrow('maintenance worker restarted');
+    await expect(h.coordinator.beginDocsCollectionMutation(2, 'upsert'))
+      .resolves.toMatchObject({ job_id: expect.any(Number), token: expect.any(String) });
+
+    expect(recoverMutationFences).toHaveBeenCalledTimes(2);
+    expect(recoverMutationFences).toHaveBeenLastCalledWith(
+      ['docs:c', 'snapshot:p', 'memory:project:p', 'memory:user'],
+      expect.any(String),
+    );
+  });
+
   it('serializes collection deletion behind an in-progress docs build', async () => {
     const content = 'Delete only after build.';
     const hash = hashEmbeddingInput(buildEmbeddingText(null, null, content, null));
@@ -2424,6 +2486,152 @@ describe('SemanticIndexCoordinator code generations', () => {
     await expect(verify('project', 1, 11, 'memory:project:p1')).resolves.toBe(1);
     expect(h.vectorStore.listIds).toHaveBeenCalledWith('memory:project:p1', 11);
   });
+
+  it('drains N exact Memory writes in one targeted pass without a full backfill', async () => {
+    const generation: Generation = {
+      id: 31,
+      purpose: 'memory',
+      fingerprint: 'local:stable-code-model',
+      embedding_target: { kind: 'onnx', model: 'memory-model' },
+      dimension: 3,
+      status: 'ready',
+      expected_items: 10,
+      indexed_items: 10,
+      failed_items: 0,
+      error: null,
+    };
+    const namespace = 'memory:project:p1';
+    const rows = Array.from({ length: 10 }, (_, index) => ({
+      id: index + 1,
+      project_id: 1,
+      scope: 'project',
+      name: `memory-${index + 1}`,
+      description: '',
+      content: `current content ${index + 1}`,
+      archived_at: null,
+    }));
+    const keys = rows.map((row) => `agent_memory:${row.id}`);
+    const beforeItems = rows.map((row) => ({
+      item_key: `agent_memory:${row.id}`,
+      source_hash: `stale-${row.id}`,
+      vector_id: `am-${row.id}`,
+      chunk_index: 0,
+      status: 'indexed' as const,
+    }));
+    const afterItems = rows.map((row) => ({
+      item_key: `agent_memory:${row.id}`,
+      source_hash: agentMemoryEmbeddingTextHash(row as never, 'local:stable-code-model'),
+      vector_id: `am-${row.id}`,
+      chunk_index: 0,
+      status: 'indexed' as const,
+    }));
+    const h = makeHarness({
+      existingGeneration: generation,
+      namespaceStates: [{
+        namespace,
+        purpose: 'memory',
+        active_generation_id: 31,
+        building_generation_id: null,
+        expected_items: 10,
+        indexed_items: 10,
+        failed_items: 0,
+        delta_items: 0,
+        last_error: null,
+      }],
+    });
+    const delta = h.store.noteNamespaceMutation({
+      namespace,
+      itemKeys: keys,
+      operation: 'upsert',
+    });
+    h.db.getAgentMemoryById.mockImplementation((id: number) =>
+      rows.find((row) => row.id === id));
+    h.store.listItems
+      .mockReturnValueOnce(beforeItems)
+      .mockReturnValueOnce(afterItems);
+    h.vectorStore.listIds.mockResolvedValueOnce(afterItems.map((item) => item.vector_id));
+
+    await expect(h.coordinator.ensureMemoryNamespace(namespace)).resolves.toBeUndefined();
+
+    expect(h.agentMemoryService.backfillEmbeddings).not.toHaveBeenCalled();
+    expect(h.db.listAgentMemoryForSemanticIndex).not.toHaveBeenCalled();
+    expect(h.agentMemoryService.embedAndUpsert).toHaveBeenCalledTimes(10);
+    expect(h.store.finishNamespaceMutationPass).toHaveBeenCalledOnce();
+    expect(h.jobs.get(delta.id)).toMatchObject({
+      status: 'completed',
+      processed_items: 10,
+    });
+    expect(Array.from(h.jobs.values()).filter((job) =>
+      job.cursor?.reason === 'targeted-memory-delta')).toEqual([
+      expect.objectContaining({
+        status: 'completed',
+        expected_items: 10,
+        processed_items: 10,
+      }),
+    ]);
+  });
+
+  it.each(['wildcard', 'truncated', 'explicit', 'unknown'] as const)(
+    'falls back to a full Memory proof for a %s mutation cursor',
+    async (cursorKind) => {
+      const generation: Generation = {
+        id: 32,
+        purpose: 'memory',
+        fingerprint: 'local:stable-code-model',
+        embedding_target: { kind: 'onnx', model: 'memory-model' },
+        dimension: 3,
+        status: 'ready',
+        expected_items: 0,
+        indexed_items: 0,
+        failed_items: 0,
+        error: null,
+      };
+      const namespace = 'memory:project:p1';
+      const h = makeHarness({
+        existingGeneration: generation,
+        namespaceStates: [{
+          namespace,
+          purpose: 'memory',
+          active_generation_id: 32,
+          building_generation_id: null,
+          expected_items: 0,
+          indexed_items: 0,
+          failed_items: 0,
+          delta_items: 0,
+          last_error: null,
+        }],
+      });
+      const delta = h.store.noteNamespaceMutation({
+        namespace,
+        itemKeys: cursorKind === 'wildcard'
+          ? ['*']
+          : cursorKind === 'unknown'
+            ? ['legacy_memory:1']
+            : ['agent_memory:1'],
+        operation: 'upsert',
+      });
+      if (cursorKind === 'truncated') {
+        delta.cursor = {
+          ...(delta.cursor ?? {}),
+          item_keys_truncated: true,
+        };
+      } else if (cursorKind === 'explicit') {
+        delta.cursor = {
+          ...(delta.cursor ?? {}),
+          requires_explicit_reindex: true,
+        };
+      }
+
+      await expect(h.coordinator.ensureMemoryNamespace(namespace)).resolves.toBeUndefined();
+
+      expect(h.agentMemoryService.backfillEmbeddings).toHaveBeenCalledOnce();
+      expect(h.investigationSemanticIndex.backfillProject).toHaveBeenCalledOnce();
+      expect(h.agentMemoryService.embedAndUpsert).not.toHaveBeenCalled();
+      expect(h.jobs.get(delta.id)?.status).toBe('completed');
+      expect(Array.from(h.jobs.values()).some((job) =>
+        job.cursor?.reason === 'targeted-memory-delta')).toBe(false);
+    },
+  );
 
   it('rejects extra stale memory items even when every current chunk exists', async () => {
     const memory = {

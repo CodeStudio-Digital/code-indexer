@@ -37,6 +37,7 @@ import type { Duplex } from 'node:stream';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Hono } from 'hono';
 import type { CompanyStore } from '@mcp/store/company-store.js';
+import type { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { getCompanyOrchestrator } from '../../sse/companyOrchestrator.js';
@@ -119,6 +120,7 @@ const DEFAULT_ORIGINS = new Set(['http://localhost', 'http://127.0.0.1']);
 
 export interface TerminalUpgradeDeps {
   companyStore: CompanyStore;
+  companySandboxStore: CompanySandboxStore;
   db: CodeIndexDB;
 }
 
@@ -166,7 +168,7 @@ export function mountTerminalDiagnoseRoute(app: Hono, deps: TerminalUpgradeDeps)
       );
     }
     const spec = targetRaw === 'sandbox'
-      ? resolveSandboxSpec(sessionId)
+      ? resolveSandboxSpec(sessionId, deps)
       : resolveHostSpec(sessionId, deps);
     if ('error' in spec) {
       return c.json(
@@ -216,7 +218,7 @@ export function attachTerminalUpgrade(server: HttpServer, deps: TerminalUpgradeD
     // mid-WebSocket close code.
     let spec: SpawnSpec | { error: string; status: number };
     if (ctx.target === 'sandbox') {
-      spec = resolveSandboxSpec(ctx.sessionId);
+      spec = resolveSandboxSpec(ctx.sessionId, deps);
     } else {
       spec = resolveHostSpec(ctx.sessionId, deps);
     }
@@ -241,16 +243,25 @@ interface SpawnSpec {
   label: string;
 }
 
-function resolveSandboxSpec(sessionId: number): SpawnSpec | { error: string; status: number } {
+function resolveSandboxSpec(
+  sessionId: number,
+  deps: TerminalUpgradeDeps,
+): SpawnSpec | { error: string; status: number } {
   const orchestrator = getCompanyOrchestrator(sessionId);
   if (!orchestrator) {
     return { error: `session ${sessionId} has no live orchestrator (open it in the dashboard first)`, status: 404 };
   }
-  const binding = orchestrator.getSandboxBinding();
-  if (!binding) {
+  // The worker proxy makes every method asynchronous, and a full
+  // SandboxBinding contains a driver that cannot cross MessagePort. Read the
+  // write-through persisted sandbox row instead; it is the restart-safe source
+  // of the exact container id and works for child sessions via their root.
+  const session = deps.companyStore.getCompanySession(sessionId);
+  const sandboxSessionId = session?.parent_session_id ?? sessionId;
+  const sandbox = deps.companySandboxStore.get(sandboxSessionId);
+  if (!sandbox) {
     return { error: `session ${sessionId} has no sandbox binding`, status: 409 };
   }
-  if (!binding.containerId) {
+  if (!sandbox.container_id || sandbox.status !== 'running') {
     return { error: `session ${sessionId} sandbox is not running`, status: 409 };
   }
   // `podman exec -it <id> /bin/bash` — `-it` allocates a TTY inside the
@@ -258,8 +269,8 @@ function resolveSandboxSpec(sessionId: number): SpawnSpec | { error: string; sta
   // shell believes it's interactive at every layer.
   return {
     file: 'podman',
-    args: ['exec', '-it', binding.containerId, '/bin/bash'],
-    label: `sandbox(s=${sessionId},c=${binding.containerId.slice(0, 12)})`,
+    args: ['exec', '-it', sandbox.container_id, '/bin/bash'],
+    label: `sandbox(s=${sessionId},c=${sandbox.container_id.slice(0, 12)})`,
   };
 }
 

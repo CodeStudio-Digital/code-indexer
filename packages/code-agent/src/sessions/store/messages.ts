@@ -5,6 +5,12 @@ import type {
   CoderMessageRow,
   SessionWithMessages,
 } from '@mcp/code-agent/sessions/types.js';
+import {
+  applyGoalMutations,
+  readPersistedGoalSnapshot,
+  samePersistedGoalSnapshot,
+  type PersistedGoalMutation,
+} from './goal-mutations.js';
 import * as sessionsCore from './sessions-core.js';
 
 const require = createRequire(import.meta.url);
@@ -206,6 +212,102 @@ export interface PersistAssistantTurnInput {
    * turn at the next flush would duplicate the assistant message.
    */
   existing_message_id?: number;
+  /**
+   * Ordered goal mutations committed with their successful tool rows. This
+   * supports both a fresh create and the canonical atomic pivot batch
+   * (supersede + create) without exposing a crash window.
+   */
+  goal_mutations?: PersistedGoalMutation[];
+}
+
+interface PersistedToolEvidence {
+  message_id: number;
+  tool_use_id: string;
+  tool_name: string;
+  args_json: string;
+  result_text: string | null;
+  is_error: number;
+}
+
+/**
+ * Reconcile the one ambiguous dbWriter failure mode: SQLite may have committed
+ * the complete turn immediately before the worker died and lost its ACK. A
+ * blind synchronous fallback would then replay the goal CAS, paint a durable
+ * success red, and duplicate the transcript. Successful goal tool evidence,
+ * the assistant payload, and the final goal generation together form an
+ * idempotency key without requiring a schema migration.
+ */
+function findAlreadyCommittedGoalTurn(
+  db: DB,
+  input: PersistAssistantTurnInput,
+): number | null {
+  const mutations = input.goal_mutations ?? [];
+  if (mutations.length === 0) return null;
+
+  const calls = [...input.tool_calls, ...(input.nested_tool_calls ?? [])];
+  if (calls.length === 0) {
+    throw new Error('goal persistence retry has no tool evidence');
+  }
+  const ids = calls.map((call) => call.tool_use_id);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('goal persistence retry has duplicate tool_use_id values');
+  }
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT tc.message_id, tc.tool_use_id, tc.tool_name, tc.args_json,
+           tc.result_text, tc.is_error
+      FROM coder_tool_calls tc
+      JOIN coder_messages m ON m.id = tc.message_id
+     WHERE m.session_id = ?
+       AND tc.tool_use_id IN (${placeholders})
+  `).all(input.session_id, ...ids) as PersistedToolEvidence[];
+  if (rows.length === 0) return null;
+
+  const messageIds = new Set(rows.map((row) => row.message_id));
+  if (rows.length !== calls.length || messageIds.size !== 1) {
+    throw new Error('goal persistence retry conflicts with partial or duplicate tool evidence');
+  }
+  const rowsById = new Map(rows.map((row) => [row.tool_use_id, row]));
+  for (const call of calls) {
+    const row = rowsById.get(call.tool_use_id);
+    if (
+      !row
+      || row.tool_name !== call.tool_name
+      || row.args_json !== JSON.stringify(call.args)
+      || row.result_text !== call.result_text
+      || row.is_error !== (call.is_error ? 1 : 0)
+    ) {
+      throw new Error(
+        `goal persistence retry conflicts with tool evidence ${call.tool_use_id}`,
+      );
+    }
+  }
+
+  const messageId = rows[0].message_id;
+  const message = db.prepare(`
+    SELECT role, content_json
+      FROM coder_messages
+     WHERE id = ? AND session_id = ?
+  `).get(messageId, input.session_id) as {
+    role: string;
+    content_json: string;
+  } | undefined;
+  if (
+    !message
+    || message.role !== input.message.role
+    || message.content_json !== JSON.stringify(input.message.content)
+    || (input.existing_message_id != null && input.existing_message_id !== messageId)
+  ) {
+    throw new Error('goal persistence retry conflicts with the assistant message');
+  }
+
+  const finalGoal = mutations[mutations.length - 1].next;
+  const actualGoal = readPersistedGoalSnapshot(db, input.session_id);
+  if (!samePersistedGoalSnapshot(actualGoal, finalGoal)) {
+    throw new Error('goal persistence retry conflicts with the durable goal generation');
+  }
+  return messageId;
 }
 
 /**
@@ -217,6 +319,9 @@ export interface PersistAssistantTurnInput {
  * included in the bumpUsage call so dashboard cost totals stay consistent.
  */
 export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): number {
+  const alreadyCommittedMessageId = findAlreadyCommittedGoalTurn(db, input);
+  if (alreadyCommittedMessageId != null) return alreadyCommittedMessageId;
+
   const insertMsg = db.prepare(`
     INSERT INTO coder_messages
       (session_id, role, content_json, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
@@ -323,6 +428,12 @@ export function persistAssistantTurn(db: DB, input: PersistAssistantTurnInput): 
     // parent_tool_use_id set, and deliberately NOT part of the paired tool
     // message below — they have no matching tool_use block.
     for (const tc of input.nested_tool_calls ?? []) runInsertTool(tc);
+    applyGoalMutations(
+      db,
+      input.session_id,
+      [...input.tool_calls, ...(input.nested_tool_calls ?? [])],
+      input.goal_mutations ?? [],
+    );
     // Persist the PAIRED tool-role message in the SAME transaction. The
     // dashboard derives a tool call's status purely from the presence of a
     // matching `tool_result` block, so a tool message that never lands shows a
@@ -637,6 +748,32 @@ export function getFirstUserText(db: DB, sessionId: number): string | null {
   const row = db
     .prepare(
       "SELECT content_json FROM coder_messages WHERE session_id = ? AND role = 'user' ORDER BY id ASC LIMIT 1",
+    )
+    .get(sessionId) as { content_json: string } | undefined;
+  if (!row) return null;
+  try {
+    const blocks = JSON.parse(row.content_json) as Array<{ type: string; text?: string }>;
+    const text = blocks
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text ?? '')
+      .join('\n')
+      .trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Text of the LATEST non-meta user message — the current human request, which
+ * may differ from the original after a pivot. Skips synthetic reminders
+ * (`is_meta = 1`) so system-reminder tails never masquerade as user intent.
+ * Best-effort: unparsable content yields null so callers degrade cleanly.
+ */
+export function getLatestNonMetaUserText(db: DB, sessionId: number): string | null {
+  const row = db
+    .prepare(
+      "SELECT content_json FROM coder_messages WHERE session_id = ? AND role = 'user' AND COALESCE(is_meta, 0) = 0 ORDER BY id DESC LIMIT 1",
     )
     .get(sessionId) as { content_json: string } | undefined;
   if (!row) return null;

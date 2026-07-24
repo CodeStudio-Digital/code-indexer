@@ -19,6 +19,9 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({
   getCompanyOrchestrator: H.getActive,
   hasCompanyOrchestrator: vi.fn(() => false),
   deleteCompanyOrchestrator: H.deleteActive,
+  evictCompanyOrchestrator: vi.fn(async (id: number) => {
+    H.deleteActive(id);
+  }),
 }));
 vi.mock('@mcp/api-handlers', () => ({
   generateAiPipeline: vi.fn(),

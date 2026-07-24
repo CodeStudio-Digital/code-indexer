@@ -10,8 +10,16 @@ interface CapturedCall {
   limit?: number;
 }
 
-function fakeStore(calls: CapturedCall[], telemetry: Array<Record<string, unknown>>): DocStore {
+function fakeStore(
+  calls: CapturedCall[],
+  telemetry: Array<Record<string, unknown>>,
+  busyTimeouts: number[] = [],
+): DocStore {
   return {
+    withBusyTimeout: (timeoutMs: number, operation: () => unknown) => {
+      busyTimeouts.push(timeoutMs);
+      return operation();
+    },
     listCollectionsForProject: () => [
       { id: 7, name: 'unity 6000.3' },
       { id: 9, name: 'local project docs' },
@@ -45,6 +53,7 @@ function fakeStore(calls: CapturedCall[], telemetry: Array<Record<string, unknow
     }],
     getCollection: () => ({ id: 7, name: 'unity 6000.3' }),
     recordDocSearchEvent: (event: Record<string, unknown>) => telemetry.push(event),
+    recordDocSearchEvents: (events: Array<Record<string, unknown>>) => telemetry.push(...events),
   } as unknown as DocStore;
 }
 
@@ -52,13 +61,15 @@ describe('worker-local documentation search', () => {
   it('keeps project-scoped agent search on the local FTS path', async () => {
     const calls: CapturedCall[] = [];
     const telemetry: Array<Record<string, unknown>> = [];
-    const backend = buildWorkerDocSearch(fakeStore(calls, telemetry));
+    const busyTimeouts: number[] = [];
+    const backend = buildWorkerDocSearch(fakeStore(calls, telemetry, busyTimeouts));
 
     const result = await backend.search({
       query: 'GlobalObjectId GetGlobalObjectIdSlow',
       project_id: 11,
       limit: 8,
     });
+    await backend.flushTelemetry();
 
     expect(calls).toEqual([{
       query: 'GlobalObjectId GetGlobalObjectIdSlow',
@@ -81,6 +92,7 @@ describe('worker-local documentation search', () => {
       vector_hits: 0,
       result_count: 1,
     });
+    expect(busyTimeouts).toEqual([0]);
   });
 
   it('does not route rag_search_docs back through the Electron host bridge', () => {
@@ -95,5 +107,23 @@ describe('worker-local documentation search', () => {
 
     expect(coder).not.toContain("'docSearch',");
     expect(company).not.toContain("'docSearch',");
+  });
+
+  it('drains every bounded telemetry batch on worker shutdown', async () => {
+    const calls: CapturedCall[] = [];
+    const telemetry: Array<Record<string, unknown>> = [];
+    const backend = buildWorkerDocSearch(fakeStore(calls, telemetry));
+
+    for (let index = 0; index < 75; index++) {
+      await backend.search({
+        query: `query ${index}`,
+        project_id: 11,
+        limit: 1,
+      });
+    }
+    await backend.dispose();
+
+    expect(calls).toHaveLength(75);
+    expect(telemetry).toHaveLength(75);
   });
 });

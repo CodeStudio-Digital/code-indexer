@@ -42,11 +42,6 @@ import {
   setGlobalToolSelectionFilter,
   setGlobalToolSelectionOutcomeObserver,
 } from '@mcp/code-agent/tool-selection/index.js';
-import {
-  setGlobalQualityClassificationStore,
-  setGlobalQualityClassifierPipeline,
-  setGlobalQualityResultObserver,
-} from '@mcp/services/quality/index.js';
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -189,9 +184,6 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
     setGlobalAgentLspBackend(null);
     setGlobalToolSelectionFilter(undefined);
     setGlobalToolSelectionOutcomeObserver(undefined);
-    setGlobalQualityClassifierPipeline(undefined, false);
-    setGlobalQualityClassificationStore(undefined);
-    setGlobalQualityResultObserver(undefined);
     setGlobalSubAgentCache(undefined, false);
     setGlobalContextRelevancePipeline(undefined, false);
     setGlobalFeedbackCollector(undefined);

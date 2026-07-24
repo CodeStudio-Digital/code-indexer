@@ -62,6 +62,19 @@ describe('extractAttachmentText', () => {
     expect(out.text).toBe('const x = 1;');
   });
 
+  it('preserves a local reference without reading or encoding the file', async () => {
+    const [out] = await extractAttachmentText({
+      name: 'large.tmp',
+      mediaType: 'application/octet-stream',
+      path: 'C:\\Temp\\large.tmp',
+    });
+    expect(out).toEqual({
+      name: 'large.tmp',
+      mediaType: 'application/octet-stream',
+      path: 'C:\\Temp\\large.tmp',
+    });
+  });
+
   it('keeps PDF base64 (Anthropic-native) — does not extract', async () => {
     const [out] = await extractAttachmentText({
       name: 'paper.pdf',

@@ -38,7 +38,7 @@ async function init(root: string, commit = true): Promise<void> {
 
 function handlers(projectRoot: string) {
   return createProjectGitHandlers({
-    db: { getProject: (id: number) => id === 1 ? { id, name: 'Test', root_path: projectRoot } : null },
+    db: { getProjectRootPath: (id: number) => id === 1 ? projectRoot : undefined },
   } as never);
 }
 
@@ -56,7 +56,7 @@ describe('project git premium safety and snapshots', () => {
     await init(root);
     const rows: Array<Record<string, unknown>> = [];
     const h = createProjectGitHandlers({
-      db: { getProject: () => ({ id: 1, name: 'Test', root_path: root }) },
+      db: { getProjectRootPath: () => root },
       pipelineTelemetryStore: { insert: (row: Record<string, unknown>) => rows.push(row) },
     } as never);
     await h.listRepos({ projectId: 1 }, {} as never);

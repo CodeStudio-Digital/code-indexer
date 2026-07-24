@@ -18,7 +18,7 @@ type ScopeKey = string; // `${scopeType}:${scopeId}`
 function row(over: Partial<PipelineProviderBinding>): PipelineProviderBinding {
   return {
     id: 1,
-    pipeline_name: 'quality_code',
+    pipeline_name: 'doc_ingest',
     binding_role: 'classifier',
     provider_id: 'p1',
     model_id: 'm',
@@ -61,21 +61,21 @@ describe('resolveChain', () => {
     const r = makeResolver({
       'global:null': [row({ id: 1, provider_id: 'p1' }), row({ id: 2, provider_id: 'p2' })],
     });
-    const chain = await r.resolveChain('quality_code', 'classifier', {});
+    const chain = await r.resolveChain('doc_ingest', 'classifier', {});
     expect(chain.map((c) => c.provider.id)).toEqual(['p1', 'p2']);
     expect(chain.every((c) => c.resolvedFrom === 'global')).toBe(true);
   });
 
   it('appends the general default as the last link (distinct provider)', async () => {
     const r = makeResolver({ 'global:null': [row({ id: 1, provider_id: 'p1' })] });
-    const chain = await r.resolveChain('quality_code', 'classifier', {}, FALLBACK);
+    const chain = await r.resolveChain('doc_ingest', 'classifier', {}, FALLBACK);
     expect(chain.map((c) => c.provider.id)).toEqual(['p1', 'pFb']);
     expect(chain.at(-1)?.resolvedFrom).toBe('fallback');
   });
 
   it('does not duplicate the fallback provider when already in the chain', async () => {
     const r = makeResolver({ 'global:null': [row({ id: 1, provider_id: 'pFb' })] });
-    const chain = await r.resolveChain('quality_code', 'classifier', {}, { providerKind: 'openrouter', modelId: 'x' });
+    const chain = await r.resolveChain('doc_ingest', 'classifier', {}, { providerKind: 'openrouter', modelId: 'x' });
     expect(chain.map((c) => c.provider.id)).toEqual(['pFb']);
   });
 
@@ -84,7 +84,7 @@ describe('resolveChain', () => {
       'session:7': [row({ id: 9, provider_id: 'p2', scope_type: 'session', scope_id: 7 })],
       'global:null': [row({ id: 1, provider_id: 'p1' })],
     });
-    const chain = await r.resolveChain('quality_code', 'classifier', { sessionId: 7 });
+    const chain = await r.resolveChain('doc_ingest', 'classifier', { sessionId: 7 });
     expect(chain.map((c) => c.provider.id)).toEqual(['p2']);
   });
 
@@ -95,13 +95,13 @@ describe('resolveChain', () => {
         row({ id: 2, provider_id: 'p1', priority: 0 }),
       ],
     });
-    const chain = await r.resolveChain('quality_code', 'classifier', {});
+    const chain = await r.resolveChain('doc_ingest', 'classifier', {});
     expect(chain.map((c) => c.provider.id)).toEqual(['p1']);
   });
 
   it('empty when nothing is bound and no fallback given', async () => {
     const r = makeResolver({});
-    expect(await r.resolveChain('quality_code', 'classifier', {})).toEqual([]);
+    expect(await r.resolveChain('doc_ingest', 'classifier', {})).toEqual([]);
   });
 });
 
@@ -110,12 +110,12 @@ describe('resolve (delegates to chain[0])', () => {
     const r = makeResolver({
       'global:null': [row({ id: 1, provider_id: 'p1' }), row({ id: 2, provider_id: 'p2' })],
     });
-    const b = await r.resolve('quality_code', 'classifier', {});
+    const b = await r.resolve('doc_ingest', 'classifier', {});
     expect(b.provider.id).toBe('p1');
   });
 
   it('throws PipelineBindingMissingError when the chain is empty', async () => {
     const r = makeResolver({});
-    await expect(r.resolve('quality_code', 'classifier', {})).rejects.toBeInstanceOf(PipelineBindingMissingError);
+    await expect(r.resolve('doc_ingest', 'classifier', {})).rejects.toBeInstanceOf(PipelineBindingMissingError);
   });
 });

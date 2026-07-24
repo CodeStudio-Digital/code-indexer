@@ -1,5 +1,5 @@
 /**
- * Catalog of all pipelines and their provider-binding roles.
+ * Catalog of configurable pipelines and their provider-binding roles.
  *
  * The admin UI uses this list to render the bindings panel — each entry
  * appears as a row even before any binding row exists in the DB. Adding a
@@ -7,9 +7,9 @@
  * it shows up in the admin panel, the admin sets a provider+model, then
  * the pipeline code uses `PipelineProviderResolver.resolve(name, role)`.
  *
- * Pipelines flagged `comingSoon: true` are part of the refactor plan
- * (see the plan file) but not yet wired — they appear in the admin panel
- * so an operator can pre-configure them before the code lands.
+ * Semantic-profile-owned embeddings/rerankers and retired historical
+ * bindings do not belong here: listing them made the admin UI report a
+ * configured provider/model even though runtime ignored the row.
  */
 
 export type BindingRole =
@@ -106,168 +106,22 @@ export interface PipelineCatalogEntry {
 type CatalogSeed = Omit<PipelineCatalogEntry, 'capabilityKind'>;
 
 const CATALOG_SEED: CatalogSeed[] = [
-  // ─── Existing indexer pipelines (Phase 1 — extracted) ────────────────────
-  {
-    pipelineName: 'indexer_search',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — code embeddings are governed by the Code semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1',
-  },
-  {
-    pipelineName: 'indexer_search',
-    bindingRole: 'reranker',
-    description:
-      'INFORMATIONAL ONLY — code-search reranking is governed by the Code semantic profile. Disabled preserves the RRF ordering; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1',
-  },
+  // ─── Existing indexer pipeline (Phase 1 — extracted) ─────────────────────
+  // Embeddings and reranking are configured exclusively through the Code
+  // semantic profile. HyDE remains an optional text-LLM pipeline binding.
   {
     pipelineName: 'indexer_search',
     bindingRole: 'hyde',
     description:
       'Optional query expansion for semantic code search. This single binding selects the provider and model used by HyDE; leave it unconfigured or disabled to make no LLM call.',
     recommendedDefault: {
-      providerKind: 'openai',
-      modelHint: 'gpt-4o-mini',
+      providerKind: 'cloudflare',
+      modelHint: '@cf/meta/llama-3.2-3b-instruct',
       config: { temperature: 0.2, max_tokens: 180, timeout_ms: 20000 },
     },
     introducedInPhase: '1',
   },
 
-  // ─── Chat-individual pipelines (Phases 1.5-1.8) ──────────────────────────
-  // All wired and consumed by the runner / context-relevance compactor /
-  // sub-agent cache. The `comingSoon` flag was kept while the consuming
-  // code was being written; now that the code ships, every entry below
-  // is live behind its respective `MCP_PIPELINES_*` env flag.
-  {
-    pipelineName: 'tool_selection',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — task and tool embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1.5',
-  },
-  {
-    pipelineName: 'context_relevance',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — session-message embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1.6',
-  },
-  {
-    pipelineName: 'todo_priority',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — semantic dependency detection uses the Knowledge semantic profile when enabled. Setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1.7',
-  },
-  {
-    pipelineName: 'sub_agent_cache',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — semantic cache lookup uses the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '1.8',
-  },
-
-  // ─── Multi-agent pipelines (Phases 2-3) ──────────────────────────────────
-  {
-    pipelineName: 'role_pipeline',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — task and role embeddings use the Knowledge semantic profile. Configure the model under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '2',
-  },
-  {
-    pipelineName: 'kanban_priority',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — semantic grouping uses the Knowledge semantic profile when enabled. Setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '3',
-  },
-
-  // ─── Quality classifiers (Phase 6) ───────────────────────────────────────
-  // Hybrid quality: one consultative terminal delivery assessment. The five
-  // older entries remain visible below as historical configuration only.
-  {
-    pipelineName: 'quality_delivery',
-    bindingRole: 'classifier',
-    description: 'One terminal assessment of delivery relevance, completeness, and evidence alignment.',
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 384 },
-    },
-    introducedInPhase: 'quality-hybrid',
-  },
-  // Historical bindings retained for rollback/audit; no active runtime path
-  // instantiates these classifiers anymore.
-  {
-    pipelineName: 'quality_off_topic',
-    bindingRole: 'classifier',
-    description: 'Historical binding only; not called by the hybrid Quality runtime.',
-    setupEligible: false,
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 256 },
-    },
-    introducedInPhase: '6',
-  },
-  {
-    pipelineName: 'quality_completeness',
-    bindingRole: 'classifier',
-    description: 'Historical binding only; used once as migration fallback for quality_delivery.',
-    setupEligible: false,
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 256 },
-    },
-    introducedInPhase: '6',
-  },
-  {
-    pipelineName: 'quality_code',
-    bindingRole: 'classifier',
-    description: 'Historical binding only; code review now uses Round Review artifacts.',
-    setupEligible: false,
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 256 },
-    },
-    introducedInPhase: '6',
-  },
-  {
-    pipelineName: 'quality_policy',
-    bindingRole: 'classifier',
-    description: 'Historical binding only; active safety is enforced before dispatch.',
-    setupEligible: false,
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 256 },
-    },
-    introducedInPhase: '6',
-  },
-  {
-    pipelineName: 'quality_tool_misuse',
-    bindingRole: 'classifier',
-    description: 'Historical binding only; ToolCallLedger and deterministic guards are active.',
-    setupEligible: false,
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.2-3b-instruct',
-      config: { temperature: 0.000001, max_tokens: 256 },
-    },
-    introducedInPhase: '6',
-  },
   {
     pipelineName: 'snapshot_review',
     bindingRole: 'reviewer',
@@ -325,22 +179,6 @@ const CATALOG_SEED: CatalogSeed[] = [
       config: { temperature: 0.2, max_tokens: 600 },
     },
     introducedInPhase: '9',
-  },
-  {
-    pipelineName: 'doc_ingest',
-    bindingRole: 'embedder',
-    description:
-      'INFORMATIONAL ONLY — not consumed by code. Documentation embeddings are governed by the global Knowledge semantic profile and persisted in the local docs-vectors.db. Configure that profile under Semantic Indexing; setting this pipeline binding has no effect.',
-    setupEligible: false, // informational only — no runtime effect
-    introducedInPhase: '9',
-  },
-  {
-    pipelineName: 'doc_search',
-    bindingRole: 'reranker',
-    description:
-      'INFORMATIONAL ONLY — documentation reranking is governed by the Knowledge semantic profile. Disabled preserves the RRF ordering; setting this pipeline binding has no effect.',
-    setupEligible: false,
-    introducedInPhase: '10',
   },
   {
     pipelineName: 'doc_search',
@@ -443,17 +281,18 @@ const CATALOG_SEED: CatalogSeed[] = [
 
   // ─── Goal completion verifier (Claude-Code stop-condition pattern) ───────
   // An INDEPENDENT read-only second agent that confirms the ORIGINAL goal was
-  // actually met (goal + plan + diff + tests) before the run is allowed to
-  // finish — the "stop-condition verifier" half of CC's two-agent split.
-  // Gated behind CODER_GOAL_VERIFY; unset binding → falls back to the general
-  // default AI model so it works zero-config. Prefer a strong reasoning model,
-  // ideally a DIFFERENT family than the executor so it doesn't share blind spots.
+  // actually met (goal + plan + project state + evidence) before the goal is
+  // completed — the "stop-condition verifier" half of CC's two-agent split.
+  // Baseline for top-level goal completion; CODER_GOAL_VERIFY=0 is the explicit
+  // kill switch. An unset binding falls back to the general default AI model.
+  // Prefer a DIFFERENT model family so it does not share executor blind spots.
   {
     pipelineName: 'goal_verification',
     bindingRole: 'reviewer',
     description:
       'Independent completion verifier: a read-only second agent that confirms the original goal was ' +
-      'actually achieved (goal+plan+diff+tests) before the run finishes. Gated behind CODER_GOAL_VERIFY. ' +
+      'actually achieved (goal, plan, project state, and evidence) before the goal is completed. Enabled by default; ' +
+      'CODER_GOAL_VERIFY=0 disables it. ' +
       'Pick a strong reasoning model — ideally a different family than the executor. Unset → general default AI model.',
     recommendedDefault: {
       providerKind: 'anthropic',

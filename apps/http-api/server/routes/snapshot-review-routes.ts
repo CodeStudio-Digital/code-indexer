@@ -19,6 +19,13 @@ import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 
 type Scope = 'coder' | 'company';
 
+interface ReviewMessageDelivery {
+  ok: boolean;
+  pending?: 'interactive_wait';
+  code?: 'OUTCOME_UNKNOWN';
+  error?: string;
+}
+
 interface MountOptions {
   scope: Scope;
   listCoderSessionIds?: (companySessionId: number) => number[];
@@ -32,7 +39,7 @@ interface MountOptions {
   deliverMessage?: (
     sessionId: number,
     message: string,
-  ) => { ok: boolean; pending?: 'interactive_wait' };
+  ) => ReviewMessageDelivery | Promise<ReviewMessageDelivery>;
 }
 
 interface CommentBody {
@@ -353,13 +360,20 @@ export function mountSnapshotReviewRoutes(
       .filter((cmt) => allowed.has(cmt.id) && cmt.status !== 'dismissed' && cmt.status !== 'sent');
     if (comments.length === 0) return c.json({ error: 'no comments to submit' }, 400);
     const message = buildFeedbackMessage(comments);
-    reviewStore.markSent(comments.map((cmt) => cmt.id));
-    const delivery = opts.deliverMessage?.(sessionId, message);
+    const delivery = await opts.deliverMessage?.(sessionId, message);
+    // A company-side delivery refusal is retryable. Do not irreversibly mark
+    // those comments as sent until the worker acknowledges the message.
+    if (delivery?.ok !== false) {
+      reviewStore.markSent(comments.map((cmt) => cmt.id));
+    }
     return c.json({
       message,
       comments: reviewStore.listCommentsByIds(comments.map((cmt) => cmt.id)),
       delivered: delivery ? delivery.ok : null,
       pending: delivery?.pending ?? null,
+      delivery_code: delivery?.code ?? null,
+      delivery_error: delivery?.error ?? null,
+      retry_safe: delivery?.code !== 'OUTCOME_UNKNOWN',
     });
   });
 }

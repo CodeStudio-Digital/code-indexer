@@ -2,8 +2,8 @@
  * anthropicChat — same shape as openAiCompatibleChat but speaks the
  * Anthropic Messages API natively.
  *
- * Used when the resolved binding's provider has `kind: 'anthropic'`. The
- * LLMClassifier dispatches to this when needed by calling `pickChatFn`.
+ * Used when the resolved binding's provider has `kind: 'anthropic'`.
+ * `pickChatFn` dispatches to this adapter.
  *
  * Important: Anthropic's API requires `max_tokens` (no default), so we
  * default to 1024 if not provided in the binding's config.
@@ -54,7 +54,8 @@ function splitMessages(messages: ChatMessage[]): { system: string | undefined; c
       systems.push(m.content);
     } else {
       // Anthropic treats 'tool' / 'tool_result' shapes specially — we
-      // collapse to user/assistant here. Classifiers don't need tool calls.
+      // collapse to user/assistant because these single-shot helpers do not
+      // model tool calls.
       conversation.push({
         role: m.role === 'assistant' ? 'assistant' : 'user',
         content: m.content,

@@ -254,8 +254,21 @@ export class CompanyOrchestrator {
   interruptMasterWait(info?: { kind?: 'plan' | 'question' | 'tasks'; agentRunId?: number; role?: string }): boolean {
     return this.master.handle?.runner.interruptWait(info) ?? false;
   }
-  respondToMasterPlan(approved: boolean, feedback?: string, promptId?: number) { return this.humanInLoop.respondToMasterPlan(approved, feedback, promptId); }
-  respondToMasterQuestion(answer: string, promptId?: number) { return this.humanInLoop.respondToMasterQuestion(answer, promptId); }
+  respondToMasterPlan(
+    approved: boolean,
+    feedback?: string,
+    promptId?: number,
+    deliveryOpts?: { retryOutcomeUnknown?: boolean },
+  ) {
+    return this.humanInLoop.respondToMasterPlan(approved, feedback, promptId, deliveryOpts);
+  }
+  respondToMasterQuestion(
+    answer: string,
+    promptId?: number,
+    deliveryOpts?: { retryOutcomeUnknown?: boolean },
+  ) {
+    return this.humanInLoop.respondToMasterQuestion(answer, promptId, deliveryOpts);
+  }
   async swapMasterProvider(providerName: string, model?: string): Promise<{ provider: string; model: string }> { return this.master.swapProvider(providerName, model); }
   updateRoleConfigs(roleConfigs: RoleConfig[]): void { this.master.updateRoleConfigs(roleConfigs); }
 
@@ -288,10 +301,10 @@ export class CompanyOrchestrator {
     });
   }
 
-  sendMessageToMaster(
+  async sendMessageToMaster(
     message: string,
     options: { interject?: boolean; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean } = {},
-  ): { ok: boolean; pending?: 'interactive_wait' } {
+  ): Promise<{ ok: boolean; pending?: 'interactive_wait' }> {
     // Lazy-start: sub-session's master is dormant until the first message.
     if (!this.master.isAlive && this.master.agentRunId == null) {
       const session = this.ctx.companyStore.getCompanySession(this.companySessionId);
@@ -321,9 +334,11 @@ export class CompanyOrchestrator {
       const launch = hasPersistedMaster
         ? this.master.resumeExisting(opts)
         : this.master.start(opts);
-      void launch.catch((e) => {
-        console.error(`[company s=${this.companySessionId}] lazy master start failed:`, e);
-      });
+      // The main-side proxy cannot acknowledge delivery until the worker has
+      // registered the resumed/new run. Propagate launch failure so HTTP
+      // callers do not return a false 200 and permanently dedupe a lost
+      // message.
+      await launch;
       return { ok: true };
     }
     return this.master.sendUserMessage(message, options);
@@ -582,9 +597,28 @@ export class CompanyOrchestrator {
   getSandboxStackForService(serviceId?: string | null): string | null { return this.sandboxService.getStackForService(serviceId ?? null); }
   listSandboxPeers(selfServiceId?: string | null): SandboxPeer[] { return listSandboxPeers(this.sandboxService, this.parentSessionId, selfServiceId); }
   async provisionSandboxIfNeeded(signal?: AbortSignal): Promise<SandboxBinding | null> { return provisionSandboxIfNeeded(this.sandboxService, this.parentSessionId, signal); }
+  /**
+   * MessagePort-safe projection for the main-process service route.
+   * `SandboxBinding` itself contains an `ISandboxDriver` with functions and
+   * therefore cannot be structured-cloned out of the company worker.
+   */
+  async addSandboxService(
+    opts: Omit<Parameters<SandboxService['addService']>[0], 'signal'>,
+  ): Promise<{ previewUrl: string; containerId: string }> {
+    const binding = await this.sandboxService.addService(opts);
+    return {
+      previewUrl: binding.previewUrl,
+      containerId: binding.containerId,
+    };
+  }
+  async removeSandboxService(serviceId: string): Promise<void> {
+    await this.sandboxService.removeService(serviceId);
+  }
 
   // ─── Shutdown ──────────────────────────────────────────────────
-  abortAll(opts: { teardownSandbox?: boolean; finalStatus?: 'error' | 'idle' } = {}): void {
+  async abortAll(
+    opts: { teardownSandbox?: boolean; finalStatus?: 'error' | 'idle' } = {},
+  ): Promise<void> {
     const teardownSandbox = opts.teardownSandbox ?? true;
     const finalStatus = opts.finalStatus ?? 'error';
     this.ctx.markAborted();
@@ -601,9 +635,10 @@ export class CompanyOrchestrator {
     // Sub-sessions don't own a sandbox — teardown would target the parent's
     // container, which siblings still depend on.
     if (teardownSandbox && this.parentSessionId == null) {
-      // Best-effort; fire-and-forget. abortAll is often called from signal
-      // handlers where we can't block on a container removal round-trip.
-      void this.sandboxService.teardown('aborted').catch(() => void 0);
+      // Destructive callers await the worker RPC before evicting it. Keeping
+      // teardown inside that acknowledgement prevents the worker from exiting
+      // midway through container removal and leaving an orphan sandbox.
+      await this.sandboxService.teardown('aborted').catch(() => void 0);
     }
     this.publisher.markEnded('done', { reason: 'aborted' });
   }

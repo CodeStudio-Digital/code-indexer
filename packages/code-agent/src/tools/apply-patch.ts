@@ -500,6 +500,7 @@ Prefer this tool over per-file edit tools when changing several files at once; t
 
 export const applyPatchTool: CoderTool = {
   name: 'apply_patch',
+  effectBoundary: 'filesystem',
   description: APPLY_PATCH_DESC,
   source: 'native',
   parameters: {

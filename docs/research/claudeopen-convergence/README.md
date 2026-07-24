@@ -1,6 +1,9 @@
 # Atlas ClaudeOpen → CodeStudio
 
-> Status: atlas documental e roadmap. Esta rodada não altera runtime, banco, API, dashboard, prompts nem comportamento de agentes.
+> Status: atlas, roadmap e implementação incremental. Os documentos `18` e
+> `19` registram, respectivamente, o plano da Fase 3 e as correções de runtime
+> já incorporadas. O baseline comparativo dos documentos `00`–`17` permanece
+> histórico e auditável.
 
 ## Objetivo
 
@@ -27,9 +30,11 @@ As perguntas centrais são:
 
 O snapshot Desktop não deve ser automaticamente identificado com as notas antigas de Claude Desktop 1.8089.1. O limite está detalhado em [00-scope-provenance-method.md](./00-scope-provenance-method.md).
 
-## Decisões vinculantes
+## Decisões vinculantes do baseline
 
-- Entrega desta rodada: **atlas + roadmap**, sem mudanças funcionais.
+- A entrega original dos documentos `00`–`17` foi **atlas + roadmap**, sem
+  mudanças funcionais; as fases de implementação posteriores são registradas
+  separadamente para não reescrever a evidência histórica.
 - Estratégia: **híbrida por contratos**; preservar as vantagens do CodeStudio.
 - Eventos: **journal canônico lossless + projeções**; o log diagnóstico atual não é o event source.
 - Ultra: **preset ortogonal** de effort, orquestração, paralelismo, verificação, durabilidade e isolamento.
@@ -47,6 +52,8 @@ Motivações, alternativas e gatilhos de revisão estão em [DECISIONS.md](./DEC
 4. [15 — Roadmap, fases e gates](./15-roadmap-phases-gates.md)
 5. [16 — Plano de avaliação](./16-evaluation-benchmark-plan.md)
 6. [17 — Riscos e questões abertas](./17-risk-register-open-questions.md)
+7. [18 — Plano da Fase 3](./18-fase-3-plan.md)
+8. [19 — Correções de maturidade do runtime](./19-runtime-hardening-corrections.md)
 
 ### Leitura ClaudeOpen
 
@@ -93,6 +100,8 @@ Motivações, alternativas e gatilhos de revisão estão em [DECISIONS.md](./DEC
 | `15-roadmap-phases-gates.md` | Rollout incremental e gates go/no-go |
 | `16-evaluation-benchmark-plan.md` | Benchmarks, métricas e critérios causais |
 | `17-risk-register-open-questions.md` | Riscos, mitigação e perguntas não respondidas |
+| `18-fase-3-plan.md` | Sequenciamento da implementação da Fase 3 |
+| `19-runtime-hardening-corrections.md` | Comparação antes/depois e gates das correções de runtime |
 | `DECISIONS.md` | Registro de decisões e alternativas |
 | `EVIDENCE_INDEX.md` | Catálogo central de claims e citações |
 

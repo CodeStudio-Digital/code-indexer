@@ -65,6 +65,24 @@ describe('authorized external filesystem roots', () => {
     expect(readFileSync(target, 'utf8')).toBe('allowed');
   });
 
+  it('authorizes one exact attached file without exposing its siblings', async () => {
+    const grantedFile = join(externalRoot, 'source.ts');
+    const sibling = join(externalRoot, 'sibling.txt');
+    writeFileSync(sibling, 'must stay private');
+    const exactFileCtx = {
+      ...ctx('read'),
+      externalRoots: [{ id: 8, rootPath: grantedFile, access: 'read' as const }],
+    } as ToolContext;
+
+    const allowed = await readFile.handler({ path: grantedFile }, exactFileCtx);
+    const denied = await readFile.handler({ path: sibling }, exactFileCtx);
+
+    expect(allowed.isError).toBeFalsy();
+    expect(allowed.content).toContain('value = 1');
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toContain('outside the project and authorized roots');
+  });
+
   it('rejects ungranted paths and symlink escapes', async () => {
     const ungranted = await readFile.handler({ path: join(outsideRoot, 'secret.txt') }, ctx('read'));
     symlinkSync(outsideRoot, join(externalRoot, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');

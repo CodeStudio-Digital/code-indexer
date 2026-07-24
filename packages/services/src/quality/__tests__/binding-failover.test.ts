@@ -10,7 +10,7 @@ import { callChatWithFailover } from '../binding-failover.js';
 
 function b(id: string, kind = 'openai'): ResolvedBinding {
   return {
-    pipelineName: 'quality_code',
+    pipelineName: 'doc_ingest',
     bindingRole: 'classifier',
     provider: { id, kind, name: id, api_key: 'k' } as ResolvedBinding['provider'],
     modelId: 'm',
@@ -87,6 +87,43 @@ describe('callChatWithFailover', () => {
     expect(res.binding?.provider.id).toBe('bb');
     expect(res.result.content).toBe('recovered');
     expect(res.failedOver).toBe(true);
+  });
+
+  it('retries caller-rejected content once on the same binding', async () => {
+    let calls = 0;
+    const res = await callChatWithFailover(
+      [b('a'), b('bb')],
+      async () => ok(++calls === 1 ? '{"findings":[' : '{"findings":[]}'),
+      {
+        ...NO_RETRY,
+        invalidResultRetries: 1,
+        validateResult: (result) => result.content.endsWith(']}') ? null : 'invalid JSON',
+      },
+    );
+    expect(calls).toBe(2);
+    expect(res.binding?.provider.id).toBe('a');
+    expect(res.result.content).toBe('{"findings":[]}');
+    expect(res.providerCalls).toBe(2);
+  });
+
+  it('fails over after caller-rejected content exhausts its same-binding retry', async () => {
+    const calls: string[] = [];
+    const res = await callChatWithFailover(
+      [b('a'), b('bb')],
+      async (bind) => {
+        calls.push(bind.provider.id);
+        return ok(bind.provider.id === 'a' ? '{"findings":[' : '{"findings":[]}');
+      },
+      {
+        ...NO_RETRY,
+        invalidResultRetries: 1,
+        validateResult: (result) => result.content.endsWith(']}') ? null : 'invalid JSON',
+      },
+    );
+    expect(calls).toEqual(['a', 'a', 'bb']);
+    expect(res.binding?.provider.id).toBe('bb');
+    expect(res.failedOver).toBe(true);
+    expect(res.providerCalls).toBe(3);
   });
 
   it('empty chain → synthetic no_binding result, never throws', async () => {

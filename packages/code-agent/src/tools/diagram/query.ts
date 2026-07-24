@@ -99,6 +99,11 @@ export const diagramExportTool: CoderTool = {
       return err(`No diagram named "${r.slug}" (${r.rel}).`);
     }
     const format = args.format === 'png' ? 'png' : 'svg';
+    // The renderer performs the eventual file write after this event. It does
+    // not yet accept a lease-bound request id or cancellation signal, so this
+    // tool intentionally declares no physical effectBoundary. AgentRun
+    // ENFORCE therefore fails closed before reaching this handler; default and
+    // SHADOW modes preserve the existing editor-mediated export.
     emitDiagramExportRequest(ctx, r.rel, format);
     return ok(
       `Requested ${format.toUpperCase()} export of ${r.rel}. If the Diagram panel is open it writes diagrams/${r.slug}.${format}; otherwise open the diagram first and retry.`,

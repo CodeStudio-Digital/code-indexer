@@ -5,10 +5,13 @@ import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
 import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { HookBus } from '@mcp/code-agent/core/hook-bus.js';
 
 export interface CoderAttachment {
   name: string;
   mediaType: string;
+  /** Canonical local path, authorized read-only for this session. */
+  path?: string;
   /** Base64-encoded payload (for images and binary docs like PDF). */
   base64?: string;
   /** Pre-decoded UTF-8 text (for plain-text-like files). */
@@ -44,6 +47,12 @@ export interface PreflightSeed {
 export interface RunCoderOptions {
   /** Numeric session id (existing) or "new" to create one */
   session: { id: number } | { create: { project_id: number; title: string; provider: CoderProviderName; model?: string } };
+  /**
+   * Opaque current AgentRun identity supplied by the execution host. This is
+   * the only control-plane field transported into a coder worker; it lets an
+   * immediate child spawn link to its parent before run_started is mirrored.
+   */
+  controlPlaneParentAgentRunId?: string;
   /** User message to append before running */
   userMessage: string;
   /** Optional attachments (images, documents) for the user message */
@@ -59,6 +68,12 @@ export interface RunCoderOptions {
   maxTurns?: number;
   /** Abort signal */
   signal?: AbortSignal;
+  /**
+   * Optional per-run HookBus injection for trusted in-process hosts/tests.
+   * Worker/plugin hooks normally register through registerRuntimeHook(); the
+   * host must not attempt to structured-clone handlers across MessagePort.
+   */
+  hookBus?: HookBus;
   /**
    * Mem C — host-provided project-memory retriever. Structural type to avoid
    * a code-agent → services dependency. When set and the project has memory
@@ -420,8 +435,7 @@ export interface RunCoderHandle {
   runner: CoderRunner;
   /**
    * Resolves as soon as the terminal assistant/tool transcript is durable.
-   * This intentionally precedes `done`, which also waits for terminal quality
-   * assessment and resource cleanup.
+   * This intentionally precedes `done`, which also waits for resource cleanup.
    */
   transcriptFlushed: Promise<{ reason: string; usage: ChatUsage; error?: string }>;
   /** Awaits completion. Resolves with the run reason, usage, and optional error detail. */

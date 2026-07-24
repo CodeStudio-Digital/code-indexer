@@ -85,7 +85,7 @@
   "item.CODER_DOOM_LOOP_THRESHOLD.label": "Strict doom-loop threshold",
   "item.CODER_FALLBACK_CHAIN.description": "Comma-separated provider ids to try in order when the primary 5xx/429s.",
   "item.CODER_FALLBACK_CHAIN.label": "Provider fallback chain",
-  "item.CODER_GOAL_VERIFY_MAX_TURNS.description": "Optional exact turn cap for the independent completion verifier. 0 = unlimited.",
+  "item.CODER_GOAL_VERIFY_MAX_TURNS.description": "Turn cap for the independent completion verifier. Defaults to 12; values below 1 fall back to 12, and the hard maximum is 50.",
   "item.CODER_GOAL_VERIFY_MAX_TURNS.label": "Completion verifier max turns",
   "item.CODER_GREP_PER_FILE_CAP.description": "Cap matches per file in `grep_code` output to keep one hot file from drowning results.",
   "item.CODER_GREP_PER_FILE_CAP.label": "grep matches-per-file cap",

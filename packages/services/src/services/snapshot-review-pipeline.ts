@@ -80,6 +80,8 @@ const PIPELINE_NAME = 'snapshot_review';
 const ROLE = 'reviewer';
 const LABEL = `${PIPELINE_NAME}/${ROLE}`;
 const MAX_DIFF_CHARS = 60_000;
+const DEFAULT_REVIEW_TIMEOUT_MS = 60_000;
+const INVALID_RESPONSE_PREFIX = '[review_pipeline_invalid_response]';
 
 function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -125,10 +127,16 @@ function toOptionalString(value: unknown, max: number): string | null {
 }
 
 function parseFindings(raw: string): SnapshotReviewFinding[] {
-  const parsed = extractJson(raw) as { findings?: unknown };
-  if (!Array.isArray(parsed.findings)) return [];
+  const parsed = extractJson(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('response JSON must be an object');
+  }
+  const rows = (parsed as { findings?: unknown }).findings;
+  if (!Array.isArray(rows)) {
+    throw new Error('response JSON must contain a findings array');
+  }
   const findings: SnapshotReviewFinding[] = [];
-  for (const item of parsed.findings) {
+  for (const item of rows) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
     const filePath = toOptionalString(row.filePath, 1000);
@@ -161,6 +169,7 @@ export class SnapshotReviewPipeline {
     const startedAt = performance.now();
     let binding: ResolvedBinding | null = null;
     let pendingHunks = 0;
+    let lastRaw = '';
     try {
       // resolveChain lets a second configured reviewer binding (or the general
       // default) take over when the primary is uncallable/down. The runner
@@ -189,24 +198,48 @@ export class SnapshotReviewPipeline {
       );
       const failover = await callChatWithFailover(
         chain,
-        (b) =>
-          callConfiguredChat(b, messages, {
+        (b) => {
+          const config = b.config as Record<string, unknown>;
+          const timeoutMs = toNumber(config.timeout_ms) ?? DEFAULT_REVIEW_TIMEOUT_MS;
+          return callConfiguredChat(b, messages, {
             temperature: 0,
-            maxTokens: toNumber((b.config as Record<string, unknown>).max_tokens) ?? 4000,
-          }),
-        { label: LABEL, codePrefix: 'review_pipeline', retry: { maxRetries: 0 } },
+            maxTokens: toNumber(config.max_tokens) ?? 4000,
+            timeoutMs,
+          });
+        },
+        {
+          label: LABEL,
+          codePrefix: 'review_pipeline',
+          retry: { maxRetries: 0 },
+          invalidResultRetries: 1,
+          validateResult: (chatResult) => {
+            try {
+              parseFindings(chatResult.content);
+              return null;
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              return `${INVALID_RESPONSE_PREFIX} ${message}`;
+            }
+          },
+        },
       );
       const result = failover.result;
+      lastRaw = result.content;
       binding = failover.binding ?? chain[0];
       if (result.errorBody) {
+        const invalidResponse = result.errorBody.startsWith(INVALID_RESPONSE_PREFIX);
         return this.finish(input, startedAt, pendingHunks, 0, true, {
           ok: false,
           findings: [],
           raw: result.content,
           providerId: binding.provider.id,
           modelId: binding.modelId,
-          errorCode: 'review_pipeline_provider_error',
-          error: friendlyProviderError(binding, result.errorBody, LABEL),
+          errorCode: invalidResponse
+            ? 'review_pipeline_invalid_response'
+            : 'review_pipeline_provider_error',
+          error: invalidResponse
+            ? result.errorBody.slice(INVALID_RESPONSE_PREFIX.length).trim()
+            : friendlyProviderError(binding, result.errorBody, LABEL),
         });
       }
 
@@ -222,7 +255,7 @@ export class SnapshotReviewPipeline {
       return this.finish(input, startedAt, pendingHunks, 0, true, {
         ok: false,
         findings: [],
-        raw: '',
+        raw: lastRaw,
         providerId: binding?.provider.id,
         modelId: binding?.modelId,
         errorCode: 'review_pipeline_error',

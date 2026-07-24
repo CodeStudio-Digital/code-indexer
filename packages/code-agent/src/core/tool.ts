@@ -19,6 +19,46 @@ import type { JsonSchema } from '@mcp/provider-sdk';
 export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
 export type ToolRepeatPolicy = 'stable' | 'volatile' | 'pollable' | 'mutating';
 export type ToolExecutionClass = 'read' | 'write' | 'execute' | 'control';
+export type GoalStatus = 'in_progress' | 'complete' | 'superseded';
+export type ToolEffectBoundaryKind =
+  | 'filesystem'
+  | 'shell'
+  | 'network'
+  | 'database'
+  /** The tool has no direct effect; every nested call is dispatched again through the registry. */
+  | 'nested'
+  /** In-process control state whose handler entry is the physical mutation boundary. */
+  | 'control';
+
+export interface ToolMutationEffect {
+  kind: Exclude<ToolEffectBoundaryKind, 'nested'>;
+  operation: string;
+  /** Canonical/physical target observed at the port boundary. */
+  resource?: string;
+}
+
+export interface ToolMutationFence {
+  readonly mode: 'shadow' | 'enforce';
+  /** Bound invocation evidence; raw tool input is never stored here. */
+  readonly resourceBinding?: import('@mcp/agent-runtime-contracts').ResourceBinding;
+  /** Aborted as soon as authoritative lease validation fails. */
+  readonly signal?: AbortSignal;
+  /**
+   * Seal the normalized effective input and declared first-party boundary for
+   * one invocation. The registry calls this again for code_exec nested calls.
+   */
+  bindInvocation(input: {
+    toolName: string;
+    toolUseId: string;
+    effectiveInput: Record<string, unknown>;
+    boundary?: ToolEffectBoundaryKind;
+    requiresEffectBoundary: boolean;
+  }): ToolMutationFence;
+  /** Revalidate input/environment/lease binding immediately before an effect. */
+  assertMutation(effect: ToolMutationEffect): void;
+  /** Periodically validate ownership so in-flight cancellable ports are aborted. */
+  startLeaseMonitor?(): () => void;
+}
 
 /**
  * Runtime-only progressive-disclosure metadata for tools contributed by a
@@ -106,6 +146,13 @@ export interface CoderTool {
    * back to the static chain exactly as before.
    */
   riskOf?(input: unknown): ToolRiskLevel;
+  /**
+   * Declares where this first-party tool revalidates the current AgentRun and
+   * resource binding immediately before its physical effect. Mutating or
+   * non-read tools without this declaration are refused in AgentRun ENFORCE;
+   * SHADOW/default-off retain legacy behaviour.
+   */
+  effectBoundary?: ToolEffectBoundaryKind;
   /**
    * Tool requires a sandbox runtime to execute safely (e.g., scaffolders
    * that materialize new projects, or shell tools that should never touch
@@ -248,6 +295,62 @@ export interface NestedToolObserver {
   afterNestedCall(e: Omit<NestedToolCallRecord, 'parentToolUseId' | 'seq'>): void;
 }
 
+export interface CapabilityPolicyInput {
+  tool: CoderTool | null;
+  toolUseId: string;
+  toolName: string;
+  /** Normalized/effective input that will reach the handler. */
+  toolInput: Record<string, unknown>;
+  turn: number;
+}
+
+export type CapabilityPolicyPort = (
+  input: CapabilityPolicyInput,
+) => { refuse: true; refusalText: string } | { refuse: false } | null | undefined
+  | Promise<{ refuse: true; refusalText: string } | { refuse: false } | null | undefined>;
+
+export interface CapabilityLifecycleHooks {
+  before(input: {
+    toolUseId: string;
+    toolName: string;
+    turn: number;
+    known: boolean;
+  }): void | Promise<void>;
+  after(input: {
+    toolUseId: string;
+    toolName: string;
+    turn: number;
+    known: boolean;
+    isError: boolean;
+    refused: boolean;
+    durationMs: number;
+  }): void | Promise<void>;
+}
+
+export interface CapabilityPreflightResult {
+  content: string;
+  isError: boolean;
+  refusalKind?: string;
+  guardVerdict?: GuardVerdict;
+}
+
+export type CapabilityPreflightPort = (
+  input: CapabilityPolicyInput & { toolMutates: boolean },
+) => CapabilityPreflightResult | null | undefined
+  | Promise<CapabilityPreflightResult | null | undefined>;
+
+/**
+ * The exact capability authority attached to a visible tool invocation.
+ * Nested dispatchers (currently code_exec) must reuse it rather than calling
+ * handlers through a weaker policy/hook path.
+ */
+export interface NestedCapabilityDispatch {
+  turn: number;
+  preflight?: CapabilityPreflightPort;
+  policyShadow?: CapabilityPolicyPort;
+  capabilityHooks?: CapabilityLifecycleHooks;
+}
+
 export interface ToolContext {
   /** Project root path of the PRIMARY project. Native fs operations default here
    *  and must stay inside SOME known root (primary or a linked `roots` entry). */
@@ -364,6 +467,12 @@ export interface ToolContext {
    */
   nestedToolObserver?: NestedToolObserver;
   /**
+   * Current direct-dispatch authority inherited by nested capability calls.
+   * The runner refreshes this per visible invocation so task-scoped policy,
+   * effective inputs and lifecycle hooks are identical at every depth.
+   */
+  nestedCapabilityDispatch?: NestedCapabilityDispatch;
+  /**
    * Session-persistent key-value store exposed to code_exec scripts as the
    * `stash` global. Survives across code_exec calls (the node:vm sandbox
    * does not), so scripts carry file content/intermediate results forward
@@ -466,20 +575,41 @@ export interface ToolContext {
    */
   getGoalState?: () => {
     text: string;
-    status: 'in_progress' | 'complete';
+    status: GoalStatus;
     budgetTokens: number | null;
     completionNote: string | null;
     createdAt: string;
     updatedAt: string;
   } | null;
-  upsertGoalState?: (goal: {
-    text: string;
-    status: 'in_progress' | 'complete';
-    budgetTokens?: number | null;
-    completionNote?: string | null;
-    createdAt: string;
-    updatedAt: string;
-  }) => void;
+  upsertGoalState?: (
+    goal: {
+      text: string;
+      status: GoalStatus;
+      budgetTokens?: number | null;
+      completionNote?: string | null;
+      createdAt: string;
+      updatedAt: string;
+    },
+    attribution: {
+      toolUseId: string;
+      toolName: 'create_goal' | 'update_goal';
+    },
+  ) => void | Promise<void>;
+  /**
+   * Runtime-owned objective authority. `update_goal(status="superseded")`
+   * is accepted only for an explicit user pivot classified required_pivot.
+   */
+  goalLifecycleIntent?:
+    | 'required_fresh'
+    | 'required_pivot'
+    | 'required_resume'
+    | 'ledger';
+  /**
+   * Exact inherited goal generation that an explicit pivot may supersede.
+   * Kept separate from required_fresh so a goal created during this run can
+   * never inherit authority intended for the previous objective.
+   */
+  goalLifecyclePivotGoalCreatedAt?: string;
   /**
    * Session Drive sinks — the session's durable working memory (migrations
    * 125/126). Wired by `runCoder` for non-company sessions so the
@@ -559,6 +689,14 @@ export interface ToolContext {
    */
   sessionId?: number;
   /**
+   * Opaque identity of the current root AgentRun, established by the host
+   * before worker dispatch. Subagent creation uses it as the authoritative
+   * parent link instead of racing the asynchronous runner_run_id mirror.
+   * It is metadata only: no actor, lease owner, or fence crosses the worker
+   * boundary through this field.
+   */
+  controlPlaneParentAgentRunId?: string;
+  /**
    * The session's project id (coder_sessions.project_id). Lets project-aware
    * tools (`rag_search_docs` linked-collection scoping, the `<indexed-docs>`
    * hint) resolve project-scoped state without a DB round-trip per call.
@@ -572,6 +710,11 @@ export interface ToolContext {
    * excluded. Undefined → shell tools inherit the plain (system) env.
    */
   runtimeEnv?: import('@mcp/code-agent/ports/shell-port.js').AgentRuntimeEnv;
+  /**
+   * Invocation-scoped AgentRun/resource fence. First-party effect ports call
+   * `assertMutation` synchronously as their final action before dispatch.
+   */
+  mutationFence?: ToolMutationFence;
   /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`

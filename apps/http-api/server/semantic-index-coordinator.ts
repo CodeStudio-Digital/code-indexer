@@ -97,6 +97,11 @@ interface CoordinatorDeps {
   withProjectLock?<T>(projectId: number, operation: () => Promise<T>): Promise<T>;
   /** Owner id used by Snapshot/AgentMemory durable fences in this process. */
   mutationFenceOwner?: string;
+  /** Optional worker-owned startup recovery for stale durable fences. */
+  recoverMutationFences?(
+    prefixes: readonly string[],
+    currentOwner: string,
+  ): Promise<number | null>;
 }
 
 type ReindexResult = {
@@ -154,6 +159,22 @@ const DOCS_BACKFILL_RETRY_MS = 30_000;
 const PROJECT_REMOVAL_RETRY_MS = 30_000;
 const CODE_DELTA_PATH_LIMIT = 512;
 const CODE_VERIFY_WAVE_FILES = 25;
+const CODE_DELTA_BUSY_TIMEOUT_MS = 0;
+const CODE_DELTA_RETRY_BASE_MS = 50;
+const CODE_DELTA_RETRY_MAX_MS = 1_000;
+const MUTATION_FENCE_RECOVERY_PREFIXES = [
+  'docs:c',
+  'snapshot:p',
+  'memory:project:p',
+  'memory:user',
+] as const;
+
+function isSqliteBusyError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'SQLITE_BUSY'
+    || code === 'SQLITE_BUSY_SNAPSHOT'
+    || /database is (?:locked|busy)/i.test(errorMessage(error));
+}
 
 type CodeDeltaCursor = {
   events: DirtyEvent[];
@@ -226,22 +247,31 @@ export class SemanticIndexCoordinator {
   private readonly projectTombstones = new Set<number>();
   private readonly docsMutationOwner = randomUUID();
   private readonly memoryMutationOwner: string;
+  private mutationFenceRecovery: Promise<void> | null = null;
   private docsBackfillTimer: ReturnType<typeof setTimeout> | null = null;
   private docsBackfillRun: Promise<number> | null = null;
   private projectRemovalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private projectRemovalRecoveryRun: Promise<number> | null = null;
+  private readonly pendingCodeDeltas = new Map<number, Map<string, DirtyEvent>>();
+  private readonly codeDeltaRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly codeDeltaRetryAttempts = new Map<number, number>();
   private disposed = false;
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.memoryMutationOwner = deps.mutationFenceOwner ?? randomUUID();
-    // No request can own this fresh process id yet, so every differently-owned
-    // fence is crash residue. Server boot synchronously recovers stale source
-    // rows before timers or routes can drive the pending catch-up.
-    this.deps.semanticStore.recoverNamespaceMutationFences?.(
-      'docs:c',
-      this.docsMutationOwner,
-    );
-    this.recoverExpiredMemoryMutationFences();
+    if (deps.recoverMutationFences) {
+      // Fence resolution can scan source rows and acquire IMMEDIATE. Keep it
+      // off Electron-main; catch-up and new docs mutations wait on this
+      // promise, while unrelated renderer/SSE work remains available. A
+      // failed worker call is not converted into success: the next semantic
+      // operation retries recovery before it may mutate or reconcile.
+      this.startMutationFenceRecovery();
+    } else {
+      // Tests/headless runtimes retain the synchronous contract, but never
+      // inherit a multi-second busy wait.
+      this.recoverMutationFencesLocallyFailFast();
+      this.mutationFenceRecovery = Promise.resolve();
+    }
     // Keep completed removal markers fenced until the caller deletes the
     // project row. This survives a crash in the gap after vectors.db is gone.
     for (const job of deps.semanticStore.listJobs()) {
@@ -255,6 +285,48 @@ export class SemanticIndexCoordinator {
     // in-memory Set. Polling is a recovery path for a failed/missed localhost
     // wake-up and also closes the crash gap after physical cleanup.
     this.scheduleProjectRemovalRetry(1_000);
+  }
+
+  private recoverMutationFencesLocallyFailFast(): void {
+    const recover = (): void => {
+      this.deps.semanticStore.recoverNamespaceMutationFences?.(
+        'docs:c',
+        this.docsMutationOwner,
+      );
+      this.recoverExpiredMemoryMutationFences();
+    };
+    if (typeof this.deps.semanticStore.withBusyTimeout === 'function') {
+      this.deps.semanticStore.withBusyTimeout(0, recover);
+    } else {
+      recover();
+    }
+  }
+
+  private startMutationFenceRecovery(): Promise<void> {
+    const recover = this.deps.recoverMutationFences;
+    if (!recover) return Promise.resolve();
+    const raw = recover(
+      MUTATION_FENCE_RECOVERY_PREFIXES,
+      this.memoryMutationOwner,
+    ).then((recovered) => {
+      if (recovered === null) this.recoverMutationFencesLocallyFailFast();
+    });
+    const guarded = raw.catch((error) => {
+      if (this.mutationFenceRecovery === guarded) this.mutationFenceRecovery = null;
+      console.warn(`[semantic] mutation-fence recovery deferred: ${errorMessage(error)}`);
+      throw error;
+    });
+    this.mutationFenceRecovery = guarded;
+    // Recovery begins eagerly at startup. Attach an observer so a worker
+    // failure before the first semantic operation is not an unhandled
+    // rejection; the operation itself will retry through the null slot.
+    void guarded.catch(() => undefined);
+    return guarded;
+  }
+
+  private ensureMutationFenceRecovery(): Promise<void> {
+    if (!this.deps.recoverMutationFences) return Promise.resolve();
+    return this.mutationFenceRecovery ?? this.startMutationFenceRecovery();
   }
 
   /** Global documentation and user memory do not resolve to a project id, so
@@ -809,7 +881,8 @@ export class SemanticIndexCoordinator {
 
   /** Mutation wake-up that preserves the on-demand invariant. Generation-less
    * deltas remain durable but do not load an embedding model on project open. */
-  catchUpMemoryNamespace(namespace: string): Promise<void> {
+  async catchUpMemoryNamespace(namespace: string): Promise<void> {
+    await this.ensureMutationFenceRecovery();
     if (semanticPurposeForNamespace(namespace) !== 'memory') return Promise.resolve();
     if (this.embeddingDisabled('memory') || !this.allowsNamespaceMutation(namespace)) {
       return Promise.resolve();
@@ -827,6 +900,7 @@ export class SemanticIndexCoordinator {
     collectionId: number,
     operation: 'upsert' | 'delete',
   ): Promise<{ job_id: number; token: string } | null> {
+    await this.ensureMutationFenceRecovery();
     let fence: { job_id: number; token: string } | null = null;
     await this.serial(docNamespace(collectionId), async () => {
       // Recheck inside the lock: collection deletion may have been ahead of
@@ -967,7 +1041,28 @@ export class SemanticIndexCoordinator {
    * The builder drains it before activation; changes after activation are
    * handled by the ordinary incremental embedding path. */
   noteCodeDelta(projectId: number, events: readonly DirtyEvent[] = []): void {
-    if (this.embeddingDisabled('code')) return;
+    if (this.disposed || this.embeddingDisabled('code')) return;
+    if (this.pendingCodeDeltas.has(projectId)) {
+      // Preserve event order while an earlier busy write is waiting to retry;
+      // a newer same-path event must win inside that queued batch.
+      this.queueCodeDeltaRetry(projectId, events);
+      return;
+    }
+    try {
+      // This path is invoked synchronously from Electron-main's file watcher.
+      // Never inherit the worker-oriented 5s busy timeout here: fail fast,
+      // coalesce in memory, and retry after the central writer yields.
+      this.deps.semanticStore.withBusyTimeout(CODE_DELTA_BUSY_TIMEOUT_MS, () => {
+        this.persistCodeDelta(projectId, events);
+      });
+      this.codeDeltaRetryAttempts.delete(projectId);
+    } catch (error) {
+      if (!isSqliteBusyError(error)) throw error;
+      this.queueCodeDeltaRetry(projectId, events);
+    }
+  }
+
+  private persistCodeDelta(projectId: number, events: readonly DirtyEvent[]): void {
     const namespace = codeNamespace(projectId);
     if (!this.allowsNamespaceMutation(namespace)) return;
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
@@ -1025,6 +1120,43 @@ export class SemanticIndexCoordinator {
         delta_items: Math.max(0, state.delta_items + nextExpected - previousExpected),
       });
     }
+  }
+
+  private queueCodeDeltaRetry(projectId: number, events: readonly DirtyEvent[]): void {
+    let pending = this.pendingCodeDeltas.get(projectId);
+    if (!pending) {
+      pending = new Map();
+      this.pendingCodeDeltas.set(projectId, pending);
+    }
+    const normalized = events.length > 0
+      ? events
+      : [{ kind: 'upsert' as const, path: '*' }];
+    for (const event of normalized) {
+      const path = event.path.replace(/\\/g, '/');
+      if (path === '*') {
+        pending.clear();
+        pending.set(path, { kind: 'upsert', path });
+      } else if (!pending.has('*')) {
+        pending.set(path, { kind: event.kind, path });
+      }
+    }
+    if (this.codeDeltaRetryTimers.has(projectId) || this.disposed) return;
+
+    const attempt = (this.codeDeltaRetryAttempts.get(projectId) ?? 0) + 1;
+    this.codeDeltaRetryAttempts.set(projectId, attempt);
+    const delayMs = Math.min(
+      CODE_DELTA_RETRY_MAX_MS,
+      CODE_DELTA_RETRY_BASE_MS * (2 ** Math.min(attempt - 1, 5)),
+    );
+    const timer = setTimeout(() => {
+      this.codeDeltaRetryTimers.delete(projectId);
+      const queued = this.pendingCodeDeltas.get(projectId);
+      if (!queued || queued.size === 0 || this.disposed) return;
+      this.pendingCodeDeltas.delete(projectId);
+      this.noteCodeDelta(projectId, [...queued.values()]);
+    }, delayMs);
+    timer.unref?.();
+    this.codeDeltaRetryTimers.set(projectId, timer);
   }
 
   removeProject(projectId: number, options: ProjectRemovalOptions = {}): Promise<void> {
@@ -1181,6 +1313,10 @@ export class SemanticIndexCoordinator {
     this.docsBackfillTimer = null;
     if (this.projectRemovalRetryTimer) clearTimeout(this.projectRemovalRetryTimer);
     this.projectRemovalRetryTimer = null;
+    for (const timer of this.codeDeltaRetryTimers.values()) clearTimeout(timer);
+    this.codeDeltaRetryTimers.clear();
+    this.pendingCodeDeltas.clear();
+    this.codeDeltaRetryAttempts.clear();
     await this.docsBackfillRun?.catch(() => undefined);
     await this.projectRemovalRecoveryRun?.catch(() => undefined);
   }
@@ -2396,20 +2532,63 @@ export class SemanticIndexCoordinator {
         && before?.active_generation_id === generation.id
         && before.delta_items === 0
         && captured.length === 0) return;
-      const investigationRows = scope === 'project'
+      const activating = before?.active_generation_id !== generation.id;
+      const targetedKeys = !force && !activating
+        ? this.targetedMemoryMutationKeys(captured)
+        : null;
+      const investigationRows = targetedKeys === null && scope === 'project'
         ? this.deps.investigationSemanticIndex.listProject(projectId)
         : [];
-      const total = this.memorySourceRows(scope, projectId).length + investigationRows.length;
-      const activating = before?.active_generation_id !== generation.id;
+      const total = targetedKeys === null
+        ? this.memorySourceRows(scope, projectId).length + investigationRows.length
+        : targetedKeys.length;
       if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
       const job = this.deps.semanticStore.createJob({
         generation_id: generation.id,
         namespace,
         kind: before?.active_generation_id ? 'build' : 'backfill',
         expected_items: total,
+        ...(targetedKeys === null ? {} : {
+          cursor: {
+            reason: 'targeted-memory-delta',
+            item_keys: targetedKeys,
+          },
+        }),
       });
       this.deps.semanticStore.updateJob(job.id, { status: 'running' });
       try {
+        if (targetedKeys !== null) {
+          const delta = await this.reconcileTargetedMemoryMutation(
+            scope,
+            projectId,
+            generation,
+            namespace,
+            targetedKeys,
+          );
+          const finish = this.deps.semanticStore.finishNamespaceMutationPass({
+            namespace,
+            generation_id: generation.id,
+            expected_items: delta.namespaceItems,
+            indexed_items: delta.namespaceItems,
+            captured_jobs: captured.map((entry) => ({
+              id: entry.id,
+              expected_items: entry.expected_items,
+            })),
+            activate: false,
+          });
+          this.deps.semanticStore.updateJob(job.id, {
+            status: 'completed',
+            processed_items: delta.processedKeys,
+            failed_items: 0,
+            error: null,
+          });
+          if (finish.pending) {
+            if (pass < 2) continue;
+            throw new DeltaBuildPendingError(namespace);
+          }
+          return;
+        }
+
         const result = await this.deps.agentMemoryService.backfillEmbeddings(
           projectId,
           Math.max(total, 1),
@@ -2458,6 +2637,152 @@ export class SemanticIndexCoordinator {
         throw error;
       }
     }
+  }
+
+  /**
+   * A settled Memory mutation is incrementally safe only when every durable
+   * cursor retained exact, supported item identities. Wildcards and bounded
+   * diagnostic cursors deliberately fall back to the full activation proof.
+   */
+  private targetedMemoryMutationKeys(captured: readonly SemanticJobRow[]): string[] | null {
+    if (captured.length === 0) return null;
+    const keys = new Set<string>();
+    for (const job of captured) {
+      if (
+        job.cursor?.item_keys_truncated === true
+        || job.cursor?.requires_explicit_reindex === true
+      ) return null;
+      const itemKeys = job.cursor?.item_keys;
+      if (!Array.isArray(itemKeys)) return null;
+      for (const itemKey of itemKeys) {
+        if (typeof itemKey !== 'string'
+          || itemKey === '*'
+          || !/^(?:agent_memory|investigation):\d+$/.test(itemKey)) return null;
+        keys.add(itemKey);
+      }
+    }
+    return [...keys];
+  }
+
+  /**
+   * Reconcile only the rows named by settled Memory fences. Unaffected vectors
+   * retain the coverage proof of the already-serving generation; affected
+   * identities receive the same logical + physical validation as a full pass.
+   */
+  private async reconcileTargetedMemoryMutation(
+    scope: 'project' | 'user',
+    projectId: number,
+    generation: SemanticGenerationRow,
+    namespace: string,
+    itemKeys: readonly string[],
+  ): Promise<{ namespaceItems: number; processedKeys: number }> {
+    const beforeState = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
+    if (beforeState?.active_generation_id !== generation.id) {
+      throw new Error(`Targeted Memory delta lost the active generation for ${namespace}`);
+    }
+    const beforeItems = this.deps.semanticStore.listItems({
+      generation_id: generation.id,
+      namespace,
+      item_keys: itemKeys,
+    });
+    const beforeVectorIds = new Set(beforeItems.flatMap((item) =>
+      item.vector_id ? [item.vector_id] : []));
+    const fingerprint = embeddingFingerprintForGeneration(generation.fingerprint);
+    const expected = new Map<string, string>();
+    const deleteKeys: string[] = [];
+    const investigationById = scope === 'project'
+      && itemKeys.some((itemKey) => itemKey.startsWith('investigation:'))
+      ? new Map(this.deps.investigationSemanticIndex.listProject(projectId)
+        .map((row) => [row.id, row]))
+      : new Map<number, never>();
+
+    for (const itemKey of itemKeys) {
+      const memoryMatch = /^agent_memory:(\d+)$/.exec(itemKey);
+      if (memoryMatch) {
+        const row = this.deps.db.getAgentMemoryById(Number(memoryMatch[1]));
+        const live = row
+          && row.archived_at == null
+          && (scope === 'user'
+            ? row.scope === 'user' && row.project_id === 0
+            : (row.scope === 'project' || row.scope === 'local')
+              && row.project_id === projectId);
+        if (!live) {
+          deleteKeys.push(itemKey);
+          continue;
+        }
+        const result = await this.deps.agentMemoryService.embedAndUpsert(row);
+        if (!result.ok) {
+          throw new Error(`memory embedding failed for ${itemKey}: ${result.error ?? 'unknown error'}`);
+        }
+        const hash = agentMemoryEmbeddingTextHash(row, fingerprint);
+        for (let index = 0; index < agentMemoryEmbeddingTexts(row).length; index++) {
+          expected.set(`${itemKey}\0${index}`, hash);
+        }
+        continue;
+      }
+
+      const investigationMatch = /^investigation:(\d+)$/.exec(itemKey);
+      const investigation = investigationMatch
+        ? investigationById.get(Number(investigationMatch[1]))
+        : undefined;
+      if (!investigation) {
+        deleteKeys.push(itemKey);
+        continue;
+      }
+      const result = await this.deps.investigationSemanticIndex.embedAndUpsert(investigation);
+      if (!result.ok) {
+        throw new Error(`investigation embedding failed for ${itemKey}: ${result.error ?? 'unknown error'}`);
+      }
+      expected.set(
+        `${itemKey}\0${0}`,
+        investigationEmbeddingTextHash(investigation, fingerprint),
+      );
+    }
+
+    if (deleteKeys.length > 0) {
+      await this.workerDeleteItemKeys(namespace, generation.id, deleteKeys);
+    }
+    const afterItems = this.deps.semanticStore.listItems({
+      generation_id: generation.id,
+      namespace,
+      item_keys: itemKeys,
+    });
+    const actual = new Map(afterItems.map((item) => [
+      `${item.item_key}\0${item.chunk_index}`,
+      item,
+    ]));
+    if (actual.size !== afterItems.length || actual.size !== expected.size) {
+      throw new Error(
+        `targeted memory coverage incomplete: found ${actual.size}/${expected.size} exact items`,
+      );
+    }
+    for (const [identity, hash] of expected) {
+      const item = actual.get(identity);
+      if (!item || item.status !== 'indexed' || !item.vector_id || item.source_hash !== hash) {
+        throw new Error(
+          `targeted memory coverage incomplete: ${identity.replace('\0', '#')} is not current`,
+        );
+      }
+    }
+    const afterVectorIds = new Set(afterItems.flatMap((item) =>
+      item.vector_id ? [item.vector_id] : []));
+    const physicalIds = new Set(await this.workerListIds(namespace, generation.id));
+    for (const vectorId of afterVectorIds) {
+      if (!physicalIds.has(vectorId)) {
+        throw new Error(`targeted memory physical coverage incomplete: ${vectorId} is missing`);
+      }
+    }
+    for (const vectorId of beforeVectorIds) {
+      if (!afterVectorIds.has(vectorId) && physicalIds.has(vectorId)) {
+        throw new Error(`targeted memory physical cleanup incomplete: ${vectorId} is stale`);
+      }
+    }
+
+    const namespaceItems = Math.max(
+      0,
+      (beforeState?.indexed_items ?? 0) - beforeItems.length + afterItems.length,
+    );
+    return { namespaceItems, processedKeys: itemKeys.length };
   }
 
   /** Capture settled documentation mutations while leaving live relational

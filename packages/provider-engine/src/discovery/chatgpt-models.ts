@@ -20,7 +20,6 @@ import {
   CHATGPT_CODEX_BASE_URL,
 } from '@mcp/services/services/oauth/openai.js';
 import { resolveChatGPTCreds } from '@mcp/services/providers/shared/oauth.js';
-import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { nativeReasoningLevel, nativeReasoningLevels, type ProviderSpec } from '@mcp/provider-sdk';
 import type { DiscoveryResult } from './index.js';
 
@@ -121,7 +120,6 @@ export async function discoverChatgptModels(
 
 function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
   const isListed = m.visibility === undefined || m.visibility === 'list';
-  const isApi = m.supported_in_api !== false;
   const defaultReasoningLevel = nativeReasoningLevel(normalizeReasoningLevel(m.default_reasoning_level));
   const supportedReasoningLevels = normalizeReasoningLevels(m.supported_reasoning_levels);
 
@@ -130,10 +128,10 @@ function toUpsertInput(m: CodexModelInfo): UpsertModelInput {
     name: m.display_name ?? m.slug,
     context_window: m.context_window ?? m.max_context_window ?? null,
     source: 'live',
-    // Default disabled for hidden / non-API models on first sight. Admin
-    // toggles via PATCH /providers/:id/models/:modelId override this and
-    // are preserved across refreshes by `replaceModelsFromSource`.
-    default_enabled: isListed && isApi,
+    // Visibility controls the Codex product surface. `supported_in_api`
+    // describes the separate public OpenAI API and must not disable listed
+    // Codex-only models such as gpt-5.3-codex-spark.
+    default_enabled: isListed,
     display_name: m.display_name ?? null,
     description: m.description ?? null,
     can_reason: defaultReasoningLevel !== null || supportedReasoningLevels !== null,
@@ -171,7 +169,7 @@ function seedFallback(): UpsertModelInput[] {
   return CHATGPT_SEED_MODELS.map((m) => ({
     model_id: m.model_id,
     name: m.name,
-    context_window: getRegistryContextWindow(m.model_id),
+    context_window: m.context_window,
     source: 'live' as const,
     // Carry reasoning hints so the admin reasoning-effort dropdown renders
     // even when the live `/models` discovery is unreachable. Live discovery

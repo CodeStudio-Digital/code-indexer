@@ -1,5 +1,5 @@
 {
-  "generatedFrom": 3688,
+  "generatedFrom": 3841,
   "report": [
     {
       "key": "ALL_PROXY",
@@ -20,6 +20,19 @@
       "enums": [],
       "usage_count": 1,
       "files": [
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+      "prefix": "ANTHROPIC",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/provider-runtime/src/wire-helpers/claude-code.ts",
         "packages/services/src/services/oauth/claude-code.ts"
       ],
       "in_catalog": false,
@@ -380,6 +393,31 @@
       "tier": "excluded"
     },
     {
+      "key": "CLAUDE_CODE_ATTRIBUTION_HEADER",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/provider-runtime/src/wire-helpers/claude-code.ts",
+        "packages/services/src/services/oauth/claude-code.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
+      "key": "CLAUDE_CODE_BILLING_TYPE",
+      "prefix": "CLAUDE",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/providers/shared/oauth.ts"
+      ],
+      "in_catalog": false,
+      "tier": "excluded"
+    },
+    {
       "key": "CLAUDE_CODE_CONTAINER_ID",
       "prefix": "CLAUDE",
       "inferred_type": "string",
@@ -418,19 +456,6 @@
     },
     {
       "key": "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
-      "prefix": "CLAUDE",
-      "inferred_type": "string",
-      "enums": [],
-      "usage_count": 2,
-      "files": [
-        "packages/provider-runtime/src/wire-helpers/claude-code.ts",
-        "packages/services/src/services/oauth/claude-code.ts"
-      ],
-      "in_catalog": false,
-      "tier": "excluded"
-    },
-    {
-      "key": "CLAUDE_CODE_DISABLE_TOKEN_EFFICIENT_TOOLS",
       "prefix": "CLAUDE",
       "inferred_type": "string",
       "enums": [],
@@ -670,6 +695,36 @@
       "tier": "cataloged"
     },
     {
+      "key": "CODER_AGENT_RUN_STORE_ENFORCE",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "apps/http-api/control-plane-shadow.ts",
+        "packages/code-agent/src/core/agent-run-recorder.ts",
+        "packages/code-agent/src/tools/subagent-resume-registry.ts",
+        "packages/code-agent/src/tools/workflow/workflow-registry.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_AGENT_RUN_STORE_SHADOW",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 4,
+      "files": [
+        "apps/http-api/control-plane-shadow.ts",
+        "apps/http-api/server/routes/admin/workers.ts",
+        "packages/code-agent/src/core/agent-run-recorder.ts",
+        "packages/code-agent/src/tools/implement-subagent.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODER_AGENTLESS_MODE",
       "prefix": "CODER",
       "inferred_type": "bool",
@@ -777,6 +832,19 @@
       ],
       "in_catalog": false,
       "tier": "tier3-debug"
+    },
+    {
+      "key": "CODER_BUG_WORKFLOW",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/server/routes/coder/stream.ts",
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
     },
     {
       "key": "CODER_CODE_EXEC_DRAIN_TIMEOUT_MS",
@@ -995,6 +1063,18 @@
       "tier": "review"
     },
     {
+      "key": "CODER_CONTROL_PLANE_SHADOW",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/control-plane-shadow.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODER_CONVERSATION_CHAPTERS",
       "prefix": "CODER",
       "inferred_type": "bool",
@@ -1153,6 +1233,18 @@
       "tier": "review"
     },
     {
+      "key": "CODER_GOAL_LIFECYCLE_MAX_NUDGES",
+      "prefix": "CODER",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/core/runner/nodes/executing-goal-gate.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODER_GOAL_VERIFY",
       "prefix": "CODER",
       "inferred_type": "bool",
@@ -1199,6 +1291,18 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "CODER_HOOK_BUS_V1",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "CODER_IMPLEMENT_MAX_TURNS",
@@ -1356,6 +1460,31 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "CODER_ORCHESTRATION_LEASE_HEARTBEAT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/orchestration-lease-guard.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_ORCHESTRATION_LEASE_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "packages/code-agent/src/tools/subagent-resume-registry.ts",
+        "packages/code-agent/src/tools/workflow/workflow-registry.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "CODER_PARALLEL_AGENT_MAX",
@@ -1640,9 +1769,8 @@
       "prefix": "CODER",
       "inferred_type": "bool",
       "enums": [],
-      "usage_count": 2,
+      "usage_count": 1,
       "files": [
-        "packages/code-agent/src/tools/spawn-agent-resume.ts",
         "packages/code-agent/src/tools/subagent-resume-registry.ts"
       ],
       "in_catalog": false,
@@ -1684,6 +1812,31 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "CODER_RUNTIME_JOURNAL_QUEUE_CAP",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "apps/http-api/control-plane-shadow.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "CODER_RUNTIME_JOURNAL_SHADOW",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 2,
+      "files": [
+        "apps/http-api/control-plane-shadow.ts",
+        "apps/http-api/server/deps.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "CODER_SELF_REVIEW",
@@ -1879,6 +2032,18 @@
       "tier": "review"
     },
     {
+      "key": "CODER_TASKS_BUDGET_RESPONSE_TIMEOUT_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/execute-tasks.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "CODER_TASKS_DEFAULT_TOKEN_CAP",
       "prefix": "CODER",
       "inferred_type": "string",
@@ -1940,18 +2105,6 @@
       "tier": "review"
     },
     {
-      "key": "CODER_TOOL_MISUSE_INTERVENTION_COOLDOWN",
-      "prefix": "CODER",
-      "inferred_type": "string",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "packages/code-agent/src/core/runner/intervention.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
       "key": "CODER_TOOL_OUTPUT_TTL_DAYS",
       "prefix": "CODER",
       "inferred_type": "int",
@@ -1968,7 +2121,7 @@
       "prefix": "CODER",
       "inferred_type": "bool",
       "enums": [],
-      "usage_count": 1,
+      "usage_count": 2,
       "files": [
         "packages/code-agent/src/core/runner/nodes/executing-dispatch.ts"
       ],
@@ -2019,6 +2172,18 @@
       "usage_count": 1,
       "files": [
         "packages/code-agent/src/core/runner/recovery-config.ts"
+      ],
+      "in_catalog": true,
+      "tier": "cataloged"
+    },
+    {
+      "key": "CODER_ULTRA_KEYWORD",
+      "prefix": "CODER",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/sessions/execution-mode.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -2142,6 +2307,18 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
+    },
+    {
+      "key": "CODER_WORKFLOW_TTL_MS",
+      "prefix": "CODER",
+      "inferred_type": "int",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/code-agent/src/tools/workflow/workflow-registry.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
     },
     {
       "key": "CODESTUDIO_CLOUD_URL",
@@ -2286,9 +2463,10 @@
       "prefix": "COMSPEC",
       "inferred_type": "string",
       "enums": [],
-      "usage_count": 3,
+      "usage_count": 4,
       "files": [
         "apps/electron/src/terminal-ipc.ts",
+        "packages/api-handlers/src/debug/adapter-process.ts",
         "packages/api-handlers/src/terminal/pty-manager.ts"
       ],
       "in_catalog": false,
@@ -2649,6 +2827,42 @@
       "tier": "cataloged"
     },
     {
+      "key": "MCP_ANGULAR_LSP_DISABLED_MAJORS",
+      "prefix": "MCP",
+      "inferred_type": "string",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/lsp/angular-server-route.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_ANGULAR_LSP_ENABLED",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/lsp/angular-server-route.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_ANGULAR_LSP_LEGACY",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/services/src/lsp/angular-server-route.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
       "key": "MCP_API_CLIENT_BLOCK_PRIVATE_HOSTS",
       "prefix": "MCP",
       "inferred_type": "bool",
@@ -2761,10 +2975,11 @@
     {
       "key": "MCP_BUS_BATCH_MS",
       "prefix": "MCP",
-      "inferred_type": "string",
+      "inferred_type": "int",
       "enums": [],
-      "usage_count": 1,
+      "usage_count": 2,
       "files": [
+        "apps/http-api/workers/coder-worker.ts",
         "apps/http-api/workers/company-worker.ts"
       ],
       "in_catalog": false,
@@ -3191,6 +3406,18 @@
       "usage_count": 1,
       "files": [
         "packages/indexer/src/indexer/indexer/embed-retry.ts"
+      ],
+      "in_catalog": false,
+      "tier": "review"
+    },
+    {
+      "key": "MCP_EXTRACT_CACHE",
+      "prefix": "MCP",
+      "inferred_type": "bool",
+      "enums": [],
+      "usage_count": 1,
+      "files": [
+        "packages/indexer/src/indexer/extract-cache.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3685,25 +3912,25 @@
       "tier": "review"
     },
     {
-      "key": "MCP_KANBAN_QUALITY_GATE_MIN_CONFIDENCE",
+      "key": "MCP_LINT_DEBOUNCE_MS",
       "prefix": "MCP",
-      "inferred_type": "string",
+      "inferred_type": "int",
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/company/src/services/KanbanService.ts"
+        "packages/api-handlers/src/lint/service.ts"
       ],
       "in_catalog": false,
       "tier": "review"
     },
     {
-      "key": "MCP_KANBAN_QUALITY_GATE_WINDOW_MS",
+      "key": "MCP_LINT_TIMEOUT_MS",
       "prefix": "MCP",
-      "inferred_type": "string",
+      "inferred_type": "int",
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/company/src/services/KanbanService.ts"
+        "packages/api-handlers/src/lint/runner.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3773,9 +4000,9 @@
       "prefix": "MCP",
       "inferred_type": "bool",
       "enums": [],
-      "usage_count": 1,
+      "usage_count": 2,
       "files": [
-        "packages/api-handlers/src/lsp/server-backend.ts"
+        "packages/api-handlers/src/lsp/server-backend-status.ts"
       ],
       "in_catalog": true,
       "tier": "cataloged"
@@ -3787,7 +4014,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/api-handlers/src/lsp/server-backend.ts"
+        "packages/api-handlers/src/lsp/server-backend-actions.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3799,9 +4026,9 @@
       "enums": [],
       "usage_count": 3,
       "files": [
-        "packages/api-handlers/src/lsp/index.ts",
-        "packages/api-handlers/src/lsp/server-backend-ops.ts",
-        "packages/api-handlers/src/lsp/server-backend.ts"
+        "packages/api-handlers/src/lsp/interactive-handlers.ts",
+        "packages/api-handlers/src/lsp/server-backend-completion.ts",
+        "packages/api-handlers/src/lsp/server-backend-op-context.ts"
       ],
       "in_catalog": false,
       "tier": "tier3-debug"
@@ -3823,9 +4050,9 @@
       "prefix": "MCP",
       "inferred_type": "bool",
       "enums": [],
-      "usage_count": 3,
+      "usage_count": 6,
       "files": [
-        "packages/services/src/lsp/lsp-server-manager.ts"
+        "packages/services/src/lsp/lsp-manager-session-coordinator.ts"
       ],
       "in_catalog": true,
       "tier": "cataloged"
@@ -3837,7 +4064,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/services/src/lsp/lsp-server-manager.ts"
+        "packages/services/src/lsp/lsp-instance-policy.ts"
       ],
       "in_catalog": true,
       "tier": "cataloged"
@@ -3849,7 +4076,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/api-handlers/src/lsp/server-backend.ts"
+        "packages/api-handlers/src/lsp/server-backend-acquire.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3861,7 +4088,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/api-handlers/src/lsp/server-backend.ts"
+        "packages/api-handlers/src/lsp/server-backend-manager.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3873,7 +4100,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/api-handlers/src/lsp/index.ts"
+        "packages/api-handlers/src/lsp/interactive-handlers.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3885,7 +4112,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/api-handlers/src/lsp/index.ts"
+        "packages/api-handlers/src/lsp/document-sync-handlers.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -3897,7 +4124,7 @@
       "enums": [],
       "usage_count": 1,
       "files": [
-        "packages/services/src/lsp/lsp-server-manager.ts"
+        "packages/services/src/lsp/lsp-instance-policy.ts"
       ],
       "in_catalog": false,
       "tier": "review"
@@ -4387,22 +4614,6 @@
       "tier": "review"
     },
     {
-      "key": "MCP_PIPELINES_QUALITY_CLASSIFIERS",
-      "prefix": "MCP",
-      "inferred_type": "bool",
-      "enums": [],
-      "usage_count": 6,
-      "files": [
-        "apps/http-api/server/routes/admin/quality.ts",
-        "apps/http-api/server.ts",
-        "apps/http-api/workers/coder-worker.ts",
-        "apps/http-api/workers/company-worker.ts",
-        "apps/http-api/workers/quality-wiring.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
       "key": "MCP_PIPELINES_SUB_AGENT_CACHE",
       "prefix": "MCP",
       "inferred_type": "bool",
@@ -4592,66 +4803,6 @@
       "usage_count": 1,
       "files": [
         "packages/services/src/qa/report-persistence.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
-      "key": "MCP_QUALITY_ALERT_COOLDOWN_MS",
-      "prefix": "MCP",
-      "inferred_type": "int",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/quality-observer.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
-      "key": "MCP_QUALITY_ALERT_FLUSH_INTERVAL_MS",
-      "prefix": "MCP",
-      "inferred_type": "int",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/quality-observer.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
-      "key": "MCP_QUALITY_ALERT_FLUSH_THRESHOLD",
-      "prefix": "MCP",
-      "inferred_type": "int",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/quality-observer.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
-      "key": "MCP_QUALITY_ALERT_IDLE_TRIM_MS",
-      "prefix": "MCP",
-      "inferred_type": "int",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/quality-observer.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
-      "key": "MCP_QUALITY_ALERT_MIN_CONFIDENCE",
-      "prefix": "MCP",
-      "inferred_type": "int",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/quality-observer.ts"
       ],
       "in_catalog": false,
       "tier": "review"

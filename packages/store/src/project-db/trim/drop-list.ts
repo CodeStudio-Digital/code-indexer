@@ -53,8 +53,8 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'company_board', 'company_drive_files', 'company_local_projects', 'company_fronts', 'company_agent_runs',
   'company_service_transitions', 'company_service_logs',
   'kanban_cards', 'kanban_card_agents', 'kanban_card_dependencies', 'kanban_checklist_items', 'kanban_comments',
-  // quality / counterfactual
-  'quality_classifications', 'quality_interventions', 'counterfactual_logs',
+  // counterfactual
+  'counterfactual_logs',
   // docs corpus (global)
   'doc_collections', 'doc_sources', 'doc_chunks', 'doc_chunk_vectors', 'doc_vector_tombstones',
   'doc_rerank_cache', 'docs_research_sessions', 'doc_source_items', 'doc_enrichment_cache',

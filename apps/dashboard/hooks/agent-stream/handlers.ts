@@ -209,9 +209,17 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     tool_call_result: (data) => {
       const d = data as {
         id: string;
-        result: { content: string; isError?: boolean; image?: { mediaType: string; base64: string } };
+        name?: string;
+        result: {
+          content: string;
+          isError?: boolean;
+          input?: Record<string, unknown>;
+          image?: { mediaType: string; base64: string };
+        };
         duration_ms: number;
+        persistence?: 'pending';
       };
+      const awaitingPersistence = d.persistence === 'pending' && !d.result.isError;
       const idx = toolIndex.get(d.id);
       if (idx !== undefined) {
         const block = blocks[idx];
@@ -220,7 +228,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             ...block.call,
             result: d.result,
             durationMs: d.duration_ms,
-            status: d.result.isError ? 'error' : 'done',
+            status: d.result.isError ? 'error' : awaitingPersistence ? 'running' : 'done',
+            awaitingPersistence,
             // Clear progress hints — the result is the new source of truth
             // for elapsed/status; carrying elapsedMs further would confuse
             // the "running Xs" renderer into showing it on a finished tool.
@@ -230,9 +239,85 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             approvals: undefined,
           };
         }
+      } else if (typeof d.name === 'string' && d.name.length > 0) {
+        // Pre-dispatch refusals (goal lifecycle, verification evidence, policy)
+        // deliberately have no tool_call_start event. The result still carries
+        // the canonical tool name + input, so materialize the terminal block
+        // here instead of leaving a truthful refusal invisible until refetch.
+        toolIndex.set(d.id, blocks.length);
+        blocks.push({
+          type: 'tool',
+          call: {
+            id: d.id,
+            name: d.name,
+            input: d.result.input,
+            result: d.result,
+            durationMs: d.duration_ms,
+            status: d.result.isError ? 'error' : awaitingPersistence ? 'running' : 'done',
+            awaitingPersistence,
+          },
+        });
       }
-      if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
-      removeProcess(`tool:${d.id}`);
+      if (!awaitingPersistence) {
+        if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
+        removeProcess(`tool:${d.id}`);
+      }
+      flush();
+    },
+
+    goal_mutations_persisted: (data) => {
+      const ids = Array.isArray(data.toolUseIds)
+        ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      let activityChanged = false;
+      for (const id of ids) {
+        const idx = toolIndex.get(id);
+        const block = idx === undefined ? undefined : blocks[idx];
+        if (block?.type === 'tool' && block.call.awaitingPersistence) {
+          block.call = {
+            ...block.call,
+            status: block.call.result?.isError ? 'error' : 'done',
+            awaitingPersistence: false,
+            elapsedMs: undefined,
+            progressNote: undefined,
+          };
+        }
+      }
+      for (const id of ids) {
+        activityChanged = removeActivity(blocks, `tool:${id}`) || activityChanged;
+        removeProcess(`tool:${id}`);
+      }
+      if (activityChanged) rebuildToolIndex(blocks, toolIndex);
+      flush();
+    },
+
+    goal_mutations_persistence_failed: (data) => {
+      const ids = Array.isArray(data.toolUseIds)
+        ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      const message = typeof data.message === 'string' && data.message.length > 0
+        ? data.message
+        : 'Goal state could not be persisted.';
+      let activityChanged = false;
+      for (const id of ids) {
+        const idx = toolIndex.get(id);
+        const block = idx === undefined ? undefined : blocks[idx];
+        if (block?.type === 'tool') {
+          block.call = {
+            ...block.call,
+            status: 'error',
+            awaitingPersistence: false,
+            result: { content: message, isError: true },
+            elapsedMs: undefined,
+            progressNote: undefined,
+          };
+        }
+      }
+      for (const id of ids) {
+        activityChanged = removeActivity(blocks, `tool:${id}`) || activityChanged;
+        removeProcess(`tool:${id}`);
+      }
+      if (activityChanged) rebuildToolIndex(blocks, toolIndex);
       flush();
     },
 
@@ -843,13 +928,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       if (!isTaskWaveGroup(d.groupId) && !isWorkflowWaveGroup(d.groupId) && applyAgentsGroupEnd(blocks, d)) flush();
     },
 
-    auto_continue: (data) => {
-      const d = data as { count: number; max: number };
-      blocks.push({
-        type: 'text',
-        text: `\n---\n**Auto-continuando — orçamento de turnos estendido (${d.count}/${d.max})**\n---\n`,
-      });
-      flush();
+    auto_continue: () => {
+      // Lifecycle telemetry only. openStream still records this event in the
+      // worker log, but it is not user-authored content and does not belong in
+      // the conversation transcript.
     },
 
     context_status: (data) => {
@@ -1004,10 +1086,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     done: (data) => {
-      // The server bundles the error message inside the `done` event (see
-      // src/api/server.ts coder runner listener), not as a separate `error`
-      // event — so the hook has to pull both fields from this payload or the
-      // UI stays silent.
+      // Rolling-upgrade compatibility: older workers bundled a runner error
+      // inside `done`. New workers emit `error`, but keep reading both fields
+      // here so a mixed-version stream never hides the failure.
       const d = data as { reason?: string; error?: string };
       if (blocks.length > 0) flushNow();
       // Run ended → the pool closes the agent's preview window, so restore the
@@ -1024,11 +1105,19 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     error: (data) => {
-      const message = String((data as { message?: string }).message ?? 'unknown');
+      const d = data as { reason?: string; error?: string; message?: string };
+      const message = String(d.message ?? d.error ?? d.reason ?? 'unknown');
       markInFlightBlocksFailed(blocks, message);
       flushNow();
       dispatchAgentPreview(sid, false);
-      updateSession(sid, { error: message, activeProcesses: [] });
+      updateSession(sid, {
+        doneReason: String(d.reason ?? 'error'),
+        error: message,
+        // A terminal failure has the same lifecycle cleanup contract as done:
+        // no approval or foreground/background process can still resolve.
+        pendingApprovals: [],
+        activeProcesses: [],
+      });
       providerProcessIds.clear();
     },
   };

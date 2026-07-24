@@ -117,6 +117,18 @@ describe('code_exec timeout (codex-faithful)', () => {
     expect(exposed).toContain('exec_command');
     expect(exposed).toContain('read_file');
   });
+
+  it('keeps goal lifecycle tools on the direct top-level audit path', () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('create_goal'));
+    registry.register(noopTool('get_goal'));
+    registry.register(noopTool('update_goal'));
+
+    const exposed = _exposedToolNames(registry);
+    expect(exposed).not.toContain('create_goal');
+    expect(exposed).not.toContain('get_goal');
+    expect(exposed).not.toContain('update_goal');
+  });
 });
 
 describe('code_exec console output limits', () => {
@@ -228,6 +240,34 @@ describe('code_exec structured tool compatibility', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('"id": 7');
     expect(result.content).toContain('"status": "ok"');
+  });
+
+  it('forwards allowlisted structured recovery ids to the nested-call ledger', async () => {
+    const workflowId = 'wf-nested-private';
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'workflow',
+      description: 'structured workflow',
+      source: 'native',
+      mutates: true,
+      parameters: { type: 'object', properties: {} },
+      handler: async () => ({
+        content: 'workflow completed',
+        structuredData: {
+          kind: 'workflow_result',
+          status: 'completed',
+          workflowId,
+        },
+      }),
+    });
+    const ledger = new ToolCallLedger();
+    const result = await buildCodeExecTool(registry).handler({
+      code: 'return await tools.workflow({});',
+    }, { ...makeCtx(), toolCallLedger: ledger });
+
+    expect(result.isError).toBeFalsy();
+    expect(ledger.snapshot()[0]?.recoveryOperationId).toMatch(/^workflow:/);
+    expect(JSON.stringify(ledger.snapshot())).not.toContain(workflowId);
   });
 
   it('keeps an explicitly optional probe from aborting its Promise.all siblings', async () => {
@@ -716,6 +756,46 @@ describe('code_exec invocation-local stable reuse', () => {
     expect(result.content).toContain('version:2');
   });
 
+  it('a session-local mutating transition invalidates nested stable reuse', async () => {
+    const registry = new ToolRegistry();
+    let version = 0;
+    let reads = 0;
+    registry.register({
+      ...stableRead(async () => ok(`version:${version}:read:${++reads}`)),
+      name: 'get_session_state',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    });
+    registry.register({
+      name: 'update_session_state',
+      description: 'session-local state transition',
+      source: 'native',
+      mutates: false,
+      riskLevel: 'read',
+      repeatPolicy: 'mutating',
+      executionClass: 'read',
+      parallelSafe: false,
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      handler: async () => {
+        version += 1;
+        return ok('updated');
+      },
+    });
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `
+        const before = await tools.get_session_state({});
+        await tools.update_session_state({});
+        const after = await tools.get_session_state({});
+        return {before, after};
+      `,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(reads).toBe(2);
+    expect(result.content).toContain('version:0');
+    expect(result.content).toContain('version:1');
+  });
+
   it('does not reuse results across separate code_exec scripts', async () => {
     const registry = new ToolRegistry();
     let reads = 0;
@@ -762,6 +842,42 @@ describe('code_exec invocation-local stable reuse', () => {
 });
 
 describe('code_exec metadata safety and scheduling', () => {
+  it('records input-sensitive database risk for nested SELECT and INSERT calls', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...noopTool('db_query'),
+      mutates: false,
+      riskLevel: 'read',
+      executionClass: 'read',
+      riskOf: (input) => /^\s*select\b/i.test(
+        String((input as { sql?: unknown } | null)?.sql ?? ''),
+      ) ? 'read' : 'write',
+      handler: async () => ok('query complete'),
+    });
+    const ledger = new ToolCallLedger();
+    const result = await buildCodeExecTool(registry).handler({
+      code: `
+        await tools.db_query({sql:'SELECT * FROM sessions'});
+        await tools.db_query({sql:'INSERT INTO sessions(id) VALUES (1)'});
+        return 'done';
+      `,
+    }, { ...makeCtx(), toolCallLedger: ledger });
+
+    expect(result.isError).toBeFalsy();
+    const entries = ledger.snapshot();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      mutates: false,
+      riskLevel: 'read',
+      executionClass: 'read',
+    });
+    expect(entries[1]).toMatchObject({
+      mutates: true,
+      riskLevel: 'write',
+      executionClass: 'write',
+    });
+  });
+
   it('does not deadlock the shared unsafe lane when dispatched with nested shell work', async () => {
     const registry = new ToolRegistry();
     registry.register({

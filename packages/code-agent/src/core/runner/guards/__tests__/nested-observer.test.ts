@@ -202,6 +202,33 @@ describe('observer robustness + telemetry sink', () => {
     });
   });
 
+  it('does not double-record a nested result that already has ledger identity', () => {
+    const ledger = new ToolCallLedger();
+    const first = ledger.record({
+      name: 'read_file',
+      args: { path: 'src/a.ts' },
+      content: 'source',
+      isError: false,
+    });
+    const seen: Array<{ logicalOperationId?: string }> = [];
+    const obs = buildNestedToolObserver(deps({
+      toolCallLedger: ledger,
+      onNestedCall: (entry) => seen.push(entry),
+    }));
+
+    obs.afterNestedCall({
+      ...afterArgs('read_file', false, 'source'),
+      args: { path: 'src/a.ts' },
+      logicalOperationId: first.logicalOperationId,
+      productive: first.productive,
+      resultNovel: first.resultNovel,
+      coverageNovel: first.coverageNovel,
+    });
+
+    expect(ledger.snapshot()).toHaveLength(1);
+    expect(seen[0]?.logicalOperationId).toBe(first.logicalOperationId);
+  });
+
   it('advances shared no-progress epoch only after a successful write/execute', () => {
     const tracker = new NoProgressTracker();
     const obs = buildNestedToolObserver(deps({ noProgressTracker: tracker }));

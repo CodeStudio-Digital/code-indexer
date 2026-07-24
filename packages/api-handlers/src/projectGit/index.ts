@@ -603,9 +603,9 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   }>();
 
   function requireRoot(projectId: number): string {
-    const project = db.getProject(projectId);
-    if (!project) throw new ApiError('not_found', 404, 'project not found');
-    return project.root_path;
+    const rootPath = db.getProjectRootPath(projectId);
+    if (!rootPath) throw new ApiError('not_found', 404, 'project not found');
+    return rootPath;
   }
 
   // repoRoot + absolute gitDir are stable for a fixed root_path across a

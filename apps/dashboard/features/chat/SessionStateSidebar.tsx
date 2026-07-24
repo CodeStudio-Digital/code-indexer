@@ -15,7 +15,7 @@ import { PipelineRuntimeSection } from './sidebar/PipelineRuntimeSection.js';
 
 interface GoalSummary {
   text: string;
-  status: 'in_progress' | 'complete';
+  status: 'in_progress' | 'complete' | 'superseded';
   budget_tokens: number | null;
   completion_note: string | null;
   created_at: string;
@@ -154,7 +154,11 @@ export function SessionStateSidebar({
             <Target
               className={cn(
                 'h-3.5 w-3.5',
-                goal.status === 'complete' ? 'text-success' : 'text-warning',
+                goal.status === 'complete'
+                  ? 'text-success'
+                  : goal.status === 'superseded'
+                    ? 'text-muted-foreground'
+                    : 'text-warning',
               )}
             />
           }
@@ -164,10 +168,16 @@ export function SessionStateSidebar({
                 'px-1.5 py-0.5 rounded text-[10px] font-medium',
                 goal.status === 'complete'
                   ? 'bg-success/15 text-success'
-                  : 'bg-warning/15 text-warning',
+                  : goal.status === 'superseded'
+                    ? 'bg-muted text-muted-foreground'
+                    : 'bg-warning/15 text-warning',
               )}
             >
-              {goal.status === 'complete' ? t('chat:state.goalDone') : t('chat:state.goalActive')}
+              {goal.status === 'complete'
+                ? t('chat:state.goalDone')
+                : goal.status === 'superseded'
+                  ? t('chat:state.goalSuperseded')
+                  : t('chat:state.goalActive')}
             </span>
           }
           defaultOpen

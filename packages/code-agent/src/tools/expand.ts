@@ -89,6 +89,7 @@ export function buildExpandTools(
 
   const expandToolset: CoderTool = {
     name: 'expand_toolset',
+    effectBoundary: 'control',
     description,
     source: 'native',
     parameters: {

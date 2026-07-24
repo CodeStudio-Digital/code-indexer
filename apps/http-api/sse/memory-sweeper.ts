@@ -140,8 +140,12 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       });
       const projectName = db.getProject(cand.project_id)?.name ?? '';
       // extractAndPersist writes its own memory_distill_log entry.
+      const persist = () =>
+        Promise.resolve(runEndMemory.extractAndPersist(cand.project_id, projectName, input));
       const result = await withTimeout(
-        Promise.resolve(runEndMemory.extractAndPersist(cand.project_id, projectName, input)),
+        agentMemoryService
+          ? agentMemoryService.runMutationBatch(persist)
+          : persist(),
         STEP_TIMEOUT_MS,
       );
       if (result === undefined) {

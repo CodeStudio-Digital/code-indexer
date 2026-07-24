@@ -7,7 +7,7 @@
  *   - Records the trigger guard in `ctx.transition` for RunResult attribution.
  *   - Yields TurnSucceeded so the orchestrator returns to Executing.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { PlanningNode } from '../planning.js';
 import { makeTestContext } from './test-helpers.js';
 
@@ -158,10 +158,8 @@ describe('PlanningNode', () => {
     expect(ctx.messages).toHaveLength(0);
   });
 
-  it('deduplicates strategy guidance and its audit action for five turns', async () => {
+  it('deduplicates strategy guidance for five turns', async () => {
     const { ctx } = makeTestContext();
-    const recordStrategyNudge = vi.fn();
-    ctx.bridge = { recordStrategyNudge };
     const event = {
       kind: 'ToolLoopDetected' as const,
       guard: 'doom-loop' as const,
@@ -174,17 +172,10 @@ describe('PlanningNode', () => {
     ctx.turn = 12;
     await new PlanningNode().execute(ctx, event);
     expect(ctx.messages).toHaveLength(1);
-    expect(recordStrategyNudge).toHaveBeenCalledTimes(1);
 
     ctx.turn = 15;
     await new PlanningNode().execute(ctx, event);
     expect(ctx.messages).toHaveLength(2);
-    expect(recordStrategyNudge).toHaveBeenCalledTimes(2);
-    expect(recordStrategyNudge).toHaveBeenLastCalledWith({
-      guard: 'doom-loop',
-      toolName: 'search',
-      count: 4,
-    });
   });
 
   it('does not retain refusing signatures across a tuple-hash planning turn', async () => {

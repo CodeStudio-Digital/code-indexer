@@ -52,13 +52,28 @@ export function scopeForProject(projectId: number): AgentMemoryScope {
   return projectId === 0 ? 'user' : 'project';
 }
 
+export interface AgentMemoryRelationalQueue {
+  run<T>(operation: () => T): Promise<T>;
+}
+
 /** Satisfies `MemoryWriter` over `agent_memory` with embed-on-write and
  *  logical-immutable updates (content change ⇒ archive+create). */
 export class AgentMemoryWriter implements MemoryWriter {
   constructor(
     private readonly db: CodeIndexDB,
     private readonly service: AgentMemoryService,
+    private readonly relationalQueue?: AgentMemoryRelationalQueue,
   ) {}
+
+  private runRelational<T>(operation: () => T): Promise<T> {
+    return this.relationalQueue
+      ? this.relationalQueue.run(operation)
+      : Promise.resolve().then(operation);
+  }
+
+  runBatch<T>(operation: () => Promise<T>): Promise<T> {
+    return this.service.runMutationBatch(operation);
+  }
 
   async create(
     projectId: number,
@@ -72,7 +87,7 @@ export class AgentMemoryWriter implements MemoryWriter {
     },
   ): Promise<AgentMemoryRow> {
     const scope = scopeForProject(projectId);
-    const row = this.service.create({
+    const row = await this.runRelational(() => this.service.create({
       scope,
       projectId,
       name: data.title,
@@ -81,7 +96,7 @@ export class AgentMemoryWriter implements MemoryWriter {
       source: data.source,
       importance: data.importance,
       referencedFiles: data.referencedFiles,
-    });
+    }));
     await this.service.embedAndUpsert(row).catch(() => undefined);
     return row;
   }
@@ -95,22 +110,25 @@ export class AgentMemoryWriter implements MemoryWriter {
     // Content change → logical-immutable replace (archive old + create fresh,
     // earliest created_at preserved), then swap the vectors.
     if (updates.content != null && updates.content !== old.content) {
-      const fresh = this.service.replace(id, {
+      const content = updates.content;
+      const fresh = await this.runRelational(() => this.service.replace(id, {
         scope: old.scope,
         projectId: old.project_id,
         name: old.name,
         description: old.description,
         type: old.type,
-        content: updates.content,
+        content,
         source: old.source,
         importance: updates.importance ?? old.importance,
-      });
+      }));
       await this.service.removeVectors(old.id, old.project_id).catch(() => undefined);
       await this.service.embedAndUpsert(fresh).catch(() => undefined);
       return fresh;
     }
     // Importance-only corroboration → cheap metadata bump (no archive churn).
-    if (updates.importance != null) this.db.setAgentMemoryImportance(id, updates.importance);
+    if (updates.importance != null) {
+      await this.runRelational(() => this.db.setAgentMemoryImportance(id, updates.importance!));
+    }
     return old;
   }
 }

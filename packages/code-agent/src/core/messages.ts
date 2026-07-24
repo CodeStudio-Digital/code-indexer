@@ -42,6 +42,7 @@ export function attachmentsToBlocks(
   attachments?: ReadonlyArray<{
     name?: string;
     mediaType: string;
+    path?: string;
     base64?: string;
     text?: string;
   }>,
@@ -55,6 +56,7 @@ export function attachmentsToBlocks(
         type: 'document',
         name: att.name ?? 'attachment',
         mediaType: att.mediaType,
+        path: att.path,
         text: att.text,
         base64: att.base64,
       });

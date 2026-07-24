@@ -44,47 +44,81 @@ export function maybePlanNudge(ctx: RunContext): string | null {
 }
 
 /**
- * A1 — goal-completion gate for a text-only finish (the "stop-condition
- * verifier" half of Claude Code's two-agent split).
+ * A1 — independent goal-completion gate for `update_goal`.
  *
- * When the host wired `bridge.verifyGoalCompletion` (CODER_GOAL_VERIFY on), a
- * text-only turn that would end the run first asks an INDEPENDENT read-only
- * verifier subagent whether the original goal is actually met. A 'not met'
- * verdict returns a `<system-reminder>` listing the gaps (the Executing node
- * injects it and re-enters); a 'met' verdict (or no verdict at all) lets the
- * run finish.
+ * The verifier runs BEFORE the tool handler persists status=complete. A
+ * negative verdict therefore leaves the durable goal in_progress, matching a
+ * Stop-hook contract: only verified completion commits the terminal state.
  *
  * Fail-open by construction: unset callback, a thrown verifier, or a null
- * verdict (no active goal / no pending diff) all return null so the run is
- * NEVER blocked by the verifier itself. Bounded by
- * `CODER_GOAL_VERIFY_MAX_ATTEMPTS` (default 2) — the cap is checked BEFORE the
- * (expensive) verifier call so a stubborn verdict can't loop or keep spending.
+ * verdict (no usable persisted goal) lets the normal update proceed.
+ * Negative verdicts are fail-closed and bounded: once the attempt cap is
+ * reached, later calls are refused without spending another verifier request.
  */
 const GOAL_VERIFY_MAX_ATTEMPTS = Math.max(0, Number(process.env.CODER_GOAL_VERIFY_MAX_ATTEMPTS ?? 2));
 
-export async function maybeGoalVerifyNudge(ctx: RunContext): Promise<string | null> {
+export async function maybeGoalCompletionRefusal(
+  ctx: RunContext,
+  evidence?: import('./executing-verification-gate.js').VerificationReadiness,
+): Promise<string | null> {
   const verify = ctx.bridge?.verifyGoalCompletion;
-  if (!verify) return null; // disabled / not wired (subagents, tests)
-  if (ctx.goalVerifyAttempts >= GOAL_VERIFY_MAX_ATTEMPTS) return null; // bounded — don't even spend the call
+  if (!verify) return null;
+  let goal: ReturnType<NonNullable<typeof ctx.opts.toolContext.getGoalState>>;
+  try {
+    goal = ctx.opts.toolContext.getGoalState?.() ?? null;
+  } catch {
+    return null; // the lifecycle/persistence gate surfaces the authoritative error
+  }
+  if (goal?.status !== 'in_progress') return null;
+  const evidenceFingerprint = evidence
+    ? JSON.stringify({
+        status: evidence.status,
+        changedFiles: [...evidence.changedFiles].sort(),
+        lastWriteSeq: evidence.lastWriteSeq,
+        lastValidationSeq: evidence.lastValidationSeq,
+        lastSuccessfulValidationSeq: evidence.lastSuccessfulValidationSeq,
+        validationSignals: [...evidence.validationSignals].sort(),
+      })
+    : null;
+  if (
+    evidenceFingerprint != null
+    && ctx.goalVerifyEvidenceFingerprint != null
+    && evidenceFingerprint !== ctx.goalVerifyEvidenceFingerprint
+  ) {
+    // A new write/validation revision is real progress. Give the independent
+    // verifier a fresh bounded budget instead of permanently pinning an old
+    // negative verdict to the run.
+    ctx.goalVerifyAttempts = 0;
+  }
+  if (evidenceFingerprint != null) {
+    ctx.goalVerifyEvidenceFingerprint = evidenceFingerprint;
+  }
+  if (ctx.goalVerifyAttempts >= GOAL_VERIFY_MAX_ATTEMPTS) {
+    return (
+      '[goal-verifier] Refused `update_goal`: the independent completion check ' +
+      `already found unmet requirements ${ctx.goalVerifyAttempts} time(s). ` +
+      'The goal remains in_progress; address the reported gaps or stop with an explicit blocker.'
+    );
+  }
 
   let verdict: { goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null;
   try {
-    verdict = await verify();
+    verdict = await verify(evidence);
   } catch {
     return null; // fail-open — a broken verifier must never block the run
   }
-  if (!verdict) return null; // not applicable (no goal / no diff) or host-disabled
-  if (verdict.goalMet) return null; // goal met → let the run finish
+  if (!verdict) return null;
+  if (verdict.goalMet) return null;
 
   ctx.goalVerifyAttempts += 1;
   const gapLines = verdict.gaps.length
     ? verdict.gaps.map((g) => `- [${g.severity}] ${g.description}`).join('\n')
     : '- (no specific gaps returned — re-check the goal against your changes)';
   return (
-    '<system-reminder>An independent completion check found the goal is NOT fully met yet. ' +
-    'Address these gaps, then continue toward done:\n' +
+    '[goal-verifier] Refused `update_goal`: an independent completion check found the goal is NOT fully met. ' +
+    'The persisted goal remains in_progress. Address these gaps, then retry:\n' +
     gapLines +
-    `\nIf a gap is wrong or genuinely out of scope, say so explicitly in your final summary instead of silently ignoring it. ` +
-    `This check runs at most ${GOAL_VERIFY_MAX_ATTEMPTS} time(s) per run.</system-reminder>`
+    `\nIf a gap is wrong or genuinely out of scope, state that explicitly rather than silently ignoring it. ` +
+    `The verifier runs at most ${GOAL_VERIFY_MAX_ATTEMPTS} time(s) per run.`
   );
 }

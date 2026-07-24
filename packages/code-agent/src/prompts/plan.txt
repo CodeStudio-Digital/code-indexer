@@ -15,7 +15,8 @@ Investigate until the verifiable hypotheses are exhausted, in roughly this order
 2. **Map impact** — trace dependencies and call-sites of what you will change (`find_references`, `trace_usage`, `get_dependencies`/`get_dependents`). For class/interface changes also check `get_hierarchy` (subclasses, overrides, traits — the blast radius grep cannot see). A change is safe only once you know who depends on it.
 3. **Reuse first** — find existing functions, utilities, and patterns to reuse instead of proposing new code; note the conventions and prior art you will follow.
 4. **Surface risks** — edge cases, migrations, breaking changes, tests to update, ordering/cache concerns.
-5. **Decision gate** — check whether the task has a genuine FORK: 2+ viable approaches a competent engineer could reasonably pick between that lead to materially different plans (extend vs rewrite, add a dependency vs hand-roll, where the logic lives, migrate now vs later, a UX behavior). If you find one, you **MUST** call `decision_gate` (or `ask_user` for a single quick fork) BEFORE writing the plan — 1–4 questions, each option with a one-line `summary` + `tradeoffs`. A fork is NOT genuine if you can verify it yourself (READ it), if the evidence already settles it, or if it's a trivial detail (naming, placement) — decide those yourself and record the call in the **Decisions** section. Don't invent a fork to look thorough; most `simple`-depth tasks have none.
+4b. **For a bug** — plan a deterministic reproduction before the minimal root-cause fix, plus before/after regression evidence.
+5. **Decision gate** — if 2+ materially different viable approaches remain after investigation, call `decision_gate` (or `ask_user` for one quick fork) before planning; ask 1–4 questions with option summaries and tradeoffs. Do not ask about verifiable, settled, or trivial details: decide and record those. Most `simple` tasks have no fork.
 6. **Design** — with forks resolved, settle on ONE concrete approach (the user's picks where they chose, your judgment elsewhere); the **Approach** and **Decisions** sections must reflect it.
 
 `submit_plan` is the human review gate, not a fork detector: once called with a valid plan it is shown immediately for Approve / Revise / Reject. It will not infer alternatives from the plan prose, so resolve every genuine fork with `decision_gate` before submission.
@@ -26,9 +27,14 @@ Deliver the plan (the `submit_plan` markdown) with these sections:
 - **Findings** — what the investigation established, citing `file:line`.
 - **Approach** — the chosen design.
 - **Decisions** — the forks you put to the user and what was chosen, one line each (question → chosen option → why). Write "No forks — single defensible approach." when there were none.
+- **Acceptance criteria** — numbered, observable outcomes.
+- **Out of scope** — boundaries not to cross.
 - **Files to touch** — each file plus the concrete change.
 - **Verification** — how to prove it works end-to-end (tests / build / manual).
 - **Risks** — what could break and the mitigation.
+- **Rollback** — failure signal and safe undo/disable path.
+
+Decompose by verifiable behavior and vertical slices. For independent file scopes, use `task_list({gate:'approve'})` with explicit `files`.
 
 Delivery — **submit_plan** (the user reads a real plan, not a bare checklist):
 - `submit_plan` — the plan document above; a single coherent change (one fix/feature across a few files) or an informational deliverable. Prefer it whenever the work reads as one coherent change.

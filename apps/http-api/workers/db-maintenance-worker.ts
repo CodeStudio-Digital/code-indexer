@@ -1,6 +1,7 @@
 /**
- * db-maintenance-worker — WAL checkpointing + retention for the CENTRAL
- * index DB (~/.mcp-code-indexer/index.db), OFF the Electron main thread.
+ * db-maintenance-worker — WAL checkpointing + retention OFF the Electron main
+ * thread. It owns the CENTRAL index DB schedule and accepts fire-and-forget
+ * PASSIVE checkpoints for per-project DB handles evicted by the main process.
  *
  * Why: the main-process CodeIndexDB handle used to own the periodic
  * `wal_checkpoint(PASSIVE)` timer. Under coder-worker write bursts that
@@ -22,7 +23,9 @@
  * `MaintenanceDb` so tests run WITHOUT the native better-sqlite3 ABI: the
  * driver import is lazy, inside the `parentPort`-guarded runtime only.
  */
+import { existsSync } from 'node:fs';
 import { parentPort, workerData, type MessagePort } from 'node:worker_threads';
+import { isAbsolute } from 'node:path';
 import { MessageBridge, type MessageBridgeOpts } from '../../../packages/orchestrator-host/src/MessageBridge.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 
@@ -98,11 +101,6 @@ const RETENTION_PASSES: RetentionPass[] = [
     sql: `DELETE FROM session_events WHERE rowid IN (
             SELECT rowid FROM session_events WHERE at_ms < ? LIMIT ?)`,
   },
-  { // Same predicate as QualityClassificationStore.pruneOlderThan, batched.
-    name: 'quality_classifications', requires: ['quality_classifications'], cutoff: 'text',
-    sql: `DELETE FROM quality_classifications WHERE rowid IN (
-            SELECT rowid FROM quality_classifications WHERE created_at < ? LIMIT ?)`,
-  },
   {
     name: 'baselines_closed', requires: ['session_file_baselines'], cutoff: 'text',
     sql: `DELETE FROM session_file_baselines WHERE rowid IN (
@@ -143,7 +141,7 @@ export async function runRetention(
 
 async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
   // Lazy: keeps this module importable in node-pure tests (no native ABI).
-  const { openWorkerDb } = await import('../../../packages/orchestrator-host/src/DbConnection.js');
+  const { DbConnection, openWorkerDb } = await import('../../../packages/orchestrator-host/src/DbConnection.js');
   const conn = openWorkerDb({ dbPath });
   const db = conn.handle;
 
@@ -153,6 +151,51 @@ async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
       console.warn(`[db-maintenance-worker] listener error in ${context}:`, error),
   });
   registerPerfStatsHandler(bridge);
+
+  bridge.handle('semantic.recover-mutation-fences', async (payload: unknown) => {
+    const input = payload as { prefixes?: unknown; currentOwner?: unknown };
+    if (!Array.isArray(input?.prefixes)
+      || input.prefixes.some((prefix) => typeof prefix !== 'string' || prefix.length > 128)
+      || typeof input.currentOwner !== 'string'
+      || input.currentOwner.length === 0
+      || input.currentOwner.length > 256) {
+      throw new Error('semantic.recover-mutation-fences requires valid prefixes and currentOwner');
+    }
+    const { SemanticStore } = await import('../../../packages/store/src/semantic-store.js');
+    const store = new SemanticStore(db);
+    let recovered = 0;
+    for (const prefix of input.prefixes as string[]) {
+      recovered += store.recoverNamespaceMutationFences(prefix, input.currentOwner);
+      // Let checkpoint/retention messages run between independent namespaces.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return { recovered };
+  });
+
+  bridge.handle('checkpoint.project', async (payload: unknown) => {
+    const projectDbPath =
+      payload && typeof payload === 'object' && 'dbPath' in payload
+        ? (payload as { dbPath?: unknown }).dbPath
+        : undefined;
+    if (typeof projectDbPath !== 'string' || !isAbsolute(projectDbPath)) {
+      throw new Error('checkpoint.project requires an absolute dbPath');
+    }
+    if (!existsSync(projectDbPath)) return { ok: true, skipped: 'missing' };
+    const started = Date.now();
+    const projectConn = new DbConnection({ dbPath: projectDbPath, busyTimeoutMs: 0 });
+    try {
+      projectConn.handle.pragma('wal_checkpoint(PASSIVE)');
+      const tookMs = Date.now() - started;
+      if (tookMs > 100) {
+        console.warn(
+          `[db-maintenance-worker] project wal_checkpoint(PASSIVE) took ${tookMs}ms: ${projectDbPath}`,
+        );
+      }
+      return { ok: true, tookMs };
+    } finally {
+      projectConn.close();
+    }
+  });
 
   const timers: Array<ReturnType<typeof setInterval>> = [];
   const schedule = (timer: ReturnType<typeof setInterval>): void => {

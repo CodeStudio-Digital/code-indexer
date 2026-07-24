@@ -100,6 +100,12 @@ export const submitPlan: CoderTool = {
     const kind = args.kind === 'informational' ? 'informational' : 'mutating';
     const runner = ctx.runner;
     if (!runner) return err('plan tool requires runner context');
+    if (runner.specMode) {
+      return err(
+        'submit_plan is unavailable in spec mode. Call submit_spec with the complete specification; ' +
+          'approving a regular plan cannot release the spec gate.',
+      );
+    }
 
     // Idempotency guard: if the user already requested revisions to this exact plan in
     // this session, refuse the resubmission instead of pausing the runner

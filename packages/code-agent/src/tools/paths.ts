@@ -80,9 +80,9 @@ export type AuthorizedPathResult =
 
 /**
  * Resolve a native-tool path against the project or an explicitly authorized
- * external root. Relative paths always stay project-relative. External roots
- * require absolute paths so two folders with the same child layout can never
- * be confused.
+ * external root/exact file reference. Relative paths always stay
+ * project-relative. External paths require absolute paths so two folders with
+ * the same child layout can never be confused.
  *
  * Existing symlinks/junctions are canonicalized before the containment check.
  * For a create path, the nearest existing ancestor is canonicalized and the

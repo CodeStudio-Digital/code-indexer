@@ -269,7 +269,7 @@ export interface RollbackResult {
    *  into the composer (shape matches the dashboard `AgentAttachment`). Images
    *  and PDFs carry `base64`; text-backed documents (md/txt/json/csv/code)
    *  carry `text` instead — both must round-trip or the attachment is lost. */
-  seed_attachments: Array<{ name: string; mediaType: string; base64?: string; text?: string }>;
+  seed_attachments: Array<{ name: string; mediaType: string; path?: string; base64?: string; text?: string }>;
   had_attachments: boolean;
 }
 
@@ -306,7 +306,7 @@ export function rollbackToMessage(
   }
 
   const blocks = Array.isArray(target.content)
-    ? (target.content as Array<{ type: string; text?: string; mediaType?: string; base64?: string; name?: string }>)
+    ? (target.content as Array<{ type: string; text?: string; mediaType?: string; path?: string; base64?: string; name?: string }>)
     : [];
   const seedText = blocks
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
@@ -318,11 +318,14 @@ export function rollbackToMessage(
   const seedAttachments = blocks
     .filter((b) =>
       (b.type === 'image' && typeof b.base64 === 'string') ||
-      (b.type === 'document' && (typeof b.base64 === 'string' || typeof b.text === 'string')),
+      (b.type === 'document' && (
+        typeof b.path === 'string' || typeof b.base64 === 'string' || typeof b.text === 'string'
+      )),
     )
     .map((b) => ({
       name: b.name ?? (b.type === 'image' ? 'image.png' : 'document'),
       mediaType: b.mediaType ?? (b.type === 'image' ? 'image/png' : 'application/octet-stream'),
+      ...(typeof b.path === 'string' ? { path: b.path } : {}),
       ...(typeof b.base64 === 'string' ? { base64: b.base64 } : {}),
       ...(typeof b.text === 'string' ? { text: b.text } : {}),
     }));

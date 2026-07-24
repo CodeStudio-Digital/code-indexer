@@ -257,6 +257,17 @@ import { subagentRunLifecycle248 } from './248_subagent_run_lifecycle.js';
 import { sessionFilesystemRoots249 } from './249_session_filesystem_roots.js';
 import { projectLspProfileOverrides250 } from './250_project_lsp_profile_overrides.js';
 import { controlPlaneFoundation251 } from './251_control_plane_foundation.js';
+import { controlPlaneAlignment252 } from './252_control_plane_alignment.js';
+import { providerAttemptTelemetry253 } from './253_provider_attempt_telemetry.js';
+import { enableCodexSpark254 } from './254_enable_codex_spark.js';
+import { policyEngine255 } from './255_policy_engine.js';
+import { policyComparisonLatency256 } from './256_policy_comparison_latency.js';
+import { agentRunChildCardinality257 } from './257_agent_run_child_cardinality.js';
+import { pendingAgentTransition258 } from './258_pending_agent_transition.js';
+import { coderOrchestrationCheckpoints259 } from './259_coder_orchestration_checkpoints.js';
+import { masterPromptDeliveryAuthority260 } from './260_master_prompt_delivery_authority.js';
+import { pipelineBindingCleanup261 } from './261_pipeline_binding_cleanup.js';
+import { retireQualityClassifiers262 } from './262_retire_quality_classifiers.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -544,6 +555,17 @@ export const MIGRATIONS: Migration[] = [
   sessionFilesystemRoots249,
   projectLspProfileOverrides250,
   controlPlaneFoundation251,
+  controlPlaneAlignment252,
+  providerAttemptTelemetry253,
+  enableCodexSpark254,
+  policyEngine255,
+  policyComparisonLatency256,
+  agentRunChildCardinality257,
+  pendingAgentTransition258,
+  coderOrchestrationCheckpoints259,
+  masterPromptDeliveryAuthority260,
+  pipelineBindingCleanup261,
+  retireQualityClassifiers262,
 ];
 
 /**

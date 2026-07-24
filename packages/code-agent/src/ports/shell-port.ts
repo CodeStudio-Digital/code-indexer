@@ -34,7 +34,7 @@
  *   - `exitCode` is `null` when the process was killed (never code 0/1).
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 
@@ -111,6 +111,12 @@ export interface ShellRunOptions {
   runtimeEnv?: AgentRuntimeEnv;
   /** Encoding for stdout/stderr. Defaults to `'utf-8'`. */
   encoding?: BufferEncoding;
+  /** Abort/fence signal — the owned process tree is killed when it fires. */
+  signal?: AbortSignal;
+  /** Optional process deadline. Defaults to ten minutes for argv tools. */
+  timeoutMs?: number;
+  /** Max bytes captured per stream. Defaults to 100 000. */
+  maxOutputBytes?: number;
 }
 
 const DEFAULT_MAX_OUTPUT_BYTES = 100_000;
@@ -309,6 +315,12 @@ class BoundedUtf8Capture {
 
 export interface IShellPort {
   /**
+   * True when invocation enters the physical spawn boundary without an
+   * intervening await and the adapter honors the supplied abort signal.
+   */
+  readonly mutationFenceAttested?: true;
+
+  /**
    * Execute `command` through a shell (Windows: default cmd; POSIX:
    * `/bin/bash`). Streams stdout/stderr with per-stream byte cap,
    * honors `timeoutMs` and `signal` via SIGKILL.
@@ -360,7 +372,12 @@ function cleanProcessEnv(): NodeJS.ProcessEnv {
  * and `git()` helper in git.ts.
  */
 export class LocalShellAdapter implements IShellPort {
+  readonly mutationFenceAttested = true as const;
+
   exec(command: string, options: ShellExecOptions): Promise<ShellExecResult> {
+    if (options.signal?.aborted) {
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: null, timedOut: false });
+    }
     const { cwd, env } = options;
     const isWin = process.platform === 'win32';
     const child = spawn(command, {
@@ -380,6 +397,9 @@ export class LocalShellAdapter implements IShellPort {
     args: string[],
     options: ShellExecOptions,
   ): Promise<ShellExecResult> {
+    if (options.signal?.aborted) {
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: null, timedOut: false });
+    }
     const { cwd, env } = options;
     const child = spawn(program, args, {
       cwd,
@@ -428,6 +448,7 @@ export class LocalShellAdapter implements IShellPort {
         terminateOwnedTree();
       };
       signal?.addEventListener('abort', onAbort);
+      if (signal?.aborted) onAbort();
 
       child.stdout?.on('data', (chunk: Buffer) => {
         stdout.append(chunk);
@@ -469,22 +490,17 @@ export class LocalShellAdapter implements IShellPort {
   }
 
   async run(program: string, args: string[], options: ShellRunOptions): Promise<ShellExecResult> {
-    const { cwd, env, encoding = 'utf-8' } = options;
-    const r = spawnSync(program, args, { cwd, encoding, env: env ?? applyRuntimeEnv(cleanProcessEnv(), options.runtimeEnv) });
-    if (r.error) {
-      return {
-        stdout: '',
-        stderr: `${program} ${args.join(' ')} failed to spawn: ${r.error.message}`,
-        exitCode: null,
-        timedOut: false,
-      };
+    if (options.signal?.aborted) {
+      return { stdout: '', stderr: '', exitCode: null, timedOut: false };
     }
-    return {
-      stdout: (r.stdout as string | null) ?? '',
-      stderr: (r.stderr as string | null) ?? '',
-      exitCode: r.status,
-      timedOut: false,
-    };
+    return this.spawn(program, args, {
+      cwd: options.cwd,
+      env: options.env,
+      runtimeEnv: options.runtimeEnv,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? 10 * 60_000,
+      maxOutputBytes: options.maxOutputBytes,
+    });
   }
 }
 

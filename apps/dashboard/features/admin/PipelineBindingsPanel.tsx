@@ -2,8 +2,8 @@
  * Admin panel for pipeline_provider_bindings (migration 080).
  *
  * Lets the operator pick which provider+model+config a consuming pipeline
- * uses. Catalog entries owned by another source of truth (notably Semantic
- * Indexing) are hidden unless a legacy row exists and needs removal.
+ * uses. Roles owned by another source of truth (notably Semantic Indexing)
+ * are intentionally absent from this catalog.
  *
  * Each catalog entry has a "Comma" pattern:
  *   - Shows the catalog hint (recommended default, description)
@@ -141,18 +141,6 @@ function draftFromBinding(b: PipelineBinding): EditingState['draft'] {
 
 const PIPELINE_LABELS: Record<string, string> = {
   indexer_search: 'Busca de código',
-  tool_selection: 'Seleção de ferramentas',
-  context_relevance: 'Relevância de contexto',
-  todo_priority: 'Prioridade de checklist',
-  sub_agent_cache: 'Cache de subagentes',
-  role_pipeline: 'Recomendação de papéis',
-  kanban_priority: 'Agrupamento Kanban',
-  quality_off_topic: 'Histórico Quality: escopo',
-  quality_completeness: 'Histórico Quality: completude',
-  quality_delivery: 'Qualidade: entrega final',
-  quality_code: 'Histórico Quality: código',
-  quality_policy: 'Histórico Quality: política',
-  quality_tool_misuse: 'Histórico Quality: ferramentas',
   snapshot_review: 'Revisão de snapshot',
   doc_ingest: 'Ingestão de documentação',
   doc_search: 'Busca em documentação',
@@ -166,7 +154,6 @@ const PIPELINE_LABELS: Record<string, string> = {
 };
 
 const ROLE_LABELS: Record<string, string> = {
-  embedder: 'Embeddings',
   reranker: 'Reranking',
   hyde: 'Expansão HyDE',
   classifier: 'Classificador',

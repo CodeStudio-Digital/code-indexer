@@ -20,7 +20,11 @@ import {
 } from '@mcp/code-agent/tools/spawn-agent-core.js';
 import { retainSpawnGroup } from '@mcp/code-agent/tools/spawn-agent-resume.js';
 import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
-import { saveWorkflow } from './workflow-registry.js';
+import {
+  assertWorkflowRunLease,
+  saveWorkflow,
+  startWorkflowRunLeaseKeepalive,
+} from './workflow-registry.js';
 import { workflowStatusFromSteps, type WorkflowRecord, type WorkflowStepState } from './workflow-types.js';
 
 const DEP_DIGEST_CHARS = 3_500;
@@ -77,9 +81,11 @@ function emitStepUpdate(ctx: ToolContext, record: WorkflowRecord, step: Workflow
   });
 }
 
-function persist(ctx: ToolContext, record: WorkflowRecord): void {
+function persist(deps: SubagentDeps, ctx: ToolContext, record: WorkflowRecord): void {
   const sessionId = ctx.runner?.sessionId;
-  if (sessionId != null) saveWorkflow(sessionId, record);
+  if (sessionId != null && !saveWorkflow(sessionId, record, deps.sessionStore)) {
+    throw new Error(`workflow '${record.id}' checkpoint commit was fenced`);
+  }
 }
 
 /** Mark pending steps whose dependencies failed/skipped as skipped (recursive via loop). */
@@ -107,141 +113,188 @@ export async function executeWorkflow(
   record: WorkflowRecord,
 ): Promise<WorkflowRecord> {
   const parentSessionId = ctx.runner?.sessionId;
-  let waveNo = 0;
-
-  for (;;) {
-    if (ctx.signal?.aborted) { record.status = 'aborted'; break; }
-    skipBlockedSteps(ctx, record);
-    const ready = record.steps.filter((step) =>
-      step.status === 'pending'
-      && step.dependsOn.every((depId) => {
-        const dep = record.steps.find((s) => s.id === depId);
-        return dep?.status === 'completed' || dep?.status === 'partial';
-      }));
-    if (ready.length === 0) break;
-
-    waveNo++;
-    const groupId = `wf${record.runCount}-${record.id}-w${waveNo}`;
-    const agents = ready.map((step) => toNormalizedAgent(step, record));
-    const agentProviders = await Promise.all(agents.map((a) => providerForProfile(deps, a.profile)));
-    const agentInfos = agentProviders.map((p) => describeProvider(p));
-    const agentLimits = agents.map((a) => limitsForAgent(a, deps));
-    const controllers = ready.map(() => new AbortController());
-    const unregisters = ready.map((step, i) =>
-      registerActiveAgent(parentSessionId, groupId, i, step.id, controllers[i]));
-
-    for (const step of ready) {
-      step.status = 'running';
-      step.groupId = groupId;
-      emitStepUpdate(ctx, record, step);
-    }
-    persist(ctx, record);
-
-    ctx.runner?.emit('agents_group_start', {
-      groupId,
-      provider: agentInfos[0]?.provider,
-      model: agentInfos[0]?.model,
-      agents: agents.map((a, i) => ({
-        index: i,
-        label: a.label,
-        provider: agentInfos[i]?.provider,
-        model: agentInfos[i]?.model,
-        task: a.task,
-        researchDepth: a.researchPolicy?.depth,
-        maxToolCalls: agentLimits[i]?.maxToolCalls,
-        hardTimeoutMs: agentLimits[i]?.timeoutMs,
-      })),
-    });
-
-    const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
-      task: taskWithWorkspaceBriefing(a.task, ctx),
-      label: a.label,
-      maxTurns: 0,
-      profile: a.profile.id,
-      provider: agentProviders[i],
-      reasoningEffort: effortForProfile(deps, a.profile),
-      spawnId: groupId,
-      systemPrompt: systemPromptForAgent(a),
-      researchPolicy: a.researchPolicy,
-      allowlist: a.profile.allowlist,
-      pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0 ? a.files : undefined,
-      pathScopeMode: a.profile.pathScopeMode,
-      limits: agentLimits[i],
-      signal: controllers[i].signal,
-    }));
-
-    let waveRun: Awaited<ReturnType<typeof runParallelAgents>>;
-    try {
-      waveRun = await runParallelAgents(
-        {
-          provider: deps.provider,
-          tools: deps.parentTools,
-          ctx,
-          sessionId: parentSessionId,
-          sessionStore: deps.sessionStore,
-          agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-          toolSelectionFilter: deps.toolSelectionFilter,
-          externalToolTiers: deps.externalToolTiers,
-        },
-        specs,
-        MICRO_AGENT_PROFILES.explore.systemPrompt,
-        MICRO_AGENT_PROFILES.explore.allowlist,
-        (progress) => {
-          const info = agentInfos[progress.agentIndex];
-          ctx.runner?.emit('agent_progress', {
-            groupId,
-            task: agents[progress.agentIndex]?.task,
-            provider: info?.provider,
-            model: info?.model,
-            ...progress,
-          });
+  const activeControllers = new Set<AbortController>();
+  const stopLeaseKeepalive = parentSessionId == null
+    ? () => {}
+    : startWorkflowRunLeaseKeepalive(
+        parentSessionId,
+        record.id,
+        deps.sessionStore,
+        (error) => {
+          for (const controller of activeControllers) {
+            try { controller.abort(error); } catch { /* already terminal */ }
+          }
         },
       );
-    } finally {
-      for (const unregister of unregisters) unregister();
+  try {
+    let waveNo = 0;
+    if (parentSessionId != null) {
+      assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
     }
 
-    const { results, totalUsage } = waveRun;
-    addUsage(record.totalUsage, totalUsage);
-    for (let i = 0; i < ready.length; i++) {
-      const step = ready[i];
-      const result = results[i];
-      step.status = result.reason === 'completed'
-        ? 'completed'
-        : isPartialSubagentReason(result.reason)
-          ? 'partial'
-          : 'failed';
-      step.summary = result.finalText || undefined;
-      step.error = step.status === 'failed' ? (result.failureDetail ?? result.finalText ?? 'failed') : undefined;
-      step.toolCallCount = result.toolCallCount;
-      step.usage = result.usage;
-      emitStepUpdate(ctx, record, step);
-    }
-    persist(ctx, record);
+    for (;;) {
+      if (ctx.signal?.aborted) { record.status = 'aborted'; break; }
+      skipBlockedSteps(ctx, record);
+      const ready = record.steps.filter((step) =>
+        step.status === 'pending'
+        && step.dependsOn.every((depId) => {
+          const dep = record.steps.find((s) => s.id === depId);
+          return dep?.status === 'completed' || dep?.status === 'partial';
+        }));
+      if (ready.length === 0) break;
 
-    const outcomeCounts = countSubagentOutcomes(results);
-    const resumableCount = retainSpawnGroup({
-      sessionId: parentSessionId,
-      spawnId: groupId,
-      provider: agentInfos[0]?.provider ?? 'unknown',
-      model: agentInfos[0]?.model ?? 'unknown',
-      agents: results.map((r, i) => ({
-        ...toRetentionAgent(i, agents[i], r, agentLimits[i]),
-        toolCallCount: r.toolCallCount,
-      })),
-    });
-    ctx.runner?.emit('agents_group_end', {
-      groupId,
-      totalUsage,
-      agentCount: results.length,
-      successCount: outcomeCounts.completedCount,
-      ...outcomeCounts,
-      resumableCount,
-    });
+      waveNo++;
+      const groupId = `wf${record.runCount}-${record.id}-w${waveNo}`;
+      const agents = ready.map((step) => toNormalizedAgent(step, record));
+      const agentProviders = await Promise.all(agents.map((a) => providerForProfile(deps, a.profile)));
+      const agentInfos = agentProviders.map((p) => describeProvider(p));
+      const agentLimits = agents.map((a) => limitsForAgent(a, deps));
+      const controllers = ready.map(() => new AbortController());
+
+      if (parentSessionId != null) {
+        assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+      }
+      for (const step of ready) {
+        step.status = 'running';
+        step.groupId = groupId;
+        emitStepUpdate(ctx, record, step);
+      }
+      persist(deps, ctx, record);
+
+      const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
+        task: taskWithWorkspaceBriefing(a.task, ctx),
+        label: a.label,
+        maxTurns: 0,
+        profile: a.profile.id,
+        provider: agentProviders[i],
+        reasoningEffort: effortForProfile(deps, a.profile),
+        spawnId: groupId,
+        systemPrompt: systemPromptForAgent(a),
+        researchPolicy: a.researchPolicy,
+        allowlist: a.profile.allowlist,
+        pathScope: a.profile.pathScopeMode === 'enforce-writes' && a.files && a.files.length > 0
+          ? a.files
+          : undefined,
+        pathScopeMode: a.profile.pathScopeMode,
+        limits: agentLimits[i],
+        signal: controllers[i].signal,
+      }));
+
+      const unregisters: Array<() => void> = [];
+      let waveRun: Awaited<ReturnType<typeof runParallelAgents>> | null = null;
+      try {
+        // Register only after the lease assertion + running-state checkpoint
+        // commit. If either fence fails, no phantom active agent or spawn
+        // event can escape. The loop also cleans partial registration.
+        for (let i = 0; i < ready.length; i++) {
+          activeControllers.add(controllers[i]);
+          unregisters.push(
+            registerActiveAgent(parentSessionId, groupId, i, ready[i].id, controllers[i]),
+          );
+        }
+        ctx.runner?.emit('agents_group_start', {
+          groupId,
+          provider: agentInfos[0]?.provider,
+          model: agentInfos[0]?.model,
+          agents: agents.map((a, i) => ({
+            index: i,
+            label: a.label,
+            provider: agentInfos[i]?.provider,
+            model: agentInfos[i]?.model,
+            task: a.task,
+            researchDepth: a.researchPolicy?.depth,
+            maxToolCalls: agentLimits[i]?.maxToolCalls,
+            hardTimeoutMs: agentLimits[i]?.timeoutMs,
+          })),
+        });
+        waveRun = await runParallelAgents(
+          {
+            provider: deps.provider,
+            tools: deps.parentTools,
+            ctx,
+            sessionId: parentSessionId,
+            sessionStore: deps.sessionStore,
+            agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+            toolSelectionFilter: deps.toolSelectionFilter,
+            externalToolTiers: deps.externalToolTiers,
+          },
+          specs,
+          MICRO_AGENT_PROFILES.explore.systemPrompt,
+          MICRO_AGENT_PROFILES.explore.allowlist,
+          (progress) => {
+            const info = agentInfos[progress.agentIndex];
+            ctx.runner?.emit('agent_progress', {
+              groupId,
+              task: agents[progress.agentIndex]?.task,
+              provider: info?.provider,
+              model: info?.model,
+              ...progress,
+            });
+          },
+        );
+      } finally {
+        for (const unregister of unregisters) unregister();
+        for (const controller of controllers) activeControllers.delete(controller);
+      }
+      if (!waveRun) throw new Error(`workflow '${record.id}' wave did not start`);
+
+      if (parentSessionId != null) {
+        assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+      }
+      const { results, totalUsage } = waveRun;
+      addUsage(record.totalUsage, totalUsage);
+      for (let i = 0; i < ready.length; i++) {
+        const step = ready[i];
+        const result = results[i];
+        step.status = result.reason === 'completed'
+          ? 'completed'
+          : isPartialSubagentReason(result.reason)
+            ? 'partial'
+            : 'failed';
+        step.summary = result.finalText || undefined;
+        step.error = step.status === 'failed'
+          ? (result.failureDetail ?? result.finalText ?? 'failed')
+          : undefined;
+        step.toolCallCount = result.toolCallCount;
+        step.usage = result.usage;
+        emitStepUpdate(ctx, record, step);
+      }
+      persist(deps, ctx, record);
+
+      const outcomeCounts = countSubagentOutcomes(results);
+      const resumableCount = retainSpawnGroup({
+        sessionId: parentSessionId,
+        spawnId: groupId,
+        provider: agentInfos[0]?.provider ?? 'unknown',
+        model: agentInfos[0]?.model ?? 'unknown',
+        agents: results.map((r, i) => ({
+          ...toRetentionAgent(i, agents[i], r, agentLimits[i]),
+          toolCallCount: r.toolCallCount,
+        })),
+        store: deps.sessionStore,
+      });
+      ctx.runner?.emit('agents_group_end', {
+        groupId,
+        totalUsage,
+        agentCount: results.length,
+        successCount: outcomeCounts.completedCount,
+        ...outcomeCounts,
+        resumableCount,
+      });
+    }
+
+    if (parentSessionId != null) {
+      assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+    }
+    skipBlockedSteps(ctx, record);
+    if (record.status !== 'aborted') record.status = workflowStatusFromSteps(record);
+    persist(deps, ctx, record);
+    return record;
+  } finally {
+    stopLeaseKeepalive();
+    for (const controller of activeControllers) {
+      try { controller.abort(new Error('workflow executor stopped')); } catch { /* terminal */ }
+    }
+    activeControllers.clear();
   }
-
-  skipBlockedSteps(ctx, record);
-  if (record.status !== 'aborted') record.status = workflowStatusFromSteps(record);
-  persist(ctx, record);
-  return record;
 }

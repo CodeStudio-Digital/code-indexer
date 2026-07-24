@@ -131,6 +131,59 @@ function rawString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+type SpawnOutcomeStatus = 'completed' | 'partial' | 'failed';
+
+function spawnOutcomeResult(input: {
+  content: string;
+  usage: ChatUsage;
+  spawnId: string;
+  agentCount: number;
+  completedCount: number;
+  partialCount: number;
+  failedCount: number;
+  resumableCount: number;
+}): ToolResult {
+  const stillFailed = input.partialCount + input.failedCount;
+  const status: SpawnOutcomeStatus = stillFailed === 0
+    ? 'completed'
+    : input.completedCount > 0 || input.partialCount > 0
+      ? 'partial'
+      : 'failed';
+  const structuredData = {
+    kind: 'spawn_agent_result',
+    status,
+    spawnId: input.spawnId,
+    agentCount: input.agentCount,
+    completedCount: input.completedCount,
+    partialCount: input.partialCount,
+    failedCount: input.failedCount,
+    stillFailed,
+    resumableCount: input.resumableCount,
+  };
+  if (stillFailed === 0) {
+    return {
+      ...ok(input.content),
+      structuredData,
+      subUsage: input.usage,
+    };
+  }
+  const retryable = input.resumableCount > 0;
+  return {
+    content: input.content,
+    isError: true,
+    error: {
+      code: status === 'partial' ? 'SPAWN_AGENT_PARTIAL' : 'SPAWN_AGENT_FAILED',
+      kind: 'tool_error',
+      retryable,
+      suggestedAction: retryable
+        ? `Call resume_agent with spawn_id '${input.spawnId}' to continue the unfinished agents.`
+        : 'No resumable checkpoint is available; narrow or decompose the task before spawning replacement work.',
+    },
+    structuredData,
+    subUsage: input.usage,
+  };
+}
+
 function normalizeAgents(args: Record<string, unknown>): { agents: NormalizedAgent[]; error: string | null } {
   const fallbackProfile = MICRO_AGENT_PROFILES.explore;
 
@@ -485,10 +538,19 @@ async function runSingleEphemeral(
     provider: providerInfo.provider,
     model: providerInfo.model,
     agents: [toRetentionAgent(0, agent, result, limits)],
+    store: deps.sessionStore,
   });
   emitEnd(result.usage, result.reason, resumableCount);
   const hint = result.reason !== 'completed' ? renderResumeHint(spawnId, 1) : '';
-  return { ...ok(header + body + trail + hint), subUsage: result.usage };
+  const outcomeCounts = countSubagentOutcomes([result]);
+  return spawnOutcomeResult({
+    content: header + body + trail + hint,
+    usage: result.usage,
+    spawnId,
+    agentCount: 1,
+    ...outcomeCounts,
+    resumableCount,
+  });
 }
 
 async function runParallelEphemeral(
@@ -645,6 +707,7 @@ async function runParallelEphemeral(
       ...toRetentionAgent(i, agents[i], r, agentLimits[i]),
       toolCallCount: r.toolCallCount,
     })),
+    store: deps.sessionStore,
   });
   const outcomeCounts = countSubagentOutcomes(results);
   ctx.runner?.emit('agents_group_end', {
@@ -657,7 +720,14 @@ async function runParallelEphemeral(
   });
   const failed = countFailed(results);
   const hint = failed > 0 ? renderResumeHint(groupId, failed) : '';
-  return { ...ok(header + body + hint), subUsage: totalUsage };
+  return spawnOutcomeResult({
+    content: header + body + hint,
+    usage: totalUsage,
+    spawnId: groupId,
+    agentCount: results.length,
+    ...outcomeCounts,
+    resumableCount,
+  });
 }
 
 async function runPersistent(
@@ -704,6 +774,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
   const includePersistent = !!registry.get('spawn_subordinate_agent');
   return {
     name: 'spawn_agent',
+    effectBoundary: 'nested',
     description: maybeTerse(SPAWN_AGENT_DESC),
     source: 'native',
     parameters: {

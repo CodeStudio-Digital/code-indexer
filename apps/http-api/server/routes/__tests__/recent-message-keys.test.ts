@@ -3,7 +3,7 @@
  * Pure/in-memory — no route mount, no ABI, no fake timers (TTL uses an injected
  * clock).
  */
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { RecentMessageKeys, normalizeDedupeKey } from '../recent-message-keys.js';
 
 // Minimal structural bus — the store only holds a WeakRef and never reads it.
@@ -12,6 +12,10 @@ function fakeBus(id: string): { busId: string; ended: boolean } {
 }
 
 describe('RecentMessageKeys', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
   it('returns the recorded bus + sinceHint on a lookup hit', () => {
     const store = new RecentMessageKeys<{ busId: string; ended: boolean }>();
     const bus = fakeBus('a');
@@ -36,14 +40,105 @@ describe('RecentMessageKeys', () => {
     expect(store.lookup(2, 'k')?.bus).toBe(b2);
   });
 
-  it('expires entries past the TTL (injected clock)', () => {
+  it('keeps an exact live bus past TTL and expires it after it ends', () => {
     let now = 1000;
     const store = new RecentMessageKeys<{ busId: string; ended: boolean }>({ ttlMs: 100, now: () => now });
-    store.record(1, 'k', fakeBus('a'), 0);
+    const bus = fakeBus('a');
+    store.record(1, 'k', bus, 0);
     now = 1099;
     expect(store.lookup(1, 'k')).toBeDefined();
     now = 1101;
+    expect(store.lookup(1, 'k')?.bus).toBe(bus);
+    bus.ended = true;
+    now = 1202;
     expect(store.lookup(1, 'k')).toBeUndefined();
+  });
+
+  it('rejects the same key with a different payload while its owner is pending', () => {
+    const store = new RecentMessageKeys<{ busId: string; ended: boolean }>();
+    expect(store.claim(1, 'k', 'payload-a').kind).toBe('owner');
+    expect(store.claim(1, 'k', 'payload-b')).toEqual({ kind: 'payload_conflict' });
+  });
+
+  it('treats a collected WeakRef as a cache miss that needs durable resolution', () => {
+    vi.stubGlobal('WeakRef', class {
+      constructor(_value: object) {}
+      deref() { return undefined; }
+    });
+    const store = new RecentMessageKeys<{ busId: string; ended: boolean }>();
+    store.record(1, 'k', fakeBus('collected'), 0);
+
+    expect(store.claim(1, 'k', '')).toMatchObject({ kind: 'owner' });
+  });
+
+  it('bounds a duplicate wait when the owner never settles', async () => {
+    vi.useFakeTimers();
+    const store = new RecentMessageKeys<{ busId: string; ended: boolean }>({
+      ttlMs: 60_000,
+      pendingWaitMs: 50,
+    });
+    const owner = store.claim(1, 'k', 'payload-a');
+    expect(owner.kind).toBe('owner');
+    const duplicate = store.claim(1, 'k', 'payload-a');
+    expect(duplicate.kind).toBe('existing');
+    const settled = duplicate.kind === 'existing' ? duplicate.settled : Promise.reject();
+
+    await vi.advanceTimersByTimeAsync(51);
+    await expect(settled).resolves.toMatchObject({
+      retryLater: {
+        reason: 'idempotency-owner-pending',
+        retryAfterMs: 50,
+      },
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    if (owner.kind !== 'owner') throw new Error('owner expected');
+    const bus = fakeBus('eventual-owner');
+    expect(store.record(1, 'k', bus, -1, {
+      token: owner.token,
+      fingerprintHash: 'payload-a',
+    })).toBe(true);
+    expect(store.lookup(1, 'k')?.bus).toBe(bus);
+  });
+
+  it('preserves all 32 live owner guards across TTL and refuses the 33rd claim', async () => {
+    vi.useFakeTimers();
+    const store = new RecentMessageKeys<{ busId: string; ended: boolean }>({
+      ttlMs: 25,
+      pendingWaitMs: 25,
+    });
+    const owners = Array.from({ length: 32 }, (_, index) => ({
+      key: `k-${index}`,
+      claim: store.claim(1, `k-${index}`, `payload-${index}`),
+    }));
+    expect(owners.every(({ claim }) => claim.kind === 'owner')).toBe(true);
+    expect(store.claim(1, 'k-32', 'payload-32')).toEqual({
+      kind: 'capacity_exhausted',
+      retryAfterMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(store.claim(1, 'k-32', 'payload-32')).toEqual({
+      kind: 'capacity_exhausted',
+      retryAfterMs: 25,
+    });
+
+    for (const [index, owner] of owners.entries()) {
+      if (owner.claim.kind !== 'owner') throw new Error('owner expected');
+      expect(store.record(1, owner.key, fakeBus(`bus-${index}`), -1, {
+        token: owner.claim.token,
+        fingerprintHash: `payload-${index}`,
+      })).toBe(true);
+    }
+  });
+
+  it('does not evict a pending session at the global session cap', () => {
+    const store = new RecentMessageKeys<{ busId: string; ended: boolean }>({
+      maxSessions: 2,
+      maxPerSession: 1,
+    });
+    expect(store.claim(1, 'a', 'a').kind).toBe('owner');
+    expect(store.claim(2, 'b', 'b').kind).toBe('owner');
+    expect(store.claim(3, 'c', 'c')).toMatchObject({ kind: 'capacity_exhausted' });
   });
 
   it('evicts the oldest key once the per-session cap is exceeded (LRU)', () => {
@@ -65,6 +160,27 @@ describe('RecentMessageKeys', () => {
     expect(store.lookup(1, 'a')).toBeDefined();
     expect(store.lookup(1, 'b')).toBeUndefined();
     expect(store.lookup(1, 'c')).toBeDefined();
+  });
+
+  it('claim and lookup hits refresh ready-entry LRU recency', async () => {
+    const byClaim = new RecentMessageKeys<{ busId: string; ended: boolean }>({ maxPerSession: 2 });
+    byClaim.record(1, 'a', fakeBus('a'), 0);
+    byClaim.record(1, 'b', fakeBus('b'), 0);
+    const hit = byClaim.claim(1, 'a', '');
+    expect(hit.kind).toBe('existing');
+    if (hit.kind !== 'existing') throw new Error('existing hit expected');
+    expect(await hit.settled).toBeDefined();
+    byClaim.record(1, 'c', fakeBus('c'), 0);
+    expect(byClaim.lookup(1, 'a')).toBeDefined();
+    expect(byClaim.lookup(1, 'b')).toBeUndefined();
+
+    const byLookup = new RecentMessageKeys<{ busId: string; ended: boolean }>({ maxPerSession: 2 });
+    byLookup.record(1, 'a', fakeBus('a'), 0);
+    byLookup.record(1, 'b', fakeBus('b'), 0);
+    expect(byLookup.lookup(1, 'a')).toBeDefined();
+    byLookup.record(1, 'c', fakeBus('c'), 0);
+    expect(byLookup.lookup(1, 'a')).toBeDefined();
+    expect(byLookup.lookup(1, 'b')).toBeUndefined();
   });
 });
 

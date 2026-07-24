@@ -29,6 +29,7 @@ function optimisticContent(text: string, attachments: readonly AgentAttachment[]
       type: 'document',
       name: attachment.name || 'attachment',
       mediaType: attachment.mediaType,
+      path: attachment.path,
       text: attachment.text,
       base64: attachment.base64,
     });

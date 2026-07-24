@@ -141,6 +141,42 @@ export class CommandLedgerStore {
     return this.get(commandId)!;
   }
 
+  /**
+   * Atomically bind an accepted command to its concrete streaming executor.
+   * `result_json` is intentionally tiny/opaque (currently `{ busId }`) and is
+   * immutable once set, so a later session bus can never impersonate it.
+   */
+  bindExecution(
+    commandId: string,
+    result: { busId: string },
+    updatedAt = new Date().toISOString(),
+  ): PersistedSessionCommand {
+    const current = this.get(commandId);
+    if (!current) throw new CommandStateConflictError(commandId, 'not found');
+    const resultJson = stableControlPlaneJson(result);
+    if (current.status === 'running') {
+      if (current.result !== undefined && stableControlPlaneJson(current.result) === resultJson) {
+        return current;
+      }
+      throw new CommandStateConflictError(commandId, 'running executor binding differs');
+    }
+    if (current.status !== 'accepted') {
+      throw new CommandStateConflictError(commandId, `cannot bind executor from ${current.status}`);
+    }
+    if (current.result !== undefined && stableControlPlaneJson(current.result) !== resultJson) {
+      throw new CommandStateConflictError(commandId, 'executor binding differs');
+    }
+    const update = this.db.prepare(`
+      UPDATE session_commands
+      SET status = 'running', result_json = COALESCE(result_json, ?), updated_at = ?
+      WHERE command_id = ? AND status = 'accepted'
+    `).run(resultJson, updatedAt, commandId);
+    if (update.changes !== 1) {
+      throw new CommandStateConflictError(commandId, 'executor binding changed concurrently');
+    }
+    return this.get(commandId)!;
+  }
+
   markTerminal(
     commandId: string,
     status: Extract<SessionCommandStatus, 'succeeded' | 'failed' | 'cancelled'>,

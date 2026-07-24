@@ -5,7 +5,7 @@
  * Uses FAKE stores (no SQLite) so the test runs under plain Node and asserts
  * the fan-out logic directly: each capability maps to its setup-eligible
  * catalog targets, each target keeps its OWN recommendedDefault.config, and
- * informational / cross-encoder entries are skipped.
+ * semantic-profile / cross-encoder roles are absent.
  */
 import { describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
@@ -92,7 +92,7 @@ describe('POST /bulk/apply', () => {
     }
   });
 
-  it('rejects an explicit informational target atomically', async () => {
+  it('rejects a retired no-effect target atomically', async () => {
     const { app, captured } = setup();
     const response = await postBulk(app, {
       provider_id: 'cf-1',
@@ -103,10 +103,9 @@ describe('POST /bulk/apply', () => {
       ],
     });
 
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
-      error: 'binding_not_configurable',
-      configure_in: 'semantic_indexing',
+      error: 'unknown_targets',
     });
     expect(captured.bulkTargets).toBeNull();
   });
@@ -126,7 +125,7 @@ describe('POST /bulk/apply-profile', () => {
     expect(rows.every((row) => row.provider_id === 'cf-1' && row.model_id === 'llama-8b')).toBe(true);
     // Per-role config preserved: classifier (max_tokens:256) AND reviewer
     // (max_tokens:4000+json_mode) both present, each with its own config.
-    const classifier = rows.find((row) => row.pipeline_name === 'quality_off_topic' && row.binding_role === 'classifier');
+    const classifier = rows.find((row) => row.pipeline_name === 'doc_ingest' && row.binding_role === 'classifier');
     const reviewer = rows.find((row) => row.pipeline_name === 'snapshot_review' && row.binding_role === 'reviewer');
     expect((classifier!.config as { max_tokens: number }).max_tokens).toBe(256);
     expect((reviewer!.config as { max_tokens: number }).max_tokens).toBe(4000);
@@ -219,17 +218,16 @@ describe('POST /activate', () => {
         provider_id: 'cf-1', model_id: 'bge-m3',
       }),
     });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
-      error: 'binding_not_configurable',
-      configure_in: 'semantic_indexing',
+      error: 'unknown_target',
     });
     expect(captured.activated).toBeNull();
   });
 });
 
 describe('POST /pipeline-bindings', () => {
-  it('does not persist known informational bindings', async () => {
+  it('does not recreate retired no-effect bindings', async () => {
     const { app } = setup();
     const response = await app.request('/api/admin/pipeline-bindings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -238,16 +236,15 @@ describe('POST /pipeline-bindings', () => {
         provider_id: 'cf-1', model_id: 'old-reranker', scope_type: 'global',
       }),
     });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
-      error: 'binding_not_configurable',
-      configure_in: 'semantic_indexing',
+      error: 'unknown_target',
     });
   });
 });
 
 describe('PATCH /pipeline-bindings/:id', () => {
-  it('cannot rename a configurable binding into an informational target', async () => {
+  it('cannot rename a configurable binding into a retired target', async () => {
     const { app, captured } = setup();
     const response = await app.request('/api/admin/pipeline-bindings/41', {
       method: 'PATCH',
@@ -255,8 +252,8 @@ describe('PATCH /pipeline-bindings/:id', () => {
       body: JSON.stringify({ pipeline_name: 'indexer_search', binding_role: 'embedder' }),
     });
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: 'binding_not_configurable' });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'unknown_target' });
     expect(captured.updated).toBeNull();
   });
 });

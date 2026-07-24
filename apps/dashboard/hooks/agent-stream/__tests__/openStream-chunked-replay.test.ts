@@ -41,6 +41,7 @@ function deps(): OpenStreamDeps {
     updateSession: vi.fn(),
     abortMap: new Map(),
     lastSeenSeqMap: new Map(),
+    lastSeenBusIdMap: new Map(),
   };
 }
 
@@ -145,6 +146,7 @@ describe('openStream chunked replay pump', () => {
     const p = openStream(1, {
       ...attachOpts,
       lastEventId: 5,
+      lastEventBusId: 'bus-a',
       initialBlocks: [{
         type: 'tool',
         call: { id: 'read-1', name: 'read_file', status: 'running' },

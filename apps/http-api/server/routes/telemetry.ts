@@ -16,6 +16,7 @@ import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js'
  *   POST /api/admin/model-prices/sync        → manual price refresh (OpenRouter + LiteLLM)
  *   GET  /api/sessions/:id/telemetry          → per-session summary (modal)
  *   GET  /api/sessions/:id/telemetry/turns    → raw rows (for debug/inspect)
+ *   GET  /api/sessions/:id/telemetry/attempts → physical upstream attempts
  */
 export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, providerStore } = deps;
@@ -83,11 +84,17 @@ export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
       ...sessionStore.getSessionTelemetrySummary(id),
       first_turn_payload: sessionStore.getFirstTurnPayloadBreakdown(id),
       turns: sessionStore.getTurnTelemetry(id),
+      attempts: sessionStore.listProviderAttempts(id),
     });
   });
 
   app.get('/api/sessions/:id/telemetry/turns', (c) => {
     const id = parseIdParam(c);
     return c.json({ turns: sessionStore.getTurnTelemetry(id) });
+  });
+
+  app.get('/api/sessions/:id/telemetry/attempts', (c) => {
+    const id = parseIdParam(c);
+    return c.json({ attempts: sessionStore.listProviderAttempts(id) });
   });
 }

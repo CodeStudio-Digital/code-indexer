@@ -6,14 +6,13 @@
  *   2. assemble messages (via assembly + bridge callbacks for skills /
  *      active-context).
  *   3. build tools (via assembly).
- *   4. assemble system prompt (base + quality-feedback suffix).
+ *   4. use the configured system prompt.
  *   5. stream `provider.chat()` with the full ChatRequest legacy passes.
  *   6. push assistant message.
  *   7. dispatch tools — pre-read + tuple-hash gates, smart-reducer +
  *      polling-stuck on results.
  *   8. push tool-role message, emit per-tool telemetry.
- *   9. fire-and-forget quality watchdog (bridge.runQualityCheck).
- *  10. decide next event:
+ *   9. decide next event:
  *        - dedup refusal         → ToolLoopDetected (→ Planning)
  *        - token usage ≥ 90% eff → TokenThresholdHit (→ Compacting)
  *        - assistant text only   → CleanFinish
@@ -22,13 +21,20 @@
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type { ProviderAttemptTelemetry } from '@mcp/code-agent/providers/adapter.js';
 import { promptTokensTotal } from '@mcp/code-agent/core/messages.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
 import { accumulateUsage } from '../machine/context.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
-import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
+import {
+  buildTools,
+  buildToolsCacheKey,
+  enforceAtomicGoalToolPair,
+  fingerprintToolsJson,
+  type BuildToolsResult,
+} from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
@@ -60,7 +66,16 @@ import {
   planMemoryRecall,
   buildConversationTail,
 } from '../memory-query.js';
-import { maybePlanNudge, maybeGoalVerifyNudge } from './executing-plan-gate.js';
+import { maybePlanNudge, maybeGoalCompletionRefusal } from './executing-plan-gate.js';
+import {
+  evaluateGoalLifecycleAtFinish,
+  goalLifecycleRefusalBeforeTool,
+} from './executing-goal-gate.js';
+import {
+  evaluateVerificationReadinessAtFinish,
+  maybeVerificationCompletionRefusal,
+  maybeVerificationNudge,
+} from './executing-verification-gate.js';
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
@@ -70,15 +85,83 @@ import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import {
   decideTerminal,
-  runQualityCheck,
-  joinText,
   providerErrorEvent,
 } from './executing-decisions.js';
 import { withAbort, isAbortError } from './executing-abort.js';
+import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
+import {
+  observePromptCache,
+  promptCacheMissGuardMessage,
+} from '../guards/prompt-cache-miss.js';
 
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
 function dbg(...args: unknown[]): void {
   if (DEBUG) console.log('[bt-debug]', ...args);
+}
+
+function fallbackAttemptErrorMeta(error: unknown, fallbackCode: string): {
+  status: number | null;
+  requestId: string | null;
+  retryAfter: string | null;
+  errorCode: string;
+  errorMessage: string;
+} {
+  const record = error && typeof error === 'object'
+    ? error as {
+        status?: unknown;
+        statusCode?: unknown;
+        code?: unknown;
+        request_id?: unknown;
+        requestId?: unknown;
+        headers?: unknown;
+        responseMeta?: {
+          response?: {
+            status?: unknown;
+            request_id?: unknown;
+            retry_after?: unknown;
+          };
+        };
+      }
+    : {};
+  const status = typeof record.status === 'number'
+    ? record.status
+    : typeof record.statusCode === 'number'
+      ? record.statusCode
+      : typeof record.responseMeta?.response?.status === 'number'
+        ? record.responseMeta.response.status
+        : null;
+  const header = (name: string): string | null => {
+    if (!record.headers || typeof record.headers !== 'object') return null;
+    const getter = (record.headers as { get?: unknown }).get;
+    if (typeof getter === 'function') {
+      const value = getter.call(record.headers, name);
+      return typeof value === 'string' && value.length > 0 ? value : null;
+    }
+    const value = (record.headers as Record<string, unknown>)[name];
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  };
+  const rawCode = typeof record.code === 'string' ? record.code : fallbackCode;
+  const safeCode = rawCode.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 128);
+  return {
+    status,
+    requestId:
+      typeof record.request_id === 'string'
+        ? record.request_id
+        : typeof record.requestId === 'string'
+          ? record.requestId
+          : typeof record.responseMeta?.response?.request_id === 'string'
+            ? record.responseMeta.response.request_id
+            : header('x-request-id'),
+    retryAfter:
+      typeof record.responseMeta?.response?.retry_after === 'string'
+        ? record.responseMeta.response.retry_after
+        : header('retry-after'),
+    errorCode: safeCode || fallbackCode,
+    // Never persist a provider message here: SDK errors may echo prompts,
+    // signed URLs or credentials. The class is sufficient for diagnosis while
+    // adapter-owned telemetry may add an opaque correlation hash.
+    errorMessage: error instanceof Error ? error.name : 'UnknownError',
+  };
 }
 
 /**
@@ -91,8 +174,19 @@ export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
+    if (ctx.cacheMissGuardError) {
+      ctx.stopReason = 'error';
+      ctx.error = ctx.cacheMissGuardError;
+      return events.aborted();
+    }
     ctx.turn++;
     ctx.emit('turn_start', ctx.turn);
+    // `turn_start` synchronously asks the host to enqueue persistence for the
+    // preceding assistant/tool turn. Do not let a new provider call — and thus
+    // no new tool side effect — overtake that transaction. Rejections bubble to
+    // the orchestrator, which emits a terminal error instead of continuing on
+    // state that failed its goal CAS/durability boundary.
+    await ctx.bridge?.awaitTurnPersistence?.();
     // Drain any messages queued via `runner.pushUserMessage` (master →
     // subordinate forward, SSE-side push from the dashboard, etc.) so
     // they appear in `ctx.messages` BEFORE we build the request. The
@@ -510,10 +604,15 @@ export class ExecutingNode implements BehaviorNode {
         console.warn(`[coder] tool-selection failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
+    // Custom/relevance selectors run after buildTools, but lifecycle tools are
+    // protected capabilities rather than ordinary relevance candidates.
+    // Restore the pair from the authoritative post-policy surface if a buggy
+    // selector omitted either/both; roles/disabled sets lacking the pair stay
+    // pairless and fail open.
+    toolsForModel = enforceAtomicGoalToolPair(toolsForModel, availableTools);
     dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
-    const qualitySuffix = ctx.bridge?.buildQualityFeedbackSuffix?.() ?? '';
-    const systemPrompt = qualitySuffix ? `${ctx.opts.systemPrompt}${qualitySuffix}` : ctx.opts.systemPrompt;
+    const systemPrompt = ctx.opts.systemPrompt;
 
     // PR-F pre-emit gate (Kimi-style). Estimate the size of the request
     // we're about to make BEFORE actually sending it. If projected to
@@ -637,6 +736,79 @@ export class ExecutingNode implements BehaviorNode {
         })
       : messagesForChat;
 
+    const providerLifecycleStartedAt = Date.now();
+    let providerLifecycleOutcome: {
+      ok: boolean;
+      status: 'completed' | 'failed' | 'aborted';
+      inputTokens?: number;
+      outputTokens?: number;
+      errorType?: string;
+    } = { ok: false, status: 'failed' };
+    if (ctx.opts.hookBus) {
+      try {
+        await ctx.opts.hookBus.fireObservation('before_provider_call', {
+          runId: ctx.runId,
+          sessionId: ctx.opts.sessionId ?? null,
+          turn: ctx.turn,
+          provider: ctx.opts.provider.name,
+          model: ctx.opts.provider.model,
+          messageCount: chatMessages.length,
+          toolCount: toolsForModel.length,
+        });
+      } catch {
+        // Observation only.
+      }
+    }
+
+    let reportedProviderAttempts = 0;
+    const recordProviderAttempt = (attempt: ProviderAttemptTelemetry): void => {
+      reportedProviderAttempts += 1;
+      const providerAttempt = ++ctx.providerAttempts;
+      const usageForEstimate =
+        attempt.inputTokens != null || attempt.outputTokens != null
+          ? {
+              input_tokens: attempt.inputTokens ?? 0,
+              output_tokens: attempt.outputTokens ?? 0,
+              prompt_tokens_total: attempt.inputTokens ?? 0,
+              cache_read_input_tokens: attempt.cachedTokens ?? 0,
+            }
+          : null;
+      const estimatedCost = usageForEstimate
+        ? estimateCost(
+            ctx.opts.provider.name,
+            ctx.opts.provider.model,
+            usageForEstimate,
+          )
+        : 0;
+      ctx.opts.sessionStore?.recordProviderAttempt({
+        session_id: ctx.opts.sessionId ?? null,
+        run_id: ctx.runId,
+        turn: ctx.turn,
+        attempt: providerAttempt,
+        provider: ctx.opts.provider.name,
+        model: ctx.opts.provider.model,
+        status: attempt.status,
+        ok: attempt.ok,
+        generation_id: attempt.generationId ?? null,
+        request_id: attempt.requestId ?? null,
+        upstream_provider: attempt.upstreamProvider ?? null,
+        input_tokens: attempt.inputTokens ?? null,
+        output_tokens: attempt.outputTokens ?? null,
+        cached_tokens: attempt.cachedTokens ?? null,
+        cost_usd:
+          attempt.costUsd != null
+            ? attempt.costUsd
+            : estimatedCost > 0
+              ? estimatedCost
+              : null,
+        retry_after: attempt.retryAfter ?? null,
+        error_code: attempt.errorCode ?? null,
+        error_message: attempt.errorMessage ?? null,
+        duration_ms: attempt.durationMs,
+      });
+    };
+    let result!: Awaited<ReturnType<typeof consumeStream>>;
+    try {
     let stream: AsyncIterable<ChatDelta>;
     try {
       dbg(`calling provider.chat() model=${ctx.opts.provider.model}`);
@@ -651,6 +823,7 @@ export class ExecutingNode implements BehaviorNode {
           ? { reasoningEffort: ctx.opts.reasoningEffort }
           : {}),
         sessionId: ctx.opts.sessionId,
+        onAttempt: recordProviderAttempt,
         signal: ctx.opts.toolContext.signal,
         ...(tempResolution && typeof tempResolution.temperature === 'number'
           ? { inference: { temperature: tempResolution.temperature } }
@@ -664,6 +837,23 @@ export class ExecutingNode implements BehaviorNode {
       });
     } catch (e) {
       dbg('provider.chat() threw', e);
+      if (reportedProviderAttempts === 0) {
+        const attemptError = fallbackAttemptErrorMeta(e, 'provider_chat_threw');
+        recordProviderAttempt({
+          status: attemptError.status,
+          ok: false,
+          requestId: attemptError.requestId,
+          retryAfter: attemptError.retryAfter,
+          errorCode: attemptError.errorCode,
+          errorMessage: attemptError.errorMessage,
+          durationMs: Date.now() - providerLifecycleStartedAt,
+        });
+      }
+      providerLifecycleOutcome = {
+        ok: false,
+        status: isAbortError(e) ? 'aborted' : 'failed',
+        errorType: e instanceof Error ? e.name : 'UnknownError',
+      };
       providerOpFinished = true;
       ctx.operations.finish(providerOpId, 'failed', {
         phase: 'provider.chat',
@@ -695,7 +885,6 @@ export class ExecutingNode implements BehaviorNode {
       });
     }, STREAM_HEARTBEAT_MS);
 
-    let result: Awaited<ReturnType<typeof consumeStream>>;
     try {
       result = await consumeStream({
         stream,
@@ -722,6 +911,26 @@ export class ExecutingNode implements BehaviorNode {
       });
     } catch (e) {
       dbg('consumeStream threw', e);
+      if (reportedProviderAttempts === 0) {
+        const attemptError = fallbackAttemptErrorMeta(
+          e,
+          isAbortError(e) ? 'aborted' : 'provider_stream_failed',
+        );
+        recordProviderAttempt({
+          status: attemptError.status,
+          ok: false,
+          requestId: attemptError.requestId,
+          retryAfter: attemptError.retryAfter,
+          errorCode: attemptError.errorCode,
+          errorMessage: attemptError.errorMessage,
+          durationMs: Date.now() - providerLifecycleStartedAt,
+        });
+      }
+      providerLifecycleOutcome = {
+        ok: false,
+        status: isAbortError(e) ? 'aborted' : 'failed',
+        errorType: e instanceof Error ? e.name : 'UnknownError',
+      };
       providerOpFinished = true;
       if (isAbortError(e)) {
         ctx.operations.finish(providerOpId, 'aborted', { phase: 'aborted', note: 'user/session aborted' });
@@ -741,9 +950,65 @@ export class ExecutingNode implements BehaviorNode {
         ctx.operations.finish(providerOpId, 'completed', { phase: 'completed' });
       }
     }
+    if (reportedProviderAttempts === 0) {
+      const response = result.responseMeta?.response;
+      recordProviderAttempt({
+        // An adapter that does not expose `onAttempt` may own retries itself.
+        // Record only response facts it actually surfaced; never manufacture a
+        // physical HTTP 200 from iterator completion alone.
+        status: typeof response?.status === 'number' ? response.status : null,
+        ok: response?.ok !== false,
+        generationId: result.responseId,
+        requestId: response?.request_id ?? null,
+        inputTokens: result.usage?.input_tokens ?? null,
+        outputTokens: result.usage?.output_tokens ?? null,
+        cachedTokens: result.usage?.cache_read_input_tokens ?? null,
+        retryAfter: response?.retry_after ?? null,
+        durationMs: Date.now() - providerLifecycleStartedAt,
+      });
+    }
+    providerLifecycleOutcome = {
+      ok: true,
+      status: 'completed',
+      inputTokens: result.usage?.input_tokens,
+      outputTokens: result.usage?.output_tokens,
+    };
+    } finally {
+      if (ctx.opts.hookBus) {
+        try {
+          await ctx.opts.hookBus.fireObservation('after_provider_call', {
+            runId: ctx.runId,
+            sessionId: ctx.opts.sessionId ?? null,
+            turn: ctx.turn,
+            provider: ctx.opts.provider.name,
+            model: ctx.opts.provider.model,
+            durationMs: Date.now() - providerLifecycleStartedAt,
+            ...providerLifecycleOutcome,
+          });
+        } catch {
+          // Observation only.
+        }
+      }
+    }
     dbg(`stream done text=${result.textBlocks.length}b tools=${result.toolUses.length} usage_in=${result.usage?.input_tokens ?? '?'}`);
 
     accumulateUsage(ctx, result.usage);
+    // A successful provider response ends the retry sequence for this logical
+    // call, regardless of whether the model now requests tools.
+    ctx.transientRetriesThisTurn = 0;
+
+    const cacheObservation = observePromptCache(
+      ctx.opts.provider.name,
+      result.usage,
+      ctx.consecutiveLargePromptCacheMisses,
+    );
+    ctx.consecutiveLargePromptCacheMisses = cacheObservation.consecutiveMisses;
+    if (cacheObservation.tripped) {
+      ctx.cacheMissGuardError = new Error(
+        promptCacheMissGuardMessage(cacheObservation),
+      );
+      console.warn(`[coder] ${ctx.cacheMissGuardError.message}`);
+    }
 
     if (result.responseId !== null && result.responseMessageCount !== null) {
       ctx.bridge?.onResponseId?.(result.responseId, result.responseMessageCount);
@@ -752,8 +1017,7 @@ export class ExecutingNode implements BehaviorNode {
     // Telemetry persistence helper — invoked from BOTH the text-only path
     // (no tool_uses) and the tool-dispatch path. The pure function lives
     // in `core/runner/telemetry/persist-turn.ts`; the bridge wrapper in
-    // `runner.ts` adds class-bound side effects (quality classifier
-    // dispatch + tool-selection feedback observer) and updates
+    // `runner.ts` adds the tool-selection feedback observer and updates
     // `runner.lastTurnTelemetryId` so the host's `flushPendingTurn` can
     // stamp pending tool calls.
     //
@@ -883,6 +1147,12 @@ export class ExecutingNode implements BehaviorNode {
     });
 
     if (result.toolUses.length === 0) {
+      if (ctx.cacheMissGuardError) {
+        runPersistTelemetry([]);
+        ctx.stopReason = 'error';
+        ctx.error = ctx.cacheMissGuardError;
+        return events.aborted();
+      }
       // Mandatory-plan gate: in plan mode the deliverable IS a plan. If the
       // model tries to end with bare text (no submit_plan/submit_tasks, no
       // approval), inject a ONE-SHOT reminder as the next user message and
@@ -893,18 +1163,57 @@ export class ExecutingNode implements BehaviorNode {
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
       }
-      // A1 goal-completion gate (CODER_GOAL_VERIFY): before letting a text-only
-      // finish end the run, an INDEPENDENT read-only verifier confirms the goal
-      // is actually met. A 'not met' verdict re-enters the turn with the gaps;
-      // fail-open + bounded by ctx.goalVerifyAttempts. See executing-plan-gate.
-      const goalNudge = await maybeGoalVerifyNudge(ctx);
-      if (goalNudge) {
-        ctx.messages.push({ role: 'user', content: [{ type: 'text', text: goalNudge }] });
+      const verificationReadiness =
+        ctx.opts.verificationEvidenceEnabled || ctx.bridge?.verifyGoalCompletion
+          ? evaluateVerificationReadinessAtFinish(ctx)
+          : undefined;
+      if (ctx.opts.verificationEvidenceEnabled && verificationReadiness) {
+        const verificationNudge = maybeVerificationNudge(ctx, verificationReadiness);
+        if (verificationNudge) {
+          // Audit the intervention (no raw commands — only classified signals)
+          // so the offline eval can measure whether the nudge corrects the next
+          // turn without inflating cost/loops.
+          if (ctx.opts.sessionId != null) {
+            try {
+              ctx.opts.sessionStore?.recordSessionInput({
+                session_id: ctx.opts.sessionId,
+                kind: 'system_reminder',
+                source_label: 'reminder:finish-evidence',
+                content: verificationNudge,
+                meta: {
+                  status: verificationReadiness.status,
+                  source: verificationReadiness.source,
+                  changed_files: verificationReadiness.changedFiles.length,
+                  validation_signals: verificationReadiness.validationSignals,
+                  turn: ctx.turn,
+                },
+              });
+            } catch { /* audit trail is best-effort */ }
+          }
+          ctx.messages.push({ role: 'user', content: [{ type: 'text', text: verificationNudge }] });
+          return events.turnSucceeded({ hasToolCalls: false });
+        }
+      }
+      // Goal lifecycle is runtime-owned at the stop boundary. The model still
+      // creates/completes goals through visible tools, but a ToolCallLedger-
+      // proven work run cannot silently clean-finish after skipping that
+      // lifecycle. The gate is bounded; exhausting it terminates as an error
+      // rather than lying to the transport with `completed`.
+      const goalLifecycle = evaluateGoalLifecycleAtFinish(ctx, {
+        effectiveToolNames: new Set(toolsForModel.map((tool) => tool.name)),
+      });
+      if (goalLifecycle?.kind === 'nudge') {
+        ctx.messages.push({ role: 'user', content: [{ type: 'text', text: goalLifecycle.text }] });
         return events.turnSucceeded({ hasToolCalls: false });
+      }
+      if (goalLifecycle?.kind === 'violation') {
+        runPersistTelemetry([]);
+        ctx.stopReason = 'error';
+        ctx.error = new Error(goalLifecycle.message);
+        return events.aborted();
       }
       // Text-only assistant turn ends the run — no tool_use means the
       // model is delivering its final reply.
-      runQualityCheck(ctx, joinText(result.textBlocks), [], result.toolUses);
       runPersistTelemetry([]);
       // Telemetry accuracy: if plan mode is active and no plan was ever
       // approved (the one-shot nudge was already spent), the run finished
@@ -917,6 +1226,7 @@ export class ExecutingNode implements BehaviorNode {
       return events.cleanFinish();
     }
 
+    const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
     const dispatch = await dispatchTools({
       toolUses: result.toolUses,
       registry: ctx.opts.registry,
@@ -926,18 +1236,91 @@ export class ExecutingNode implements BehaviorNode {
       noProgressTracker: ctx.noProgressTracker,
       // Pin mechanism — hidden registered tools execute and join the
       // visible list next turn; disabled tools hard-block at dispatch.
-      visibleToolNames: new Set(toolsForModel.map((t) => t.name)),
+      visibleToolNames: effectiveToolNames,
       pinnedTools: ctx.pinnedTools,
       onToolPinned: (name) => ctx.pinnedTools.add(name),
-      isToolBlocked: (name) =>
-        ctx.opts.globalDisabledTools?.has(name)
-          ? `[tool-disabled] '${name}' is disabled globally by the admin — pick another tool (find_tools lists alternatives).`
-          : ctx.opts.sessionDisabledTools?.has(name)
-            ? `[tool-disabled] '${name}' is disabled for this session — pick another tool (find_tools lists alternatives).`
-            : null,
-      toolGate: ctx.bridge?.toolGate,
+      isToolBlocked: (name) => {
+        if (ctx.opts.globalDisabledTools?.has(name)) {
+          return `[tool-disabled] '${name}' is disabled globally by the admin — pick another tool (find_tools lists alternatives).`;
+        }
+        if (ctx.opts.sessionDisabledTools?.has(name)) {
+          return `[tool-disabled] '${name}' is disabled for this session — pick another tool (find_tools lists alternatives).`;
+        }
+        if (
+          (name === 'create_goal' || name === 'update_goal')
+          && (
+            !effectiveToolNames.has('create_goal')
+            || !effectiveToolNames.has('update_goal')
+          )
+        ) {
+          return (
+            `[goal-lifecycle-disabled] '${name}' is unavailable because create_goal and ` +
+            'update_goal must be exposed together; continue without session-goal lifecycle tools.'
+          );
+        }
+        return null;
+      },
+      toolGate: async (name, input) => {
+        const bridgeRefusal = ctx.bridge?.toolGate?.(name, input);
+        if (bridgeRefusal != null) return bridgeRefusal;
+        const goalRefusal = goalLifecycleRefusalBeforeTool(
+          ctx,
+          name,
+          input,
+          { effectiveToolNames },
+        );
+        if (goalRefusal != null) return goalRefusal;
+        const completesGoal =
+          name === 'update_goal'
+          && input
+          && typeof input === 'object'
+          && !Array.isArray(input)
+          && (input as Record<string, unknown>).status === 'complete';
+        if (ctx.opts.verificationEvidenceEnabled && completesGoal) {
+          const evidenceRefusal = maybeVerificationCompletionRefusal(ctx);
+          if (evidenceRefusal != null) return evidenceRefusal;
+        }
+        if (completesGoal) {
+          return maybeGoalCompletionRefusal(
+            ctx,
+            evaluateVerificationReadinessAtFinish(ctx),
+          );
+        }
+        return null;
+      },
       enforcePreRead: ctx.bridge?.enforcePreRead,
       enforceTaskMode: ctx.bridge?.enforceTaskMode,
+      // Fase 2.5 — Policy Engine shadow port (absent by default).
+      policyShadow: ctx.opts.policyShadow,
+      ...(ctx.opts.hookBus
+        ? {
+            capabilityHooks: {
+              before: (input: {
+                toolUseId: string;
+                toolName: string;
+                turn: number;
+                known: boolean;
+              }) => ctx.opts.hookBus!.fireObservation('before_capability', {
+                runId: ctx.runId,
+                sessionId: ctx.opts.sessionId ?? null,
+                ...input,
+              }).then(() => undefined),
+              after: (input: {
+                toolUseId: string;
+                toolName: string;
+                turn: number;
+                known: boolean;
+                isError: boolean;
+                refused: boolean;
+                durationMs: number;
+              }) => ctx.opts.hookBus!.fireObservation('after_capability', {
+                runId: ctx.runId,
+                sessionId: ctx.opts.sessionId ?? null,
+                ...input,
+              }).then(() => undefined),
+            },
+          }
+        : {}),
       registerInFlightTool: ctx.bridge?.registerInFlightTool,
       unregisterInFlightTool: ctx.bridge?.unregisterInFlightTool,
       consumeInjectedToolError: ctx.bridge?.consumeInjectedToolError,
@@ -1078,9 +1461,6 @@ export class ExecutingNode implements BehaviorNode {
     // produced its `largest_tool_result_chars` value.
     const toolResultBlocks = Array.isArray(toolMessage.content) ? toolMessage.content : [];
     runPersistTelemetry(toolResultBlocks);
-
-    // Fire-and-forget quality classifier. Errors must NOT block the turn.
-    runQualityCheck(ctx, joinText(result.textBlocks), dispatch.results, result.toolUses);
 
     // Fix B — advance loop-aware compaction signals every turn, BEFORE any
     // early return below, so `stuck-progress` / `cumulative` work even when the

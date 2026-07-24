@@ -9,7 +9,7 @@
  * via `writeGlobalSubAgentResult`.
  *
  * Mirror of `setGlobalToolSelectionFilter` and
- * `setGlobalQualityClassifierPipeline` patterns. Same singleton-holder
+ * the other process-wide pipeline holders. Same singleton-holder
  * approach the codebase uses for cross-cutting concerns.
  */
 import type {

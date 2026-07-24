@@ -245,7 +245,7 @@ describe('execute_tasks timeline events', () => {
 
     const result = await tool.handler({}, ctx);
 
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
     expect(runSubagent).toHaveBeenCalledTimes(2);
     expect(result.content).toContain('tsk_a');
     expect(result.content).toContain('status=failed');

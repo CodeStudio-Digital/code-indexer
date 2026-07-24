@@ -105,6 +105,8 @@ export class BedrockChatProvider implements ChatProvider {
         }
         const client = new sdk.BedrockRuntimeClient({
           region: this.region,
+          // Retry/backoff belongs to the behavior-tree runner.
+          maxAttempts: 1,
           // Passing `undefined` lets the SDK fall back to its default provider
           // chain (env, shared credentials file, instance role).
           credentials: this.credentials,
@@ -166,6 +168,7 @@ export class BedrockChatProvider implements ChatProvider {
     // We accumulate per contentBlockIndex and emit tool_call_end on stop.
     const toolAcc = new Map<number, { id: string; name: string; argsAcc: string }>();
     let finishReason: string | undefined;
+    let receivedTerminal = false;
     let usage: ChatDelta | null = null;
 
     try {
@@ -209,6 +212,7 @@ export class BedrockChatProvider implements ChatProvider {
         }
         if (event.messageStop) {
           finishReason = event.messageStop.stopReason;
+          receivedTerminal = true;
           continue;
         }
         if (event.metadata?.usage) {
@@ -232,7 +236,11 @@ export class BedrockChatProvider implements ChatProvider {
     }
 
     if (usage) yield usage;
-    yield { type: 'done', stop_reason: finishReason };
+    // ConverseStream commits a response with `messageStop`. A clean iterator
+    // EOF without that event is a truncated provider attempt, not success.
+    if (receivedTerminal) {
+      yield { type: 'done', stop_reason: finishReason };
+    }
   }
 }
 
@@ -303,7 +311,7 @@ export function toBedrockMessages(messages: AgentMessage[]): BedrockMessage[] {
               source: { bytes: base64ToBytes(b.base64) },
             },
           });
-        } else if (b.type === 'document' && b.text) {
+        } else if (b.type === 'document' && (b.text || b.path)) {
           content.push({
             text: renderTextDocument(b),
           });

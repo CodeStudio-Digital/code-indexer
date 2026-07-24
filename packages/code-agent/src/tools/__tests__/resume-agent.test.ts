@@ -8,6 +8,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 
 vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@mcp/code-agent/tools/implement-subagent.js')>();
@@ -16,10 +18,18 @@ vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) =>
 
 const { buildResumeAgentTool } = await import('@mcp/code-agent/tools/resume-agent.js');
 const { runParallelAgents } = await import('@mcp/code-agent/tools/implement-subagent.js');
-const { retainGroup, getGroup, clearSession } = await import('@mcp/code-agent/tools/subagent-resume-registry.js');
+const {
+  retainGroup,
+  getGroup,
+  clearSession,
+  resumeLeaseKeepaliveActiveForTests,
+} = await import('@mcp/code-agent/tools/subagent-resume-registry.js');
 
 const usage: ChatUsage = { input_tokens: 5, output_tokens: 3 };
-const deps = { provider: { name: 'stub', model: 'm' }, parentTools: [] } as never;
+const deps = {
+  provider: { name: 'stub', model: 'm' },
+  parentTools: [],
+} as unknown as SubagentDeps;
 
 let emit: ReturnType<typeof vi.fn>;
 let ctx: ToolContext;
@@ -56,7 +66,27 @@ function mockRun(reason: StopReason = 'completed', finalText = 'done now') {
   });
 }
 
+function leaseStore(failRenewal: number) {
+  let renewals = 0;
+  return {
+    loadOrchestrationCheckpoint: vi.fn(() => {
+      const group = getGroup(SID, 'g1');
+      return group ? { payloadJson: JSON.stringify(group) } : null;
+    }),
+    listOrchestrationCheckpoints: vi.fn(() => []),
+    saveOrchestrationCheckpoint: vi.fn(() => true),
+    removeOrchestrationCheckpoint: vi.fn(),
+    tryAcquireOrchestrationCheckpoint: vi.fn(() => 'lease:test'),
+    releaseOrchestrationCheckpoint: vi.fn(),
+    renewOrchestrationCheckpoint: vi.fn(() => {
+      renewals += 1;
+      return renewals !== failRenewal;
+    }),
+  };
+}
+
 beforeEach(() => {
+  vi.unstubAllEnvs();
   SID += 10;
   emit = vi.fn();
   ctx = { cwd: '/tmp', runner: { sessionId: SID, agentLoopV2: false, emit } } as unknown as ToolContext;
@@ -125,14 +155,102 @@ describe('resume_agent', () => {
     retain('error', { failureNote: 'boom' });
     mockRun('error', 'still broken');
     const t = buildResumeAgentTool(deps);
-    await t.handler({ spawn_id: 'g1' }, ctx);
+    const result = await t.handler({ spawn_id: 'g1' }, ctx);
+    expect(result.isError).toBe(true);
     expect(getGroup(SID, 'g1')!.agents[0].attempt).toBe(2);
+  });
+
+  it('returns a structured partial error when a resumed agent hits another operational cutoff', async () => {
+    retain('tool_budget');
+    mockRun('tool_budget', 'useful partial work');
+    const t = buildResumeAgentTool(deps);
+
+    const result = await t.handler({ spawn_id: 'g1' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({
+      code: 'RESUME_AGENT_PARTIAL',
+      kind: 'tool_error',
+      retryable: true,
+    });
+    expect(result.structuredData).toMatchObject({
+      kind: 'resume_agent_result',
+      status: 'partial',
+      spawnId: 'g1',
+      relaunchedCount: 1,
+      completedCount: 0,
+      partialCount: 1,
+      failedCount: 0,
+      stillFailed: 1,
+    });
+    expect(result.subUsage).toEqual(usage);
+    expect(String(result.content)).toContain('[resume group=g1: 1 agent(s) relaunched]');
+  });
+
+  it('records a hard re-failure as an error and a later identical resume as success', async () => {
+    retain('error', { failureNote: 'boom' });
+    const t = buildResumeAgentTool(deps);
+    const input = { spawn_id: 'g1' };
+    const ledger = new ToolCallLedger();
+
+    mockRun('error', 'still broken');
+    const failed = await t.handler(input, ctx);
+    const failedEntry = ledger.record({
+      name: 'resume_agent',
+      args: input,
+      content: failed.content,
+      isError: failed.isError === true,
+      executionClass: 'execute',
+    });
+
+    expect(failed.isError).toBe(true);
+    expect(failed.error?.code).toBe('RESUME_AGENT_FAILED');
+    expect(failed.structuredData).toMatchObject({
+      status: 'failed',
+      completedCount: 0,
+      partialCount: 0,
+      failedCount: 1,
+      stillFailed: 1,
+    });
+    expect(failedEntry.outcome).toBe('tool_error');
+
+    mockRun('completed', 'recovered');
+    const recovered = await t.handler(input, ctx);
+    const recoveredEntry = ledger.record({
+      name: 'resume_agent',
+      args: input,
+      content: recovered.content,
+      isError: recovered.isError === true,
+      executionClass: 'execute',
+    });
+
+    expect(recovered.isError).toBeFalsy();
+    expect(recovered.structuredData).toMatchObject({
+      status: 'completed',
+      completedCount: 1,
+      partialCount: 0,
+      failedCount: 0,
+      stillFailed: 0,
+    });
+    expect(recoveredEntry.outcome).toBe('success');
+    expect(recoveredEntry.logicalOperationId).toBe(failedEntry.logicalOperationId);
   });
 
   it('skips aborted agents unless explicitly named', async () => {
     retain('aborted');
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1' }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.error).toMatchObject({
+      code: 'RESUME_AGENT_INCOMPLETE',
+      retryable: true,
+    });
+    expect(r.structuredData).toMatchObject({
+      status: 'failed',
+      relaunchedCount: 0,
+      stillFailed: 1,
+      remainingCount: 1,
+    });
     expect(String(r.content)).toContain('no eligible agents');
     expect(runParallelAgents).not.toHaveBeenCalled();
     // Explicit selection resumes it.
@@ -142,12 +260,123 @@ describe('resume_agent', () => {
     expect(runParallelAgents).toHaveBeenCalledTimes(1);
   });
 
+  it('stays partial when an eligible child completes but an ineligible sibling remains failed', async () => {
+    const now = 0;
+    retainGroup(SID, {
+      spawnId: 'g1',
+      sessionId: SID,
+      provider: 'stub',
+      model: 'm',
+      createdAt: now,
+      lastTouchedAt: now,
+      agents: [
+        {
+          agentIndex: 0,
+          label: 'retryable',
+          task: 'retryable task',
+          profileId: 'implement',
+          maxTurns: 50,
+          limits: { maxToolCalls: 80 },
+          transcript: transcript(),
+          reason: 'error',
+          failureNote: 'boom',
+          toolCallCount: 4,
+          usage,
+          attempt: 1,
+          capturedAt: now,
+          approxBytes: 0,
+        },
+        {
+          agentIndex: 1,
+          label: 'aborted',
+          task: 'aborted task',
+          profileId: 'implement',
+          maxTurns: 50,
+          limits: { maxToolCalls: 80 },
+          transcript: transcript(),
+          reason: 'aborted',
+          toolCallCount: 1,
+          usage,
+          attempt: 1,
+          capturedAt: now,
+          approxBytes: 0,
+        },
+      ],
+    });
+    mockRun('completed', 'retryable child recovered');
+    const t = buildResumeAgentTool(deps);
+
+    const result = await t.handler({ spawn_id: 'g1' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toMatchObject({
+      code: 'RESUME_AGENT_INCOMPLETE',
+      retryable: true,
+    });
+    expect(result.structuredData).toMatchObject({
+      status: 'partial',
+      relaunchedCount: 1,
+      completedCount: 1,
+      stillFailed: 1,
+      remainingCount: 1,
+      skippedCount: 1,
+    });
+    expect(result.subUsage).toEqual(usage);
+    expect(String(result.content)).toContain('retryable child recovered');
+    expect(String(result.content)).toContain('also skipped');
+  });
+
   it('refuses once the attempt cap is reached', async () => {
     retain('error', { attempt: 3, failureNote: 'boom' });
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1' }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.error).toMatchObject({
+      code: 'RESUME_AGENT_EXHAUSTED',
+      retryable: false,
+    });
+    expect(r.structuredData).toMatchObject({
+      status: 'failed',
+      relaunchedCount: 0,
+      stillFailed: 1,
+      remainingCount: 1,
+    });
     expect(String(r.content)).toContain('attempt cap');
     expect(runParallelAgents).not.toHaveBeenCalled();
+  });
+
+  it('never resolves a failed logical operation with a false success after reaching the attempt cap', async () => {
+    retain('error', { attempt: 2, failureNote: 'boom' });
+    mockRun('error', 'still broken at final attempt');
+    const t = buildResumeAgentTool(deps);
+    const input = { spawn_id: 'g1' };
+    const ledger = new ToolCallLedger();
+
+    const finalAttempt = await t.handler(input, ctx);
+    const failedEntry = ledger.record({
+      name: 'resume_agent',
+      args: input,
+      content: String(finalAttempt.content),
+      isError: finalAttempt.isError === true,
+      executionClass: 'execute',
+    });
+    const exhausted = await t.handler(input, ctx);
+    const exhaustedEntry = ledger.record({
+      name: 'resume_agent',
+      args: input,
+      content: String(exhausted.content),
+      isError: exhausted.isError === true,
+      executionClass: 'execute',
+    });
+
+    expect(finalAttempt.isError).toBe(true);
+    expect(finalAttempt.error).toMatchObject({ code: 'RESUME_AGENT_FAILED', retryable: false });
+    expect(exhausted.isError).toBe(true);
+    expect(exhausted.error).toMatchObject({ code: 'RESUME_AGENT_EXHAUSTED', retryable: false });
+    expect(failedEntry.outcome).toBe('tool_error');
+    expect(exhaustedEntry.outcome).toBe('tool_error');
+    expect(exhaustedEntry.logicalOperationId).toBe(failedEntry.logicalOperationId);
+    expect(runParallelAgents).toHaveBeenCalledOnce();
   });
 
   it('preserves the prior transcript when a re-failure returns none (M1)', async () => {
@@ -182,6 +411,93 @@ describe('resume_agent', () => {
     const t = buildResumeAgentTool(deps);
     // quality is explicit-only AND capped at 2 → attempt 2 refused.
     const r = await t.handler({ spawn_id: 'g1', agents: [1] }, ctx);
+    expect(r.isError).toBe(true);
+    expect(r.error).toMatchObject({
+      code: 'RESUME_AGENT_EXHAUSTED',
+      retryable: false,
+    });
     expect(String(r.content)).toContain('attempt cap 2');
+  });
+
+  it('emits no resume start/spawn when the lease is fenced immediately before that boundary', async () => {
+    retain('error', { failureNote: 'boom' });
+    mockRun('completed');
+    const store = leaseStore(2);
+    const t = buildResumeAgentTool({ ...deps, sessionStore: store as never });
+
+    await expect(t.handler({ spawn_id: 'g1' }, ctx)).rejects.toThrow(/fenced|expired/);
+    expect(runParallelAgents).not.toHaveBeenCalled();
+    expect(emit.mock.calls.map((call) => call[0])).not.toContain('agents_group_start');
+  });
+
+  it('withholds the resume terminal event and tool ACK when the final lease assertion is fenced', async () => {
+    retain('error', { failureNote: 'boom' });
+    mockRun('completed');
+    const store = leaseStore(6);
+    const t = buildResumeAgentTool({ ...deps, sessionStore: store as never });
+
+    await expect(t.handler({ spawn_id: 'g1' }, ctx)).rejects.toThrow(/fenced|expired/);
+    expect(runParallelAgents).toHaveBeenCalledOnce();
+    expect(emit.mock.calls.map((call) => call[0])).toContain('agents_group_start');
+    expect(emit.mock.calls.map((call) => call[0])).not.toContain('agents_group_end');
+    expect(resumeLeaseKeepaliveActiveForTests(SID, 'g1')).toBe(false);
+  });
+
+  it('reloads the winner roster after acquire instead of resuming a stale snapshot', async () => {
+    retain('error', { failureNote: 'stale failure' });
+    const stale = getGroup(SID, 'g1')!;
+    const winner = JSON.parse(JSON.stringify(stale));
+    winner.agents[0].reason = 'completed';
+    winner.agents[0].failureNote = undefined;
+    winner.agents[0].transcript = undefined;
+    winner.agents[0].attempt = 2;
+    let payloadJson = JSON.stringify(stale);
+    const store = {
+      loadOrchestrationCheckpoint: vi.fn(() => ({ payloadJson })),
+      listOrchestrationCheckpoints: vi.fn(() => []),
+      saveOrchestrationCheckpoint: vi.fn(() => true),
+      removeOrchestrationCheckpoint: vi.fn(),
+      tryAcquireOrchestrationCheckpoint: vi.fn(() => {
+        // A different executor commits and releases after our cache read but
+        // immediately before this executor wins the CAS.
+        payloadJson = JSON.stringify(winner);
+        return 'lease:after-winner';
+      }),
+      releaseOrchestrationCheckpoint: vi.fn(),
+      renewOrchestrationCheckpoint: vi.fn(() => true),
+    };
+    const tool = buildResumeAgentTool({ ...deps, sessionStore: store as never });
+
+    const result = await tool.handler({ spawn_id: 'g1' }, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(String(result.content)).toContain('nothing to resume');
+    expect(runParallelAgents).not.toHaveBeenCalled();
+    expect(getGroup(SID, 'g1')?.agents[0].reason).toBe('completed');
+  });
+
+  it('keeps the pre-migration in-memory resume path, but refuses it in enforce mode', async () => {
+    const compat = {
+      loadOrchestrationCheckpoint: vi.fn(() => null),
+      listOrchestrationCheckpoints: vi.fn(() => []),
+      saveOrchestrationCheckpoint: vi.fn(() => false),
+      removeOrchestrationCheckpoint: vi.fn(),
+      tryAcquireOrchestrationCheckpoint: vi.fn(() => 'compat:test'),
+      releaseOrchestrationCheckpoint: vi.fn(),
+      renewOrchestrationCheckpoint: vi.fn(() => true),
+    };
+    retain('error', { failureNote: 'compat' });
+    mockRun('completed');
+    const tool = buildResumeAgentTool({ ...deps, sessionStore: compat as never });
+    const defaultResult = await tool.handler({ spawn_id: 'g1' }, ctx);
+    expect(defaultResult.isError).toBeFalsy();
+    expect(runParallelAgents).toHaveBeenCalledOnce();
+
+    clearSession(SID);
+    (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockClear();
+    retain('error', { failureNote: 'enforce' });
+    vi.stubEnv('CODER_AGENT_RUN_STORE_ENFORCE', '1');
+    await expect(tool.handler({ spawn_id: 'g1' }, ctx)).rejects.toThrow(/migration 259/);
+    expect(runParallelAgents).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,9 @@ export interface ToolCallEvent {
   };
   durationMs?: number;
   status: 'running' | 'awaiting_approval' | 'done' | 'error';
+  /** Goal create/update returned from the model loop but its session mutation
+   *  has not committed with the tool audit row yet. */
+  awaitingPersistence?: boolean;
   /** `Date.now()` stamped when `tool_call_start` arrived. Used to render
    *  "running Xs" while the tool is in flight, AND as a fallback for
    *  `elapsedMs` if the worker is on an older build that doesn't emit
@@ -201,6 +204,8 @@ export interface TaskRunState {
 export interface AgentAttachment {
   name: string;
   mediaType: string;
+  /** Canonical local file reference. Bytes are read by tools only when needed. */
+  path?: string;
   base64?: string;
   text?: string;
 }
@@ -607,7 +612,7 @@ export interface SessionState {
 export interface WorkerLogEntry {
   /** Local capture time (Date.now). Server-side `ts` is preferred when present in `data.ts`. */
   ts: number;
-  /** Raw event name from the SSE stream (e.g. `tool_call_start`, `worker_log`, `quality_watchdog_alert`). */
+  /** Raw event name from the SSE stream (e.g. `tool_call_start`, `worker_log`, `tool_loop_intervention`). */
   event: string;
   /** Severity. Derived from event semantics or the explicit `level` field on `worker_log` payloads. */
   level: 'info' | 'warn' | 'error' | 'debug';

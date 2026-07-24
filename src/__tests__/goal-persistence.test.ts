@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -43,7 +43,11 @@ describe('goal — DB-persisted across runner restarts', () => {
     }).id;
   });
 
-  function ctxFor(sid: number): ToolContext {
+  function ctxFor(
+    sid: number,
+    goalLifecycleIntent?: ToolContext['goalLifecycleIntent'],
+    goalLifecyclePivotGoalCreatedAt?: string,
+  ): ToolContext {
     return {
       cwd: workDir,
       projectName: 'test-proj',
@@ -53,6 +57,8 @@ describe('goal — DB-persisted across runner restarts', () => {
       runner: {} as unknown as ToolContext['runner'],
       getGoalState: () => store.getSessionGoal(sid),
       upsertGoalState: (g) => store.upsertSessionGoal(sid, g),
+      goalLifecycleIntent,
+      goalLifecyclePivotGoalCreatedAt,
     };
   }
 
@@ -72,6 +78,126 @@ describe('goal — DB-persisted across runner restarts', () => {
     expect(g.content).toContain('Migrate auth to OAuth2');
     expect(g.content).toContain('in_progress');
     expect(g.content).toContain('50000');
+  });
+
+  it('returns a tool error when synchronous goal persistence throws', async () => {
+    const ctx: ToolContext = {
+      cwd: workDir,
+      projectName: 'test-proj',
+      runner: {} as unknown as ToolContext['runner'],
+      getGoalState: () => null,
+      upsertGoalState: () => {
+        throw new Error('synchronous SQL failure');
+      },
+    };
+
+    const result = await createGoal.handler({ goal: 'must persist' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('create_goal: failed to persist goal state');
+    expect(result.content).toContain('synchronous SQL failure');
+    expect(result.content).not.toContain('Goal set');
+  });
+
+  it('refuses to overwrite goal state when the persisted read fails', async () => {
+    const upsertGoalState = vi.fn();
+    const ctx: ToolContext = {
+      cwd: workDir,
+      projectName: 'test-proj',
+      runner: {} as unknown as ToolContext['runner'],
+      getGoalState: () => {
+        throw new Error('SQLITE_BUSY while reading goal');
+      },
+      upsertGoalState,
+    };
+
+    const result = await createGoal.handler({ goal: 'must not overwrite' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('create_goal: failed to read persisted goal state');
+    expect(result.content).toContain('SQLITE_BUSY');
+    expect(upsertGoalState).not.toHaveBeenCalled();
+  });
+
+  it('surfaces persisted read failures from get_goal and update_goal', async () => {
+    const ctx: ToolContext = {
+      cwd: workDir,
+      projectName: 'test-proj',
+      runner: {} as unknown as ToolContext['runner'],
+      getGoalState: () => {
+        throw new Error('goal database unavailable');
+      },
+      upsertGoalState: vi.fn(),
+    };
+
+    const readResult = await getGoal.handler({}, ctx);
+    const updateResult = await updateGoal.handler({ status: 'complete' }, ctx);
+
+    expect(readResult).toMatchObject({ isError: true });
+    expect(readResult.content).toContain('get_goal: failed to read persisted goal state');
+    expect(updateResult).toMatchObject({ isError: true });
+    expect(updateResult.content).toContain('update_goal: failed to read persisted goal state');
+  });
+
+  it('awaits asynchronous goal persistence and returns a tool error on rejection', async () => {
+    const ctx: ToolContext = {
+      cwd: workDir,
+      projectName: 'test-proj',
+      runner: {} as unknown as ToolContext['runner'],
+      getGoalState: () => null,
+      upsertGoalState: async () => {
+        await Promise.resolve();
+        throw new Error('asynchronous SQL failure');
+      },
+    };
+
+    const result = await createGoal.handler({ goal: 'must await persistence' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('create_goal: failed to persist goal state');
+    expect(result.content).toContain('asynchronous SQL failure');
+    expect(result.content).not.toContain('Goal set');
+  });
+
+  it('returns a tool error when completing a goal cannot be persisted', async () => {
+    const now = new Date().toISOString();
+    const ctx: ToolContext = {
+      cwd: workDir,
+      projectName: 'test-proj',
+      runner: {} as unknown as ToolContext['runner'],
+      getGoalState: () => ({
+        text: 'finish safely',
+        status: 'in_progress',
+        budgetTokens: null,
+        completionNote: null,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      upsertGoalState: async () => {
+        throw new Error('completion write rejected');
+      },
+    };
+
+    const result = await updateGoal.handler({ status: 'complete' }, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('update_goal: failed to persist goal state');
+    expect(result.content).toContain('completion write rejected');
+    expect(result.content).not.toContain('Goal marked complete');
+  });
+
+  it('throws when goal persistence targets a missing session row', () => {
+    const now = new Date().toISOString();
+    const missingSessionId = sessionId + 1_000_000_000;
+
+    expect(() => store.upsertSessionGoal(missingSessionId, {
+      text: 'orphan goal',
+      status: 'in_progress',
+      budgetTokens: null,
+      completionNote: null,
+      createdAt: now,
+      updatedAt: now,
+    })).toThrow(`upsertSessionGoal: session ${missingSessionId} was not found`);
   });
 
   it('persists status=complete across runners', async () => {
@@ -112,6 +238,58 @@ describe('goal — DB-persisted across runner restarts', () => {
     const g = await getGoal.handler({}, fresh2);
     expect(g.content).toContain('Goal: phase 2');
     expect(g.content).toContain('in_progress');
+  });
+
+  it('supersedes an unfinished goal only with explicit pivot authority and an audit note', async () => {
+    await createGoal.handler({ goal: 'old objective' }, ctxFor(sessionId));
+    const inheritedCreatedAt = store.getSessionGoal(sessionId)!.createdAt;
+
+    const unauthorized = await updateGoal.handler(
+      { status: 'superseded', note: 'user changed scope' },
+      ctxFor(sessionId),
+    );
+    expect(unauthorized).toMatchObject({ isError: true });
+    expect(unauthorized.content).toContain('explicit user pivot');
+
+    const missingReason = await updateGoal.handler(
+      { status: 'superseded' },
+      ctxFor(sessionId, 'required_pivot', inheritedCreatedAt),
+    );
+    expect(missingReason).toMatchObject({ isError: true });
+    expect(missingReason.content).toContain('requires a short reason');
+
+    const superseded = await updateGoal.handler(
+      { status: 'superseded', note: 'User requested a different objective.' },
+      ctxFor(sessionId, 'required_pivot', inheritedCreatedAt),
+    );
+    expect(superseded.isError).toBeFalsy();
+    expect(store.getSessionGoal(sessionId)).toMatchObject({
+      status: 'superseded',
+      completionNote: 'User requested a different objective.',
+    });
+
+    const replacement = await createGoal.handler(
+      { goal: 'replacement objective' },
+      ctxFor(sessionId, 'required_pivot', inheritedCreatedAt),
+    );
+    expect(replacement.isError).toBeFalsy();
+    expect(store.getSessionGoal(sessionId)).toMatchObject({
+      text: 'replacement objective',
+      status: 'in_progress',
+    });
+
+    const replacementGoal = store.getSessionGoal(sessionId)!;
+    store.upsertSessionGoal(sessionId, {
+      ...replacementGoal,
+      createdAt: '2099-01-01T00:00:00.000Z',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    const cannotSupersedeReplacement = await updateGoal.handler(
+      { status: 'superseded', note: 'agent changed its mind again' },
+      ctxFor(sessionId, 'required_pivot', inheritedCreatedAt),
+    );
+    expect(cannotSupersedeReplacement).toMatchObject({ isError: true });
+    expect(cannotSupersedeReplacement.content).toContain('only the inherited goal');
   });
 
   it('isolates goal per session (sessionA does not see sessionB goal)', async () => {

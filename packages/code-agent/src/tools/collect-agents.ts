@@ -46,6 +46,51 @@ function renderSnapshot(jobs: SubagentJob[], waitExpired: boolean): string {
   return `${blocks.join('\n\n')}\n\n${guidance}`;
 }
 
+function terminalResult(job: SubagentJob): ToolResult {
+  const completedCount = job.agents.filter((agent) => agent.status === 'completed').length;
+  const partialCount = job.agents.filter((agent) => agent.status === 'partial').length;
+  // A terminal job must not retain pending/running slots. Count them as failed
+  // defensively so a dropped progress event can never produce a false success.
+  const failedCount = job.agents.length - completedCount - partialCount;
+  const stillFailed = partialCount + failedCount;
+  const status = stillFailed === 0
+    ? 'completed'
+    : completedCount > 0 || partialCount > 0
+      ? 'partial'
+      : 'failed';
+  const structuredData = {
+    kind: 'collect_agents_result',
+    status,
+    jobId: job.jobId,
+    spawnId: job.groupId,
+    agentCount: job.agents.length,
+    completedCount,
+    partialCount,
+    failedCount,
+    stillFailed,
+    resumableCount: job.resumableCount,
+  };
+  const content = job.resultText ?? '(background job produced no result)';
+  if (status === 'completed') {
+    return { ...ok(content), structuredData };
+  }
+
+  const retryable = job.resumableCount > 0;
+  return {
+    content,
+    isError: true,
+    error: {
+      code: status === 'partial' ? 'COLLECT_AGENTS_PARTIAL' : 'COLLECT_AGENTS_FAILED',
+      kind: 'tool_error',
+      retryable,
+      suggestedAction: retryable
+        ? `Call resume_agent with spawn_id '${job.groupId}' to continue only the unfinished agents.`
+        : 'No resumable checkpoint is available; narrow or decompose the task before spawning replacement work.',
+    },
+    structuredData,
+  };
+}
+
 const COLLECT_DESC =
   'Wait for / fetch the results of a background spawn_agent job. Pass the job id from the spawn result. ' +
   'Omit job_id to wait for ANY outstanding job. Blocks until done by default; set wait:false for an instant status snapshot. ' +
@@ -100,7 +145,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
         switch (res.kind) {
           case 'done':
             manager.markDelivery(res.job, 'collected');
-            return ok(res.job.resultText ?? '(background job produced no result)');
+            return terminalResult(res.job);
           case 'timeout': {
             const jobs = jobId ? manager.list(sessionId).filter((j) => j.jobId === jobId) : manager.list(sessionId).filter((j) => j.status === 'running');
             return ok(renderSnapshot(jobs, wait));

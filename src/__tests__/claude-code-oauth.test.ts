@@ -124,6 +124,7 @@ describe('Claude Code OAuth parity helpers', () => {
       expect(getClaudeCodeBetasForModel('claude-opus-4-8[1m]', true, {
         hasEffort: true,
         hasTools: true,
+        promptCacheTtl: '1h',
       })).toEqual([
         'claude-code-20250219',
         'oauth-2025-04-20',
@@ -131,6 +132,7 @@ describe('Claude Code OAuth parity helpers', () => {
         'interleaved-thinking-2025-05-14',
         'context-management-2025-06-27',
         'prompt-caching-scope-2026-01-05',
+        'extended-cache-ttl-2025-04-11',
       ]);
       expect(getClaudeCodeBetasForModel('claude-sonnet-4-6[1m]', true)).toEqual([
         'claude-code-20250219',

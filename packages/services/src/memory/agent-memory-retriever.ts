@@ -183,7 +183,13 @@ export class AgentMemoryRetriever {
 
   private markAccessed(ids: number[]): void {
     try {
-      this.db.bumpAgentMemoryAccess(ids);
+      // Access counters are best-effort telemetry. They must never inherit the
+      // worker-oriented 5s busy timeout on Electron-main.
+      if (typeof this.db.withBusyTimeout === 'function') {
+        this.db.withBusyTimeout(0, () => this.db.bumpAgentMemoryAccess(ids));
+      } else {
+        this.db.bumpAgentMemoryAccess(ids);
+      }
     } catch {
       /* best-effort */
     }

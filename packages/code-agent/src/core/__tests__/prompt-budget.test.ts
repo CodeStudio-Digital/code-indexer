@@ -71,7 +71,8 @@ function splitStatic(prompt: string): { preamble: string; sections: Section[] } 
 const SECTION_BUDGETS: Record<string, number> = {
   '(preamble)': 360,
   '(base-intro)': 280,
-  '# Project context': 1100,
+  '# Project context': 1250, // Windows shell guidance measured 1178 (2026-07-23)
+  '# Goal lifecycle': 160, // compact first-batch + verified finish contract
   '# Tool tiers': 420,
   '# Tool tiers (IMPORTANT)': 720,
   '# Tool strategy — token economy': 1150,
@@ -91,7 +92,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Explanatory output': 420,
   '# Learning output': 420,
   '# Operating autonomously': 760,
-  '# Multi-agent mode (Ultra)': 1350,
+  '# Multi-agent mode (Ultra)': 1600, // bounded orchestration guidance measured 1465 (2026-07-23)
   '# Multi-agent mode (explicit request only)': 600,
   '# Plan mode is ACTIVE': 5800, // plan.txt + ## Plan depth block + decision-gate step/section + recall step 0 (2026-07; complex measured 5792)
 

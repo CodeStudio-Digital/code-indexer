@@ -15,7 +15,11 @@ class StubProvider implements ChatProvider {
   }
 }
 
-function makeRunner(opts: { planMode?: boolean; planDepth?: 'simple' | 'normal' | 'complex' } = {}) {
+function makeRunner(opts: {
+  planMode?: boolean;
+  specMode?: boolean;
+  planDepth?: 'simple' | 'normal' | 'complex';
+} = {}) {
   const registry = new ToolRegistry();
   registry.registerAll(planTools);
   registry.registerAll(interactionTools);
@@ -25,6 +29,7 @@ function makeRunner(opts: { planMode?: boolean; planDepth?: 'simple' | 'normal' 
     systemPrompt: 'test',
     toolContext: { cwd: '/tmp', projectName: 'test' },
     planMode: opts.planMode,
+    specMode: opts.specMode,
     planDepth: opts.planDepth,
   });
 }
@@ -168,5 +173,20 @@ describe('submit_plan does not infer forks from plan prose', () => {
     const result = await resultP;
     expect(result.isError).toBeUndefined();
     expect(result.content).toMatch(/approved/i);
+  });
+
+  it('is refused immediately in spec mode and never posts an interactive plan', async () => {
+    const r = makeRunner({ specMode: true });
+    let posted = false;
+    r.on('plan_posted', () => { posted = true; });
+
+    const result = await submitPlan.handler(
+      { plan: 'This regular plan must not satisfy the spec gate.' },
+      ctx(r),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/submit_spec/);
+    expect(posted).toBe(false);
   });
 });

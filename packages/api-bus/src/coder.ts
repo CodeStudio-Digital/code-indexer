@@ -110,6 +110,8 @@ export interface UpdateSessionInput {
 export interface CoderAttachment {
   name: string;
   mediaType: string;
+  /** Canonical local path; the payload is not embedded in the request. */
+  path?: string;
   base64?: string;
   text?: string;
 }

@@ -36,6 +36,7 @@ describe('Claude Code host/plugin wire-helper parity', () => {
           thinking: true,
           effort: 'auto' as const,
           hasTools: true,
+          promptCacheTtl: '1h' as const,
         };
         expect(resolveRuntimeModel(entry.model, entry.account, opts)).toEqual(
           resolveServiceModel(entry.model, entry.account, opts),

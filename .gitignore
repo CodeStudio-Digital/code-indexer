@@ -37,4 +37,3 @@ worker-market/.deploy.*
 .smoke/
 .codex-tmp/
 debug.log
-scripts/js-debug-adapter-artifact.d.mts

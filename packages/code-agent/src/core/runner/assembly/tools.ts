@@ -83,8 +83,48 @@ export interface BuildToolsResult {
   protectedToolNames: ReadonlySet<string>;
 }
 
+/**
+ * Goal creation and completion form one capability. Preserve the original
+ * array reference when the pair is already coherent so memoized tool JSON and
+ * prompt-cache fingerprints remain reusable.
+ */
+export function enforceAtomicGoalToolPair<T extends { name: string }>(
+  tools: T[],
+  authoritativeTools?: readonly T[],
+): T[] {
+  const hasCreateGoal = tools.some((tool) => tool.name === 'create_goal');
+  const hasUpdateGoal = tools.some((tool) => tool.name === 'update_goal');
+  const authorityHasPair = authoritativeTools
+    && authoritativeTools.some((tool) => tool.name === 'create_goal')
+    && authoritativeTools.some((tool) => tool.name === 'update_goal');
+  if (authorityHasPair && (!hasCreateGoal || !hasUpdateGoal)) {
+    const selectedByName = new Map(tools.map((tool) => [tool.name, tool]));
+    return authoritativeTools
+      .filter(
+        (tool) =>
+          selectedByName.has(tool.name)
+          || tool.name === 'create_goal'
+          || tool.name === 'update_goal',
+      )
+      .map((tool) => selectedByName.get(tool.name) ?? tool);
+  }
+  if (hasCreateGoal === hasUpdateGoal) return tools;
+  return tools.filter(
+    (tool) => tool.name !== 'create_goal' && tool.name !== 'update_goal',
+  );
+}
+
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   let filtered = args.registry.list();
+  // Spec mode has a dedicated human gate. Do not advertise submit_plan to the
+  // model and rely on prose saying it is blocked: the tool previously remained
+  // protected by NEVER_TRIM and was repeatedly selected, even though its
+  // approval can never set specApproved. The registry keeps the handler so
+  // persisted legacy calls can still resolve deterministically.
+  const specModeBlocksPlan = args.toolContext.runner?.specMode === true;
+  if (specModeBlocksPlan) {
+    filtered = filtered.filter((tool) => tool.name !== 'submit_plan');
+  }
 
   if (args.globalDisabledTools?.size) {
     filtered = filtered.filter((t) => !args.globalDisabledTools!.has(t.name));
@@ -105,6 +145,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     const present = new Set(filtered.map((t) => t.name));
     for (const t of args.registry.list()) {
       if (!args.pinnedTools.has(t.name) || present.has(t.name)) continue;
+      if (specModeBlocksPlan && t.name === 'submit_plan') continue;
       if (args.globalDisabledTools?.has(t.name)) continue;
       if (args.sessionDisabledTools?.has(t.name)) continue;
       filtered.push(t);
@@ -129,6 +170,13 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     }
   }
 
+  // Goal lifecycle is one atomic capability: advertising create_goal without
+  // update_goal can leave a durable in_progress goal that the model has no way
+  // to close, while update_goal alone recreates the original "No goal set"
+  // failure. Disabled sets, tiering, pins and project hooks all converge here,
+  // so drop BOTH transitions whenever either one is unavailable.
+  filtered = enforceAtomicGoalToolPair(filtered);
+
   // NOTE: `create_goal` stays in the tool surface for the ENTIRE run — we
   // deliberately do NOT remove it once a goal is in_progress. Tool-array
   // membership is the first segment of the provider prompt-cache prefix;
@@ -152,6 +200,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   for (const t of filtered) {
     const isProtected =
       NEVER_TRIM.has(t.name) ||
+      (specModeBlocksPlan && t.name === 'submit_spec') ||
       PREVIEW_WORKFLOW_FLOOR.has(t.name) ||
       ROLE_CAPABILITY_FLOOR.has(t.name) ||
       !!args.pinnedTools?.has(t.name) ||

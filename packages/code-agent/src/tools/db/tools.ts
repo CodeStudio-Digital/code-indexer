@@ -12,6 +12,10 @@ import type {
   ToolSourceTruncation,
 } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import {
+  assertMutationFence,
+  combinedMutationSignal,
+} from '@mcp/code-agent/core/mutation-fence.js';
 import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
 import { isWriteCommand } from '@mcp/db-drivers/command-classify.js';
 import type { DatabaseDriver, DbCommand, QueryResult, TableRef } from '@mcp/db-drivers/types.js';
@@ -218,6 +222,7 @@ const dbSchema: CoderTool = {
 
 const dbQuery: CoderTool = {
   name: 'db_query',
+  effectBoundary: 'database',
   description:
     'Execute ONE SQL statement against a registered relational connection. Reads AND writes ' +
     'are allowed unless the connection is marked read-only in the Databases tab. Use `params` ' +
@@ -261,7 +266,19 @@ const dbQuery: CoderTool = {
         return err('Connection is read-only — writes are blocked.');
       }
       const params = Array.isArray(args.params) ? (args.params as unknown[]) : undefined;
-      const result = await acquired.driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows) });
+      const operation = sql.trim().match(/^([a-z]+)/i)?.[1]?.toLowerCase() ?? 'unknown';
+      if (!isReadStatement(sql)) {
+        assertMutationFence(ctx.mutationFence, {
+          kind: 'database',
+          operation,
+          resource: String(args.connection ?? '<default>'),
+        });
+      }
+      const result = await acquired.driver.runQuery(sql, {
+        params,
+        maxRows: clampMaxRows(args.max_rows),
+        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
+      });
       return renderDbResult(result, ctx, isReadStatement(sql));
     } catch (e) {
       return err(`db_query failed: ${scrubDbError(e, acquired?.spec)}`);
@@ -283,6 +300,7 @@ function commandRisk(input: unknown): 'read' | 'write' {
 
 const dbCommand: CoderTool = {
   name: 'db_command',
+  effectBoundary: 'database',
   description:
     'Run a document/key-value command on a MongoDB or Redis connection (relational engines ' +
     'must use db_query). Shape: {op, collection?, payload?} for Mongo ' +
@@ -335,8 +353,22 @@ const dbCommand: CoderTool = {
       if (!acquired.driver.runCommand) {
         return err(`db_command: the '${picked.value.conn.engine}' driver does not support commands.`);
       }
-      const result = await acquired.driver.runCommand(command, { maxRows: clampMaxRows(args.max_rows) });
-      return renderDbResult(result, ctx, !isWriteCommand(command));
+      const mutates = isWriteCommand(command);
+      const operation = typeof command.op === 'string'
+        ? command.op.toLowerCase()
+        : String(command.args?.[0] ?? 'unknown').toLowerCase();
+      if (mutates) {
+        assertMutationFence(ctx.mutationFence, {
+          kind: 'database',
+          operation,
+          resource: String(args.connection ?? '<default>'),
+        });
+      }
+      const result = await acquired.driver.runCommand(command, {
+        maxRows: clampMaxRows(args.max_rows),
+        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
+      });
+      return renderDbResult(result, ctx, !mutates);
     } catch (e) {
       return err(`db_command failed: ${scrubDbError(e, acquired?.spec)}`);
     }
