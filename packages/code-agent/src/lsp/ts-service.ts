@@ -1,6 +1,52 @@
 import ts from 'typescript';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { resolve, isAbsolute, dirname, join } from 'node:path';
+import { resolve, isAbsolute, dirname, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Directory holding the TypeScript default library files (`lib.es*.d.ts`,
+ * `lib.dom.d.ts`, …), or `null` when the compiler can resolve them itself.
+ *
+ * In dev this is `null`: `ts.getDefaultLibFilePath` finds the libs next to
+ * `typescript.js` inside `node_modules/typescript/lib` as usual.
+ *
+ * In the packaged Electron app it is NOT null. electron-builder strips every
+ * `*.d.ts` from the bundled `node_modules` (its Go copier does this
+ * unconditionally — it is not overridable via the `files` globs), so the
+ * bundled `typescript/lib` ships WITHOUT the default libs. Without them the
+ * language service can't load global types and reports spurious "Cannot find
+ * name 'console'/'Promise'/…" on every file. To fix that, the electron build
+ * ships the libs verbatim via `extraResources` into `resources/ts-lib`
+ * (see apps/electron/electron-builder.json) and we point the language-service
+ * host there. Resolution tries, in order: an explicit env override, the
+ * Electron `resourcesPath`, and the `ts-lib` sibling of the running `app.asar`
+ * (covers worker threads where `resourcesPath` may be unset).
+ */
+function resolveBundledTsLibDir(): string | null {
+  const candidates: string[] = [];
+  const envDir = process.env.CODESTUDIO_TS_LIB_DIR;
+  if (envDir) candidates.push(envDir);
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) candidates.push(join(resourcesPath, 'ts-lib'));
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const marker = `${sep}app.asar${sep}`;
+    const i = here.indexOf(marker);
+    if (i !== -1) candidates.push(join(here.slice(0, i), 'ts-lib'));
+  } catch {
+    /* import.meta unavailable — fall through to the compiler default */
+  }
+  for (const dir of candidates) {
+    try {
+      if (existsSync(join(dir, 'lib.es5.d.ts'))) return dir;
+    } catch {
+      /* unreadable candidate — try the next */
+    }
+  }
+  return null;
+}
+
+const DEFAULT_LIB_DIR = resolveBundledTsLibDir();
 
 /**
  * TypeScript canonical path: forward slashes only, lowercase Windows
@@ -387,7 +433,13 @@ export class TsLanguageService {
       },
       getCurrentDirectory: () => this.projectRoot,
       getCompilationSettings: () => this.compilerOptions,
-      getDefaultLibFileName: (opts) => ts.getDefaultLibFilePath(opts),
+      // Prefer the extraResources-shipped lib dir in the packaged app (where
+      // electron-builder stripped the bundled typescript/lib *.d.ts); fall
+      // back to the compiler's own resolution in dev. See DEFAULT_LIB_DIR.
+      getDefaultLibFileName: (opts) =>
+        DEFAULT_LIB_DIR
+          ? join(DEFAULT_LIB_DIR, ts.getDefaultLibFileName(opts))
+          : ts.getDefaultLibFilePath(opts),
       fileExists: ts.sys.fileExists,
       readFile: ts.sys.readFile,
       readDirectory: ts.sys.readDirectory,

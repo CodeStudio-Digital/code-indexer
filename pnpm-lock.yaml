@@ -230,6 +230,9 @@ importers:
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
       undici:
         specifier: ^7.25.0
         version: 7.25.0
@@ -339,9 +342,6 @@ importers:
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
-      typescript:
-        specifier: ^5.8.2
-        version: 5.9.3
       vite:
         specifier: ^8.0.16
         version: 8.1.0(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)

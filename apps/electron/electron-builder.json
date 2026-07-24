@@ -9,6 +9,7 @@
   "files": [
     "dist/apps/electron/**/*",
     "dist/apps/http-api/**/*",
+    "dist/apps/mcp-server/**/*",
     "dist/dashboard/**/*",
     "dist/packages/**/*",
     "package.json",
@@ -37,6 +38,11 @@
     {
       "from": "dist/bundled-plugins",
       "to": "bundled-plugins"
+    },
+    {
+      "from": "node_modules/typescript/lib",
+      "to": "ts-lib",
+      "filter": ["**/*.d.ts"]
     }
   ],
   "win": {
