@@ -8,6 +8,7 @@ import {
   parseVerdictBlock,
   buildVerifyInitialMessage,
   resolveGoalVerificationScope,
+  resolveUsableGoalCompletionVerdict,
   resolveVerifyMaxTurns,
   shouldEnableGoalCompletionVerifier,
 } from '@mcp/code-agent/tools/verify-completion-subagent.js';
@@ -32,7 +33,7 @@ describe('parseVerdictBlock', () => {
     ]);
   });
 
-  it('returns null when the block is absent (caller treats as NOT met)', () => {
+  it('returns null when the block is absent', () => {
     expect(parseVerdictBlock('I think it is probably fine.')).toBeNull();
   });
 
@@ -54,6 +55,27 @@ describe('parseVerdictBlock', () => {
   it('is tolerant of case and surrounding whitespace', () => {
     const v = parseVerdictBlock('<VERDICT>\n  {"goal_met": true, "gaps": []}\n</VERDICT>');
     expect(v).toEqual({ goalMet: true, gaps: [] });
+  });
+});
+
+describe('resolveUsableGoalCompletionVerdict', () => {
+  it('keeps an explicit parsed negative verdict authoritative', () => {
+    expect(resolveUsableGoalCompletionVerdict({
+      parsed: true,
+      goalMet: false,
+      gaps: [{ description: 'Regression is still failing', severity: 'high' }],
+    })).toEqual({
+      goalMet: false,
+      gaps: [{ description: 'Regression is still failing', severity: 'high' }],
+    });
+  });
+
+  it('treats an aborted or malformed verifier result as inconclusive', () => {
+    expect(resolveUsableGoalCompletionVerdict({
+      parsed: false,
+      goalMet: false,
+      gaps: [],
+    })).toBeNull();
   });
 });
 

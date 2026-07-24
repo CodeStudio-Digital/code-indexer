@@ -12,6 +12,15 @@ const ctx = {
 };
 
 describe('buildCodeExecFailureHint — unquoted path (P6)', () => {
+  it('explains a lexical declaration that shadows the reserved tools proxy', () => {
+    const hint = buildCodeExecFailureHint(
+      "SyntaxError: Identifier 'tools' has already been declared",
+      ctx,
+    );
+    expect(hint).toContain('reserved code_exec tool proxy');
+    expect(hint).toContain('toolResults');
+  });
+
   it('recognizes the unquoted-path SyntaxError and suggests quoting', () => {
     const hint = buildCodeExecFailureHint(
       "code_exec parse/sync error: SyntaxError: Unexpected identifier 'corporate'",

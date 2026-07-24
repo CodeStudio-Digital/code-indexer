@@ -79,6 +79,46 @@ describe('ToolCallLedger', () => {
     expect(env.validationSignal).toBe('pnpm run audit:env:check');
   });
 
+  it('recognizes validation scripts after monorepo workspace selectors', () => {
+    const ledger = new ToolCallLedger();
+    const test = ledger.record({
+      name: 'run_command',
+      args: { command: 'pnpm --filter @migrator/core test -- siger.mapper.spec.ts' },
+      content: 'passed',
+      isError: false,
+    });
+    const typecheck = ledger.record({
+      name: 'run_command',
+      args: { command: 'npm --workspace apps/api run typecheck -- --pretty false' },
+      content: 'passed',
+      isError: false,
+    });
+    const unrelated = ledger.record({
+      name: 'run_command',
+      args: { command: 'pnpm --filter test deploy' },
+      content: 'deployed',
+      isError: false,
+    });
+
+    expect(test.validationSignal).toBe('pnpm test');
+    expect(typecheck.validationSignal).toBe('npm run typecheck');
+    expect(unrelated.validationSignal).toBeUndefined();
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('@migrator');
+  });
+
+  it('recognizes PHP syntax checks without retaining the target path', () => {
+    const ledger = new ToolCallLedger();
+    const lint = ledger.record({
+      name: 'run_command',
+      args: { command: 'php -l sync-service/handlers/UserHandler.php' },
+      content: 'No syntax errors detected',
+      isError: false,
+    });
+
+    expect(lint.validationSignal).toBe('php -l');
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('UserHandler.php');
+  });
+
   it('correlates spawn recovery by a hashed opaque id across tools', () => {
     const ledger = new ToolCallLedger();
     const spawnId = 'spawn-private-control-id';

@@ -260,6 +260,21 @@ export class AgentMemoryService {
     return result;
   }
 
+  /**
+   * Run an arbitrary central-memory SQLite section through the same fail-fast
+   * adapter and async contention queue as normal agent-memory mutations.
+   *
+   * Background maintenance runs in Electron main and also updates session/log
+   * tables on the shared connection. Keeping this seam public lets those
+   * callers wait for SQLITE_BUSY without blocking the main event loop.
+   */
+  async runRelationalWrite<T>(operation: () => T): Promise<T> {
+    const attempt = (): T => this.mutationExecution.execute(operation);
+    return this.mutationExecution.retry
+      ? this.mutationExecution.retry(attempt)
+      : attempt();
+  }
+
   /** Notify a bulk relational hygiene pass (duplicate consolidation/decay).
    * The coordinator performs a full idempotent reconciliation for the scope. */
   noteScopeMutation(scope: AgentMemoryScope, projectId: number): void {
@@ -286,6 +301,19 @@ export class AgentMemoryService {
       itemKeys: [...existingKeys, '*'],
       operation: 'delete',
     }], mutation);
+  }
+
+  /**
+   * Async main-process variant of runScopeMutation. The complete fence/source
+   * transaction is retried as one fail-fast unit, so contention never becomes
+   * a synchronous busy wait on Electron's UI thread.
+   */
+  async runScopeMutationAsync<T>(
+    scope: AgentMemoryScope,
+    projectId: number,
+    mutation: () => T,
+  ): Promise<T> {
+    return this.runRelationalWrite(() => this.runScopeMutation(scope, projectId, mutation));
   }
 
   /** Relational create plus a synchronous durable semantic delta. */

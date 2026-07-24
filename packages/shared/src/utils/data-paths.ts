@@ -49,6 +49,17 @@ export function coderToolOutputsBaseDir(env: NodeJS.ProcessEnv = process.env): s
   return join(mcpDataDir(env), 'coder-tool-outputs');
 }
 
+/**
+ * Off-heap storage for spilled TERMINAL (completed) subagent transcripts —
+ * `<base>/<sessionId>/<spawnId>.<agentIndex>.jsonl`. Keeps the resume
+ * registry's worker RAM bounded while transcripts stay readable on demand.
+ * The dedicated `MCP_SUBAGENT_TRANSCRIPT_DIR` override lives in the spill
+ * module; this is just the default location.
+ */
+export function subagentTranscriptsBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(mcpDataDir(env), 'subagent-transcripts');
+}
+
 /** Uploaded Design System theme zips. */
 export function designSystemUploadsDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'design-system-uploads');

@@ -100,6 +100,7 @@ import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js'
 import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
 import {
   resolveGoalVerificationScope,
+  resolveUsableGoalCompletionVerdict,
   runVerifyCompletionSubagent,
   shouldEnableGoalCompletionVerifier,
 } from '@mcp/code-agent/tools/verify-completion-subagent.js';
@@ -2514,7 +2515,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
                 files: scope.files,
               },
             );
-            return { goalMet: result.goalMet, gaps: result.gaps };
+            return resolveUsableGoalCompletionVerdict(result);
           } catch {
             return null; // fail-open — the verifier must never block the run
           }

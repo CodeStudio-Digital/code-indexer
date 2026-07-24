@@ -1,19 +1,30 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
   clearSession,
   getGroup,
   listReadableGroups,
   listResumable,
+  peekSessionGroupCountForTests,
   retainCompletedTranscripts,
   retainGroup,
+  stopResumeSweepForTests,
   type ResumableAgentState,
   type ResumableGroup,
 } from '../subagent-resume-registry.js';
 import { retainSpawnGroup } from '../spawn-agent-resume.js';
-import { findRetainedAgent, renderAgentTranscript } from '../read-agent-transcript.js';
+import {
+  buildReadAgentTranscriptTool,
+  findRetainedAgent,
+  renderAgentTranscript,
+} from '../read-agent-transcript.js';
 
 let nextSession = 910_000;
+const SPILL_DIR = mkdtempSync(join(tmpdir(), 'mcp-spill-'));
 
 function transcript(): AgentMessage[] {
   return [
@@ -61,19 +72,38 @@ function group(sessionId: number, reasons: ResumableAgentState['reason'][]): Res
   };
 }
 
+beforeEach(() => {
+  // Route every spill to an isolated temp dir so tests never touch ~/.mcp-*.
+  vi.stubEnv('MCP_SUBAGENT_TRANSCRIPT_DIR', SPILL_DIR);
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  stopResumeSweepForTests();
+  vi.useRealTimers();
+});
+
+afterAll(() => {
+  rmSync(SPILL_DIR, { recursive: true, force: true });
 });
 
 describe('completed-transcript retention (P1)', () => {
-  it('retains completed transcripts by DEFAULT so they are readable', () => {
+  it('spills completed transcripts off-heap by DEFAULT but keeps them readable', () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     expect(retainCompletedTranscripts()).toBe(true);
     const sid = ++nextSession;
     retainGroup(sid, group(sid, ['completed', 'error']));
     const stored = getGroup(sid, `grp-${sid}`);
-    expect(stored?.agents[0].transcript?.length).toBeGreaterThan(0);
+    // Completed → spilled to disk: no in-RAM transcript, pointer kept, 0 bytes.
+    expect(stored?.agents[0].transcript).toBeUndefined();
+    expect(stored?.agents[0].spillPath).toBeTruthy();
+    expect(stored?.agents[0].approxBytes).toBe(0);
+    expect(existsSync(stored!.agents[0].spillPath!)).toBe(true);
+    // Resumable (error) → stays in RAM so resume_agent can relaunch it.
     expect(stored?.agents[1].transcript?.length).toBeGreaterThan(0);
+    expect(stored?.agents[1].spillPath).toBeUndefined();
+    // Spilled transcripts still count as readable via their pointer.
+    expect(listReadableGroups(sid)[0].agents[0].hasTranscript).toBe(true);
     clearSession(sid);
   });
 
@@ -122,7 +152,11 @@ describe('completed-transcript retention (P1)', () => {
       }],
     });
     expect(resumableCount).toBe(0);
-    expect(getGroup(sid, 'spawn-ok')?.agents[0].transcript?.length).toBeGreaterThan(0);
+    const stored = getGroup(sid, 'spawn-ok');
+    // The all-completed roster is retained, but its transcript lives on disk.
+    expect(stored?.agents[0].transcript).toBeUndefined();
+    expect(stored?.agents[0].spillPath).toBeTruthy();
+    expect(listReadableGroups(sid)[0].agents[0].hasTranscript).toBe(true);
     clearSession(sid);
   });
 });
@@ -130,6 +164,7 @@ describe('completed-transcript retention (P1)', () => {
 describe('read_agent_transcript rendering', () => {
   it('renders header, tool calls with inputs, results and final text', () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    vi.stubEnv('CODER_RESUME_SPILL', '0'); // pure in-RAM rendering (disk fallback covered below)
     const sid = ++nextSession;
     retainGroup(sid, group(sid, ['completed']));
     const agent = findRetainedAgent(sid, `grp-${sid}`, 1);
@@ -146,6 +181,7 @@ describe('read_agent_transcript rendering', () => {
 
   it('resolves agents by label and elides the middle under a tight budget', () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    vi.stubEnv('CODER_RESUME_SPILL', '0');
     const sid = ++nextSession;
     const g = group(sid, ['completed']);
     // Inflate the transcript so the digest budget must elide.
@@ -161,5 +197,125 @@ describe('read_agent_transcript rendering', () => {
     expect(text.length).toBeLessThanOrEqual(3_200);
     expect(text).toContain('earlier event(s) elided');
     clearSession(sid);
+  });
+
+  it('accepts zero as an unambiguous alias for the first agent', async () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    vi.stubEnv('CODER_RESUME_SPILL', '0');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed', 'completed']));
+
+    const result = await buildReadAgentTranscriptTool().handler(
+      { spawn_id: `grp-${sid}`, agent: 0, max_chars: 24_000 },
+      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toContain('[transcript agent=#1 "agent-1"');
+
+    expect(findRetainedAgent(sid, `grp-${sid}`, 0)?.label).toBe('agent-1');
+    expect(findRetainedAgent(sid, `grp-${sid}`, '0')?.label).toBe('agent-1');
+    expect(findRetainedAgent(sid, `grp-${sid}`, 1)?.label).toBe('agent-1');
+    expect(findRetainedAgent(sid, `grp-${sid}`, 2)?.label).toBe('agent-2');
+
+    clearSession(sid);
+  });
+});
+
+describe('terminal-transcript spill to disk (part b)', () => {
+  it('read_agent_transcript renders the full body back from the spill file', async () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed']));
+    const stored = getGroup(sid, `grp-${sid}`);
+    expect(stored?.agents[0].transcript).toBeUndefined(); // dropped from RAM
+    expect(stored?.agents[0].spillPath).toBeTruthy();      // only the pointer stays
+
+    const result = await buildReadAgentTranscriptTool().handler(
+      { spawn_id: `grp-${sid}`, agent: 1 },
+      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
+    );
+    expect(result.isError).not.toBe(true);
+    // Tool-call bodies came back from disk — not just the in-RAM metadata header.
+    expect(result.content).toContain('→ read_file');
+    expect(result.content).toContain('src/auth.ts');
+    expect(result.content).toContain('← read_file');
+    clearSession(sid);
+  });
+
+  it('keeps FAILED/ABORTED transcripts in RAM so resume_agent stays intact', () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['error', 'aborted']));
+    const stored = getGroup(sid, `grp-${sid}`);
+    for (const a of stored!.agents) {
+      expect(a.transcript?.length).toBeGreaterThan(0); // resumable → resident
+      expect(a.spillPath).toBeUndefined();             // nothing spilled
+    }
+    expect(listResumable(sid)).toHaveLength(2);
+    clearSession(sid);
+  });
+
+  it('kill switch CODER_RESUME_SPILL=0 keeps completed transcripts in RAM', () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    vi.stubEnv('CODER_RESUME_SPILL', '0');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed']));
+    const stored = getGroup(sid, `grp-${sid}`);
+    expect(stored?.agents[0].transcript?.length).toBeGreaterThan(0);
+    expect(stored?.agents[0].spillPath).toBeUndefined();
+    clearSession(sid);
+  });
+
+  it('degrades to the final report when the spill file vanished', async () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed']));
+    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    rmSync(spillPath, { force: true }); // external cleanup between spill and read
+    const result = await buildReadAgentTranscriptTool().handler(
+      { spawn_id: `grp-${sid}`, agent: 1 },
+      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
+    );
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toContain('[final] Done — login() lives in src/auth.ts.');
+    clearSession(sid);
+  });
+
+  it('deletes the spill file when the group is cleared', () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed']));
+    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    expect(existsSync(spillPath)).toBe(true);
+    clearSession(sid);
+    expect(existsSync(spillPath)).toBe(false);
+  });
+});
+
+describe('periodic worker-realm sweep (part a)', () => {
+  it('reclaims an idle session on the timer without any registry access', () => {
+    vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
+    vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
+    vi.useFakeTimers();
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['error'])); // arms the unref'd interval
+    expect(peekSessionGroupCountForTests(sid)).toBe(1); // retain-time sweep kept it
+    // Advance past the TTL. Only the timer runs here — no getGroup/sweep call.
+    vi.advanceTimersByTime(15_000);
+    expect(peekSessionGroupCountForTests(sid)).toBe(0);
+  });
+
+  it('the timer also deletes the spilled files of the groups it evicts', () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
+    vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
+    vi.useFakeTimers();
+    const sid = ++nextSession;
+    retainGroup(sid, group(sid, ['completed']));
+    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    expect(existsSync(spillPath)).toBe(true);
+    vi.advanceTimersByTime(15_000);
+    expect(peekSessionGroupCountForTests(sid)).toBe(0);
+    expect(existsSync(spillPath)).toBe(false);
   });
 });

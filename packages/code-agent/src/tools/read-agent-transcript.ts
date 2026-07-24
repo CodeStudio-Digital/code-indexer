@@ -17,6 +17,7 @@ import {
   listReadableGroups,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
+import { readSpilledTranscript } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
 
 const DEFAULT_MAX_CHARS = 15_000;
 const HARD_MAX_CHARS = 60_000;
@@ -37,6 +38,18 @@ function describeInput(input: Record<string, unknown>): string {
   }
 }
 
+/**
+ * The renderable transcript for an agent. Resumable agents keep it in RAM;
+ * COMPLETED agents have it spilled to a JSONL file (worker RAM stays bounded),
+ * so fall back to that file via the retained pointer. Returns [] when neither
+ * source has it — the caller then shows the final report instead.
+ */
+export function resolveAgentTranscript(agent: ResumableAgentState): AgentMessage[] {
+  if (agent.transcript && agent.transcript.length > 0) return agent.transcript;
+  if (agent.spillPath) return readSpilledTranscript(agent.spillPath) ?? [];
+  return [];
+}
+
 /** One line per transcript event — compact, chronological, tool-centric. */
 export function renderAgentTranscript(
   agent: ResumableAgentState,
@@ -50,7 +63,7 @@ export function renderAgentTranscript(
     `Task: ${clip(agent.task, 400)}\n`;
   const lines: string[] = [];
   const toolNames = new Map<string, string>();
-  for (const message of agent.transcript ?? []) {
+  for (const message of resolveAgentTranscript(agent)) {
     for (const block of message.content) {
       if (block.type === 'text' && message.role === 'user') {
         lines.push(`[user] ${clip(block.text, TEXT_BLOCK_CHARS)}`);
@@ -117,7 +130,7 @@ const schema: JsonSchema = {
     spawn_id: { type: 'string', description: 'Group/spawn id (shown in spawn results and the agents panel). Omit to list readable groups.' },
     agent: {
       type: ['string', 'number'],
-      description: 'Agent label OR 1-based index within the group. Optional when the group has a single agent.',
+      description: 'Agent label OR 1-based index within the group. Optional when the group has a single agent. Numeric 0 is accepted as an alias for the first agent.',
     },
     max_chars: { type: 'number', description: `Digest budget in characters (default ${DEFAULT_MAX_CHARS}, max ${HARD_MAX_CHARS}).` },
   },
@@ -147,19 +160,17 @@ export function buildReadAgentTranscriptTool(): CoderTool {
       }
 
       const ref = args.agent;
-      let agent: ResumableAgentState | undefined;
-      if (typeof ref === 'number' && Number.isFinite(ref)) {
-        agent = group.agents.find((a) => a.agentIndex === Math.floor(ref) - 1);
-      } else if (typeof ref === 'string' && ref.trim()) {
-        agent = group.agents.find((a) => a.label === ref.trim());
-      } else if (group.agents.length === 1) {
-        agent = group.agents[0];
-      }
+      const agent = resolveRetainedAgent(
+        group.agents,
+        typeof ref === 'string' || typeof ref === 'number' ? ref : undefined,
+      );
       if (!agent) {
         const roster = group.agents.map((a) => `#${a.agentIndex + 1} ${a.label}`).join(', ');
         return err(`read_agent_transcript: pick an agent — group '${spawnId}' has: ${roster}.`);
       }
-      if (!agent.transcript || agent.transcript.length === 0) {
+      // A completed agent's transcript may be spilled to disk (no in-RAM copy);
+      // renderAgentTranscript falls back to the spill file via agent.spillPath.
+      if ((!agent.transcript || agent.transcript.length === 0) && !agent.spillPath) {
         return ok(
           `Agent #${agent.agentIndex + 1} "${agent.label}" [${agent.reason}] has no retained transcript ` +
           `(retention off or evicted by the byte cap). Final report:\n\n${agent.finalText || '(empty)'}`,
@@ -171,6 +182,33 @@ export function buildReadAgentTranscriptTool(): CoderTool {
   };
 }
 
+function resolveRetainedAgent(
+  agents: ResumableAgentState[],
+  agentRef: string | number | undefined,
+): ResumableAgentState | undefined {
+  if (typeof agentRef === 'number' && Number.isFinite(agentRef)) {
+    const requestedIndex = Math.floor(agentRef);
+    // UI/runtime agent arrays are zero-based while this public tool is
+    // historically one-based. Zero is outside the public range, so accepting
+    // it as a first-agent alias is unambiguous and prevents a needless failed
+    // read when a caller forwards an internal index.
+    const internalIndex = requestedIndex === 0 ? 0 : requestedIndex - 1;
+    return agents.find((a) => a.agentIndex === internalIndex);
+  }
+  if (typeof agentRef === 'string' && agentRef.trim()) {
+    const trimmed = agentRef.trim();
+    const byLabel = agents.find((a) => a.label === trimmed);
+    if (byLabel) return byLabel;
+    const asIndex = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(asIndex)) {
+      const internalIndex = asIndex === 0 ? 0 : asIndex - 1;
+      return agents.find((a) => a.agentIndex === internalIndex);
+    }
+    return undefined;
+  }
+  return agents.length === 1 ? agents[0] : undefined;
+}
+
 /** Route-facing helper: locate one retained agent (label or 1-based index). */
 export function findRetainedAgent(
   sessionId: number,
@@ -179,18 +217,7 @@ export function findRetainedAgent(
 ): ResumableAgentState | undefined {
   const group = getGroup(sessionId, spawnId);
   if (!group) return undefined;
-  if (typeof agentRef === 'number' && Number.isFinite(agentRef)) {
-    return group.agents.find((a) => a.agentIndex === Math.floor(agentRef) - 1);
-  }
-  if (typeof agentRef === 'string' && agentRef.trim()) {
-    const trimmed = agentRef.trim();
-    const byLabel = group.agents.find((a) => a.label === trimmed);
-    if (byLabel) return byLabel;
-    const asIndex = Number.parseInt(trimmed, 10);
-    if (Number.isFinite(asIndex)) return group.agents.find((a) => a.agentIndex === asIndex - 1);
-    return undefined;
-  }
-  return group.agents.length === 1 ? group.agents[0] : undefined;
+  return resolveRetainedAgent(group.agents, agentRef);
 }
 
 /** AgentMessage kept import-referenced for route typing convenience. */

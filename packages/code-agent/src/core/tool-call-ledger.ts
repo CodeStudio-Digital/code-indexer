@@ -249,6 +249,54 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+const PACKAGE_VALIDATION_SCRIPT =
+  /(?:^|[:_-])(?:test|typecheck|lint|build|check|audit)(?:$|[:_-])/;
+const PACKAGE_OPTIONS_WITH_VALUE = new Set([
+  '--filter', '-f',
+  '--workspace', '-w',
+  '--dir', '-c',
+  '--prefix',
+  '--cwd',
+  '--config',
+]);
+
+function cleanCommandToken(token: string): string {
+  return token
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/[;&|]+$/g, '');
+}
+
+function extractPackageValidationSignal(normalized: string): string | undefined {
+  const packageManager = normalized.match(/\b(npm|pnpm|yarn|bun)\b/);
+  if (!packageManager) return undefined;
+  const manager = packageManager[1]!;
+  const invocation = normalized.slice(packageManager.index! + packageManager[0].length);
+  const tokens = invocation.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = cleanCommandToken(tokens[i]!);
+    if (token === 'run' || token === 'run-script') {
+      const script = cleanCommandToken(tokens[i + 1] ?? '');
+      return PACKAGE_VALIDATION_SCRIPT.test(script)
+        ? `${manager} run ${script}`
+        : undefined;
+    }
+    if (manager === 'yarn' && token === 'workspace') {
+      i += 1; // skip the workspace name; its next positional is the script
+      continue;
+    }
+    if (PACKAGE_OPTIONS_WITH_VALUE.has(token)) {
+      i += 1; // a selector value named "test" is not itself a test command
+      continue;
+    }
+    if (token.startsWith('-')) continue;
+    return PACKAGE_VALIDATION_SCRIPT.test(token)
+      ? `${manager} ${token}`
+      : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Extract only opaque control-plane ids from known first-party orchestration
  * results. The ledger stores their hash, never the raw id or arbitrary
@@ -303,16 +351,15 @@ function extractValidationSignal(name: string, args: Record<string, unknown>): s
   const command = [args.command, args.cmd, args.script].find((value): value is string => typeof value === 'string');
   if (command) {
     const normalized = command.replace(/\s+/g, ' ').trim().toLowerCase();
-    const packageScript = normalized.match(
-      /\b((?:npm|pnpm|yarn|bun)(?: run)?) ([a-z0-9][a-z0-9:_-]*)\b/,
-    );
+    const packageValidation = extractPackageValidationSignal(normalized);
+    if (packageValidation) return packageValidation;
     if (
-      packageScript
-      && /(?:^|[:_-])(?:test|typecheck|lint|build|check|audit)(?:$|[:_-])/.test(packageScript[2]!)
+      /\bphp(?:\.exe)?\s+(?:-d\s+\S+\s+)*(?:-l|--syntax-check)\b/.test(normalized)
     ) {
       // Keep the exact validation script (for example check:loc vs.
-      // audit:env:check) without retaining flags, paths, or secrets.
-      return `${packageScript[1]} ${packageScript[2]}`;
+      // audit:env:check), or the PHP lint operation, without retaining flags,
+      // paths, workspace names, or secrets.
+      return 'php -l';
     }
     const patterns: Array<[RegExp, string]> = [
       [/\bgit diff --check\b/, 'git diff --check'],

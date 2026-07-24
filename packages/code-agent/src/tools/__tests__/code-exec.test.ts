@@ -8,7 +8,11 @@
  * exposed inside `code_exec`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { buildCodeExecTool, _exposedToolNames } from '@mcp/code-agent/tools/code-exec.js';
+import {
+  buildCodeExecTool,
+  _exposedToolNames,
+  _maxParallelToolCalls,
+} from '@mcp/code-agent/tools/code-exec.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, type CoderTool, type GuardVerdict, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
@@ -62,6 +66,31 @@ function noopTool(name: string): CoderTool {
 }
 
 describe('code_exec timeout (codex-faithful)', () => {
+  it('rejects a lexical tools shadow before starting any nested call', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => ok('skeleton'));
+    registry.register({
+      ...noopTool('mcp__get_file_skeleton'),
+      mutates: false,
+      parallelSafe: true,
+      handler,
+    });
+
+    const res = await buildCodeExecTool(registry).handler({
+      code: `const [author, tools, findings] = await Promise.all([
+        mcp__get_file_skeleton({file_path:'Editor/Timeline/TimelineAuthor.cs'}),
+        Promise.resolve([]),
+        tools.mcp__get_file_skeleton({file_path:'Tests/TimelineAuthorTests.cs'})
+      ]); return {author, tools, findings};`,
+    }, makeCtx());
+
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain("Identifier 'tools' has already been declared");
+    expect(res.content).toContain('reserved code_exec tool proxy');
+    expect(res.content).toContain('toolResults');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('does NOT time out while awaiting a nested tool slower than the JS budget', async () => {
     const registry = new ToolRegistry();
     // Budget floor is 500ms; the tool sleeps longer, but the clock is paused
@@ -1091,6 +1120,35 @@ describe('code_exec metadata safety and scheduling', () => {
     }, makeCtx());
     expect(result.isError).toBeFalsy();
     expect(maxActive).toBe(2);
+  });
+
+  it('bounds Promise.all fan-out while preserving parallel-safe overlap and results', async () => {
+    const registry = new ToolRegistry();
+    let active = 0;
+    let maxActive = 0;
+    registry.register({
+      ...slowTool('read_file', 1),
+      parallelSafe: true,
+      handler: async (args) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await sleep(20);
+        active--;
+        return ok(`read:${String(args.n)}`);
+      },
+    });
+    // Mirrors the reported batch: 8 prepare_edit + glob + read + 5 RAG calls.
+    const values = Array.from({ length: 15 }, (_, index) => index + 1);
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([${values
+        .map((n) => `tools.read_file({n:${n}})`)
+        .join(',')}]);`,
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(maxActive).toBe(Math.min(_maxParallelToolCalls, values.length));
+    expect(maxActive).toBeGreaterThan(1);
+    for (const n of values) expect(result.content).toContain(`read:${n}`);
   });
 
   it('keeps the shared mutation lane locked after timeout until a non-cancellable tool settles', async () => {

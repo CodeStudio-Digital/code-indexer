@@ -58,10 +58,90 @@ const WALL_TIMEOUT_MS = Number(process.env.CODER_CODE_EXEC_WALL_TIMEOUT_MS ?? 35
 const DRAIN_TIMEOUT_MS = Number(process.env.CODER_CODE_EXEC_DRAIN_TIMEOUT_MS ?? 5_000) || 5_000;
 const ABORT_DRAIN_GRACE_MS = 250;
 const MAX_TOOL_CALLS = 50;
+const MAX_PARALLEL_TOOL_CALLS = Math.min(
+  MAX_TOOL_CALLS,
+  Math.max(
+    1,
+    Math.trunc(Number(process.env.CODER_CODE_EXEC_MAX_PARALLEL_TOOLS ?? 8) || 8),
+  ),
+);
 const MAX_OUTPUT_BYTES = 50_000;
 const PRIORITY_ERROR_LOG_RATIO = 0.2;
 const MIN_PRIORITY_ERROR_LOG_BYTES = 1_024;
 const MAX_PRIORITY_ERROR_LOG_BYTES = 16_384;
+
+/**
+ * Small abort-aware FIFO used per code_exec invocation. Promise.all remains
+ * concurrent, but a script cannot fan out dozens of physical MCP/RAG calls at
+ * once and amplify downstream pools, native DB writers, or response buffers.
+ */
+class NestedToolConcurrencyGate {
+  private active = 0;
+  private readonly waiters: Array<{
+    resolve: (release: () => void) => void;
+    reject: (reason: unknown) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+  }> = [];
+
+  constructor(private readonly limit: number) {}
+
+  reserve(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(this.abortReason(signal));
+    if (this.active < this.limit) {
+      this.active += 1;
+      return Promise.resolve(this.releaseOnce());
+    }
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: {
+        resolve: (release: () => void) => void;
+        reject: (reason: unknown) => void;
+        signal?: AbortSignal;
+        onAbort?: () => void;
+      } = { resolve, reject, ...(signal ? { signal } : {}) };
+      if (signal) {
+        waiter.onAbort = () => {
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          reject(this.abortReason(signal));
+        };
+        signal.addEventListener('abort', waiter.onAbort, { once: true });
+      }
+      this.waiters.push(waiter);
+    });
+  }
+
+  private abortReason(signal: AbortSignal): Error {
+    return signal.reason instanceof Error
+      ? signal.reason
+      : new Error('nested tool call cancelled while waiting for concurrency capacity');
+  }
+
+  private releaseOnce(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active = Math.max(0, this.active - 1);
+      this.dispatch();
+    };
+  }
+
+  private dispatch(): void {
+    while (this.active < this.limit && this.waiters.length > 0) {
+      const waiter = this.waiters.shift()!;
+      if (waiter.onAbort && waiter.signal) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
+      if (waiter.signal?.aborted) {
+        waiter.reject(this.abortReason(waiter.signal));
+        continue;
+      }
+      this.active += 1;
+      waiter.resolve(this.releaseOnce());
+    }
+  }
+}
 
 /**
  * Promises returned by an active code_exec toolsProxy. The module-level
@@ -111,7 +191,7 @@ const CODE_EXEC_DESC =
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
   'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (create_goal, get_goal, update_goal, task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
-  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
+  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' physical nested calls at once, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
   'Example — required reads plus one optional symbol probe:\n' +
   '```\n' +
@@ -391,6 +471,7 @@ export function buildCodeExecTool(
       // One shared FIFO lane per runner. Lightweight/standalone tests get an
       // invocation-local ledger with the exact same abortable queue contract.
       const unsafeLedger = ctx.toolCallLedger ?? new ToolCallLedger();
+      const concurrencyGate = new NestedToolConcurrencyGate(MAX_PARALLEL_TOOL_CALLS);
 
       const priorityErrorLimit = Math.max(
         MIN_PRIORITY_ERROR_LOG_BYTES,
@@ -899,8 +980,9 @@ export function buildCodeExecTool(
             const invokePhysical = async (): Promise<string> => {
               const perToolMs = resolveToolTimeoutMs(t, argObj);
               let toolTimer: ReturnType<typeof setTimeout> | null = null;
+              let releaseCapacity: (() => void) | undefined;
               let releaseLane: (() => void) | undefined;
-              let laneReleaseOwnedByInvocation = false;
+              let releasesOwnedByInvocation = false;
               let outcomeRecorded = false;
               const started = Date.now();
               // The controller and deadline exist BEFORE unsafe-lane
@@ -937,6 +1019,11 @@ export function buildCodeExecTool(
                     }, perToolMs);
                   });
               try {
+                releaseCapacity = await Promise.race([
+                  concurrencyGate.reserve(callAbort.signal),
+                  cancelled,
+                  ...(timedOut ? [timedOut] : []),
+                ]);
                 if (metadata.mutates || !metadata.parallelSafe) {
                   // The deadline starts before queue acquisition so a call
                   // cannot wait forever behind an uncooperative owner. Attach
@@ -961,10 +1048,16 @@ export function buildCodeExecTool(
                     ctx.currentToolUseId ?? ctx.parentToolUseId ?? ctx.approvalAnchorId,
                   signal: callAbort.signal,
                 });
-                if (releaseLane) {
-                  laneReleaseOwnedByInvocation = true;
-                  void invocation.then(releaseLane, releaseLane);
-                }
+                // A timed-out handler may ignore AbortSignal. Keep both its
+                // global-capacity permit and unsafe lane (when any) occupied
+                // until the physical invocation settles, preventing runaway
+                // overlap after the model-facing call has already returned.
+                releasesOwnedByInvocation = true;
+                const releaseInvocationResources = (): void => {
+                  releaseLane?.();
+                  releaseCapacity?.();
+                };
+                void invocation.then(releaseInvocationResources, releaseInvocationResources);
                 const guarded = Promise.race([
                   invocation,
                   cancelled,
@@ -1031,7 +1124,10 @@ export function buildCodeExecTool(
                 if (toolTimer) clearTimeout(toolTimer);
                 ctx.signal?.removeEventListener('abort', parentAbort);
                 activeControllers.delete(callAbort);
-                if (releaseLane && !laneReleaseOwnedByInvocation) releaseLane();
+                if (!releasesOwnedByInvocation) {
+                  releaseLane?.();
+                  releaseCapacity?.();
+                }
               }
             };
 
@@ -1233,8 +1329,15 @@ export function buildCodeExecTool(
         // Intentionally NO require/import/process/Buffer/global/__dirname.
       };
 
-      // Wrap as async IIFE so user code can use top-level await + return.
-      const wrapped = `(async () => {\n${code}\n})()`;
+      // Pass the primary API as a formal parameter instead of letting the
+      // snippet resolve it only through the vm global. A lexical declaration
+      // such as `const [result, tools] = ...` otherwise shadows the injected
+      // binding for the whole function body. If earlier array elements start
+      // tool calls before a later `tools.*` access hits that TDZ, the script
+      // aborts with several misleading nested-tool cancellations. Making
+      // `tools` a parameter turns the shadow into a parse-time duplicate
+      // declaration, before any physical tool call can start.
+      const wrapped = `(async (tools) => {\n${code}\n})(tools)`;
 
       const settleActiveWithin = async (limitMs: number): Promise<boolean> => {
         const deadline = Date.now() + Math.max(0, limitMs);
@@ -1499,3 +1602,6 @@ export function buildCodeExecTool(
 export function _exposedToolNames(registry: ToolRegistry): string[] {
   return registry.list().filter(isSafeTool).map((t) => t.name).sort();
 }
+
+/** Test-only: effective physical fan-out ceiling for one code_exec batch. */
+export const _maxParallelToolCalls = MAX_PARALLEL_TOOL_CALLS;

@@ -27,6 +27,11 @@ import {
   createOrchestrationLeaseGuard,
   type OrchestrationLeaseGuard,
 } from '@mcp/code-agent/tools/orchestration-lease-guard.js';
+import {
+  removeSessionSpill,
+  removeSpillFile,
+  spillTranscriptToDisk,
+} from '@mcp/code-agent/tools/subagent-transcript-spill.js';
 
 export interface ResumableAgentState {
   /** 0-based; matches agent_progress.agentIndex and the original roster. */
@@ -40,8 +45,18 @@ export interface ResumableAgentState {
   researchPolicy?: SubagentResearchPolicy;
   maxTurns: number;
   limits: SubagentLimits;
-  /** Pairing-repaired; retained for completed agents too (observability). */
+  /**
+   * Pairing-repaired; retained in RAM for RESUMABLE (non-completed) agents.
+   * For a COMPLETED agent it is spilled to disk (see `spillPath`) and dropped
+   * from RAM, so a big all-completed group no longer pins tens of MB.
+   */
   transcript?: AgentMessage[];
+  /**
+   * Set when this agent's transcript was spilled to a JSONL file instead of
+   * kept in `transcript`. read_agent_transcript falls back to it. Only
+   * completed (never-resumed) agents are spilled, so resume state is unaffected.
+   */
+  spillPath?: string;
   reason: StopReason;
   /** Watchdog message / error text — feeds the continuation nudge. */
   failureNote?: string;
@@ -93,12 +108,29 @@ function leaseMs(): number {
     ? Math.floor(configured)
     : 120_000;
 }
+/**
+ * Spill COMPLETED transcripts to disk (default ON). `CODER_RESUME_SPILL=0`
+ * keeps them in RAM (the pre-spill behavior). Only completed agents are ever
+ * spilled — failed/aborted stay in RAM so resume_agent keeps working.
+ */
+function spillTerminalTranscripts(): boolean {
+  return process.env.CODER_RESUME_SPILL !== '0';
+}
+/** How often the unref'd worker timer reclaims idle sessions (default 5min). */
+function sweepIntervalMs(): number {
+  const configured = Number(process.env.CODER_RESUME_SWEEP_INTERVAL_MS ?? 5 * 60_000);
+  return Number.isFinite(configured) && configured >= 10_000
+    ? Math.floor(configured)
+    : 5 * 60_000;
+}
 
 const bySession = new Map<number, Map<string, ResumableGroup>>();
 const inFlightResumes = new Set<string>();
 const resumeLeaseTokens = new Map<string, string>();
 const resumeLeaseGuards = new Map<string, OrchestrationLeaseGuard>();
 let touchSeq = 0;
+/** Unref'd worker-realm timer that reclaims idle sessions on the TTL cadence. */
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
 const checkpointEnforced = (): boolean => process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
 
 export interface ResumeCheckpointStore {
@@ -168,6 +200,9 @@ function durableProjection(group: ResumableGroup): ResumableGroup {
       transcript: agent.reason === 'completed' || !agent.transcript
         ? undefined
         : sanitizeMessagesForCheckpoint(agent.transcript),
+      // The spill pointer is a host-local filesystem path — never persist it
+      // into the cross-executor checkpoint (another host has no such file).
+      spillPath: undefined,
     })),
   };
   return sanitizeCheckpointValue(projected);
@@ -295,19 +330,43 @@ function lruGroup(groups: Map<string, ResumableGroup>): ResumableGroup | null {
   return oldest;
 }
 
+/** Evict a group from RAM AND delete any transcript it spilled to disk. */
+function dropGroup(groups: Map<string, ResumableGroup>, group: ResumableGroup): void {
+  for (const a of group.agents) if (a.spillPath) removeSpillFile(a.spillPath);
+  groups.delete(group.spawnId);
+}
+
+/**
+ * Spill a COMPLETED agent's (already sanitized) transcript to disk and drop it
+ * from RAM, leaving a pointer + metadata. Only completed agents are spilled —
+ * failed/aborted keep their in-RAM transcript so resume_agent can relaunch
+ * them. A spill failure is non-fatal: the transcript simply stays in RAM.
+ */
+function maybeSpillAgent(sessionId: number, spawnId: string, agent: ResumableAgentState): void {
+  if (agent.spillPath) { removeSpillFile(agent.spillPath); agent.spillPath = undefined; }
+  if (!spillTerminalTranscripts()) return;
+  if (agent.reason !== 'completed') return;
+  if (!agent.transcript || agent.transcript.length === 0) return;
+  const path = spillTranscriptToDisk(sessionId, spawnId, agent.agentIndex, agent.transcript);
+  if (path) {
+    agent.spillPath = path;
+    agent.transcript = undefined;
+  }
+}
+
 function sweep(sessionId: number): void {
   const groups = bySession.get(sessionId);
   if (!groups) return;
   const now = Date.now();
   const ttl = ttlMs();
-  for (const [id, g] of groups) {
-    if (now - g.lastTouchedAt > ttl) groups.delete(id);
+  for (const g of [...groups.values()]) {
+    if (now - g.lastTouchedAt > ttl) dropGroup(groups, g);
   }
   // LRU count cap.
   while (groups.size > MAX_GROUPS_PER_SESSION) {
     const oldest = lruGroup(groups);
     if (!oldest) break;
-    groups.delete(oldest.spawnId);
+    dropGroup(groups, oldest);
   }
   // Byte budget — evict LRU until under.
   let bytes = 0;
@@ -317,9 +376,37 @@ function sweep(sessionId: number): void {
     const oldest = lruGroup(groups);
     if (!oldest) break;
     for (const a of oldest.agents) bytes -= a.approxBytes;
-    groups.delete(oldest.spawnId);
+    dropGroup(groups, oldest);
   }
   if (groups.size === 0) bySession.delete(sessionId);
+}
+
+/** Sweep every session — the body of the periodic worker-realm timer. */
+function sweepAllSessions(): void {
+  for (const sessionId of [...bySession.keys()]) sweep(sessionId);
+}
+
+/**
+ * Start the periodic sweep once (idempotent). Unref'd so it never keeps the
+ * worker alive, and lazy so a process that never retains a group pays nothing.
+ * Without it, the 45-min TTL only fires on the next registry access, so a warm
+ * session that goes idle would pin its RAM until the whole worker is evicted.
+ */
+function ensureSweepTimer(): void {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(sweepAllSessions, sweepIntervalMs());
+  sweepTimer.unref?.();
+}
+
+/** Test hook: stop the timer so a suite leaves no lingering interval. */
+export function stopResumeSweepForTests(): void {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+}
+
+/** Test hook: RAM group count for a session WITHOUT triggering a lazy sweep. */
+export function peekSessionGroupCountForTests(sessionId: number): number {
+  return bySession.get(sessionId)?.size ?? 0;
 }
 
 /**
@@ -334,8 +421,11 @@ export function retainCompletedTranscripts(): boolean {
 
 /**
  * Retain a finished spawn group. Transcripts are sanitized + byte-capped here
- * so `resume_agent` can use them verbatim. Completed agents keep theirs too
- * (observability) unless CODER_RESUME_RETAIN_COMPLETED=0.
+ * so `resume_agent` can use them verbatim. Completed agents' transcripts are
+ * spilled to disk (read via read_agent_transcript) unless
+ * CODER_RESUME_RETAIN_COMPLETED=0 (dropped) or CODER_RESUME_SPILL=0 (kept in
+ * RAM); failed/aborted transcripts stay resident so resume can relaunch them.
+ * Arms the periodic worker-realm sweep so idle sessions are reclaimed on time.
  */
 export function retainGroup(
   sessionId: number,
@@ -349,6 +439,9 @@ export function retainGroup(
     } else {
       agent.transcript = undefined;
     }
+    // Spill completed transcripts to disk (drops them from RAM) so approxBytes
+    // below reflects only what actually stays resident.
+    maybeSpillAgent(sessionId, group.spawnId, agent);
     agent.approxBytes = agent.transcript ? approxBytesOf(agent.transcript) : 0;
   }
   let groups = bySession.get(sessionId);
@@ -359,6 +452,7 @@ export function retainGroup(
   touch(group);
   groups.set(group.spawnId, group);
   persistGroup(store, group);
+  ensureSweepTimer();
   sweep(sessionId);
 }
 
@@ -407,6 +501,15 @@ export function reloadGroupUnderLease(
       ? parsePersistedGroup(JSON.stringify(cached), sessionId, spawnId)
       : undefined;
   if (!restored) return undefined;
+  // The durable checkpoint strips the host-local spill pointer, so carry it
+  // forward from this worker's cache — otherwise a store-backed reload would
+  // orphan the spilled files and lose completed-agent readability post-resume.
+  if (cached) {
+    const spillByIndex = new Map(cached.agents.map((a) => [a.agentIndex, a.spillPath]));
+    for (const a of restored.agents) {
+      if (!a.spillPath && !a.transcript) a.spillPath = spillByIndex.get(a.agentIndex);
+    }
+  }
   let groups = bySession.get(sessionId);
   if (!groups) {
     groups = new Map();
@@ -428,11 +531,14 @@ export function replaceAgentState(
   if (!group) return false;
   const idx = group.agents.findIndex((a) => a.agentIndex === next.agentIndex);
   if (idx === -1) return false;
+  const prevSpill = group.agents[idx].spillPath;
+  if (prevSpill && prevSpill !== next.spillPath) removeSpillFile(prevSpill);
   if (next.transcript && (next.reason !== 'completed' || retainCompletedTranscripts())) {
     next.transcript = sanitizeTranscriptForResume(next.transcript, next.reason);
   } else {
     next.transcript = undefined;
   }
+  maybeSpillAgent(sessionId, spawnId, next);
   next.approxBytes = next.transcript ? approxBytesOf(next.transcript) : 0;
   group.agents[idx] = next;
   touch(group);
@@ -472,7 +578,8 @@ export function listReadableGroups(
         agentIndex: a.agentIndex,
         label: a.label,
         reason: a.reason,
-        hasTranscript: (a.transcript?.length ?? 0) > 0,
+        // A spilled (completed) transcript is still readable via its pointer.
+        hasTranscript: (a.transcript?.length ?? 0) > 0 || !!a.spillPath,
       })),
     });
   }
@@ -481,6 +588,7 @@ export function listReadableGroups(
 
 export function clearSession(sessionId: number, store?: ResumeCheckpointStore): void {
   bySession.delete(sessionId);
+  removeSessionSpill(sessionId);
   if (store) {
     for (const row of store.listOrchestrationCheckpoints(sessionId, 'subagent_resume', 200)) {
       store.removeOrchestrationCheckpoint(sessionId, 'subagent_resume', row.scopeId);

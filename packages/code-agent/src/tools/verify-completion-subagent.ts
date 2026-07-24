@@ -16,7 +16,9 @@
  *
  * Output contract — the verifier's LAST message contains:
  *   <verdict>{"goal_met": bool, "gaps": [{"description": "...", "severity": "high|medium|low"}]}</verdict>
- * A missing/malformed block is treated as NOT met (fail-closed).
+ * A parsed negative verdict blocks completion. A missing/malformed block is
+ * inconclusive so the runner's documented verifier-error fail-open contract
+ * can distinguish infrastructure failure from an actual unmet goal.
  */
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { SubagentParent } from '@mcp/code-agent/tools/implement-subagent.js';
@@ -80,8 +82,13 @@ export interface VerifyGap {
   severity: 'high' | 'medium' | 'low';
 }
 
+export interface UsableGoalCompletionVerdict {
+  goalMet: boolean;
+  gaps: ReadonlyArray<VerifyGap>;
+}
+
 export interface VerifyResult {
-  /** Fail-closed: an unparseable verdict resolves to `false`. */
+  /** False for an explicit negative verdict or an unparseable result; consult `parsed`. */
   goalMet: boolean;
   gaps: VerifyGap[];
   /** Raw text the verifier returned, for debugging. */
@@ -198,6 +205,19 @@ export function parseVerdictBlock(text: string): { goalMet: boolean; gaps: Verif
     /* fall through */
   }
   return null;
+}
+
+/**
+ * Convert the raw subagent result into an authoritative completion verdict.
+ * An aborted/timed-out provider commonly leaves no parseable verdict. That is
+ * verifier failure, not evidence that the user's goal is unmet, so callers
+ * fail open exactly as they do for a thrown verifier.
+ */
+export function resolveUsableGoalCompletionVerdict(
+  result: Pick<VerifyResult, 'goalMet' | 'gaps' | 'parsed'>,
+): UsableGoalCompletionVerdict | null {
+  if (!result.parsed) return null;
+  return { goalMet: result.goalMet, gaps: result.gaps };
 }
 
 export async function runVerifyCompletionSubagent(

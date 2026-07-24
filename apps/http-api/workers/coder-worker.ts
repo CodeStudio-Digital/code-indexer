@@ -1032,7 +1032,9 @@ bridge.handle('readAgentTranscript', async (payload) => {
   );
   const agent = findRetainedAgent(sessionId, spawnId, agentRef);
   if (!agent) return { ok: false, reason: 'not_found' };
-  const hasTranscript = (agent.transcript?.length ?? 0) > 0;
+  // Completed transcripts are spilled to disk; the renderer restores them via
+  // the retained pointer, so a spilled agent is still "hasTranscript".
+  const hasTranscript = (agent.transcript?.length ?? 0) > 0 || !!agent.spillPath;
   return {
     ok: true,
     label: agent.label,

@@ -133,6 +133,16 @@ describe('agent_memory store (migration 181)', () => {
     expect(idx[0].description).toBe('big call');
   });
 
+  it('preflights deterministic hygiene and returns false again after consolidation', () => {
+    expect(db.hasAgentMemoryHygieneCandidates('project', projectId)).toBe(false);
+    db.createAgentMemory({ projectId, name: 'first', content: 'Use   SQLite WAL' });
+    db.createAgentMemory({ projectId, name: 'second', content: ' use sqlite wal ' });
+
+    expect(db.hasAgentMemoryHygieneCandidates('project', projectId)).toBe(true);
+    expect(db.consolidateAgentMemory('project', projectId).archived).toBe(1);
+    expect(db.hasAgentMemoryHygieneCandidates('project', projectId)).toBe(false);
+  });
+
   it('records and prunes telemetry events', () => {
     db.recordAgentMemoryEvent({ eventType: 'remember', scope: 'project', projectId, memoryId: 1 });
     db.recordAgentMemoryEvent({ eventType: 'recall', scope: 'project', projectId, kept: 2, dropped: 3 });

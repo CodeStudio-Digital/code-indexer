@@ -25,6 +25,62 @@ function normalizeContent(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+interface ConsolidationRow {
+  id: number;
+  content: string;
+  importance: number;
+  created_at: string;
+}
+
+function listConsolidationRows(
+  db: DB,
+  scope: 'project' | 'user' | 'local',
+  projectId: number,
+  cap: number,
+): ConsolidationRow[] {
+  return db
+    .prepare(
+      `SELECT id, content, importance, created_at
+         FROM agent_memory
+        WHERE scope = ? AND project_id = ? AND archived_at IS NULL
+        ORDER BY id LIMIT ?`,
+    )
+    .all(scope, projectId, cap) as ConsolidationRow[];
+}
+
+/**
+ * Cheap read-only preflight for the idle sweeper. Avoids opening a wildcard
+ * semantic fence (and a follow-up generation job) when consolidation/decay
+ * would be a guaranteed no-op.
+ */
+export function hasHygieneCandidates(
+  db: DB,
+  scope: 'project' | 'user' | 'local',
+  projectId: number,
+  cap = 500,
+): boolean {
+  const seen = new Set<string>();
+  for (const row of listConsolidationRows(db, scope, projectId, cap)) {
+    const key = normalizeContent(row.content);
+    if (!key) continue;
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  if (scope !== 'project') return false;
+  return Boolean(db
+    .prepare(
+      `SELECT 1
+         FROM agent_memory
+        WHERE scope = ? AND project_id = ? AND archived_at IS NULL
+          AND type = 'note'
+          AND access_count = 0
+          AND importance < 0.4
+          AND created_at < datetime('now', '-60 days')
+        LIMIT 1`,
+    )
+    .get(scope, projectId));
+}
+
 /**
  * Deterministic decay of cold LOW-VALUE rows (sweeper hygiene, no LLM):
  * archive `note`-type memories that were never accessed, sit under the
@@ -60,19 +116,7 @@ export function consolidateProject(
   projectId: number,
   cap = 500,
 ): ConsolidationResult {
-  const rows = db
-    .prepare(
-      `SELECT id, content, importance, created_at
-         FROM agent_memory
-        WHERE scope = ? AND project_id = ? AND archived_at IS NULL
-        ORDER BY id LIMIT ?`,
-    )
-    .all(scope, projectId, cap) as Array<{
-    id: number;
-    content: string;
-    importance: number;
-    created_at: string;
-  }>;
+  const rows = listConsolidationRows(db, scope, projectId, cap);
 
   const groups = new Map<string, typeof rows>();
   for (const r of rows) {

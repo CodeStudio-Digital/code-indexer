@@ -69,10 +69,14 @@ function write(ledger: ToolCallLedger, path = 'src/a.ts') {
   });
 }
 
-function validate(ledger: ToolCallLedger, isError = false) {
+function validate(
+  ledger: ToolCallLedger,
+  isError = false,
+  command = 'pnpm test',
+) {
   ledger.record({
     name: 'run_command',
-    args: { command: 'pnpm test' },
+    args: { command },
     content: isError ? 'exit code 1' : 'exit code 0',
     isError,
     executionClass: 'execute',
@@ -126,6 +130,28 @@ describe('evaluateVerificationReadinessAtFinish', () => {
       lastWriteSeq: 1,
       lastSuccessfulValidationSeq: 2,
       validationSignals: ['pnpm test'],
+    });
+  });
+
+  it('reports fresh for filtered workspace validation and PHP lint', () => {
+    const workspace = harness();
+    write(workspace.ledger);
+    validate(
+      workspace.ledger,
+      false,
+      'pnpm --filter @migrator/core test -- siger.mapper.spec.ts',
+    );
+    expect(evaluateVerificationReadinessAtFinish(workspace.ctx)).toMatchObject({
+      status: 'fresh',
+      validationSignals: ['pnpm test'],
+    });
+
+    const php = harness(['sync-service/handlers/UserHandler.php']);
+    write(php.ledger, 'sync-service/handlers/UserHandler.php');
+    validate(php.ledger, false, 'php -l sync-service/handlers/UserHandler.php');
+    expect(evaluateVerificationReadinessAtFinish(php.ctx)).toMatchObject({
+      status: 'fresh',
+      validationSignals: ['php -l'],
     });
   });
 

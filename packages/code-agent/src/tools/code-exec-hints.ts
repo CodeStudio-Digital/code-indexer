@@ -36,6 +36,17 @@ export interface CodeExecHintContext {
  * append it verbatim.
  */
 export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext): string {
+  // The sandbox API is passed as a formal parameter so declaring a lexical
+  // `tools` binding fails before partially evaluating a batch. Explain the
+  // otherwise opaque duplicate-declaration SyntaxError with the safe rename.
+  if (/Identifier ['"]tools['"] has already been declared/.test(msg)) {
+    return (
+      '\n\nHint: `tools` is the reserved code_exec tool proxy. Rename the local variable or ' +
+      'destructuring target (for example, `toolResults`) and keep calling registered tools ' +
+      'through `tools.<name>(args)` or their bare aliases.'
+    );
+  }
+
   // Parse-time "Unexpected identifier 'x'" — telemetry's #2 authoring error
   // (19 cases): an unquoted path/word pasted into JS, e.g.
   // `read_file({ path: import/corporate-ui/x.html })`. V8 reports the second

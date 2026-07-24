@@ -779,6 +779,8 @@ export class CodeIndexDB {
   pruneAgentMemoryEvents(maxAgeDays = 30, maxRows = 50_000): number { return agentMemory.pruneEvents(this.db, maxAgeDays, maxRows); }
   getAgentMemoryStaleBatch(ids: number[]): Map<number, { stale: string[]; total: number }> { return agentMemory.getStaleBatch(this.db, ids); }
   setAgentMemoryImportance(id: number, importance: number): void { agentMemory.setImportance(this.db, id, importance); }
+  /** Read-only guard that keeps no-op hygiene passes from creating semantic jobs. */
+  hasAgentMemoryHygieneCandidates(scope: AgentMemoryScope, projectId: number): boolean { return agentMemoryConsolidation.hasHygieneCandidates(this.db, scope, projectId); }
   /** WS8 — conservative consolidation (collapse exact-duplicate live memories). */
   consolidateAgentMemory(scope: AgentMemoryScope, projectId: number): agentMemoryConsolidation.ConsolidationResult { return agentMemoryConsolidation.consolidateProject(this.db, scope, projectId); }
   /** WS8 — reversible decay of cold, unused, low-importance `note` memories. */

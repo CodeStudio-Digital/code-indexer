@@ -15,6 +15,7 @@ import {
   clearSession,
   tryAcquireResume,
   releaseResume,
+  stopResumeSweepForTests,
   type ResumableGroup,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
@@ -56,8 +57,17 @@ function group(sessionId: number, spawnId: string, agents: ResumableAgentState[]
 }
 
 let SID = 0;
-beforeEach(() => { SID += 100; });
-afterEach(() => { for (let s = SID - 100; s <= SID + 20; s++) clearSession(s); vi.useRealTimers(); });
+// This suite isolates the registry's in-RAM mechanics (sanitize, byte-cap, LRU,
+// TTL). The disk-spill layer (default ON) is exercised in
+// subagent-resume-retention.test.ts, so keep it OFF here to assert in-memory
+// transcripts directly.
+beforeEach(() => { SID += 100; vi.stubEnv('CODER_RESUME_SPILL', '0'); });
+afterEach(() => {
+  for (let s = SID - 100; s <= SID + 20; s++) clearSession(s);
+  vi.unstubAllEnvs();
+  stopResumeSweepForTests();
+  vi.useRealTimers();
+});
 
 describe('subagent-resume-registry', () => {
   it('keeps transcripts for failed AND completed agents by default (P1 observability)', () => {

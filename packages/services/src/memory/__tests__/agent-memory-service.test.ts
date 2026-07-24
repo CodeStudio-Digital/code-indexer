@@ -165,6 +165,42 @@ describe('AgentMemoryService active-generation queries', () => {
     expect(order).toEqual(['fence:start', 'sqlite:hygiene', 'fence:settle']);
   });
 
+  it('routes async scope hygiene through the shared relational retry queue', async () => {
+    const order: string[] = [];
+    let retryCalls = 0;
+    const retry = async <T>(operation: () => T): Promise<T> => {
+      retryCalls++;
+      order.push('queue');
+      return operation();
+    };
+    const execute = <T>(operation: () => T): T => {
+      order.push('fail-fast');
+      return operation();
+    };
+    const service = new AgentMemoryService({
+      listAgentMemoryForSemanticIndex: vi.fn(() => [memoryRow(3)]),
+    } as unknown as CodeIndexDB, null, null, null, {
+      noteMutation: vi.fn(),
+      beginMutation: vi.fn(() => {
+        order.push('fence:start');
+        return { jobId: 73, token: 't73', namespace: 'memory:project:p7' };
+      }),
+      settleMutation: vi.fn(() => { order.push('fence:settle'); }),
+    }, null, { execute, retry });
+
+    const result = await service.runScopeMutationAsync('project', 7, () => {
+      order.push('sqlite:hygiene');
+      return { archived: 1 };
+    });
+
+    expect(result).toEqual({ archived: 1 });
+    expect(retryCalls).toBe(1);
+    expect(order[0]).toBe('queue');
+    expect(order).toContain('sqlite:hygiene');
+    expect(order.indexOf('fence:start')).toBeLessThan(order.indexOf('sqlite:hygiene'));
+    expect(order.indexOf('sqlite:hygiene')).toBeLessThan(order.indexOf('fence:settle'));
+  });
+
   it('coalesces N inserts into one identity fence and one settlement', async () => {
     let nextId = 20;
     const createAgentMemory = vi.fn(() => memoryRow(nextId++));
